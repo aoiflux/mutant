@@ -1,0 +1,86 @@
+putln("=== ioc_fetcher ===");
+putln("Safe use: downloads public IOC feed for defensive filtering.");
+
+let output_dir = "example_output/ioc_fetcher";
+let input_path = output_dir + "/source.json";
+let feed_path = output_dir + "/ioc_feed.txt";
+let graph_path = output_dir + "/ioc_graph";
+let report_path = output_dir + "/report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+if (fs_exists(input_path) == false) {
+    let seed = {
+        "ioc_api": "https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-domains-ACTIVE.txt"
+    };
+    let seed_write = fs_write(input_path, json_stringify(seed));
+    if (seed_write["ok"]) {
+        putln("seeded test dataset: ", input_path);
+    } else {
+        putln("failed to seed dataset: ", seed_write["error"]);
+    };
+};
+
+let source = json_parse(fs_read(input_path));
+let api = source["ioc_api"];
+let response = http_get(api);
+
+if (response["error"] != "") {
+    putln("download failed: ", response["error"]);
+};
+
+let feed_write = fs_write(feed_path, response["body"]);
+if (feed_write["ok"] == false) {
+    putln("failed to write feed file: ", feed_write["error"]);
+};
+
+let lua_extract = "local data,err=mutant.read_file('example_output/ioc_fetcher/ioc_feed.txt'); if not data then return '[]' end; local q=string.char(34); local out={}; local count=0; for line in string.gmatch(data, '[^\\n]+') do line=string.gsub(line,'\\r',''); if line ~= '' then table.insert(out,q..line..q); count=count+1; if count >= 200 then break end end end; return '['..table.concat(out,',')..']'";
+let lua_result = lua_run_string(lua_extract);
+if (lua_result["ok"] == false) {
+    putln("lua parse failed: ", lua_result["error"]);
+};
+
+let iocs = json_parse(lua_result["result"]);
+
+let NODE_FEED = 1;
+let NODE_IOC = 2;
+let EDGE_CONTAINS = 1;
+
+let db = db_open_disk(graph_path);
+let feed_node = db_add_node(db, NODE_FEED);
+db_index_prop(db, feed_node, "source", api);
+
+for (let i = 0; i < len(iocs); i = i + 1) {
+    let ioc = iocs[i];
+    let ioc_node = db_add_node(db, NODE_IOC);
+    db_index_prop(db, ioc_node, "value", ioc);
+    db_index_prop(db, ioc_node, "kind", "domain");
+    db_add_edge(db, feed_node, ioc_node, EDGE_CONTAINS);
+}
+
+let stats = db_stats(db);
+let closed = db_close(db);
+if (closed["ok"] == false) {
+    putln("db close error: ", closed["error"]);
+};
+
+let report = {
+    "profile": "ioc_fetcher",
+    "source": api,
+    "feed_file": feed_path,
+    "iocs_loaded": len(iocs),
+    "graph_path": graph_path,
+    "graph_stats": stats,
+    "http_status": response["status"],
+    "http_error": response["error"]
+};
+
+let write_report = fs_write(report_path, json_stringify(report));
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

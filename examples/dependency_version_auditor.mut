@@ -1,0 +1,166 @@
+putln("=== dependency_version_auditor ===");
+putln("Safe use: reads local dependency manifests and queries public vulnerability API.");
+
+let output_dir = "example_output/dependency_version_auditor";
+let package_path = output_dir + "/package.json";
+let gomod_path = output_dir + "/go.mod";
+let graph_path = output_dir + "/dep_graph";
+let report_path = output_dir + "/report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+if (fs_exists(package_path) == false) {
+    let package_seed = json_stringify({
+        "name": "demo",
+        "dependencies": {
+            "express": "4.17.1",
+            "lodash": "4.17.20"
+        }
+    });
+    let package_write = fs_write(package_path, package_seed);
+    if (package_write["ok"]) {
+        putln("seeded package.json: ", package_path);
+    };
+};
+
+if (fs_exists(gomod_path) == false) {
+    let gomod_seed = "module demo\n\nrequire github.com/gin-gonic/gin v1.9.1\n";
+    let gomod_write = fs_write(gomod_path, gomod_seed);
+    if (gomod_write["ok"]) {
+        putln("seeded go.mod: ", gomod_path);
+    };
+};
+
+let extract_npm_lua = "local data,err=mutant.read_file('example_output/dependency_version_auditor/package.json'); if not data then return '[]' end; local dq=string.char(34); local out={}; for name,ver in string.gmatch(data, dq..'([%w%-%._]+)'..dq..'%s*:%s*'..dq..'([^'..dq..']+)'..dq) do if name ~= 'name' and name ~= 'dependencies' then local item='{'..dq..'name'..dq..':'..dq..name..dq..','..dq..'version'..dq..':'..dq..ver..dq..','..dq..'ecosystem'..dq..':'..dq..'npm'..dq..'}'; table.insert(out,item); end end; return '['..table.concat(out,',')..']'";
+let npm_result = lua_run_string(extract_npm_lua);
+if (npm_result["ok"] == false) {
+    putln("npm extraction failed: ", npm_result["error"]);
+};
+
+let extract_go_lua = "local data,err=mutant.read_file('example_output/dependency_version_auditor/go.mod'); if not data then return '[]' end; local dq=string.char(34); local out={}; for line in string.gmatch(data, '[^\\n]+') do local mod,ver=string.match(line,'^%s*require%s+([%w%-%._/]+)%s+v([%w%._%-]+)'); if mod and ver then local item='{'..dq..'name'..dq..':'..dq..mod..dq..','..dq..'version'..dq..':'..dq..ver..dq..','..dq..'ecosystem'..dq..':'..dq..'Go'..dq..'}'; table.insert(out,item); end end; return '['..table.concat(out,',')..']'";
+let go_result = lua_run_string(extract_go_lua);
+if (go_result["ok"] == false) {
+    putln("go extraction failed: ", go_result["error"]);
+};
+
+let npm_deps = json_parse(npm_result["result"]);
+let go_deps = json_parse(go_result["result"]);
+
+let NODE_DEP = 1;
+let NODE_FINDING = 2;
+let EDGE_HAS_FINDING = 1;
+
+let db = db_open_disk(graph_path);
+let findings = [];
+
+for (let i = 0; i < len(npm_deps); i = i + 1) {
+    let dep = npm_deps[i];
+    let dep_node = db_add_node(db, NODE_DEP);
+    db_index_prop(db, dep_node, "name", dep["name"]);
+    db_index_prop(db, dep_node, "version", dep["version"]);
+    db_index_prop(db, dep_node, "ecosystem", dep["ecosystem"]);
+
+    let body = {
+        "package": {
+            "name": dep["name"],
+            "ecosystem": dep["ecosystem"]
+        },
+        "version": dep["version"]
+    };
+    let resp = http_post("https://api.osv.dev/v1/query", body, "application/json");
+
+    let tmp_path = output_dir + "/osv_npm_" + json_stringify(i) + ".json";
+    fs_write(tmp_path, resp["body"]);
+
+    let flag_lua = "local data,err=mutant.read_file('" + tmp_path + "'); if not data then return '0' end; if string.find(data,'vulns') then return '1' end; return '0'";
+    let flag = lua_run_string(flag_lua);
+
+    let vuln_signal = false;
+    if (flag["result"] == "1") {
+        vuln_signal = true;
+    };
+
+    let finding_node = db_add_node(db, NODE_FINDING);
+    db_index_prop(db, finding_node, "source", "osv");
+    db_index_prop(db, finding_node, "status", json_stringify(resp["status"]));
+    db_index_prop(db, finding_node, "vuln_signal", json_stringify(vuln_signal));
+    db_add_edge(db, dep_node, finding_node, EDGE_HAS_FINDING);
+
+    findings = push(findings, {
+        "name": dep["name"],
+        "version": dep["version"],
+        "ecosystem": dep["ecosystem"],
+        "status": resp["status"],
+        "vuln_signal": vuln_signal,
+        "error": resp["error"]
+    });
+}
+
+for (let i = 0; i < len(go_deps); i = i + 1) {
+    let dep = go_deps[i];
+    let dep_node = db_add_node(db, NODE_DEP);
+    db_index_prop(db, dep_node, "name", dep["name"]);
+    db_index_prop(db, dep_node, "version", dep["version"]);
+    db_index_prop(db, dep_node, "ecosystem", dep["ecosystem"]);
+
+    let body = {
+        "package": {
+            "name": dep["name"],
+            "ecosystem": dep["ecosystem"]
+        },
+        "version": dep["version"]
+    };
+    let resp = http_post("https://api.osv.dev/v1/query", body, "application/json");
+
+    let tmp_path = output_dir + "/osv_go_" + json_stringify(i) + ".json";
+    fs_write(tmp_path, resp["body"]);
+
+    let flag_lua = "local data,err=mutant.read_file('" + tmp_path + "'); if not data then return '0' end; if string.find(data,'vulns') then return '1' end; return '0'";
+    let flag = lua_run_string(flag_lua);
+
+    let vuln_signal = false;
+    if (flag["result"] == "1") {
+        vuln_signal = true;
+    };
+
+    let finding_node = db_add_node(db, NODE_FINDING);
+    db_index_prop(db, finding_node, "source", "osv");
+    db_index_prop(db, finding_node, "status", json_stringify(resp["status"]));
+    db_index_prop(db, finding_node, "vuln_signal", json_stringify(vuln_signal));
+    db_add_edge(db, dep_node, finding_node, EDGE_HAS_FINDING);
+
+    findings = push(findings, {
+        "name": dep["name"],
+        "version": dep["version"],
+        "ecosystem": dep["ecosystem"],
+        "status": resp["status"],
+        "vuln_signal": vuln_signal,
+        "error": resp["error"]
+    });
+}
+
+let stats = db_stats(db);
+let closed = db_close(db);
+if (closed["ok"] == false) {
+    putln("db close error: ", closed["error"]);
+};
+
+let report = {
+    "profile": "dependency_version_auditor",
+    "package_file": package_path,
+    "gomod_file": gomod_path,
+    "dependencies_checked": len(findings),
+    "graph_path": graph_path,
+    "graph_stats": stats,
+    "findings": findings
+};
+
+let write_report = fs_write(report_path, json_stringify(report));
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

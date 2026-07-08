@@ -10,15 +10,9 @@ if (mk["ok"] == false) {
 };
 
 if (fs_exists(input_path) == false) {
-    let sample = {
-        "events": [
-            {"src": "10.10.10.5", "event": "auth_fail", "count": 6},
-            {"src": "10.10.10.9", "event": "powershell_encoded", "count": 1},
-            {"src": "10.10.10.11", "event": "service_install", "count": 2},
-            {"src": "10.10.10.12", "event": "auth_fail", "count": 2}
-        ]
-    };
-    let sample_json = json_stringify(sample);
+    let sample_lua = "local q=string.char(34); local s='{'..q..'events'..q..':['..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':6},'..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':5},'..'{'..q..'src'..q..':'..q..'10.10.10.9'..q..','..q..'event'..q..':'..q..'powershell_encoded'..q..','..q..'count'..q..':1},'..'{'..q..'src'..q..':'..q..'10.10.10.11'..q..','..q..'event'..q..':'..q..'service_install'..q..','..q..'count'..q..':2}'..']}' ; return s";
+    let sample_json_result = lua_run_string(sample_lua);
+    let sample_json = sample_json_result["result"];
     let write_sample = fs_write(input_path, sample_json);
     if (write_sample["ok"]) {
         putln("seeded sample events at ", input_path);

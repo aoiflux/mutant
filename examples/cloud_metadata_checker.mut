@@ -1,0 +1,101 @@
+putln("=== cloud_metadata_checker ===");
+putln("Safe default: metadata checks are opt-in via config allow_sensitive_endpoints=true.");
+
+let output_dir = "example_output/cloud_metadata_checker";
+let input_path = output_dir + "/metadata_targets.json";
+let graph_path = output_dir + "/metadata_graph";
+let report_path = output_dir + "/report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+if (fs_exists(input_path) == false) {
+    let seed = {
+        "allow_sensitive_endpoints": false,
+        "metadata_endpoints": [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://metadata.google.internal/computeMetadata/v1/"
+        ]
+    };
+    let seed_write = fs_write(input_path, json_stringify(seed));
+    if (seed_write["ok"]) {
+        putln("seeded test dataset: ", input_path);
+    } else {
+        putln("failed to seed dataset: ", seed_write["error"]);
+    };
+};
+
+let parsed = json_parse(fs_read(input_path));
+let endpoints = parsed["metadata_endpoints"];
+let allow_sensitive = parsed["allow_sensitive_endpoints"];
+
+let NODE_ENDPOINT = 1;
+let NODE_RESULT = 2;
+let EDGE_CHECKED = 1;
+
+let db = db_open_disk(graph_path);
+let results = [];
+
+for (let i = 0; i < len(endpoints); i = i + 1) {
+    let endpoint = endpoints[i];
+
+    let status = 0;
+    let err = "skipped_by_default";
+    let body_preview = "";
+
+    if (allow_sensitive) {
+        if (endpoint == "http://metadata.google.internal/computeMetadata/v1/") {
+            let headers = {"Metadata-Flavor": "Google"};
+            let resp = http_request("GET", endpoint, "", headers);
+            status = resp["status"];
+            err = resp["error"];
+            body_preview = resp["body"];
+        } else {
+            let resp = http_get(endpoint);
+            status = resp["status"];
+            err = resp["error"];
+            body_preview = resp["body"];
+        };
+    };
+
+    let endpoint_node = db_add_node(db, NODE_ENDPOINT);
+    db_index_prop(db, endpoint_node, "url", endpoint);
+
+    let result_node = db_add_node(db, NODE_RESULT);
+    db_index_prop(db, result_node, "status", json_stringify(status));
+    db_index_prop(db, result_node, "error", err);
+    db_index_prop(db, result_node, "allow_sensitive", json_stringify(allow_sensitive));
+    db_add_edge(db, endpoint_node, result_node, EDGE_CHECKED);
+
+    results = push(results, {
+        "endpoint": endpoint,
+        "status": status,
+        "error": err,
+        "body_preview": body_preview
+    });
+}
+
+let stats = db_stats(db);
+let closed = db_close(db);
+if (closed["ok"] == false) {
+    putln("db close error: ", closed["error"]);
+};
+
+let report = {
+    "profile": "cloud_metadata_checker",
+    "input_file": input_path,
+    "allow_sensitive_endpoints": allow_sensitive,
+    "endpoints_checked": len(results),
+    "graph_path": graph_path,
+    "graph_stats": stats,
+    "results": results
+};
+
+let write_report = fs_write(report_path, json_stringify(report));
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

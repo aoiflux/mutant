@@ -1,0 +1,132 @@
+putln("=== phishing_url_analyzer ===");
+putln("Safe use: defensive URL triage only.");
+
+let output_dir = "example_output/phishing_url_analyzer";
+let input_path = output_dir + "/urls.json";
+let feed_path = output_dir + "/phishing_domains.txt";
+let graph_path = output_dir + "/url_graph";
+let report_path = output_dir + "/report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+if (fs_exists(input_path) == false) {
+    let seed = {
+        "urls": [
+            "http://example.com",
+            "http://suspicious-domain.xyz"
+        ]
+    };
+    let seed_write = fs_write(input_path, json_stringify(seed));
+    if (seed_write["ok"]) {
+        putln("seeded test dataset: ", input_path);
+    };
+};
+
+let feed_resp = http_get("https://raw.githubusercontent.com/mitchellkrogza/Phishing.Database/master/phishing-domains-ACTIVE.txt");
+let feed_write = fs_write(feed_path, feed_resp["body"]);
+if (feed_write["ok"] == false) {
+    putln("failed to write feed file: ", feed_write["error"]);
+};
+
+let parsed = json_parse(fs_read(input_path));
+let urls = parsed["urls"];
+
+let NODE_URL = 1;
+let NODE_DOMAIN = 2;
+let NODE_RISK = 3;
+let EDGE_RESOLVES_TO = 1;
+let EDGE_HAS_RISK = 2;
+
+let db = db_open_disk(graph_path);
+let findings = [];
+
+for (let i = 0; i < len(urls); i = i + 1) {
+    let url = urls[i];
+
+    let extract_lua = "local u='" + url + "'; local d=string.match(u,'^https?://([^/]+)'); if not d then return '' end; return d";
+    let extracted = lua_run_string(extract_lua);
+    let domain = extracted["result"];
+
+    let listed_lua = "local data,err=mutant.read_file('" + feed_path + "'); if not data then return '0' end; local d='" + domain + "'; local pad='\\n'..data..'\\n'; if string.find(pad,'\\n'..d..'\\n',1,true) then return '1' end; return '0'";
+    let listed_result = lua_run_string(listed_lua);
+
+    let listed = false;
+    if (listed_result["result"] == "1") {
+        listed = true;
+    };
+
+    let resp = http_get(url);
+
+    let risk_score = 5;
+    if (listed) {
+        risk_score = risk_score + 70;
+    };
+    if (resp["status"] > 399) {
+        risk_score = risk_score + 20;
+    };
+    if (resp["error"] != "") {
+        risk_score = risk_score + 15;
+    };
+    if (risk_score > 100) {
+        risk_score = 100;
+    };
+
+    let severity = "low";
+    if (risk_score > 69) {
+        severity = "high";
+    } else {
+        if (risk_score > 39) {
+            severity = "medium";
+        };
+    };
+
+    let url_node = db_add_node(db, NODE_URL);
+    db_index_prop(db, url_node, "url", url);
+
+    let domain_node = db_add_node(db, NODE_DOMAIN);
+    db_index_prop(db, domain_node, "domain", domain);
+    db_add_edge(db, url_node, domain_node, EDGE_RESOLVES_TO);
+
+    let risk_node = db_add_node(db, NODE_RISK);
+    db_index_prop(db, risk_node, "score", json_stringify(risk_score));
+    db_index_prop(db, risk_node, "severity", severity);
+    db_index_prop(db, risk_node, "listed", json_stringify(listed));
+    db_add_edge(db, url_node, risk_node, EDGE_HAS_RISK);
+
+    findings = push(findings, {
+        "url": url,
+        "domain": domain,
+        "listed_in_feed": listed,
+        "http_status": resp["status"],
+        "risk_score": risk_score,
+        "severity": severity,
+        "error": resp["error"]
+    });
+}
+
+let stats = db_stats(db);
+let closed = db_close(db);
+if (closed["ok"] == false) {
+    putln("db close error: ", closed["error"]);
+};
+
+let report = {
+    "profile": "phishing_url_analyzer",
+    "input_file": input_path,
+    "urls_processed": len(urls),
+    "feed_status": feed_resp["status"],
+    "feed_error": feed_resp["error"],
+    "graph_path": graph_path,
+    "graph_stats": stats,
+    "findings": findings
+};
+
+let write_report = fs_write(report_path, json_stringify(report));
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};
