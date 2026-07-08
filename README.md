@@ -33,7 +33,7 @@ cd mutant
 go install
 ```
 
-### Build scripts (Go-only)
+### Build scripts
 
 Mutant release packaging now uses Go-only build scripts (no external Rust/cgo
 toolchain required).
@@ -56,6 +56,72 @@ Common options:
 - `--assets-out <dir>` / `-AssetsOut <dir>`
 - `--final-name <name>` / `-FinalName <name>`
 - `--host-only` / `-HostOnly`
+
+## CLI Quick Start
+
+Mutant now exposes a more structured CLI with explicit subcommands for
+generation, release packaging, and help.
+
+### Core usage
+
+```bash
+mutant
+mutant hello.mut
+mutant hello.mu --secure --signer-auth
+mutant help
+mutant help gen
+mutant help release
+```
+
+- `mutant` starts the REPL
+- `mutant hello.mut` compiles source into encrypted bytecode
+- `mutant hello.mu` runs compiled bytecode in the Mutant VM
+
+### Bytecode generation
+
+```bash
+mutant gen --src hello.mut
+mutant gen hello.mut --password "My$tr0ngPass!"
+mutant gen hello.mut --mutation 5 --seed 42
+```
+
+### Release asset generation
+
+```bash
+mutant gen assets
+mutant gen assets --out ./releaseassets
+```
+
+Legacy form is still supported:
+
+```bash
+mutant gen --release-assets --out ./releaseassets
+```
+
+### Standalone release builds
+
+```bash
+mutant release --src hello.mut
+mutant release hello.mut --os windows --arch amd64
+mutant release hello.mut --password "My$tr0ngPass!" --mutation 5
+```
+
+Supported release targets:
+
+- OS: `darwin`, `linux`, `windows`
+- ARCH: `amd64`, `arm64`, `arm`, `386`, `x86`
+
+### Runtime security options
+
+When running `.mu` files or embedded standalone payloads, these flags are
+available:
+
+- `--secure` to enforce secure mode
+- `--compat` to allow weaker compatibility-mode checks
+- `--dev` for developer mode and local password fallback
+- `--signer-auth` to require trusted signer verification
+- `--security-log-level <none|error|info|debug|trace>`
+- `--log-level <none|error|info|debug|trace>` as an alias
 
 ## Featured In
 

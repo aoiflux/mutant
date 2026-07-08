@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"mutant/cli"
 	"mutant/global"
 	"mutant/mutil"
@@ -22,201 +23,120 @@ const (
 	RELEASECMD = "release"
 	GENCMD     = "gen"
 	RUNCMD     = "run"
+	HELPCMD    = "help"
 	VERSION    = "Version: 2.1.0"
 )
 
+type cliRuntime struct {
+	runRepl               func(string, bool)
+	compileCode           func(string, string, string, bool, string, int, int64)
+	generateReleaseAssets func(string)
+	runCode               func(string, string, bool, bool)
+	hasStandalonePayload  func(string) (bool, error)
+	executablePath        func() (string, error)
+	getPwd                func() string
+}
+
+var runtimeDeps = cliRuntime{
+	runRepl:               cli.RunRepl,
+	compileCode:           cli.CompileCode,
+	generateReleaseAssets: cli.GenerateReleaseAssets,
+	runCode:               cli.RunCode,
+	hasStandalonePayload:  runner.HasStandalonePayload,
+	executablePath:        os.Executable,
+	getPwd:                mutil.GetPwd,
+}
+
+var commandHandlers = map[string]func([]string) int{
+	GENCMD:     handleGenCommand,
+	RUNCMD:     handleGenCommand,
+	RELEASECMD: handleReleaseCommand,
+}
+
 func main() {
-	if shouldAttemptEmbeddedRun(os.Args) {
-		executablePath, err := os.Executable()
-		if err == nil {
-			hasStandalonePayload, payloadErr := runner.HasStandalonePayload(executablePath)
-			if payloadErr != nil {
-				fmt.Println(payloadErr)
-				os.Exit(1)
-			}
+	exitCode := run(os.Args)
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
 
-			if hasStandalonePayload {
-				password := extractPasswordArg(os.Args)
-				devMode := hasDevModeArg(os.Args)
-				secureMode := extractSecurityModeArg(os.Args)
-				enforceSignerAuth := extractSignerAuthArg(os.Args)
-
-				if devMode {
-					secureMode = false
-				}
-				configureSecurityLogging(os.Args, devMode)
-				if password == "" && devMode {
-					password = mutil.GetPwd()
-				}
-
-				cli.RunCode(executablePath, password, secureMode, enforceSignerAuth)
-				return
-			}
-		}
+func run(args []string) int {
+	if handled, exitCode := tryEmbeddedPayloadRun(args); handled {
+		return exitCode
 	}
 
-	if len(os.Args) == 1 {
-		cli.RunRepl(VERSION, false)
-		return
+	return runCommandFlow(args)
+}
+
+func tryEmbeddedPayloadRun(args []string) (bool, int) {
+	if !shouldAttemptEmbeddedRun(args) {
+		return false, 0
 	}
 
-	if len(os.Args) == 2 {
-		if os.Args[1] == "-h" || os.Args[1] == "--help" {
-			fmt.Println("mutant - an open source, secure by default programming language")
-			fmt.Println()
-			fmt.Println("USAGE: mutant COMMAND [OPTIONS...]")
-
-			fmt.Println("Options:")
-
-			fmt.Println("\tmutant")
-			fmt.Println("\t\tRun mutant in REPL mode.")
-			fmt.Println()
-
-			fmt.Println("\tmutant -em, --enableMacros")
-			fmt.Println("\t\tRun mutant in REPL mode with experimental macros support.")
-			fmt.Println()
-
-			fmt.Println("\tmutant -h, --help")
-			fmt.Println("\t\tShow this help message.")
-			fmt.Println()
-
-			fmt.Println("\tmutant -v, --version")
-			fmt.Println("\t\tShow version information.")
-			fmt.Println()
-
-			fmt.Println("\tmutant <FILENAME>.mut")
-			fmt.Println("\t\tCompile mutant source code into mutant bytecode.")
-			fmt.Println()
-
-			fmt.Println("\tmutant <FILENAME>.mu")
-			fmt.Println("\t\tRun mutant bytecode using mutant VM.")
-			fmt.Println("\t\tOptional: --compat to allow compatibility mode (weaker security checks).")
-			fmt.Println("\t\tOptional: --dev for developer mode (compat mode + default local password fallback).")
-			fmt.Println("\t\tOptional: --security-log-level <none|error|info|debug|trace> (active in --dev mode).")
-			fmt.Println("\t\tAlias: --log-level <none|error|info|debug|trace> (active in --dev mode).")
-			fmt.Println("\t\tOptional: --signer-auth to enforce trusted signer key verification in secure mode.")
-			fmt.Println("\t\tDefault is --secure (fail-closed security behavior).")
-			fmt.Println()
-			fmt.Println("\tmutant gen <FILENAME>.mut [-password|-pwd]")
-			fmt.Println("\t\tCompile mutant source code into bytecode with optional password.")
-			fmt.Println("\t\tOptional: -mutation <0-10> to control polymorphism level (default: 3).")
-			fmt.Println("\t\tOptional: -seed <INT64> to set polymorphism seed (default: current timestamp).")
-			fmt.Println("\tmutant gen --release-assets [-out <DIR>]")
-			fmt.Println("\t\tGenerate embedded release runtime assets files (index + data/*.bin).")
-			fmt.Println("\t\tAlso supported: mutant gen assets [-out <DIR>].")
-			fmt.Println()
-			fmt.Println("\tmutant release <FILENAME>.mut [-os | -arch]")
-			fmt.Println("\t\tCompile mutant source code into standalone, independent binary executable.")
-			fmt.Println("\t\tRelease requires embedded runtime assets for target OS/ARCH.")
-			fmt.Println("")
-			fmt.Println("\t\tOptional: -password|-pwd <STRING> to encrypt output with a password.")
-			fmt.Println("\t\tOptional: -mutation <0-10> to control polymorphism level (default: 3).")
-			fmt.Println("\t\tOptional: -seed <INT64> to set polymorphism seed (default: current timestamp).")
-			fmt.Println("\t\tIf omitted, deterministic compatibility mode (weaker obfuscation) is used.")
-			fmt.Println("")
-			fmt.Println("\t\tPossible values for -os: darwin | linux | windows.")
-			fmt.Println("\t\tPossible values for -arch: amd64 | arm64 | arm | 386 | x86. (386 & x86 have same meaning here)")
-
-			fmt.Println("")
-			fmt.Println("Examples:")
-			fmt.Println("\tmutant gen -src hello.mut -pwd \"My$tr0ngPass!\"")
-
-			return
-		}
-
-		if os.Args[1] == "-em" || os.Args[1] == "enableMacros" {
-			cli.RunRepl(VERSION, true)
-			return
-		}
-
-		if os.Args[1] == "-v" || os.Args[1] == "--version" {
-			fmt.Println(VERSION)
-			return
-		}
-
-		if strings.HasSuffix(os.Args[1], global.MutantSourceCodeFileExtention) {
-			pwd := mutil.GetPwd()
-			cli.CompileCode(os.Args[1], "", "", false, pwd, defaultPolymorphicLevel, time.Now().UnixNano())
-			return
-		}
-
-		if strings.HasSuffix(os.Args[1], global.MutantByteCodeCompiledFileExtension) {
-			pwd := mutil.GetPwd()
-			cli.RunCode(os.Args[1], pwd, true, false)
-			return
-		}
+	executablePath, err := runtimeDeps.executablePath()
+	if err != nil {
+		return false, 0
 	}
 
-	// General CLI: support password for compile/run (non-release, non-gen)
-	if len(os.Args) >= 2 && os.Args[1] != RELEASECMD && os.Args[1] != GENCMD {
-		// Try to find a file argument anywhere in the args
-		var fileArg string
-		for i := 1; i < len(os.Args); i++ {
-			if strings.HasSuffix(os.Args[i], global.MutantSourceCodeFileExtention) ||
-				strings.HasSuffix(os.Args[i], global.MutantByteCodeCompiledFileExtension) {
-				fileArg = os.Args[i]
-				break
-			}
-		}
-
-		if fileArg != "" {
-			password := extractPasswordArg(os.Args)
-			devMode := hasDevModeArg(os.Args)
-			secureMode := extractSecurityModeArg(os.Args)
-			enforceSignerAuth := extractSignerAuthArg(os.Args)
-			if devMode {
-				secureMode = false
-			}
-			configureSecurityLogging(os.Args, devMode)
-			if strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention) {
-				cli.CompileCode(fileArg, "", "", false, password, defaultPolymorphicLevel, time.Now().UnixNano())
-				return
-			}
-			if strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension) {
-				if password == "" && devMode {
-					password = mutil.GetPwd()
-				}
-				cli.RunCode(fileArg, password, secureMode, enforceSignerAuth)
-				return
-			}
-		}
+	hasStandalonePayload, payloadErr := runtimeDeps.hasStandalonePayload(executablePath)
+	if payloadErr != nil {
+		fmt.Println(payloadErr)
+		return true, 1
 	}
 
-	if len(os.Args) >= 2 && os.Args[1] == GENCMD && hasReleaseAssetsArg(os.Args) {
-		out, err := prepareReleaseAssetsGeneration(os.Args)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		fmt.Println("Generating embedded release runtime assets....")
-		cli.GenerateReleaseAssets(out)
-		return
+	if !hasStandalonePayload {
+		return false, 0
 	}
 
-	if len(os.Args) >= 2 && (os.Args[1] == GENCMD || os.Args[1] == RUNCMD) {
-		src, password, mutationLevel, mutationSeed, err := prepareGenRun(os.Args)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
+	runEmbeddedPayload(executablePath, args)
+	return true, 0
+}
 
-		fmt.Println("Generating Bytecode....")
-		cli.CompileCode(src, "", "", false, password, mutationLevel, mutationSeed)
-		return
+func runEmbeddedPayload(executablePath string, args []string) {
+	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
+
+	configureSecurityLogging(args, devMode)
+	if password == "" && devMode {
+		password = runtimeDeps.getPwd()
 	}
 
-	if len(os.Args) >= 2 && os.Args[1] == RELEASECMD {
-		src, goos, goarch, password, mutationLevel, mutationSeed, err := prepareRelease(os.Args)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
+	runtimeDeps.runCode(executablePath, password, secureMode, enforceSignerAuth)
+}
 
-		fmt.Println("Compiling Release Build....")
-		cli.CompileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed)
-		return
+func resolveRuntimeExecutionOptions(args []string) (string, bool, bool, bool) {
+	password := extractPasswordArg(args)
+	devMode := hasDevModeArg(args)
+	secureMode := extractSecurityModeArg(args)
+	if devMode {
+		secureMode = false
 	}
+
+	enforceSignerAuth := extractSignerAuthArg(args)
+	return password, devMode, secureMode, enforceSignerAuth
+}
+
+func runCommandFlow(args []string) int {
+	if len(args) == 1 {
+		runtimeDeps.runRepl(VERSION, false)
+		return 0
+	}
+
+	if handleBuiltinCommand(args) {
+		return 0
+	}
+
+	if handleFileInvocation(args) {
+		return 0
+	}
+
+	handler, ok := commandHandlers[args[1]]
+	if !ok {
+		fmt.Printf("unknown command or file: %s\n\n", args[1])
+		printGeneralHelp()
+		return 1
+	}
+
+	return handler(args)
 }
 
 func shouldAttemptEmbeddedRun(args []string) bool {
@@ -226,7 +146,11 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 
 	for _, arg := range args[1:] {
 		switch arg {
-		case RELEASECMD, GENCMD, RUNCMD, "-h", "--help", "-v", "--version", "-em", "--enableMacros":
+		case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+			return false
+		}
+
+		if isHelpArg(arg) || isVersionArg(arg) || isEnableMacrosArg(arg) {
 			return false
 		}
 
@@ -282,6 +206,362 @@ func extractSecurityLogLevelArg(args []string) string {
 	return ""
 }
 
+func handleBuiltinCommand(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+
+	if isHelpArg(args[1]) {
+		printGeneralHelp()
+		return true
+	}
+
+	if args[1] == HELPCMD {
+		printHelpTopic(args[2:])
+		return true
+	}
+
+	if isVersionArg(args[1]) {
+		fmt.Println(VERSION)
+		return true
+	}
+
+	if isEnableMacrosArg(args[1]) {
+		runtimeDeps.runRepl(VERSION, true)
+		return true
+	}
+
+	return false
+}
+
+func handleFileInvocation(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+
+	if isBuiltinCommand(args[1]) {
+		return false
+	}
+
+	fileArg := findProgramArg(args[1:])
+	if fileArg == "" {
+		return false
+	}
+
+	return executeProgramFile(args, fileArg)
+}
+
+func isBuiltinCommand(arg string) bool {
+	switch arg {
+	case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+		return true
+	default:
+		return false
+	}
+}
+
+func executeProgramFile(args []string, fileArg string) bool {
+	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
+	configureSecurityLogging(args, devMode)
+
+	if strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention) {
+		runtimeDeps.compileCode(fileArg, "", "", false, password, defaultPolymorphicLevel, time.Now().UnixNano())
+		return true
+	}
+
+	if !strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension) {
+		return false
+	}
+
+	password = resolveProgramRunPassword(args, password, devMode)
+	runtimeDeps.runCode(fileArg, password, secureMode, enforceSignerAuth)
+	return true
+}
+
+func resolveProgramRunPassword(args []string, password string, devMode bool) string {
+	if password == "" && devMode {
+		return runtimeDeps.getPwd()
+	}
+
+	if password == "" && len(args) == 2 {
+		return runtimeDeps.getPwd()
+	}
+
+	return password
+}
+
+func handleGenCommand(args []string) int {
+	if hasHelpFlag(args[2:]) {
+		printGenCommandHelp(args)
+		return 0
+	}
+
+	if hasReleaseAssetsArg(args) {
+		return handleGenAssetsCommand(args)
+	}
+
+	return handleGenCompileCommand(args)
+}
+
+func handleReleaseCommand(args []string) int {
+	if hasHelpFlag(args[2:]) {
+		printReleaseHelp()
+		return 0
+	}
+
+	return handleReleaseCompileCommand(args)
+}
+
+func printGenCommandHelp(args []string) {
+	if hasReleaseAssetsArg(args) {
+		printAssetsHelp()
+		return
+	}
+
+	printGenHelp(args[1] == RUNCMD)
+}
+
+func handleGenAssetsCommand(args []string) int {
+	out, err := prepareReleaseAssetsGeneration(args)
+	if err != nil {
+		printCommandError(err, "gen assets")
+		printAssetsHelp()
+		return 1
+	}
+
+	fmt.Println("Generating embedded release runtime assets...")
+	runtimeDeps.generateReleaseAssets(out)
+	return 0
+}
+
+func handleGenCompileCommand(args []string) int {
+	src, password, mutationLevel, mutationSeed, err := prepareGenRun(args)
+	if err != nil {
+		printCommandError(err, args[1])
+		printGenHelp(args[1] == RUNCMD)
+		return 1
+	}
+
+	fmt.Println("Generating bytecode...")
+	runtimeDeps.compileCode(src, "", "", false, password, mutationLevel, mutationSeed)
+	return 0
+}
+
+func handleReleaseCompileCommand(args []string) int {
+
+	src, goos, goarch, password, mutationLevel, mutationSeed, err := prepareRelease(args)
+	if err != nil {
+		printCommandError(err, RELEASECMD)
+		printReleaseHelp()
+		return 1
+	}
+
+	fmt.Println("Compiling release build...")
+	runtimeDeps.compileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed)
+	return 0
+}
+
+func printHelpTopic(args []string) {
+	if len(args) == 0 {
+		printGeneralHelp()
+		return
+	}
+
+	switch args[0] {
+	case GENCMD:
+		if len(args) > 1 && strings.EqualFold(args[1], "assets") {
+			printAssetsHelp()
+			return
+		}
+		printGenHelp(false)
+	case RUNCMD:
+		printGenHelp(true)
+	case RELEASECMD:
+		printReleaseHelp()
+	default:
+		fmt.Printf("unknown help topic: %s\n\n", args[0])
+		printGeneralHelp()
+	}
+}
+
+func printGeneralHelp() {
+	fmt.Printf(`mutant
+%s
+
+Secure-by-default programming language and toolchain.
+
+Usage:
+  mutant
+  mutant [global options] <file.mut>
+  mutant [runtime options] <file.mu>
+  mutant gen [options] --src <file.mut>
+  mutant gen assets [options]
+  mutant release [options] --src <file.mut>
+  mutant help [command]
+
+Commands:
+  gen        Compile source into encrypted bytecode.
+  gen assets Generate embedded runtime assets for release packaging.
+  release    Build a standalone executable for a target OS/ARCH.
+  help       Show general or command-specific help.
+
+Global options:
+  -h, --help                 Show help.
+  -v, --version              Show version information.
+  -em, --enable-macros       Start the REPL with experimental macros enabled.
+
+Runtime options:
+  --secure                   Enforce secure mode. Default behavior.
+  --compat                   Use compatibility mode with weaker security checks.
+  --dev                      Developer mode. Implies compatibility mode and local password fallback.
+  --signer-auth              Require trusted signer verification in secure mode.
+  --no-signer-auth           Disable signer verification.
+  --security-log-level LEVEL Set security logging in dev mode.
+  --log-level LEVEL          Alias for --security-log-level.
+
+Examples:
+  mutant
+  mutant --enable-macros
+  mutant hello.mut
+  mutant hello.mu --secure --signer-auth
+  mutant gen --src hello.mut --password "My$tr0ngPass!"
+  mutant gen assets --out ./releaseassets
+  mutant release --src hello.mut --os windows --arch amd64 --mutation 5
+
+Use "mutant help gen", "mutant help gen assets", or "mutant help release" for more detail.
+`, VERSION)
+}
+
+func printGenHelp(isRunAlias bool) {
+	commandName := GENCMD
+	description := "Compile source into encrypted bytecode."
+	if isRunAlias {
+		commandName = RUNCMD
+		description = "Legacy alias for \"mutant gen\". Compiles source into encrypted bytecode."
+	}
+
+	fmt.Printf(`mutant %s
+
+%s
+
+Usage:
+  mutant %s --src <file.mut> [options]
+  mutant %s <file.mut> [options]
+
+Options:
+  --src <file>         Path to the .mut source file.
+  --password <value>   Encrypt output with a password.
+  --pwd <value>        Alias for --password.
+  --mutation <0-10>    Polymorphic mutation level. Default: %d.
+  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  -h, --help           Show command help.
+
+Examples:
+  mutant %s --src hello.mut
+  mutant %s hello.mut --password "My$tr0ngPass!"
+  mutant %s hello.mut --mutation 5 --seed 42
+`, commandName, description, commandName, commandName, defaultPolymorphicLevel, commandName, commandName, commandName)
+}
+
+func printAssetsHelp() {
+	fmt.Printf(`mutant gen assets
+
+Generate embedded release runtime assets used by standalone release builds.
+
+Usage:
+  mutant gen assets [--out <dir>]
+  mutant gen --release-assets [--out <dir>]
+
+Options:
+  --out <dir>          Output directory. Default: releaseassets.
+  --release-assets     Legacy flag-based form of the assets subcommand.
+  -h, --help           Show command help.
+
+Examples:
+  mutant gen assets
+  mutant gen assets --out ./build/releaseassets
+`)
+}
+
+func printReleaseHelp() {
+	fmt.Printf(`mutant release
+
+Build a standalone executable for a target OS and architecture.
+
+Usage:
+  mutant release --src <file.mut> [options]
+  mutant release <file.mut> [options]
+
+Options:
+  --src <file>         Path to the .mut source file.
+  --os <name>          Target OS. Default: current host OS.
+  --arch <name>        Target architecture. Default: current host architecture.
+  --password <value>   Encrypt output with a password.
+  --pwd <value>        Alias for --password.
+  --mutation <0-10>    Polymorphic mutation level. Default: %d.
+  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  -h, --help           Show command help.
+
+Supported OS values:
+  darwin, linux, windows
+
+Supported architecture values:
+  amd64, arm64, arm, 386, x86
+
+Examples:
+  mutant release --src hello.mut
+  mutant release hello.mut --os windows --arch amd64
+  mutant release hello.mut --password "My$tr0ngPass!" --mutation 5
+`, defaultPolymorphicLevel)
+}
+
+func printCommandError(err error, command string) {
+	fmt.Printf("%s: %v\n\n", command, err)
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if isHelpArg(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help"
+}
+
+func isVersionArg(arg string) bool {
+	return arg == "-v" || arg == "--version"
+}
+
+func isEnableMacrosArg(arg string) bool {
+	switch arg {
+	case "-em", "--enableMacros", "--enable-macros", "enableMacros":
+		return true
+	default:
+		return false
+	}
+}
+
+func newFlagSet(name string) *flag.FlagSet {
+	flagSet := flag.NewFlagSet(name, flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	return flagSet
+}
+
+func findProgramArg(args []string) string {
+	for _, arg := range args {
+		if strings.HasSuffix(arg, global.MutantSourceCodeFileExtention) ||
+			strings.HasSuffix(arg, global.MutantByteCodeCompiledFileExtension) {
+			return arg
+		}
+	}
+
+	return ""
+}
+
 func configureSecurityLogging(args []string, devMode bool) {
 	if devMode {
 		_ = os.Setenv(security.SecurityDevModeEnv, "1")
@@ -313,7 +593,7 @@ func extractSignerAuthArg(args []string) bool {
 // extractPasswordArg scans args for -password|-pwd or --password=|--pwd=<value>
 func extractPasswordArg(args []string) string {
 	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "-password" || args[i] == "-pwd" {
+		if args[i] == "-password" || args[i] == "-pwd" || args[i] == "--password" || args[i] == "--pwd" {
 			return args[i+1]
 		}
 	}
@@ -323,6 +603,12 @@ func extractPasswordArg(args []string) string {
 		}
 		if strings.HasPrefix(args[i], "--pwd=") {
 			return strings.TrimPrefix(args[i], "--pwd=")
+		}
+		if strings.HasPrefix(args[i], "-password=") {
+			return strings.TrimPrefix(args[i], "-password=")
+		}
+		if strings.HasPrefix(args[i], "-pwd=") {
+			return strings.TrimPrefix(args[i], "-pwd=")
 		}
 	}
 	return ""
@@ -343,7 +629,7 @@ func prepareRelease(args []string) (string, string, string, string, int, int64, 
 	releasecmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
 
-	if err := releasecmd.Parse(args[2:]); err != nil {
+	if err := releasecmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", "", "", 0, 0, err
 	}
 
@@ -388,7 +674,7 @@ func prepareGenRun(args []string) (string, string, int, int64, error) {
 	gencmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	gencmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
 
-	if err := gencmd.Parse(args[2:]); err != nil {
+	if err := gencmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", 0, 0, err
 	}
 
@@ -441,7 +727,7 @@ func prepareReleaseAssetsGeneration(args []string) (string, error) {
 	gencmd.Bool("release-assets", false, "Generate embedded release runtime assets")
 	gencmd.StringVar(&out, "out", "releaseassets", "Directory for generated release assets")
 
-	if err := gencmd.Parse(args[2:]); err != nil {
+	if err := gencmd.Parse(filterAssetsArgs(args[2:])); err != nil {
 		return "", err
 	}
 
@@ -461,6 +747,41 @@ func prepareReleaseAssetsGeneration(args []string) (string, error) {
 	}
 
 	return absOut, nil
+}
+
+func filterSourceArgs(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-src" || arg == "--src" {
+			filtered = append(filtered, arg)
+			if i+1 < len(args) {
+				filtered = append(filtered, args[i+1])
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-src=") || strings.HasPrefix(arg, "--src=") {
+			filtered = append(filtered, arg)
+			continue
+		}
+		if strings.HasSuffix(arg, global.MutantSourceCodeFileExtention) {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
+}
+
+func filterAssetsArgs(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.EqualFold(arg, "assets") {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 func findSourceArg(args []string) string {
