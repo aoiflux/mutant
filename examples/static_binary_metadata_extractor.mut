@@ -2,8 +2,8 @@ putln("=== static_binary_metadata_extractor ===");
 putln("Safe use: static metadata only. No execution performed.");
 
 let output_dir = "example_output/static_binary_metadata_extractor";
-let config_path = output_dir + "/input.json";
-let default_sample = output_dir + "/sample.bin";
+let sample_path = "examples/data/sample.exe";
+let lua_parser_path = "examples/static_binary_parser.lua";
 let report_path = output_dir + "/report.json";
 
 let mk = fs_mkdir(output_dir);
@@ -11,62 +11,75 @@ if (mk["ok"] == false) {
     putln("failed to create output directory: ", mk["error"]);
 };
 
-if (fs_exists(config_path) == false) {
-    let seed = {
-        "sample_path": default_sample,
-        "note": "replace sample_path with a real PE/ELF file for richer metadata"
-    };
-    let seed_write = fs_write(config_path, json_stringify(seed));
-    if (seed_write["ok"]) {
-        putln("seeded config: ", config_path);
-    };
-};
-
-if (fs_exists(default_sample) == false) {
-    let sample_blob = "MZThisIsATestSampleBinaryHeaderOnly";
-    let sample_write = fs_write(default_sample, sample_blob);
-    if (sample_write["ok"]) {
-        putln("seeded sample binary: ", default_sample);
-    };
-};
-
-let config = json_parse(fs_read(config_path));
-let sample_path = config["sample_path"];
 let sample_data = fs_read(sample_path);
+let lua_bundle_result = lua_run_file(lua_parser_path);
 
-let format_guess = "unknown";
-if (sample_data[0] == "M") {
-    if (sample_data[1] == "Z") {
-        format_guess = "pe_like";
+let metadata = {
+    "format": "unknown",
+    "magic_hex": "",
+    "byte_length": len(sample_data),
+    "pe_offset": 0,
+    "pe_signature": "",
+    "machine": "",
+    "sections": 0,
+    "timestamp": 0,
+    "characteristics": "",
+    "optional_magic": "",
+    "entry_rva": 0,
+    "section_table": [],
+    "import_table": []
+};
+
+let import_table = [];
+
+let import_diagnostics = {
+    "pe_ok": false,
+    "pe_offset": 0,
+    "import_directory_rva": "0x00000000",
+    "import_directory_raw": "0x00000000",
+    "data_directory_base": "0x00000000",
+    "pointer_size": 0,
+    "descriptors_seen": 0,
+    "descriptors_with_name": 0,
+    "descriptors_with_thunks": 0
+};
+
+if (lua_bundle_result["ok"]) {
+    if (lua_bundle_result["result"] != "") {
+        let bundle = json_parse(lua_bundle_result["result"]);
+        metadata = bundle["metadata"];
+        import_table = bundle["import_table"];
+        import_diagnostics = bundle["import_diagnostics"];
     };
 };
-if (sample_data[0] == "\u007f") {
-    if (sample_data[1] == "E") {
-        if (sample_data[2] == "L") {
-            if (sample_data[3] == "F") {
-                format_guess = "elf_like";
+
+let format_guess = metadata["format"];
+if (format_guess == "unknown") {
+    if (len(sample_data) > 1) {
+        if (sample_data[0] == "M") {
+            if (sample_data[1] == "Z") {
+                format_guess = "pe_like";
             };
         };
     };
 };
-
-let lua_code = "local data,err=mutant.read_file('" + sample_path + "'); if not data then return 'error='..err end; local size=#data; local b1=string.byte(data,1) or 0; local b2=string.byte(data,2) or 0; local b3=string.byte(data,3) or 0; local b4=string.byte(data,4) or 0; local magic=string.format('%02X%02X%02X%02X',b1,b2,b3,b4); return 'magic_hex='..magic..';size='..tostring(size)";
-let lua_result = lua_run_string(lua_code);
 
 let report = {
     "profile": "static_binary_metadata_extractor",
     "sample_path": sample_path,
     "format_guess": format_guess,
     "byte_length": len(sample_data),
-    "lua_metadata": lua_result["result"],
-    "lua_ok": lua_result["ok"],
-    "lua_error": lua_result["error"],
-    "note": "for full metadata, provide a real PE/ELF sample in input.json"
+    "metadata": metadata,
+    "import_table": import_table,
+    "import_diagnostics": import_diagnostics,
+    "lua_bundle_ok": lua_bundle_result["ok"],
+    "lua_bundle_error": lua_bundle_result["error"],
+    "lua_bundle_raw": lua_bundle_result["result"],
 };
 
 let write_report = fs_write(report_path, json_stringify(report));
 if (write_report["ok"]) {
-    putln("wrote report: ", report_path);
+    putf("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putf("failed to write report: ", write_report["error"]);
 };
