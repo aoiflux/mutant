@@ -36,6 +36,9 @@ var builtins = map[string]*builtin.BuiltIn{
 	"http_get":     builtin.GetBuiltinByName("http_get"),
 	"http_post":    builtin.GetBuiltinByName("http_post"),
 	"http_request": builtin.GetBuiltinByName("http_request"),
+	// json
+	"json_stringify": builtin.GetBuiltinByName("json_stringify"),
+	"json_parse":     builtin.GetBuiltinByName("json_parse"),
 	// graph db
 	"db_open":          builtin.GetBuiltinByName("db_open"),
 	"db_open_disk":     builtin.GetBuiltinByName("db_open_disk"),

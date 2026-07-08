@@ -70,7 +70,6 @@ Explicit environment variables still win:
 - `MUTANT_BUILTIN_CAPABILITIES`
 - `MUTANT_SECURITY_AUDIT`
 - `MUTANT_SECURITY_TELEMETRY_FILE`
-- `MUTANT_ENABLE_COMMAND_EXEC`
 
 ## Artifact format
 

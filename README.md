@@ -123,6 +123,41 @@ available:
 - `--security-log-level <none|error|info|debug|trace>`
 - `--log-level <none|error|info|debug|trace>` as an alias
 
+## Practical Security and Forensics Examples
+
+The `examples/` directory now includes practical scripts that can be used for
+real security and forensics workflows:
+
+- `security_environment_report.mut`: Collects debugger/sandbox diagnostics,
+  computes a risk score, and writes a JSON report.
+- `network_service_recon_graph.mut`: Performs DNS + TCP reconnaissance, persists
+  a graph model, and writes a machine-readable findings report.
+- `ioc_event_triage.mut`: Seeds/parses IOC events from JSON, scores suspicious
+  activity, and emits triage findings.
+- `persistence_triage_commands.mut`: Captures startup and scheduled task
+  snapshots using command execution builtins and writes a forensic artifact.
+
+Suggested run sequence:
+
+```bash
+mutant examples/security_environment_report.mut
+mutant examples/network_service_recon_graph.mut
+mutant examples/ioc_event_triage.mut
+mutant examples/persistence_triage_commands.mut
+```
+
+Artifacts are written under `example_output/`.
+
+### Command execution requirements
+
+`persistence_triage_commands.mut` uses `cmd_builder`, `cmd_add`, and `cmd_run`.
+Those are policy controlled.
+
+Optional policy tuning:
+
+- `MUTANT_COMMAND_EXEC_TIMEOUT_MS`
+- `MUTANT_COMMAND_EXEC_MAX_OUTPUT_BYTES`
+
 ## Featured In
 
 - [Gopherlabs Conference 2021 by CloudNativeFolks](https://youtu.be/rhSwwGSt90c?t=2223)

@@ -1,0 +1,39 @@
+putln("=== Persistence Triage via Command Execution ===");
+
+let output_dir = "example_output/persistence";
+let report_path = output_dir + "/persistence_triage_report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+let startup_builder = cmd_builder("powershell");
+startup_builder = cmd_add(startup_builder, "Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json -Compress");
+let startup = cmd_run(startup_builder);
+
+let tasks_builder = cmd_builder("powershell");
+tasks_builder = cmd_add(tasks_builder, "Get-ScheduledTask | Select-Object TaskName, TaskPath, State | ConvertTo-Json -Compress");
+let tasks = cmd_run(tasks_builder);
+
+if (startup["allowed"] == false) {
+    putln("command execution blocked by policy");
+    putln("update command execution policy/profile to enable this example");
+} else {
+    putln("startup command exit_code: ", startup["exit_code"], " timed_out=", startup["timed_out"]);
+    putln("task command exit_code: ", tasks["exit_code"], " timed_out=", tasks["timed_out"]);
+};
+
+let report = {
+    "profile": "persistence_triage",
+    "startup_snapshot": startup,
+    "scheduled_tasks_snapshot": tasks
+};
+
+let report_json = json_stringify(report);
+let write_report = fs_write(report_path, report_json);
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

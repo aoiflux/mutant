@@ -1,0 +1,93 @@
+putln("=== IOC Event Triage ===");
+
+let output_dir = "example_output/ioc";
+let input_path = output_dir + "/events.json";
+let report_path = output_dir + "/ioc_triage_report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+if (fs_exists(input_path) == false) {
+    let sample = {
+        "events": [
+            {"src": "10.10.10.5", "event": "auth_fail", "count": 6},
+            {"src": "10.10.10.9", "event": "powershell_encoded", "count": 1},
+            {"src": "10.10.10.11", "event": "service_install", "count": 2},
+            {"src": "10.10.10.12", "event": "auth_fail", "count": 2}
+        ]
+    };
+    let sample_json = json_stringify(sample);
+    let write_sample = fs_write(input_path, sample_json);
+    if (write_sample["ok"]) {
+        putln("seeded sample events at ", input_path);
+    };
+};
+
+let raw = fs_read(input_path);
+let parsed = json_parse(raw);
+let events = parsed["events"];
+
+let findings = [];
+let high_count = 0;
+let medium_count = 0;
+
+for (let i = 0; i < len(events); i = i + 1) {
+    let ev = events[i];
+    let score = 10;
+
+    if (ev["event"] == "auth_fail") {
+        score = 25;
+        if (ev["count"] > 4) {
+            score = 65;
+        };
+    };
+    if (ev["event"] == "powershell_encoded") {
+        score = 95;
+    };
+    if (ev["event"] == "service_install") {
+        score = 70;
+    };
+
+    let severity = "low";
+    if (score > 79) {
+        severity = "high";
+        high_count = high_count + 1;
+    } else {
+        if (score > 49) {
+            severity = "medium";
+            medium_count = medium_count + 1;
+        };
+    };
+
+    if (severity != "low") {
+        findings = push(findings, {
+            "src": ev["src"],
+            "event": ev["event"],
+            "count": ev["count"],
+            "score": score,
+            "severity": severity
+        });
+    };
+}
+
+putln("events processed: ", len(events));
+putln("high findings: ", high_count, " medium findings: ", medium_count);
+
+let report = {
+    "profile": "ioc_event_triage",
+    "input_file": input_path,
+    "events_processed": len(events),
+    "high_findings": high_count,
+    "medium_findings": medium_count,
+    "findings": findings
+};
+
+let report_json = json_stringify(report);
+let write_report = fs_write(report_path, report_json);
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

@@ -1,0 +1,86 @@
+putln("=== Network Service Recon + Graph Artifact ===");
+
+let output_dir = "example_output/recon";
+let graph_path = output_dir + "/service_graph";
+let report_path = output_dir + "/network_recon_report.json";
+
+let mk = fs_mkdir(output_dir);
+if (mk["ok"] == false) {
+    putln("failed to create output directory: ", mk["error"]);
+};
+
+let targets = ["example.com", "cloudflare.com"];
+let ports = ["80", "443", "22", "3389"];
+
+let NODE_HOST = 1;
+let NODE_SERVICE = 2;
+let EDGE_EXPOSES = 1;
+
+let db = db_open_disk(graph_path);
+let host_nodes = [];
+let findings = [];
+let open_count = 0;
+
+for (let i = 0; i < len(targets); i = i + 1) {
+    let host = targets[i];
+    let host_node = db_add_node(db, NODE_HOST);
+    db_index_prop(db, host_node, "host", host);
+    host_nodes = push(host_nodes, host_node);
+
+    let resolved = net_resolve(host);
+    if (len(resolved) > 0) {
+        db_index_prop(db, host_node, "resolved_ip", resolved[0]);
+    };
+
+    for (let j = 0; j < len(ports); j = j + 1) {
+        let port = ports[j];
+        let dial = net_dial(host + ":" + port, 1200);
+
+        if (dial["ok"]) {
+            open_count = open_count + 1;
+            let service_node = db_add_node(db, NODE_SERVICE);
+            db_index_prop(db, service_node, "port", port);
+            db_index_prop(db, service_node, "latency_ms", json_stringify(dial["latency_ms"]));
+            db_add_edge(db, host_node, service_node, EDGE_EXPOSES);
+
+            findings = push(findings, {
+                "host": host,
+                "port": port,
+                "latency_ms": dial["latency_ms"],
+                "status": "open"
+            });
+
+            putln("open: ", host, ":", port, " latency_ms=", dial["latency_ms"]);
+        };
+    }
+}
+
+let stats = db_stats(db);
+let bfs_node_count = 0;
+if (len(host_nodes) > 0) {
+    let bfs = db_bfs(db, first(host_nodes), 1, "out");
+    bfs_node_count = len(bfs["nodes"]);
+};
+
+let close_result = db_close(db);
+if (close_result["ok"] == false) {
+    putln("db_close error: ", close_result["error"]);
+};
+
+let report = {
+    "profile": "network_recon_graph",
+    "targets": targets,
+    "open_service_count": open_count,
+    "graph_stats": stats,
+    "bfs_node_count": bfs_node_count,
+    "findings": findings
+};
+
+let report_json = json_stringify(report);
+let write_report = fs_write(report_path, report_json);
+if (write_report["ok"]) {
+    putln("wrote report: ", report_path);
+    putln("graph path: ", graph_path);
+} else {
+    putln("failed to write report: ", write_report["error"]);
+};

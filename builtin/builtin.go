@@ -51,6 +51,9 @@ var Builtins = []struct {
 	{"http_get", &BuiltIn{HttpGet}, "network"},
 	{"http_post", &BuiltIn{HttpPost}, "network"},
 	{"http_request", &BuiltIn{HttpRequest}, "network"},
+	// json
+	{"json_stringify", &BuiltIn{JsonStringify}, ""},
+	{"json_parse", &BuiltIn{JsonParse}, ""},
 	// lua
 	{"lua_run_string", &BuiltIn{LuaRunString}, ""},
 	{"lua_run_file", &BuiltIn{LuaRunFile}, "filesystem"},

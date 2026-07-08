@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"mutant/object"
+	"strings"
 	"testing"
 )
 
@@ -325,6 +326,29 @@ func TestCommandExecutionBuiltins(t *testing.T) {
 	}
 	if decisionObj.Value != "blocked_disabled" {
 		t.Fatalf("unexpected cmd_run policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
+	}
+}
+
+func TestJSONBuiltins(t *testing.T) {
+	parsed := testEval(`json_parse("[1,2,3]")[1]`)
+	testIntegerObject(t, parsed, 2)
+
+	stringified := testEval(`json_stringify({"name": "mutant", "flags": [true, false]})`)
+	strObj, ok := stringified.(*object.String)
+	if !ok {
+		t.Fatalf("json_stringify did not return String. got=%T", stringified)
+	}
+	if len(strObj.Value) == 0 {
+		t.Fatalf("json_stringify returned empty string")
+	}
+
+	invalid := testEval(`json_parse("[1,")`)
+	errObj, ok := invalid.(*object.Error)
+	if !ok {
+		t.Fatalf("json_parse invalid input did not return Error. got=%T", invalid)
+	}
+	if !strings.Contains(errObj.Message, "not valid JSON") {
+		t.Fatalf("unexpected json_parse error: %q", errObj.Message)
 	}
 }
 
