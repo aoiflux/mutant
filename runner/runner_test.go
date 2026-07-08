@@ -252,6 +252,83 @@ func TestEnforceAntiSandboxCompatModeWarnsAndContinues(t *testing.T) {
 	}
 }
 
+func TestEnforceProcessProtectionSecureModeTerminatesOnHighConfidence(t *testing.T) {
+	originalProbe := runAntiTamperProbe
+	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
+		return []security.AntiTamperSignal{{
+			Name:       "trampoline",
+			Detected:   true,
+			Confidence: processProtectionTerminateConfidence,
+			Detail:     "test",
+		}}, true, nil
+	}
+	defer func() {
+		runAntiTamperProbe = originalProbe
+	}()
+
+	t.Setenv(security.TamperResponseEnv, "")
+	err := enforceProcessProtection(true, "test-stage")
+	if err == nil {
+		t.Fatalf("expected secure mode to terminate on high-confidence process protection signal")
+	}
+	if !errors.Is(err, security.ErrProcessProtectionDetected) {
+		t.Fatalf("expected ErrProcessProtectionDetected, got: %v", err)
+	}
+}
+
+func TestEnforceProcessProtectionIgnoresLowConfidence(t *testing.T) {
+	originalProbe := runAntiTamperProbe
+	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
+		return []security.AntiTamperSignal{{
+			Name:       "process_injection",
+			Detected:   true,
+			Confidence: processProtectionTerminateConfidence - 1,
+			Detail:     "test",
+		}}, true, nil
+	}
+	defer func() {
+		runAntiTamperProbe = originalProbe
+	}()
+
+	err := enforceProcessProtection(true, "test-stage")
+	if err != nil {
+		t.Fatalf("expected low-confidence process protection signal to be advisory, got: %v", err)
+	}
+}
+
+func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
+	originalProbe := runAntiTamperProbe
+	called := false
+	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
+		called = true
+		return []security.AntiTamperSignal{{
+			Name:       "trampoline",
+			Detected:   true,
+			Confidence: processProtectionTerminateConfidence,
+			Detail:     "test",
+		}}, true, nil
+	}
+	defer func() {
+		runAntiTamperProbe = originalProbe
+	}()
+
+	t.Setenv(security.ProcessProtectionEnabledEnv, "0")
+	err := enforceProcessProtection(true, "test-stage")
+	if err != nil {
+		t.Fatalf("expected disabled process protection to skip enforcement, got: %v", err)
+	}
+	if called {
+		t.Fatalf("expected probe not to run when process protection is disabled")
+	}
+}
+
+func TestIsProcessProtectionEnabledDefaultsToTrue(t *testing.T) {
+	t.Setenv(security.ProcessProtectionEnabledEnv, "")
+	if !isProcessProtectionEnabled() {
+		t.Fatalf("expected process protection enabled by default")
+	}
+}
+
 func TestExecuteLuaPatchesBeforeVMSucceeds(t *testing.T) {
 	plaintext := []byte("return mutant.version()")
 	password := "runner-lua-success"

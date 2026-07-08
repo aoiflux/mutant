@@ -10,11 +10,11 @@ import (
 
 func TestDetectSandboxWindowsFromTasklistHyperV(t *testing.T) {
 	detection := detectSandboxWindowsFromTasklist("vmicheartbeat.exe vmictimesync.exe")
-	if detection.Type != "Hyper-V" {
-		t.Fatalf("expected Hyper-V detection, got %q", detection.Type)
+	if detection.Type != windowsSandboxTypeHyperV {
+		t.Fatalf("expected %s detection, got %q", windowsSandboxTypeHyperV, detection.Type)
 	}
-	if detection.Confidence < 80 {
-		t.Fatalf("expected Hyper-V confidence >= 80, got %d", detection.Confidence)
+	if detection.Confidence < windowsConfidenceHyperVIntegration {
+		t.Fatalf("expected Hyper-V confidence >= %d, got %d", windowsConfidenceHyperVIntegration, detection.Confidence)
 	}
 	if len(detection.Indicators) == 0 {
 		t.Fatalf("expected Hyper-V indicators")
@@ -36,12 +36,12 @@ func TestDetectSandboxWindowsFromTasklistHostWSLProcessesNoSignal(t *testing.T) 
 }
 
 func TestDetectSandboxWindowsFromEnvWSL(t *testing.T) {
-	detection := detectSandboxWindowsFromEnv(map[string]string{"WSL_INTEROP": `/run/WSL/9_interop`})
-	if detection.Type != "WSL" {
+	detection := detectSandboxWindowsFromEnv(map[string]string{windowsEnvWSLInterop: `/run/WSL/9_interop`})
+	if detection.Type != windowsSandboxTypeWSL {
 		t.Fatalf("expected WSL detection, got %q", detection.Type)
 	}
-	if detection.Confidence < 90 {
-		t.Fatalf("expected WSL confidence >= 90, got %d", detection.Confidence)
+	if detection.Confidence < windowsConfidenceWslCwd {
+		t.Fatalf("expected WSL confidence >= %d, got %d", windowsConfidenceWslCwd, detection.Confidence)
 	}
 	if len(detection.Indicators) == 0 {
 		t.Fatalf("expected WSL indicators")
@@ -49,12 +49,12 @@ func TestDetectSandboxWindowsFromEnvWSL(t *testing.T) {
 }
 
 func TestDetectSandboxWindowsFromEnvWSLENV(t *testing.T) {
-	detection := detectSandboxWindowsFromEnv(map[string]string{"WSLENV": "PATH/l"})
-	if detection.Type != "WSL" {
+	detection := detectSandboxWindowsFromEnv(map[string]string{windowsEnvWSLEnv: "PATH/l"})
+	if detection.Type != windowsSandboxTypeWSL {
 		t.Fatalf("expected WSL detection, got %q", detection.Type)
 	}
-	if detection.Confidence != 35 {
-		t.Fatalf("expected WSLENV-only confidence 35, got %d", detection.Confidence)
+	if detection.Confidence != windowsConfidenceWslEnvOnly {
+		t.Fatalf("expected WSLENV-only confidence %d, got %d", windowsConfidenceWslEnvOnly, detection.Confidence)
 	}
 	if detection.Confidence >= sandboxDetectedThreshold {
 		t.Fatalf("expected WSLENV-only signal to stay below sandbox threshold, got %d", detection.Confidence)
@@ -63,21 +63,21 @@ func TestDetectSandboxWindowsFromEnvWSLENV(t *testing.T) {
 
 func TestDetectSandboxWindowsFromCwdWSLUNC(t *testing.T) {
 	detection := detectSandboxWindowsFromCwd(`\\wsl.localhost\Ubuntu\home\user\project`)
-	if detection.Type != "WSL" {
+	if detection.Type != windowsSandboxTypeWSL {
 		t.Fatalf("expected WSL detection from cwd, got %q", detection.Type)
 	}
-	if detection.Confidence < 90 {
-		t.Fatalf("expected WSL cwd confidence >= 90, got %d", detection.Confidence)
+	if detection.Confidence < windowsConfidenceWslCwd {
+		t.Fatalf("expected WSL cwd confidence >= %d, got %d", windowsConfidenceWslCwd, detection.Confidence)
 	}
 }
 
 func TestDetectSandboxWindowsFromParentWSLHost(t *testing.T) {
 	detection := detectSandboxWindowsFromParent("wslhost.exe")
-	if detection.Type != "WSL" {
+	if detection.Type != windowsSandboxTypeWSL {
 		t.Fatalf("expected WSL detection from parent process, got %q", detection.Type)
 	}
-	if detection.Confidence < 90 {
-		t.Fatalf("expected WSL parent confidence >= 90, got %d", detection.Confidence)
+	if detection.Confidence < windowsConfidenceWslParent {
+		t.Fatalf("expected WSL parent confidence >= %d, got %d", windowsConfidenceWslParent, detection.Confidence)
 	}
 }
 
@@ -92,15 +92,27 @@ func TestParseTasklistImageName(t *testing.T) {
 }
 
 func TestDetectSandboxWindowsFromEnvWindowsSandbox(t *testing.T) {
-	detection := detectSandboxWindowsFromEnv(map[string]string{"USERNAME": "WDAGUtilityAccount"})
-	if detection.Type != "Windows Sandbox" {
+	detection := detectSandboxWindowsFromEnv(map[string]string{windowsEnvUsername: windowsWdagUtilityAccount})
+	if detection.Type != windowsSandboxTypeWindowsSB {
 		t.Fatalf("expected Windows Sandbox detection, got %q", detection.Type)
 	}
-	if detection.Confidence < 95 {
-		t.Fatalf("expected Windows Sandbox confidence >= 95, got %d", detection.Confidence)
+	if detection.Confidence < windowsConfidenceWdagSignals {
+		t.Fatalf("expected Windows Sandbox confidence >= %d, got %d", windowsConfidenceWdagSignals, detection.Confidence)
 	}
 	if len(detection.Indicators) == 0 {
 		t.Fatalf("expected Windows Sandbox indicators")
+	}
+}
+
+func TestFinalizeWindowsDetectionCapsConfidence(t *testing.T) {
+	typeScore := map[string]int{windowsSandboxTypeWSL: maxConfidenceScore + 50}
+	detection := finalizeWindowsDetection(typeScore, []string{windowsIndicatorEnvWSLContext})
+
+	if detection.Confidence != maxConfidenceScore {
+		t.Fatalf("expected confidence cap at %d, got %d", maxConfidenceScore, detection.Confidence)
+	}
+	if detection.Type != windowsSandboxTypeWSL {
+		t.Fatalf("expected type %q, got %q", windowsSandboxTypeWSL, detection.Type)
 	}
 }
 
@@ -143,13 +155,13 @@ func detectSandboxWindowsFromEnv(env map[string]string) sandboxDetection {
 		value, ok := env[name]
 		return value, ok
 	}, add)
-	if value, ok := env["USERNAME"]; ok && value == "WDAGUtilityAccount" {
-		add("Windows Sandbox", 95, "windows:env:wdag_utility_account")
+	if value, ok := env[windowsEnvUsername]; ok && value == windowsWdagUtilityAccount {
+		add(windowsSandboxTypeWindowsSB, windowsConfidenceWdagSignals, windowsIndicatorEnvWdagUser)
 	}
-	if value, ok := env["USERPROFILE"]; ok && value != "" {
+	if value, ok := env[windowsEnvUserProfile]; ok && value != "" {
 		profile := strings.ToLower(value)
-		if strings.Contains(profile, `\users\wdagutilityaccount`) {
-			add("Windows Sandbox", 95, "windows:env:userprofile_wdag")
+		if strings.Contains(profile, windowsPathWdagProfile) {
+			add(windowsSandboxTypeWindowsSB, windowsConfidenceWdagSignals, windowsIndicatorEnvWdagProfile)
 		}
 	}
 

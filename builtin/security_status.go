@@ -31,7 +31,7 @@ func DebugStatus(args ...object.Object) object.Object {
 	}
 
 	probeSignals, probeEnabled, probeErr := security.RunAntiTamperProbe(
-		[]string{"hardware_breakpoint", "timing", "syscall", "frida_ptrace", "trampoline", "iat_got"},
+		[]string{"hardware_breakpoint", "timing", "syscall", "frida_ptrace", "trampoline", "iat_got", "process_injection", "module_integrity", "memory_page_anomaly"},
 		"builtin:debug_status",
 	)
 	result["probe_enabled"] = boolObj(probeEnabled)
@@ -87,7 +87,7 @@ func SandboxStatus(args ...object.Object) object.Object {
 	}
 
 	probeSignals, probeEnabled, probeErr := security.RunAntiTamperProbe(
-		[]string{"cpuid_hypervisor", "rdtsc_drift", "acpi_pci", "gpu_feature", "ld_preload", "syscall_table"},
+		[]string{"cpuid_hypervisor", "rdtsc_drift", "acpi_pci", "gpu_feature", "ld_preload", "syscall_table", "module_integrity", "memory_page_anomaly"},
 		"builtin:sandbox_status",
 	)
 	result["probe_enabled"] = boolObj(probeEnabled)

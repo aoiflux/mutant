@@ -8,6 +8,21 @@ import (
 	"unsafe"
 )
 
+const (
+	debugMethodIsDebuggerPresent    = "windows:is_debugger_present"
+	debugMethodCheckRemoteDebugger  = "windows:check_remote_debugger_present"
+	debugMethodProcessDebugPort     = "windows:process_debug_port"
+	debugMethodProcessDebugObject   = "windows:process_debug_object_handle"
+	debugMethodSystemDebugControl   = "windows:system_debug_control_query_version"
+	debugMethodOutputDebugTiming    = "windows:output_debug_string_timing"
+	debugMethodDebuggerDLLLoaded    = "windows:debugger_dll_loaded"
+	outputDebugTimingThresholdTicks = 10
+	weakSignalTriggerThreshold      = 2
+	outputDebugProbeMessage         = "DEBUG_CHECK"
+)
+
+var debuggerDLLs = []string{"dbghelp.dll", "msvcr120d.dll", "msvcd120d.dll", "vccorlib120d.dll"}
+
 var (
 	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
 	ntdll                          = syscall.NewLazyDLL("ntdll.dll")
@@ -20,13 +35,34 @@ var (
 	procGetParentProcess           = kernel32.NewProc("CreateToolhelp32Snapshot")
 	procCheckRemoteDebuggerPresent = kernel32.NewProc("CheckRemoteDebuggerPresent")
 	procCheckSystemDebugControl    = ntdll.NewProc("NtSystemDebugControl")
+	procGetTickCount               = kernel32.NewProc("GetTickCount")
 )
 
 // ProcessDebugPort is used with NtQueryInformationProcess
 const (
 	ProcessDebugPort         = 7
 	ProcessDebugObjectHandle = 30
+	statusSuccess            = 0
+	statusDebuggerInactive   = 0xC0000354
+	sysDbgQueryVersion       = 7
 )
+
+type dbgkdGetVersion64 struct {
+	MajorVersion       uint16
+	MinorVersion       uint16
+	ProtocolVersion    byte
+	KdSecondaryVersion byte
+	Flags              uint16
+	MachineType        uint16
+	MaxPacketType      byte
+	MaxStateChange     byte
+	MaxManipulate      byte
+	Simulation         byte
+	Unused             [1]uint16
+	KernBase           uint64
+	PsLoadedModuleList uint64
+	DebuggerDataList   uint64
+}
 
 // isDebuggerPresentWindows performs multiple debugger detection techniques.
 // Uses a combination of methods inspired by Kaspersky, Symantec, and other security vendors.
@@ -36,20 +72,23 @@ func isDebuggerPresentWindows() bool {
 }
 
 func detectDebuggerDetailsWindows() (bool, []string) {
-	methods := make([]string, 0, 6)
+	methods := make([]string, 0, 7)
 
 	// High-confidence checks: a single hit is enough.
 	if checkBeingDebugged() {
-		methods = append(methods, "windows:is_debugger_present")
+		methods = append(methods, debugMethodIsDebuggerPresent)
 	}
 	if checkRemoteDebugger() {
-		methods = append(methods, "windows:check_remote_debugger_present")
+		methods = append(methods, debugMethodCheckRemoteDebugger)
 	}
 	if checkProcessDebugPort() {
-		methods = append(methods, "windows:process_debug_port")
+		methods = append(methods, debugMethodProcessDebugPort)
 	}
 	if checkProcessDebugObjectHandle() {
-		methods = append(methods, "windows:process_debug_object_handle")
+		methods = append(methods, debugMethodProcessDebugObject)
+	}
+	if checkSystemDebugControlQueryVersion() {
+		methods = append(methods, debugMethodSystemDebugControl)
 	}
 	if len(methods) > 0 {
 		return true, methods
@@ -59,14 +98,14 @@ func detectDebuggerDetailsWindows() (bool, []string) {
 	weakHits := 0
 	if checkOutputDebugStringTest() {
 		weakHits++
-		methods = append(methods, "windows:output_debug_string_timing")
+		methods = append(methods, debugMethodOutputDebugTiming)
 	}
 	if checkDebuggerDLLs() {
 		weakHits++
-		methods = append(methods, "windows:debugger_dll_loaded")
+		methods = append(methods, debugMethodDebuggerDLLLoaded)
 	}
 
-	return shouldTriggerDebuggerByWeight(false, weakHits, 2), methods
+	return shouldTriggerDebuggerByWeight(false, weakHits, weakSignalTriggerThreshold), methods
 }
 
 // checkBeingDebugged uses IsDebuggerPresent API
@@ -140,6 +179,33 @@ func checkProcessDebugObjectHandle() bool {
 	return false
 }
 
+// checkSystemDebugControlQueryVersion probes the kernel debugger interface.
+// A successful SysDbgQueryVersion call implies the kernel debugger is active.
+// When no kernel debugger is attached, Windows returns STATUS_DEBUGGER_INACTIVE.
+func checkSystemDebugControlQueryVersion() bool {
+	var version dbgkdGetVersion64
+	var returnLength uint32
+
+	ret, _, _ := procCheckSystemDebugControl.Call(
+		uintptr(sysDbgQueryVersion),
+		0,
+		0,
+		uintptr(unsafe.Pointer(&version)),
+		unsafe.Sizeof(version),
+		uintptr(unsafe.Pointer(&returnLength)),
+	)
+
+	if uint32(ret) == statusSuccess {
+		return true
+	}
+
+	if uint32(ret) == statusDebuggerInactive {
+		return false
+	}
+
+	return false
+}
+
 // checkOutputDebugStringTest uses a trick with OutputDebugString.
 // If a debugger is present, it will consume the output.
 // We can detect this by checking system state before/after.
@@ -148,7 +214,7 @@ func checkOutputDebugStringTest() bool {
 	initialTicks := getTicks()
 
 	// Call OutputDebugString - debugger will intercept this
-	msg, _ := syscall.UTF16PtrFromString("DEBUG_CHECK")
+	msg, _ := syscall.UTF16PtrFromString(outputDebugProbeMessage)
 	procOutputDebugString.Call(uintptr(unsafe.Pointer(msg)))
 
 	// If a debugger consumed it, there might be timing artifacts
@@ -157,7 +223,7 @@ func checkOutputDebugStringTest() bool {
 
 	// If time difference is suspicious (debugger stepping), flag it
 	// Allow up to 10ms normally, debuggers often take longer
-	if finalTicks-initialTicks > 10 {
+	if finalTicks-initialTicks > outputDebugTimingThresholdTicks {
 		return true
 	}
 
@@ -166,20 +232,12 @@ func checkOutputDebugStringTest() bool {
 
 // getTicks returns the current system tick count
 func getTicks() uint32 {
-	procGetTickCount := kernel32.NewProc("GetTickCount")
 	ret, _, _ := procGetTickCount.Call()
 	return uint32(ret)
 }
 
 // checkDebuggerDLLs checks if common debugger DLLs are loaded in memory
 func checkDebuggerDLLs() bool {
-	debuggerDLLs := []string{
-		"dbghelp.dll",
-		"msvcr120d.dll",
-		"msvcd120d.dll",
-		"vccorlib120d.dll",
-	}
-
 	for _, dll := range debuggerDLLs {
 		moduleHandle, _, _ := procGetModuleHandle.Call(uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(dll))))
 		if moduleHandle != 0 {

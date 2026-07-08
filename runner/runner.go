@@ -18,13 +18,17 @@ import (
 	"mutant/vm"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var (
-	isDebuggerPresent = security.IsDebuggerPresent
-	isSandboxed       = security.IsSandboxed
-	executeLuaPatches = luaruntime.ExecutePatches
+	isDebuggerPresent  = security.IsDebuggerPresent
+	isSandboxed        = security.IsSandboxed
+	executeLuaPatches  = luaruntime.ExecutePatches
+	runAntiTamperProbe = security.RunAntiTamperProbe
 )
+
+const processProtectionTerminateConfidence = 80
 
 func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
 	telemetryPath := os.Getenv(security.SecurityTelemetryFileEnv)
@@ -99,6 +103,9 @@ func enforceAntiRev(secureMode bool, stage string) error {
 	if err := enforceAntiSandbox(secureMode, stage); err != nil {
 		return err
 	}
+	if err := enforceProcessProtection(secureMode, stage); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -118,6 +125,52 @@ func enforceAntiSandbox(secureMode bool, stage string) error {
 	security.RecordSandboxDetected(stage)
 
 	return security.ApplyTamperResponse("sandbox_detected", stage, secureMode, security.ErrSandboxDetected)
+}
+
+func enforceProcessProtection(secureMode bool, stage string) error {
+	if !isProcessProtectionEnabled() {
+		return nil
+	}
+
+	probes := []string{"process_injection", "trampoline", "iat_got", "module_integrity", "memory_page_anomaly"}
+	signals, enabled, err := runAntiTamperProbe(probes, "runner:"+stage)
+	if err != nil {
+		security.RecordProbeError("runner:" + stage)
+		return nil
+	}
+	if !enabled {
+		return nil
+	}
+
+	for _, signal := range signals {
+		if !signal.Detected || signal.Confidence < processProtectionTerminateConfidence {
+			continue
+		}
+
+		security.RecordProcessProtectionDetected(stage)
+		return security.ApplyTamperResponse(
+			"process_protection_detected",
+			stage,
+			secureMode,
+			security.ErrProcessProtectionDetected,
+		)
+	}
+
+	return nil
+}
+
+func isProcessProtectionEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(security.ProcessProtectionEnabledEnv)))
+	if raw == "" {
+		return true
+	}
+
+	switch raw {
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 func decode(data []byte, password string) (*compiler.ByteCode, error) {

@@ -9,6 +9,51 @@ import (
 	"strings"
 )
 
+const (
+	darwinSandboxTypeAppSandbox = "macOS App Sandbox"
+	darwinSandboxTypeColima     = "Colima"
+	darwinSandboxTypeVMware     = "VMware Fusion"
+	darwinSandboxTypeVirtualBox = "VirtualBox"
+	darwinSandboxTypeParallels  = "Parallels"
+	darwinSandboxTypeUTM        = "UTM"
+	darwinSandboxTypeQEMU       = "QEMU"
+
+	darwinConfidenceAppSandboxEnv = 85
+	darwinConfidenceDYLDEnv       = 35
+	darwinConfidenceColimaEnv     = 80
+	darwinConfidenceVMAppFile     = 80
+	darwinConfidenceParallelsDir  = 60
+	darwinConfidenceColimaBin     = 70
+	darwinConfidenceVMProcess     = 70
+
+	darwinEnvAppSandboxContainer = "APP_SANDBOX_CONTAINER_ID"
+	darwinEnvDYLDInsertLibraries = "DYLD_INSERT_LIBRARIES"
+	darwinEnvColimaHome          = "COLIMA_HOME"
+
+	darwinIndicatorEnvAppSandbox = "darwin:env:app_sandbox_container_id"
+	darwinIndicatorEnvDYLDInsert = "darwin:env:dyld_insert_libraries"
+	darwinIndicatorEnvColimaHome = "darwin:env:colima_home"
+	darwinIndicatorProcVMware    = "darwin:process:vmware_vmx"
+	darwinIndicatorProcVBox      = "darwin:process:virtualbox_tools"
+	darwinIndicatorProcParallels = "darwin:process:parallels_tools"
+	darwinIndicatorProcQEMU      = "darwin:process:qemu_system"
+	darwinIndicatorProcColima    = "darwin:process:colima"
+)
+
+var darwinSandboxPathChecks = []struct {
+	path  string
+	kind  string
+	score int
+	mark  string
+}{
+	{"/Applications/VMware Fusion.app", darwinSandboxTypeVMware, darwinConfidenceVMAppFile, "darwin:file:vmware_fusion_app"},
+	{"/Applications/VirtualBox.app", darwinSandboxTypeVirtualBox, darwinConfidenceVMAppFile, "darwin:file:virtualbox_app"},
+	{"/Applications/Parallels Desktop.app", darwinSandboxTypeParallels, darwinConfidenceVMAppFile, "darwin:file:parallels_app"},
+	{"/Applications/UTM.app", darwinSandboxTypeUTM, darwinConfidenceVMAppFile, "darwin:file:utm_app"},
+	{"/Users/Shared/Parallels", darwinSandboxTypeParallels, darwinConfidenceParallelsDir, "darwin:file:parallels_shared"},
+	{"/opt/homebrew/bin/colima", darwinSandboxTypeColima, darwinConfidenceColimaBin, "darwin:file:colima_bin"},
+}
+
 func detectSandboxDarwin() (sandboxDetection, error) {
 	var detection sandboxDetection
 
@@ -23,29 +68,17 @@ func detectSandboxDarwin() (sandboxDetection, error) {
 		indicators = append(indicators, indicator)
 	}
 
-	if envSet("APP_SANDBOX_CONTAINER_ID") {
-		add("macOS App Sandbox", 85, "darwin:env:app_sandbox_container_id")
+	if envSet(darwinEnvAppSandboxContainer) {
+		add(darwinSandboxTypeAppSandbox, darwinConfidenceAppSandboxEnv, darwinIndicatorEnvAppSandbox)
 	}
-	if envSet("DYLD_INSERT_LIBRARIES") {
-		add("macOS App Sandbox", 35, "darwin:env:dyld_insert_libraries")
+	if envSet(darwinEnvDYLDInsertLibraries) {
+		add(darwinSandboxTypeAppSandbox, darwinConfidenceDYLDEnv, darwinIndicatorEnvDYLDInsert)
 	}
-	if envSet("COLIMA_HOME") {
-		add("Colima", 80, "darwin:env:colima_home")
+	if envSet(darwinEnvColimaHome) {
+		add(darwinSandboxTypeColima, darwinConfidenceColimaEnv, darwinIndicatorEnvColimaHome)
 	}
 
-	for _, path := range []struct {
-		path  string
-		kind  string
-		score int
-		mark  string
-	}{
-		{"/Applications/VMware Fusion.app", "VMware Fusion", 80, "darwin:file:vmware_fusion_app"},
-		{"/Applications/VirtualBox.app", "VirtualBox", 80, "darwin:file:virtualbox_app"},
-		{"/Applications/Parallels Desktop.app", "Parallels", 80, "darwin:file:parallels_app"},
-		{"/Applications/UTM.app", "UTM", 80, "darwin:file:utm_app"},
-		{"/Users/Shared/Parallels", "Parallels", 60, "darwin:file:parallels_shared"},
-		{"/opt/homebrew/bin/colima", "Colima", 70, "darwin:file:colima_bin"},
-	} {
+	for _, path := range darwinSandboxPathChecks {
 		if _, err := os.Stat(path.path); err == nil {
 			add(path.kind, path.score, path.mark)
 		}
@@ -54,19 +87,19 @@ func detectSandboxDarwin() (sandboxDetection, error) {
 	if out, err := exec.Command("ps", "-axo", "comm").CombinedOutput(); err == nil {
 		procs := strings.ToLower(string(out))
 		if strings.Contains(procs, "vmware-vmx") {
-			add("VMware Fusion", 70, "darwin:process:vmware_vmx")
+			add(darwinSandboxTypeVMware, darwinConfidenceVMProcess, darwinIndicatorProcVMware)
 		}
 		if strings.Contains(procs, "vboxservice") || strings.Contains(procs, "vboxclient") {
-			add("VirtualBox", 70, "darwin:process:virtualbox_tools")
+			add(darwinSandboxTypeVirtualBox, darwinConfidenceVMProcess, darwinIndicatorProcVBox)
 		}
 		if strings.Contains(procs, "prl_tools") {
-			add("Parallels", 70, "darwin:process:parallels_tools")
+			add(darwinSandboxTypeParallels, darwinConfidenceVMProcess, darwinIndicatorProcParallels)
 		}
 		if strings.Contains(procs, "qemu-system") {
-			add("QEMU", 70, "darwin:process:qemu_system")
+			add(darwinSandboxTypeQEMU, darwinConfidenceVMProcess, darwinIndicatorProcQEMU)
 		}
 		if strings.Contains(procs, "colima") {
-			add("Colima", 70, "darwin:process:colima")
+			add(darwinSandboxTypeColima, darwinConfidenceVMProcess, darwinIndicatorProcColima)
 		}
 	}
 
@@ -79,8 +112,8 @@ func detectSandboxDarwin() (sandboxDetection, error) {
 		}
 	}
 
-	if bestScore > 100 {
-		bestScore = 100
+	if bestScore > maxConfidenceScore {
+		bestScore = maxConfidenceScore
 	}
 
 	detection.Type = bestType

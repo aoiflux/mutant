@@ -10,6 +10,15 @@ import (
 	"golang.org/x/crypto/chacha20"
 )
 
+const (
+	streamSeedByteSize      = 8
+	streamBlockSize         = 64
+	streamVersionPrefix     = "mutant-stream-v1"
+	streamMaterialSeparator = "|"
+	streamKeyLabel          = "key|"
+	streamNonceLabel        = "nonce|"
+)
+
 // SecureRandByte generates a cryptographically secure random byte
 // Replaces the insecure math/rand implementation
 func SecureRandByte() (byte, error) {
@@ -53,12 +62,12 @@ func SecureXORAt(data []byte, seed int64, password string, offset int64) ([]byte
 		return nil, err
 	}
 
-	blockOffset := uint32(offset / 64)
+	blockOffset := uint32(offset / streamBlockSize)
 	if blockOffset > 0 {
 		cipher.SetCounter(blockOffset)
 	}
 
-	skip := int(offset % 64)
+	skip := int(offset % streamBlockSize)
 	if skip > 0 {
 		discard := make([]byte, skip)
 		cipher.XORKeyStream(discard, discard)
@@ -98,15 +107,15 @@ func DerivePasswordFromInstructions(instructions []byte) uint64 {
 }
 
 func deriveStreamKeyAndNonce(seed int64, password string) ([32]byte, [12]byte) {
-	seedBytes := make([]byte, 8)
+	seedBytes := make([]byte, streamSeedByteSize)
 	binary.LittleEndian.PutUint64(seedBytes, uint64(seed))
 
-	baseMaterial := append([]byte("mutant-stream-v1|"), seedBytes...)
-	baseMaterial = append(baseMaterial, '|')
+	baseMaterial := append([]byte(streamVersionPrefix+streamMaterialSeparator), seedBytes...)
+	baseMaterial = append(baseMaterial, streamMaterialSeparator...)
 	baseMaterial = append(baseMaterial, []byte(password)...)
 
-	keyHash := sha256.Sum256(append([]byte("key|"), baseMaterial...))
-	nonceHash := sha256.Sum256(append([]byte("nonce|"), baseMaterial...))
+	keyHash := sha256.Sum256(append([]byte(streamKeyLabel), baseMaterial...))
+	nonceHash := sha256.Sum256(append([]byte(streamNonceLabel), baseMaterial...))
 
 	var key [32]byte
 	var nonce [12]byte

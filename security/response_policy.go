@@ -16,6 +16,10 @@ const (
 	TamperResponseWarn      = "warn"
 	TamperResponseDelay     = "delay"
 	TamperResponseTerminate = "terminate"
+
+	DefaultTamperDelayMs = 250
+	MinTamperDelayMs     = 0
+	MaxTamperDelayMs     = 5000
 )
 
 func ResolveTamperResponse(secureMode bool) string {
@@ -48,15 +52,14 @@ func ApplyTamperResponse(event, stage string, secureMode bool, baseErr error) er
 }
 
 func resolveTamperDelay() time.Duration {
-	const defaultDelayMs = 250
 	raw := strings.TrimSpace(os.Getenv(TamperDelayMsEnv))
 	if raw == "" {
-		return defaultDelayMs * time.Millisecond
+		return DefaultTamperDelayMs * time.Millisecond
 	}
 
 	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 0 || parsed > 5000 {
-		return defaultDelayMs * time.Millisecond
+	if err != nil || parsed < MinTamperDelayMs || parsed > MaxTamperDelayMs {
+		return DefaultTamperDelayMs * time.Millisecond
 	}
 
 	return time.Duration(parsed) * time.Millisecond

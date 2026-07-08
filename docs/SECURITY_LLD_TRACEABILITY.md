@@ -204,4 +204,32 @@ integration depth:
 
 ---
 
+## 10. Probe and Process-Protection Traceability
+
+### 10.1 Control Additions
+
+1. Master anti-tamper probe gate: `MUTANT_ENABLE_ANTITAMPER_PROBE=1`
+2. Runner process-protection gate: `MUTANT_ENABLE_PROCESS_PROTECTION`
+3. Runner enforcement threshold: any probe signal with `detected=true` and
+   `confidence >= 80`
+
+### 10.2 Implementation Anchors
+
+1. Probe gate and engine: `security/antitamper_probe.go`
+2. Probe routing: `security/antitamper_routing.go`
+3. Probe implementations:
+   - `security/antitamper_detectors.go`
+   - `security/antitamper_windows.go`
+4. Runner enforcement path: `runner/runner.go`
+5. Builtin diagnostics probe use: `builtin/security_status.go`
+
+### 10.3 Operational Notes
+
+1. Runner enforcement probe scope is intentionally narrower than builtin
+   diagnostic scope.
+2. If master probe gate is disabled, runner process-protection enforcement will
+   not execute probe logic even when process-protection gate is enabled.
+
+---
+
 End of document.

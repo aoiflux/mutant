@@ -13,6 +13,12 @@ type sandboxDetection struct {
 
 const sandboxDetectedThreshold = 70
 
+const (
+	sandboxTypeNone    = "none"
+	minConfidenceScore = 0
+	maxConfidenceScore = 100
+)
+
 // IsSandboxed returns true when environment signals indicate a high-confidence
 // container, virtualization, or sandboxed runtime.
 func IsSandboxed() bool {
@@ -28,17 +34,17 @@ func DetectSandboxType() (string, int, error) {
 	result, err := detectSandbox()
 	if err != nil {
 		securityDevLogf("sandbox detect error=%v", err)
-		return "none", 0, err
+		return sandboxTypeNone, minConfidenceScore, err
 	}
-	if result.Confidence < 0 {
-		result.Confidence = 0
+	if result.Confidence < minConfidenceScore {
+		result.Confidence = minConfidenceScore
 	}
-	if result.Confidence > 100 {
-		result.Confidence = 100
+	if result.Confidence > maxConfidenceScore {
+		result.Confidence = maxConfidenceScore
 	}
-	if result.Type == "" || result.Confidence == 0 {
+	if result.Type == "" || result.Confidence == minConfidenceScore {
 		securityDevLogf("sandbox detected=false type=none confidence=0 indicators=")
-		return "none", 0, nil
+		return sandboxTypeNone, minConfidenceScore, nil
 	}
 	securityDevLogf(
 		"sandbox detected=%t type=%s confidence=%d indicators=%s",

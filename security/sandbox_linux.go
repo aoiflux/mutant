@@ -8,6 +8,75 @@ import (
 	"strings"
 )
 
+const (
+	linuxSandboxTypeContainer    = "Container"
+	linuxSandboxTypeKubernetes   = "Kubernetes"
+	linuxSandboxTypeWSL          = "WSL"
+	linuxSandboxTypeLXC          = "LXC"
+	linuxSandboxTypeSystemdSpawn = "systemd-nspawn"
+	linuxSandboxTypeVM           = "VM"
+	linuxSandboxTypeKVMQEMU      = "KVM/QEMU"
+	linuxSandboxTypeVMware       = "VMware"
+	linuxSandboxTypeVirtualBox   = "VirtualBox"
+	linuxSandboxTypeXen          = "Xen"
+	linuxSandboxTypeHyperV       = "Hyper-V"
+
+	linuxConfidenceDockerFile     = 85
+	linuxConfidenceContainerFile  = 75
+	linuxConfidenceKubernetesEnv  = 85
+	linuxConfidenceWSLEnv         = 95
+	linuxConfidenceKubernetesCgrp = 80
+	linuxConfidenceContainerCgrp  = 70
+	linuxConfidenceLXC            = 75
+	linuxConfidenceSystemdNspawn  = 60
+	linuxConfidenceHypervisorFlag = 30
+	linuxConfidenceVMVendorCPU    = 80
+	linuxConfidenceWSLKernel      = 90
+	linuxConfidenceDMIVendor      = 75
+	linuxConfidenceXenProcFile    = 85
+
+	linuxPathContainerEnv   = "/run/.containerenv"
+	linuxPathProc1Cgroup    = "/proc/1/cgroup"
+	linuxPathProcSelfCgrp   = "/proc/self/cgroup"
+	linuxPathProcCPUInfo    = "/proc/cpuinfo"
+	linuxPathProcVersion    = "/proc/version"
+	linuxPathProcXen        = "/proc/xen"
+	linuxPathDMIProduct     = "/sys/class/dmi/id/product_name"
+	linuxPathDMISysVendor   = "/sys/class/dmi/id/sys_vendor"
+	linuxPathDMIBoardVendor = "/sys/class/dmi/id/board_vendor"
+
+	linuxEnvKubernetesHost = "KUBERNETES_SERVICE_HOST"
+	linuxEnvKubernetesPort = "KUBERNETES_SERVICE_PORT"
+	linuxEnvWSLInterop     = "WSL_INTEROP"
+	linuxEnvWSLDistroName  = "WSL_DISTRO_NAME"
+
+	linuxIndicatorContainerFile     = "linux:file:/run/.containerenv"
+	linuxIndicatorKubernetesEnv     = "linux:env:kubernetes_service"
+	linuxIndicatorWSLEnv            = "linux:env:wsl"
+	linuxIndicatorKubernetesCgroup  = "linux:cgroup:kubepods"
+	linuxIndicatorContainerRuntime  = "linux:cgroup:container_runtime"
+	linuxIndicatorLXC               = "linux:cgroup:lxc"
+	linuxIndicatorSystemdNspawn     = "linux:cgroup:systemd_nspawn"
+	linuxIndicatorCPUHypervisorFlag = "linux:cpu:hypervisor_flag"
+	linuxIndicatorCPUKVMQEMU        = "linux:cpu:kvm_qemu"
+	linuxIndicatorCPUVMware         = "linux:cpu:vmware"
+	linuxIndicatorCPUVirtualBox     = "linux:cpu:virtualbox"
+	linuxIndicatorCPUXen            = "linux:cpu:xen"
+	linuxIndicatorKernelMicrosoft   = "linux:kernel:microsoft"
+	linuxIndicatorDMIVMware         = "linux:dmi:vmware"
+	linuxIndicatorDMIVirtualBox     = "linux:dmi:virtualbox"
+	linuxIndicatorDMIKVMQEMU        = "linux:dmi:kvm_qemu"
+	linuxIndicatorDMIXen            = "linux:dmi:xen"
+	linuxIndicatorDMIHyperV         = "linux:dmi:hyperv"
+	linuxIndicatorFileProcXen       = "linux:file:/proc/xen"
+)
+
+var (
+	linuxCgroupPaths       = []string{linuxPathProc1Cgroup, linuxPathProcSelfCgrp}
+	linuxContainerRuntimes = []string{"docker", "containerd", "podman", "libpod", "crio"}
+	linuxDMIPaths          = []string{linuxPathDMIProduct, linuxPathDMISysVendor, linuxPathDMIBoardVendor}
+)
+
 func detectSandboxLinux() (sandboxDetection, error) {
 	var detection sandboxDetection
 
@@ -23,19 +92,19 @@ func detectSandboxLinux() (sandboxDetection, error) {
 	}
 
 	if fileExists(LNX_DCKR_ENV_0) {
-		add(DOCKER, 85, LNX_DCKR_ENV_1)
+		add(DOCKER, linuxConfidenceDockerFile, LNX_DCKR_ENV_1)
 	}
-	if fileExists("/run/.containerenv") {
-		add("Container", 75, "linux:file:/run/.containerenv")
+	if fileExists(linuxPathContainerEnv) {
+		add(linuxSandboxTypeContainer, linuxConfidenceContainerFile, linuxIndicatorContainerFile)
 	}
-	if envSet("KUBERNETES_SERVICE_HOST") || envSet("KUBERNETES_SERVICE_PORT") {
-		add("Kubernetes", 85, "linux:env:kubernetes_service")
+	if envSet(linuxEnvKubernetesHost) || envSet(linuxEnvKubernetesPort) {
+		add(linuxSandboxTypeKubernetes, linuxConfidenceKubernetesEnv, linuxIndicatorKubernetesEnv)
 	}
-	if envSet("WSL_INTEROP") || envSet("WSL_DISTRO_NAME") {
-		add("WSL", 95, "linux:env:wsl")
+	if envSet(linuxEnvWSLInterop) || envSet(linuxEnvWSLDistroName) {
+		add(linuxSandboxTypeWSL, linuxConfidenceWSLEnv, linuxIndicatorWSLEnv)
 	}
 
-	for _, cgroupPath := range []string{"/proc/1/cgroup", "/proc/self/cgroup"} {
+	for _, cgroupPath := range linuxCgroupPaths {
 		data, err := os.ReadFile(cgroupPath)
 		if err != nil {
 			return detection, err
@@ -43,71 +112,70 @@ func detectSandboxLinux() (sandboxDetection, error) {
 
 		cgroup := strings.ToLower(string(data))
 		if strings.Contains(cgroup, "kubepods") {
-			add("Kubernetes", 80, "linux:cgroup:kubepods")
+			add(linuxSandboxTypeKubernetes, linuxConfidenceKubernetesCgrp, linuxIndicatorKubernetesCgroup)
 		}
 
-		dckrs := []string{"docker", "containerd", "podman", "libpod", "crio"}
-		if containsAny(cgroup, dckrs) {
-			add(DOCKER, 70, "linux:cgroup:container_runtime")
+		if containsAny(cgroup, linuxContainerRuntimes) {
+			add(DOCKER, linuxConfidenceContainerCgrp, linuxIndicatorContainerRuntime)
 		}
 
 		if strings.Contains(cgroup, "lxc") {
-			add("LXC", 75, "linux:cgroup:lxc")
+			add(linuxSandboxTypeLXC, linuxConfidenceLXC, linuxIndicatorLXC)
 		}
 		if strings.Contains(cgroup, "machine.slice") && strings.Contains(cgroup, "systemd") {
-			add("systemd-nspawn", 60, "linux:cgroup:systemd_nspawn")
+			add(linuxSandboxTypeSystemdSpawn, linuxConfidenceSystemdNspawn, linuxIndicatorSystemdNspawn)
 		}
 	}
 
-	if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+	if data, err := os.ReadFile(linuxPathProcCPUInfo); err == nil {
 		cpu := strings.ToLower(string(data))
 		if strings.Contains(cpu, "hypervisor") {
-			add("VM", 30, "linux:cpu:hypervisor_flag")
+			add(linuxSandboxTypeVM, linuxConfidenceHypervisorFlag, linuxIndicatorCPUHypervisorFlag)
 		}
 		if strings.Contains(cpu, "kvm") || strings.Contains(cpu, "qemu") {
-			add("KVM/QEMU", 80, "linux:cpu:kvm_qemu")
+			add(linuxSandboxTypeKVMQEMU, linuxConfidenceVMVendorCPU, linuxIndicatorCPUKVMQEMU)
 		}
 		if strings.Contains(cpu, "vmware") {
-			add("VMware", 80, "linux:cpu:vmware")
+			add(linuxSandboxTypeVMware, linuxConfidenceVMVendorCPU, linuxIndicatorCPUVMware)
 		}
 		if strings.Contains(cpu, "virtualbox") {
-			add("VirtualBox", 80, "linux:cpu:virtualbox")
+			add(linuxSandboxTypeVirtualBox, linuxConfidenceVMVendorCPU, linuxIndicatorCPUVirtualBox)
 		}
 		if strings.Contains(cpu, "xen") {
-			add("Xen", 80, "linux:cpu:xen")
+			add(linuxSandboxTypeXen, linuxConfidenceVMVendorCPU, linuxIndicatorCPUXen)
 		}
 	}
 
-	if data, err := os.ReadFile("/proc/version"); err == nil {
+	if data, err := os.ReadFile(linuxPathProcVersion); err == nil {
 		kernel := strings.ToLower(string(data))
 		if strings.Contains(kernel, "microsoft") {
-			add("WSL", 90, "linux:kernel:microsoft")
+			add(linuxSandboxTypeWSL, linuxConfidenceWSLKernel, linuxIndicatorKernelMicrosoft)
 		}
 	}
 
-	for _, dmiPath := range []string{"/sys/class/dmi/id/product_name", "/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/board_vendor"} {
+	for _, dmiPath := range linuxDMIPaths {
 		if data, err := os.ReadFile(dmiPath); err == nil {
 			v := strings.ToLower(string(data))
 			if strings.Contains(v, "vmware") {
-				add("VMware", 75, "linux:dmi:vmware")
+				add(linuxSandboxTypeVMware, linuxConfidenceDMIVendor, linuxIndicatorDMIVMware)
 			}
 			if strings.Contains(v, "virtualbox") {
-				add("VirtualBox", 75, "linux:dmi:virtualbox")
+				add(linuxSandboxTypeVirtualBox, linuxConfidenceDMIVendor, linuxIndicatorDMIVirtualBox)
 			}
 			if strings.Contains(v, "kvm") || strings.Contains(v, "qemu") {
-				add("KVM/QEMU", 75, "linux:dmi:kvm_qemu")
+				add(linuxSandboxTypeKVMQEMU, linuxConfidenceDMIVendor, linuxIndicatorDMIKVMQEMU)
 			}
 			if strings.Contains(v, "xen") {
-				add("Xen", 75, "linux:dmi:xen")
+				add(linuxSandboxTypeXen, linuxConfidenceDMIVendor, linuxIndicatorDMIXen)
 			}
 			if strings.Contains(v, "microsoft corporation") && strings.Contains(v, "virtual") {
-				add("Hyper-V", 75, "linux:dmi:hyperv")
+				add(linuxSandboxTypeHyperV, linuxConfidenceDMIVendor, linuxIndicatorDMIHyperV)
 			}
 		}
 	}
 
-	if fileExists("/proc/xen") {
-		add("Xen", 85, "linux:file:/proc/xen")
+	if fileExists(linuxPathProcXen) {
+		add(linuxSandboxTypeXen, linuxConfidenceXenProcFile, linuxIndicatorFileProcXen)
 	}
 
 	bestType := ""
@@ -119,8 +187,8 @@ func detectSandboxLinux() (sandboxDetection, error) {
 		}
 	}
 
-	if bestScore > 100 {
-		bestScore = 100
+	if bestScore > maxConfidenceScore {
+		bestScore = maxConfidenceScore
 	}
 
 	detection.Type = bestType

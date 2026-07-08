@@ -24,6 +24,31 @@ const (
 	minimumCommandMaxOutput    = 256
 	maximumCommandMaxOutput    = 1048576
 	defaultAllowedShellsConfig = "powershell,cmd"
+
+	policyBlockedEmpty    = "blocked_empty"
+	policyBlockedDisabled = "blocked_disabled"
+	policyBlockedShell    = "blocked_shell"
+	policyAllowed         = "allowed"
+
+	errorCommandEmpty     = "command is empty"
+	errorCommandDisabled  = "command execution disabled"
+	errorCommandTimedOut  = "command timed out"
+	truncatedOutputSuffix = "\n...[truncated]"
+
+	defaultShellName = "powershell"
+	shellPowerShell  = "powershell"
+	shellPwsh        = "pwsh"
+	shellCmd         = "cmd"
+	shellBatch       = "batch"
+
+	powershellExecutable = "powershell.exe"
+	cmdExecutable        = "cmd.exe"
+	cmdFlagExec          = "/C"
+
+	pwshFlagNoLogo         = "-NoLogo"
+	pwshFlagNoProfile      = "-NoProfile"
+	pwshFlagNonInteractive = "-NonInteractive"
+	pwshFlagCommand        = "-Command"
 )
 
 type CommandResult struct {
@@ -44,8 +69,8 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 		RecordCommandBlocked(stage)
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_empty",
-			ErrorMessage:   "command is empty",
+			PolicyDecision: policyBlockedEmpty,
+			ErrorMessage:   errorCommandEmpty,
 		}
 	}
 
@@ -53,8 +78,8 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 		RecordCommandBlocked(stage)
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_disabled",
-			ErrorMessage:   "command execution disabled",
+			PolicyDecision: policyBlockedDisabled,
+			ErrorMessage:   errorCommandDisabled,
 		}
 	}
 
@@ -65,7 +90,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_shell",
+			PolicyDecision: policyBlockedShell,
 			ErrorMessage:   err.Error(),
 		}
 	}
@@ -83,7 +108,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 	runErr := cmd.Run()
 	result := CommandResult{
 		Allowed:        true,
-		PolicyDecision: "allowed",
+		PolicyDecision: policyAllowed,
 
 		ExitCode: 0,
 		Stdout:   truncateOutput(stdout.String(), resolveCommandExecMaxOutput()),
@@ -92,7 +117,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.TimedOut = true
-		result.ErrorMessage = "command timed out"
+		result.ErrorMessage = errorCommandTimedOut
 		result.ExitCode = -1
 		RecordCommandFailed(stage)
 		return result
@@ -118,17 +143,17 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 func normalizeShell(shell string) string {
 	normalized := strings.ToLower(strings.TrimSpace(shell))
 	if normalized == "" {
-		return "powershell"
+		return defaultShellName
 	}
 	return normalized
 }
 
 func buildShellCommand(shell, command string) (string, []string, error) {
 	switch shell {
-	case "powershell", "pwsh":
-		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command}, nil
-	case "cmd", "batch":
-		return "cmd.exe", []string{"/C", command}, nil
+	case shellPowerShell, shellPwsh:
+		return powershellExecutable, []string{pwshFlagNoLogo, pwshFlagNoProfile, pwshFlagNonInteractive, pwshFlagCommand, command}, nil
+	case shellCmd, shellBatch:
+		return cmdExecutable, []string{cmdFlagExec, command}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported shell %q", shell)
 	}
@@ -176,5 +201,5 @@ func truncateOutput(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	return value[:limit] + "\n...[truncated]"
+	return value[:limit] + truncatedOutputSuffix
 }

@@ -10,6 +10,38 @@ import (
 	"strings"
 )
 
+const (
+	linuxProcSelfStatusPath      = "/proc/self/status"
+	linuxTracerPidPrefix         = "TracerPid:"
+	linuxParentCmdlinePathPrefix = "/proc/"
+	linuxParentCmdlinePathSuffix = "/cmdline"
+	linuxNullByteTrimSet         = "\x00"
+	linuxLDPreloadVar            = "LD_PRELOAD"
+	linuxLDPreloadLengthLimit    = 50
+	linuxForcedExitCode          = 1
+)
+
+var (
+	linuxDebuggerPatterns = []string{
+		"gdb", "lldb", "valgrind",
+		"radare2", "ida", "ghidra", "angr", "frida",
+		"rr", "pernosco",
+	}
+
+	linuxDebuggerEnvVars = []string{
+		"GDB_OPTS",
+		"GDBHISTFILE",
+		"LLDB_DEBUGSERVER",
+		"LLDB_HIST_FILE",
+		"VALGRIND_LIB",
+		"VALGRIND_PID",
+		linuxLDPreloadVar,
+		"LD_AUDIT",
+		"SYSTEMTAP_STAPRUN",
+		"FRIDA_SERVER_PORT",
+	}
+)
+
 // isDebuggerPresentLinux performs multiple anti-debugging checks on Linux
 // using techniques employed by major security firms and tech companies
 func isDebuggerPresentLinux() bool {
@@ -41,14 +73,14 @@ func detectDebuggerDetailsLinux() (bool, []string) {
 // isTracingDetected checks if the process is being traced via ptrace
 // Used by debuggers like gdb, lldb, and system tracing tools
 func isTracingDetected() bool {
-	data, err := os.ReadFile("/proc/self/status")
+	data, err := os.ReadFile(linuxProcSelfStatusPath)
 	if err != nil {
 		return false
 	}
 
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "TracerPid:") {
+		if strings.HasPrefix(line, linuxTracerPidPrefix) {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
 				pid, err := strconv.Atoi(fields[1])
@@ -69,24 +101,17 @@ func isParentDebugger() bool {
 	ppid := os.Getppid()
 
 	// Try to read parent process cmdline
-	cmdlinePath := "/proc/" + strconv.Itoa(ppid) + "/cmdline"
+	cmdlinePath := linuxParentCmdlinePathPrefix + strconv.Itoa(ppid) + linuxParentCmdlinePathSuffix
 	cmdlineData, err := os.ReadFile(cmdlinePath)
 	if err != nil {
 		return false
 	}
 
 	// Parse cmdline (null-separated)
-	cmdline := string(bytes.Trim(cmdlineData, "\x00"))
+	cmdline := string(bytes.Trim(cmdlineData, linuxNullByteTrimSet))
 	cmdline = strings.ToLower(cmdline)
 
-	// Known debuggers and reverse-engineering tools
-	debuggerPatterns := []string{
-		"gdb", "lldb", "valgrind",
-		"radare2", "ida", "ghidra", "angr", "frida",
-		"rr", "pernosco",
-	}
-
-	for _, pattern := range debuggerPatterns {
+	for _, pattern := range linuxDebuggerPatterns {
 		if strings.Contains(cmdline, pattern) {
 			return true
 		}
@@ -98,27 +123,14 @@ func isParentDebugger() bool {
 // hasDebuggerEnvironmentMarkers checks for environment variables set by debuggers
 // GDB, LLDB, and other debuggers typically set specific environment variables
 func hasDebuggerEnvironmentMarkers() bool {
-	debugEnvVars := []string{
-		"GDB_OPTS",          // GDB options
-		"GDBHISTFILE",       // GDB history file
-		"LLDB_DEBUGSERVER",  // LLDB debug server
-		"LLDB_HIST_FILE",    // LLDB history
-		"VALGRIND_LIB",      // Valgrind library
-		"VALGRIND_PID",      // Valgrind PID
-		"LD_PRELOAD",        // Often used for debugging/tracing
-		"LD_AUDIT",          // Library audit (debugging)
-		"SYSTEMTAP_STAPRUN", // SystemTap
-		"FRIDA_SERVER_PORT", // Frida instrumentation
-	}
-
-	for _, envVar := range debugEnvVars {
+	for _, envVar := range linuxDebuggerEnvVars {
 		if _, exists := os.LookupEnv(envVar); exists {
 			return true
 		}
 	}
 
 	// Check for excessive LD_PRELOAD which is often used in debuggers
-	if preload, exists := os.LookupEnv("LD_PRELOAD"); exists && len(preload) > 50 {
+	if preload, exists := os.LookupEnv(linuxLDPreloadVar); exists && len(preload) > linuxLDPreloadLengthLimit {
 		return true
 	}
 
@@ -130,7 +142,7 @@ func hasDebuggerEnvironmentMarkers() bool {
 func DetectDebuggerAndTerminate() error {
 	if isDebuggerPresentLinux() {
 		// Take evasive action: exit ungracefully
-		os.Exit(1)
+		os.Exit(linuxForcedExitCode)
 	}
 	return nil
 }

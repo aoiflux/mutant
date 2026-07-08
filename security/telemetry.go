@@ -16,6 +16,7 @@ var (
 	telemetryIntegrityFailed  uint64
 	telemetrySignatureFailed  uint64
 	telemetrySandboxDetected  uint64
+	telemetryProcessProtect   uint64
 	telemetryProbeInvoked     uint64
 	telemetryProbeError       uint64
 	telemetryCommandAttempt   uint64
@@ -42,6 +43,11 @@ func RecordSignatureFailure(stage string) {
 func RecordSandboxDetected(stage string) {
 	atomic.AddUint64(&telemetrySandboxDetected, 1)
 	auditEvent("sandbox_detected", stage)
+}
+
+func RecordProcessProtectionDetected(stage string) {
+	atomic.AddUint64(&telemetryProcessProtect, 1)
+	auditEvent("process_protection_detected", stage)
 }
 
 func RecordProbeInvoked(stage string) {
@@ -76,16 +82,17 @@ func RecordCommandFailed(stage string) {
 
 func SecurityTelemetrySnapshot() map[string]uint64 {
 	return map[string]uint64{
-		"debugger_detected":         atomic.LoadUint64(&telemetryDebuggerDetected),
-		"integrity_failed":          atomic.LoadUint64(&telemetryIntegrityFailed),
-		"signature_failed":          atomic.LoadUint64(&telemetrySignatureFailed),
-		"sandbox_detected":          atomic.LoadUint64(&telemetrySandboxDetected),
-		"anti_tamper_probe_invoked": atomic.LoadUint64(&telemetryProbeInvoked),
-		"anti_tamper_probe_error":   atomic.LoadUint64(&telemetryProbeError),
-		"command_attempt":           atomic.LoadUint64(&telemetryCommandAttempt),
-		"command_blocked":           atomic.LoadUint64(&telemetryCommandBlocked),
-		"command_succeeded":         atomic.LoadUint64(&telemetryCommandSucceeded),
-		"command_failed":            atomic.LoadUint64(&telemetryCommandFailed),
+		"debugger_detected":           atomic.LoadUint64(&telemetryDebuggerDetected),
+		"integrity_failed":            atomic.LoadUint64(&telemetryIntegrityFailed),
+		"signature_failed":            atomic.LoadUint64(&telemetrySignatureFailed),
+		"sandbox_detected":            atomic.LoadUint64(&telemetrySandboxDetected),
+		"process_protection_detected": atomic.LoadUint64(&telemetryProcessProtect),
+		"anti_tamper_probe_invoked":   atomic.LoadUint64(&telemetryProbeInvoked),
+		"anti_tamper_probe_error":     atomic.LoadUint64(&telemetryProbeError),
+		"command_attempt":             atomic.LoadUint64(&telemetryCommandAttempt),
+		"command_blocked":             atomic.LoadUint64(&telemetryCommandBlocked),
+		"command_succeeded":           atomic.LoadUint64(&telemetryCommandSucceeded),
+		"command_failed":              atomic.LoadUint64(&telemetryCommandFailed),
 	}
 }
 
@@ -112,6 +119,7 @@ func ResetSecurityTelemetry() {
 	atomic.StoreUint64(&telemetryIntegrityFailed, 0)
 	atomic.StoreUint64(&telemetrySignatureFailed, 0)
 	atomic.StoreUint64(&telemetrySandboxDetected, 0)
+	atomic.StoreUint64(&telemetryProcessProtect, 0)
 	atomic.StoreUint64(&telemetryProbeInvoked, 0)
 	atomic.StoreUint64(&telemetryProbeError, 0)
 	atomic.StoreUint64(&telemetryCommandAttempt, 0)
