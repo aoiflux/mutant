@@ -1,0 +1,788 @@
+putln("=== static_binary_metadata_extractor ===");
+putln("Safe use: static metadata only. No execution performed.");
+
+let fail_err = fn(err, op) {
+    if (err) {
+        putln("[error] " + op + ": " + err);
+        return true;
+    };
+    return false;
+};
+
+let hex_pair = fn(value, op) {
+    let h, err = bytes_hex(value, 2);
+    if (fail_err(err, op + " bytes_hex")) {
+        return "";
+    };
+    let pair, err = bytes_slice(h, 2, 2);
+    if (fail_err(err, op + " bytes_slice")) {
+        return "";
+    };
+    return pair;
+};
+
+struct ParseState {
+    sample_data;
+    sample_last;
+    runtime_sections;
+    section_count;
+    pointer_size;
+};
+
+struct ThunkContext {
+    rva;
+    raw;
+};
+
+let rva_to_raw_offset = fn(state, rva) {
+    for (let i = 0; i < state.section_count; i = i + 1) {
+        let sec = state.runtime_sections[i];
+        let vsize = sec["vsize"];
+        let vaddr = sec["vaddr"];
+        let raw_size = sec["raw_size"];
+        let raw_ptr = sec["raw_ptr"];
+
+        let lim = vsize;
+        if (raw_size > lim) {
+            lim = raw_size;
+        };
+
+        if (rva < vaddr) {
+            continue;
+        };
+
+        let section_end = vaddr + lim;
+        if (rva == section_end) {
+            continue;
+        };
+        if (rva > section_end) {
+            continue;
+        };
+
+        return raw_ptr + (rva - vaddr);
+    }
+
+    return 0;
+};
+
+let parse_thunks64 = fn(state, thunk) {
+    let function_count = 0;
+    let ordinal_count = 0;
+    let functions = [];
+    let function_details = [];
+
+    for (let ti = 0; ti < 8192; ti = ti + 1) {
+        let slot = thunk.raw + (ti * 8);
+        let thunk_entry_rva = thunk.rva + (ti * 8);
+        if ((slot + 7) > state.sample_last) {
+            break;
+        };
+
+        let lo, err = bytes_read_u32_le(state.sample_data, slot);
+        if (fail_err(err, "bytes_read_u32_le thunk lo")) {
+            break;
+        };
+        let hi, err = bytes_read_u32_le(state.sample_data, slot + 4);
+        if (fail_err(err, "bytes_read_u32_le thunk hi")) {
+            break;
+        };
+        if ((lo + hi) == 0) {
+            break;
+        };
+
+        function_count = function_count + 1;
+        let thunk_hex, err = bytes_hex(thunk_entry_rva, 8);
+        if (fail_err(err, "bytes_hex thunk_entry_rva 64")) {
+            break;
+        };
+
+        if (hi > 2147483647) {
+            let ord = lo - ((lo / 65536) * 65536);
+            ordinal_count = ordinal_count + 1;
+            let next_fn_details, err = push(function_details, {
+                "by_ordinal": true,
+                "ordinal": ord,
+                "hint": 0,
+                "name": "",
+                "thunk_rva": thunk_hex
+            });
+            if (fail_err(err, "push function_details 64 ordinal")) {
+                break;
+            };
+            function_details = next_fn_details;
+            continue;
+        };
+
+        let ibn_raw = rva_to_raw_offset(state, lo);
+        if (ibn_raw == 0) {
+            continue;
+        };
+
+        let hint, err = bytes_read_u16_le(state.sample_data, ibn_raw);
+        if (fail_err(err, "bytes_read_u16_le hint 64")) {
+            break;
+        };
+        let fn_name, err = bytes_cstr_at(state.sample_data, ibn_raw + 2, 256);
+        if (fail_err(err, "bytes_cstr_at fn_name 64")) {
+            break;
+        };
+
+        if (fn_name != "") {
+            let next_functions, err = push(functions, fn_name);
+            if (fail_err(err, "push functions 64")) {
+                break;
+            };
+            functions = next_functions;
+        };
+
+        let next_fn_details, err = push(function_details, {
+            "by_ordinal": false,
+            "ordinal": 0,
+            "hint": hint,
+            "name": fn_name,
+            "thunk_rva": thunk_hex
+        });
+        if (fail_err(err, "push function_details 64 name")) {
+            break;
+        };
+        function_details = next_fn_details;
+    }
+
+    return {
+        "has_thunks": true,
+        "function_count": function_count,
+        "ordinal_count": ordinal_count,
+        "functions": functions,
+        "function_details": function_details
+    };
+};
+
+let parse_thunks32 = fn(state, thunk) {
+    let function_count = 0;
+    let ordinal_count = 0;
+    let functions = [];
+    let function_details = [];
+
+    for (let ti = 0; ti < 8192; ti = ti + 1) {
+        let slot = thunk.raw + (ti * 4);
+        let thunk_entry_rva = thunk.rva + (ti * 4);
+        if ((slot + 3) > state.sample_last) {
+            break;
+        };
+
+        let value, err = bytes_read_u32_le(state.sample_data, slot);
+        if (fail_err(err, "bytes_read_u32_le thunk value 32")) {
+            break;
+        };
+        if (value == 0) {
+            break;
+        };
+
+        function_count = function_count + 1;
+        let thunk_hex, err = bytes_hex(thunk_entry_rva, 8);
+        if (fail_err(err, "bytes_hex thunk_entry_rva 32")) {
+            break;
+        };
+
+        if (value > 2147483647) {
+            let ord = value - ((value / 65536) * 65536);
+            ordinal_count = ordinal_count + 1;
+            let next_fn_details, err = push(function_details, {
+                "by_ordinal": true,
+                "ordinal": ord,
+                "hint": 0,
+                "name": "",
+                "thunk_rva": thunk_hex
+            });
+            if (fail_err(err, "push function_details 32 ordinal")) {
+                break;
+            };
+            function_details = next_fn_details;
+            continue;
+        };
+
+        let ibn_raw = rva_to_raw_offset(state, value);
+        if (ibn_raw == 0) {
+            continue;
+        };
+
+        let hint, err = bytes_read_u16_le(state.sample_data, ibn_raw);
+        if (fail_err(err, "bytes_read_u16_le hint 32")) {
+            break;
+        };
+        let fn_name, err = bytes_cstr_at(state.sample_data, ibn_raw + 2, 256);
+        if (fail_err(err, "bytes_cstr_at fn_name 32")) {
+            break;
+        };
+
+        if (fn_name != "") {
+            let next_functions, err = push(functions, fn_name);
+            if (fail_err(err, "push functions 32")) {
+                break;
+            };
+            functions = next_functions;
+        };
+
+        let next_fn_details, err = push(function_details, {
+            "by_ordinal": false,
+            "ordinal": 0,
+            "hint": hint,
+            "name": fn_name,
+            "thunk_rva": thunk_hex
+        });
+        if (fail_err(err, "push function_details 32 name")) {
+            break;
+        };
+        function_details = next_fn_details;
+    }
+
+    return {
+        "has_thunks": true,
+        "function_count": function_count,
+        "ordinal_count": ordinal_count,
+        "functions": functions,
+        "function_details": function_details
+    };
+};
+
+let parse_thunks = fn(state, thunk_rva) {
+    let thunk_raw = rva_to_raw_offset(state, thunk_rva);
+    if (thunk_raw == 0) {
+        return {
+            "has_thunks": false,
+            "function_count": 0,
+            "ordinal_count": 0,
+            "functions": [],
+            "function_details": []
+        };
+    };
+
+    let thunk = ThunkContext {
+        rva: thunk_rva,
+        raw: thunk_raw
+    };
+
+    if (state.pointer_size == 8) {
+        return parse_thunks64(state, thunk);
+    };
+
+    return parse_thunks32(state, thunk);
+};
+
+let parse_sections = fn(sample_data, sample_last, section_base, sections) {
+    let section_table = [];
+    let section_runtime = [];
+
+    for (let i = 0; i < sections; i = i + 1) {
+        let sp = section_base + (i * 40);
+        if ((sp + 39) > sample_last) {
+            continue;
+        };
+
+        let section_name, err = bytes_cstr_at(sample_data, sp, 8);
+        if (fail_err(err, "bytes_cstr_at section_name")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let virtual_size, err = bytes_read_u32_le(sample_data, sp + 8);
+        if (fail_err(err, "bytes_read_u32_le virtual_size")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let virtual_address, err = bytes_read_u32_le(sample_data, sp + 12);
+        if (fail_err(err, "bytes_read_u32_le virtual_address")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let raw_size, err = bytes_read_u32_le(sample_data, sp + 16);
+        if (fail_err(err, "bytes_read_u32_le raw_size")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let raw_ptr, err = bytes_read_u32_le(sample_data, sp + 20);
+        if (fail_err(err, "bytes_read_u32_le raw_ptr")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let sec_chr_raw, err = bytes_read_u32_le(sample_data, sp + 36);
+        if (fail_err(err, "bytes_read_u32_le section_characteristics")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+
+        let vaddr_hex, err = bytes_hex(virtual_address, 8);
+        if (fail_err(err, "bytes_hex virtual_address")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let raw_ptr_hex, err = bytes_hex(raw_ptr, 8);
+        if (fail_err(err, "bytes_hex raw_ptr")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        let sch_hex, err = bytes_hex(sec_chr_raw, 8);
+        if (fail_err(err, "bytes_hex section_characteristics")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+
+        let next_section_table, err = push(section_table, {
+            "index": i,
+            "name": section_name,
+            "virtual_size": virtual_size,
+            "virtual_address": vaddr_hex,
+            "raw_size": raw_size,
+            "raw_ptr": raw_ptr_hex,
+            "characteristics": sch_hex
+        });
+        if (fail_err(err, "push section_table")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        section_table = next_section_table;
+
+        let next_runtime, err = push(section_runtime, {
+            "vsize": virtual_size,
+            "vaddr": virtual_address,
+            "raw_size": raw_size,
+            "raw_ptr": raw_ptr
+        });
+        if (fail_err(err, "push section_runtime")) {
+            return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
+        };
+        section_runtime = next_runtime;
+    }
+
+    return {"ok": true, "section_table": section_table, "section_runtime": section_runtime};
+};
+
+let parse_import_descriptors = fn(parse_state, import_directory_raw) {
+    let descriptors_seen = 0;
+    let descriptors_with_name = 0;
+    let descriptors_with_thunks = 0;
+    let import_table = [];
+
+    for (let di = 0; di < 512; di = di + 1) {
+        let d = import_directory_raw + (di * 20);
+        if ((d + 19) > parse_state.sample_last) {
+            break;
+        };
+
+        let oft, err = bytes_read_u32_le(parse_state.sample_data, d);
+        if (fail_err(err, "bytes_read_u32_le import oft")) {
+            return {
+                "ok": false,
+                "descriptors_seen": descriptors_seen,
+                "descriptors_with_name": descriptors_with_name,
+                "descriptors_with_thunks": descriptors_with_thunks,
+                "import_table": import_table
+            };
+        };
+        let name_rva, err = bytes_read_u32_le(parse_state.sample_data, d + 12);
+        if (fail_err(err, "bytes_read_u32_le import name_rva")) {
+            return {
+                "ok": false,
+                "descriptors_seen": descriptors_seen,
+                "descriptors_with_name": descriptors_with_name,
+                "descriptors_with_thunks": descriptors_with_thunks,
+                "import_table": import_table
+            };
+        };
+        let ft, err = bytes_read_u32_le(parse_state.sample_data, d + 16);
+        if (fail_err(err, "bytes_read_u32_le import ft")) {
+            return {
+                "ok": false,
+                "descriptors_seen": descriptors_seen,
+                "descriptors_with_name": descriptors_with_name,
+                "descriptors_with_thunks": descriptors_with_thunks,
+                "import_table": import_table
+            };
+        };
+
+        let descriptor_sum = oft + name_rva + ft;
+        if (descriptor_sum == 0) {
+            break;
+        };
+
+        descriptors_seen = descriptors_seen + 1;
+
+        let dll = "";
+        let name_raw = 0;
+        if (name_rva > 0) {
+            name_raw = rva_to_raw_offset(parse_state, name_rva);
+        };
+        if (name_raw > 0) {
+            let next_dll, err = bytes_cstr_at(parse_state.sample_data, name_raw, 256);
+            if (fail_err(err, "bytes_cstr_at dll")) {
+                return {
+                    "ok": false,
+                    "descriptors_seen": descriptors_seen,
+                    "descriptors_with_name": descriptors_with_name,
+                    "descriptors_with_thunks": descriptors_with_thunks,
+                    "import_table": import_table
+                };
+            };
+            dll = next_dll;
+        };
+        if (dll != "") {
+            descriptors_with_name = descriptors_with_name + 1;
+        };
+
+        let thunk_rva = oft;
+        if (thunk_rva == 0) {
+            thunk_rva = ft;
+        };
+
+        let thunk_bundle = parse_thunks(parse_state, thunk_rva);
+        let function_count = thunk_bundle["function_count"];
+        let ordinal_count = thunk_bundle["ordinal_count"];
+        let functions = thunk_bundle["functions"];
+        let function_details = thunk_bundle["function_details"];
+        if (thunk_bundle["has_thunks"]) {
+            descriptors_with_thunks = descriptors_with_thunks + 1;
+        };
+
+        let should_skip = false;
+        if (dll == "") {
+            should_skip = true;
+        };
+        if (function_count > 0) {
+            should_skip = false;
+        };
+        if (should_skip) {
+            continue;
+        };
+
+        let next_imports, err = push(import_table, {
+            "dll": dll,
+            "function_count": function_count,
+            "ordinal_count": ordinal_count,
+            "functions": functions,
+            "function_details": function_details
+        });
+        if (fail_err(err, "push import_table")) {
+            return {
+                "ok": false,
+                "descriptors_seen": descriptors_seen,
+                "descriptors_with_name": descriptors_with_name,
+                "descriptors_with_thunks": descriptors_with_thunks,
+                "import_table": import_table
+            };
+        };
+        import_table = next_imports;
+    }
+
+    return {
+        "ok": true,
+        "descriptors_seen": descriptors_seen,
+        "descriptors_with_name": descriptors_with_name,
+        "descriptors_with_thunks": descriptors_with_thunks,
+        "import_table": import_table
+    };
+};
+
+let output_directory = "example_output/static_binary_metadata_extractor";
+let sample_file_path = "examples/data/sample_win.exe";
+let report_file_path = output_directory + "/report.json";
+
+let mkdir_result, err = fs_mkdir(output_directory);
+if (fail_err(err, "fs_mkdir")) {
+    return;
+};
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let sample_data, err = fs_read(sample_file_path);
+if (fail_err(err, "fs_read sample")) {
+    return;
+};
+
+let sample_size, err = bytes_len(sample_data);
+if (fail_err(err, "bytes_len sample")) {
+    return;
+};
+let sample_last = sample_size - 1;
+
+let b1, err = bytes_get(sample_data, 0);
+if (fail_err(err, "bytes_get magic b1")) {
+    return;
+};
+let b2, err = bytes_get(sample_data, 1);
+if (fail_err(err, "bytes_get magic b2")) {
+    return;
+};
+let b3, err = bytes_get(sample_data, 2);
+if (fail_err(err, "bytes_get magic b3")) {
+    return;
+};
+let b4, err = bytes_get(sample_data, 3);
+if (fail_err(err, "bytes_get magic b4")) {
+    return;
+};
+
+let format = "unknown";
+let mz_hits = 0;
+if (b1 == 77) {
+    mz_hits = mz_hits + 1;
+};
+if (b2 == 90) {
+    mz_hits = mz_hits + 1;
+};
+if (mz_hits == 2) {
+    format = "pe_like";
+};
+
+let elf_hits = 0;
+if (b1 == 127) {
+    elf_hits = elf_hits + 1;
+};
+if (b2 == 69) {
+    elf_hits = elf_hits + 1;
+};
+if (b3 == 76) {
+    elf_hits = elf_hits + 1;
+};
+if (b4 == 70) {
+    elf_hits = elf_hits + 1;
+};
+if (elf_hits == 4) {
+    format = "elf_like";
+};
+
+let magic_hex = hex_pair(b1, "magic b1") + hex_pair(b2, "magic b2") + hex_pair(b3, "magic b3") + hex_pair(b4, "magic b4");
+
+let pe_ok = false;
+let pe_offset = 0;
+let pe_signature = "";
+let machine = "";
+let sections = 0;
+let timestamp = 0;
+let characteristics = "";
+let optional_magic = "";
+let entry_rva = 0;
+let pointer_size = 0;
+let data_directory_base = 0;
+let import_directory_rva = 0;
+let import_directory_raw = 0;
+let descriptors_seen = 0;
+let descriptors_with_name = 0;
+let descriptors_with_thunks = 0;
+
+let section_table = [];
+let section_runtime = [];
+let import_table = [];
+
+let should_parse_pe = false;
+if (format == "pe_like") {
+    should_parse_pe = true;
+};
+if (sample_size < 64) {
+    should_parse_pe = false;
+};
+
+if (should_parse_pe) {
+        let next_pe_offset, err = bytes_read_u32_le(sample_data, 60);
+        if (fail_err(err, "bytes_read_u32_le e_lfanew")) {
+            return;
+        };
+        pe_offset = next_pe_offset;
+
+        let sig1, err = bytes_get(sample_data, pe_offset);
+        if (fail_err(err, "bytes_get pe sig1")) {
+            return;
+        };
+        let sig2, err = bytes_get(sample_data, pe_offset + 1);
+        if (fail_err(err, "bytes_get pe sig2")) {
+            return;
+        };
+        let sig3, err = bytes_get(sample_data, pe_offset + 2);
+        if (fail_err(err, "bytes_get pe sig3")) {
+            return;
+        };
+        let sig4, err = bytes_get(sample_data, pe_offset + 3);
+        if (fail_err(err, "bytes_get pe sig4")) {
+            return;
+        };
+
+        pe_signature = hex_pair(sig1, "sig1") + hex_pair(sig2, "sig2") + hex_pair(sig3, "sig3") + hex_pair(sig4, "sig4");
+
+        let sig_hits = 0;
+        if (sig1 == 80) {
+            sig_hits = sig_hits + 1;
+        };
+        if (sig2 == 69) {
+            sig_hits = sig_hits + 1;
+        };
+
+        let sig_valid = false;
+        if (sig_hits == 2) {
+            sig_valid = true;
+        };
+
+        if (sig_valid) {
+            pe_ok = true;
+
+            let file_header = pe_offset + 4;
+            let next_sections, err = bytes_read_u16_le(sample_data, file_header + 2);
+            if (fail_err(err, "bytes_read_u16_le sections")) {
+                return;
+            };
+            sections = next_sections;
+            if (sections > 128) {
+                sections = 128;
+            };
+
+            let machine_raw, err = bytes_read_u16_le(sample_data, file_header);
+            if (fail_err(err, "bytes_read_u16_le machine")) {
+                return;
+            };
+            let next_machine, err = bytes_hex(machine_raw, 4);
+            if (fail_err(err, "bytes_hex machine")) {
+                return;
+            };
+            machine = next_machine;
+
+            let next_timestamp, err = bytes_read_u32_le(sample_data, file_header + 4);
+            if (fail_err(err, "bytes_read_u32_le timestamp")) {
+                return;
+            };
+            timestamp = next_timestamp;
+
+            let characteristics_raw, err = bytes_read_u16_le(sample_data, file_header + 18);
+            if (fail_err(err, "bytes_read_u16_le characteristics")) {
+                return;
+            };
+            let next_characteristics, err = bytes_hex(characteristics_raw, 4);
+            if (fail_err(err, "bytes_hex characteristics")) {
+                return;
+            };
+            characteristics = next_characteristics;
+
+            let size_opt, err = bytes_read_u16_le(sample_data, file_header + 16);
+            if (fail_err(err, "bytes_read_u16_le size_of_optional_header")) {
+                return;
+            };
+
+            let opt_header = file_header + 20;
+            let optional_magic_raw, err = bytes_read_u16_le(sample_data, opt_header);
+            if (fail_err(err, "bytes_read_u16_le optional_magic")) {
+                return;
+            };
+            let next_optional_magic, err = bytes_hex(optional_magic_raw, 4);
+            if (fail_err(err, "bytes_hex optional_magic")) {
+                return;
+            };
+            optional_magic = next_optional_magic;
+
+            let next_entry_rva, err = bytes_read_u32_le(sample_data, opt_header + 16);
+            if (fail_err(err, "bytes_read_u32_le entry_rva")) {
+                return;
+            };
+            entry_rva = next_entry_rva;
+
+            if (optional_magic_raw == 523) {
+                pointer_size = 8;
+                data_directory_base = opt_header + 112;
+            } else {
+                pointer_size = 4;
+                data_directory_base = opt_header + 96;
+            };
+
+            let section_base = opt_header + size_opt;
+            let section_bundle = parse_sections(sample_data, sample_last, section_base, sections);
+            if (section_bundle["ok"] == false) {
+                return;
+            };
+            section_table = section_bundle["section_table"];
+            section_runtime = section_bundle["section_runtime"];
+
+            let next_import_directory_rva, err = bytes_read_u32_le(sample_data, data_directory_base + 8);
+            if (fail_err(err, "bytes_read_u32_le import_directory_rva")) {
+                return;
+            };
+            import_directory_rva = next_import_directory_rva;
+
+            let parse_state = ParseState {
+                sample_data: sample_data,
+                sample_last: sample_last,
+                runtime_sections: section_runtime,
+                section_count: sections,
+                pointer_size: pointer_size
+            };
+
+            import_directory_raw = rva_to_raw_offset(parse_state, import_directory_rva);
+
+            let should_scan_imports = true;
+            if (import_directory_rva == 0) {
+                should_scan_imports = false;
+            };
+            if (import_directory_raw == 0) {
+                should_scan_imports = false;
+            };
+
+            if (should_scan_imports) {
+                let import_bundle = parse_import_descriptors(parse_state, import_directory_raw);
+                if (import_bundle["ok"] == false) {
+                    return;
+                };
+
+                descriptors_seen = import_bundle["descriptors_seen"];
+                descriptors_with_name = import_bundle["descriptors_with_name"];
+                descriptors_with_thunks = import_bundle["descriptors_with_thunks"];
+                import_table = import_bundle["import_table"];
+            };
+        };
+};
+
+let import_directory_rva_hex, err = bytes_hex(import_directory_rva, 8);
+if (fail_err(err, "bytes_hex import_directory_rva")) {
+    return;
+};
+let import_directory_raw_hex, err = bytes_hex(import_directory_raw, 8);
+if (fail_err(err, "bytes_hex import_directory_raw")) {
+    return;
+};
+let data_directory_base_hex, err = bytes_hex(data_directory_base, 8);
+if (fail_err(err, "bytes_hex data_directory_base")) {
+    return;
+};
+
+let metadata = {
+    "format": format,
+    "magic_hex": magic_hex,
+    "byte_length": sample_size,
+    "pe_offset": pe_offset,
+    "pe_signature": pe_signature,
+    "machine": machine,
+    "sections": sections,
+    "timestamp": timestamp,
+    "characteristics": characteristics,
+    "optional_magic": optional_magic,
+    "entry_rva": entry_rva,
+    "section_table": section_table
+};
+
+let import_diagnostics = {
+    "pe_ok": pe_ok,
+    "pe_offset": pe_offset,
+    "import_directory_rva": import_directory_rva_hex,
+    "import_directory_raw": import_directory_raw_hex,
+    "data_directory_base": data_directory_base_hex,
+    "pointer_size": pointer_size,
+    "descriptors_seen": descriptors_seen,
+    "descriptors_with_name": descriptors_with_name,
+    "descriptors_with_thunks": descriptors_with_thunks
+};
+
+let bundle = {
+    "metadata": metadata,
+    "import_table": import_table,
+    "import_diagnostics": import_diagnostics
+};
+
+let bundle_json, err = json_stringify(bundle);
+if (fail_err(err, "json_stringify bundle")) {
+    return;
+};
+
+let write_result, err = fs_write(report_file_path, bundle_json);
+if (fail_err(err, "fs_write report")) {
+    return;
+};
+
+if (write_result) {
+    putln("wrote report: " + report_file_path);
+} else {
+    putln("failed to write report");
+};

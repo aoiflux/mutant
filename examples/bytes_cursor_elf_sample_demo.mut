@@ -1,0 +1,184 @@
+putln("=== bytes_cursor_elf_sample_demo ===");
+putln("Safe use: reads static metadata from examples/data/sample_lnx");
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] " + op + ": " + err);
+    };
+};
+
+let fail_err = fn(err, op) {
+    if (err) {
+        putln("[error] " + op + ": " + err);
+        return true;
+    };
+    return false;
+};
+
+let output_directory = "example_output/bytes_cursor_sample_demo";
+let report_path = output_directory + "/report_lnx.json";
+let sample_path = "examples/data/sample_lnx";
+
+let mkdir_result, err = fs_mkdir(output_directory);
+check_err(err, "fs_mkdir");
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let sample_bytes, err = fs_read(sample_path);
+if (fail_err(err, "fs_read sample")) {
+    return;
+};
+
+let sample_len, err = bytes_len(sample_bytes);
+if (fail_err(err, "bytes_len sample")) {
+    return;
+};
+
+let b1, err = bytes_get(sample_bytes, 0);
+if (fail_err(err, "bytes_get b1")) {
+    return;
+};
+let b2, err = bytes_get(sample_bytes, 1);
+if (fail_err(err, "bytes_get b2")) {
+    return;
+};
+let b3, err = bytes_get(sample_bytes, 2);
+if (fail_err(err, "bytes_get b3")) {
+    return;
+};
+let b4, err = bytes_get(sample_bytes, 3);
+if (fail_err(err, "bytes_get b4")) {
+    return;
+};
+
+let magic = "";
+if (b1 == 127) {
+    if (b2 == 69) {
+        if (b3 == 76) {
+            if (b4 == 70) {
+                magic = "ELF";
+            };
+        };
+    };
+};
+
+let elf_class, err = bytes_get(sample_bytes, 4);
+if (fail_err(err, "bytes_get elf class")) {
+    return;
+};
+
+let elf_endian, err = bytes_get(sample_bytes, 5);
+if (fail_err(err, "bytes_get elf endian")) {
+    return;
+};
+
+let machine_raw, err = bytes_read_u16_le(sample_bytes, 18);
+if (fail_err(err, "bytes_read_u16_le machine")) {
+    return;
+};
+if (elf_endian == 2) {
+    let machine_be, err = bytes_read_u16_be(sample_bytes, 18);
+    if (fail_err(err, "bytes_read_u16_be machine")) {
+        return;
+    };
+    machine_raw = machine_be;
+};
+let machine_hex, err = bytes_hex(machine_raw, 4);
+if (fail_err(err, "bytes_hex machine")) {
+    return;
+};
+
+let entry_raw, err = bytes_read_u64_le(sample_bytes, 24);
+if (fail_err(err, "bytes_read_u64_le entry")) {
+    return;
+};
+if (elf_endian == 2) {
+    let entry_be, err = bytes_read_u64_be(sample_bytes, 24);
+    if (fail_err(err, "bytes_read_u64_be entry")) {
+        return;
+    };
+    entry_raw = entry_be;
+};
+
+let entry_hex_width = 16;
+if (elf_class != 2) {
+    entry_hex_width = 8;
+};
+let entry_hex, err = bytes_hex(entry_raw, entry_hex_width);
+if (fail_err(err, "bytes_hex entry")) {
+    return;
+};
+
+let first16, err = bytes_slice(sample_bytes, 0, 16);
+if (fail_err(err, "bytes_slice first16")) {
+    return;
+};
+
+let first16_hex = "";
+for (let i = 0; i < 16; i = i + 1) {
+    let byte_val, err = bytes_get(first16, i);
+    if (fail_err(err, "bytes_get first16")) {
+        return;
+    };
+
+    let byte_hex, err = bytes_hex(byte_val, 2);
+    if (fail_err(err, "bytes_hex first16")) {
+        return;
+    };
+
+    if (i == 0) {
+        first16_hex = byte_hex;
+    } else {
+        first16_hex = first16_hex + " " + byte_hex;
+    };
+}
+
+let sample_len_text, err = json_stringify(sample_len);
+if (fail_err(err, "json_stringify sample_len")) {
+    return;
+};
+
+let elf_class_text, err = json_stringify(elf_class);
+if (fail_err(err, "json_stringify elf_class")) {
+    return;
+};
+let elf_endian_text, err = json_stringify(elf_endian);
+if (fail_err(err, "json_stringify elf_endian")) {
+    return;
+};
+
+putln("sample bytes: " + sample_len_text);
+putln("magic: " + magic);
+putln("elf class: " + elf_class_text + " endian: " + elf_endian_text + " machine: " + machine_hex);
+putln("entry: " + entry_hex);
+putln("first16: " + first16_hex);
+
+let report = {
+    "profile": "bytes_cursor_elf_sample_demo",
+    "sample_path": sample_path,
+    "format": "elf_like",
+    "magic": magic,
+    "byte_length": sample_len,
+    "elf_class": elf_class,
+    "elf_endian": elf_endian,
+    "machine_hex": machine_hex,
+    "entry_hex": entry_hex,
+    "first16_hex": first16_hex
+};
+
+let report_json, err = json_stringify(report);
+if (fail_err(err, "json_stringify report")) {
+    return;
+};
+
+let write_ok, err = fs_write(report_path, report_json);
+if (fail_err(err, "fs_write report")) {
+    return;
+};
+
+if (write_ok) {
+    putln("wrote report: " + report_path);
+} else {
+    putln("failed to write report");
+};
