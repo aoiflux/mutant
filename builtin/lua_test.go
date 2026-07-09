@@ -12,9 +12,14 @@ import (
 
 func TestLuaRunStringSuccess(t *testing.T) {
 	result := LuaRunString(&object.String{Value: "return 'mutant-lua'"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -30,9 +35,14 @@ func TestLuaRunStringSuccess(t *testing.T) {
 
 func TestLuaRunStringHasIOLibrary(t *testing.T) {
 	result := LuaRunString(&object.String{Value: "return type(io)"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -48,9 +58,14 @@ func TestLuaRunStringHasIOLibrary(t *testing.T) {
 
 func TestLuaRunStringCapturesPrintOutputWithoutReturn(t *testing.T) {
 	result := LuaRunString(&object.String{Value: "print('hello'); print('world')"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -66,9 +81,14 @@ func TestLuaRunStringCapturesPrintOutputWithoutReturn(t *testing.T) {
 
 func TestLuaRunStringNilReturnUsesExplicitNilString(t *testing.T) {
 	result := LuaRunString(&object.String{Value: "return nil"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -91,9 +111,14 @@ func TestLuaRunStringMutantReadFile(t *testing.T) {
 
 	code := "local d,e = mutant.read_file('" + filepath.ToSlash(path) + "'); if not d then return 'ERR:' .. tostring(e) end; return d"
 	result := LuaRunString(&object.String{Value: code})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -115,9 +140,14 @@ func TestLuaRunFileSuccess(t *testing.T) {
 	}
 
 	result := LuaRunFile(&object.String{Value: path})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -134,9 +164,14 @@ func TestLuaRunHTTPCodeSuccess(t *testing.T) {
 	defer server.Close()
 
 	result := LuaRunHTTP(&object.String{Value: server.URL})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -152,27 +187,22 @@ func TestLuaRunHTTPCodeSuccess(t *testing.T) {
 
 func TestLuaRunFileBlockedWithoutCapability(t *testing.T) {
 	result := LuaRunFile(&object.String{Value: "patch.lua"})
-	hash, ok := result.(*object.Hash)
-	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
-	}
-
-	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
-	if okObj == nil || okObj.Value {
-		t.Fatalf("expected ok=false")
-	}
-
-	errObj, _ := hashValueByKey(hash, "error").(*object.String)
-	if errObj == nil || errObj.Value == "" {
-		t.Fatalf("expected non-empty error")
+	_, errObj := unwrapPair(t, result)
+	if errObj == nil {
+		t.Fatalf("expected non-nil pair error")
 	}
 }
 
 func TestLuaRunHTTPBlockedWithoutCapability(t *testing.T) {
 	result := LuaRunHTTP(&object.String{Value: "https://example.com"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected pair error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
@@ -180,8 +210,8 @@ func TestLuaRunHTTPBlockedWithoutCapability(t *testing.T) {
 		t.Fatalf("expected ok=false")
 	}
 
-	errObj, _ := hashValueByKey(hash, "error").(*object.String)
-	if errObj == nil || errObj.Value == "" {
+	errMsgObj, _ := hashValueByKey(hash, "error").(*object.String)
+	if errMsgObj == nil || errMsgObj.Value == "" {
 		t.Fatalf("expected non-empty error")
 	}
 }

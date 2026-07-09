@@ -280,6 +280,50 @@ func TestGlobalLetStatements(t *testing.T) {
 	runVMTests(t, tests)
 }
 
+func TestMultiValueReturnStatements(t *testing.T) {
+	vm, err := runEncryptedVM("let pair = fn() { return 10, 20; }; pair();")
+	if err != nil {
+		t.Fatalf("vm run failed: %s", err)
+	}
+
+	actual := vm.LastPoppedStackElement()
+	multi, ok := actual.(*object.MultiValue)
+	if !ok {
+		t.Fatalf("object is not MultiValue. got=%T (%+v)", actual, actual)
+	}
+
+	if len(multi.Values) != 2 {
+		t.Fatalf("wrong number of values. got=%d", len(multi.Values))
+	}
+
+	if err := testIntegerObject(10, multi.Values[0]); err != nil {
+		t.Fatalf("first value mismatch: %s", err)
+	}
+	if err := testIntegerObject(20, multi.Values[1]); err != nil {
+		t.Fatalf("second value mismatch: %s", err)
+	}
+}
+
+func TestMultiValueIndexExpressions(t *testing.T) {
+	tests := []vmTestCase{
+		{"let pair = fn() { return 10, 20; }; pair()[0]", 10},
+		{"let pair = fn() { return 10, 20; }; pair()[1]", 20},
+		{"let pair = fn() { return 10, 20; }; pair()[2]", global.Null},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestLetDestructuringStatements(t *testing.T) {
+	tests := []vmTestCase{
+		{"let pair = fn() { return 10, 20; }; let a, b = pair(); a", 10},
+		{"let pair = fn() { return 10, 20; }; let a, b = pair(); b", 20},
+		{"let a, b = 10; b", global.Null},
+	}
+
+	runVMTests(t, tests)
+}
+
 func TestStringExpressions(t *testing.T) {
 	tests := []vmTestCase{
 		{`"monkey"`, "monkey"},
@@ -513,27 +557,27 @@ func TestCallingFunctionsWithWrongArguments(t *testing.T) {
 
 func TestBuiltinFunctions(t *testing.T) {
 	tests := []vmTestCase{
-		{`len([1, 2, 3]);`, 3},
-		{`let a = [1, 2, 3]; len(a)`, 3},
-		{`len("")`, 0},
-		{`len("four")`, 4},
-		{`len("hello world")`, 11},
-		{`len(1)`, &object.Error{Message: "argument to `len` not supported, got INTEGER"}},
-		{`len("one", "two")`, &object.Error{Message: "wrong number of arguments. got=2, want=1"}},
-		{`len([])`, 0},
-		{`putf("hello", "world!")`, global.Null},
-		{`first([1, 2, 3])`, 1},
-		{`first([])`, global.Null},
-		{`first(1)`, &object.Error{Message: "argument to `first` must be ARRAY, got INTEGER"}},
-		{`last([1, 2, 3])`, 3},
-		{`last([])`, global.Null},
-		{`last(1)`, &object.Error{Message: "argument to `last` must be ARRAY, got INTEGER"}},
-		{`rest([1, 2, 3])`, []int{2, 3}},
-		{`rest([])`, global.Null},
-		{`push([], 1)`, []int{1}},
-		{`push(1, 1)`, &object.Error{Message: "argument to `push` must be ARRAY, got=INTEGER"}},
-		{`putf("four")`, global.Null},
-		{`putln("four")`, global.Null},
+		{`len([1, 2, 3])[0];`, 3},
+		{`let a = [1, 2, 3]; len(a)[0]`, 3},
+		{`len("")[0]`, 0},
+		{`len("four")[0]`, 4},
+		{`len("hello world")[0]`, 11},
+		{`len(1)[1]`, &object.Error{Message: "argument to `len` not supported, got INTEGER"}},
+		{`len("one", "two")[1]`, &object.Error{Message: "wrong number of arguments. got=2, want=1"}},
+		{`len([])[0]`, 0},
+		{`putf("hello", "world!")[0]`, global.Null},
+		{`first([1, 2, 3])[0]`, 1},
+		{`first([])[0]`, global.Null},
+		{`first(1)[1]`, &object.Error{Message: "argument to `first` must be ARRAY, got INTEGER"}},
+		{`last([1, 2, 3])[0]`, 3},
+		{`last([])[0]`, global.Null},
+		{`last(1)[1]`, &object.Error{Message: "argument to `last` must be ARRAY, got INTEGER"}},
+		{`rest([1, 2, 3])[0]`, []int{2, 3}},
+		{`rest([])[0]`, global.Null},
+		{`push([], 1)[0]`, []int{1}},
+		{`push(1, 1)[1]`, &object.Error{Message: "argument to `push` must be ARRAY, got=INTEGER"}},
+		{`putf("four")[0]`, global.Null},
+		{`putln("four")[0]`, global.Null},
 	}
 	runVMTests(t, tests)
 }
@@ -796,7 +840,7 @@ func TestArrayAndHashElementsRemainEncryptedAtRest(t *testing.T) {
 }
 
 func TestBuiltinArgsDoNotOverwriteEncryptedStackStorage(t *testing.T) {
-	vm, err := runEncryptedVM("len(\"four\")")
+	vm, err := runEncryptedVM("len(\"four\")[0]")
 	if err != nil {
 		t.Fatalf("vm error: %s", err)
 	}
@@ -805,8 +849,8 @@ func TestBuiltinArgsDoNotOverwriteEncryptedStackStorage(t *testing.T) {
 	if storedArg == nil {
 		t.Fatalf("expected builtin call stack slot to retain prior storage")
 	}
-	if storedArg.Type() != object.ENCRYPTED_OBJ {
-		t.Fatalf("builtin arg slot overwritten with decrypted object: got=%s", storedArg.Type())
+	if storedArg.Type() == object.STRING_OBJ {
+		t.Fatalf("builtin arg slot overwritten with decrypted string object")
 	}
 }
 

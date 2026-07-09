@@ -1,45 +1,46 @@
 let path = "example_output.txt";
 
-let w = fs_write(path, "hello from mutant\n");
-if (w["ok"]) {
+let w, err = fs_write(path, "hello from mutant\n");
+if (w) {
     putln("wrote file");
 } else {
-    putln("write failed: ", w["error"]);
+    putln("write failed");
 };
 
-let a = fs_append(path, "second line\n");
-if (a["ok"]) {
+let a, err = fs_append(path, "second line\n");
+if (a) {
     putln("appended to file");
 };
 
-let contents = fs_read(path);
+let contents, err = fs_read(path);
 putln("file contents:");
 putln(contents);
 
-let info = fs_stat(path);
+let info, err = fs_stat(path);
 putln("file name:     ", info["name"]);
 putln("file size:     ", info["size"]);
 putln("is directory:  ", info["is_dir"]);
 putln("modified:      ", info["mod_time"]);
 
-let exists = fs_exists(path);
+let exists, err = fs_exists(path);
 putln("file exists: ", exists);
 
-let dir = fs_mkdir("example_dir");
-if (dir["ok"]) {
+let dir, err = fs_mkdir("example_dir");
+if (dir) {
     putln("created directory");
 };
 
-let cp = fs_copy(path, "example_dir/copy.txt");
-if (cp["ok"]) {
+let cp, err = fs_copy(path, "example_dir/copy.txt");
+if (cp) {
     putln("copied file");
 };
 
-let listing = fs_list("example_dir");
+let listing, err = fs_list("example_dir");
 putln("directory listing:");
 let i = 0;
 let printEntry = fn(entries, idx) {
-    if (idx == len(entries)) {
+    let reached_end, err = idx == len(entries);
+    if (reached_end) {
         return 0;
     }
     let entry = entries[idx];
@@ -48,12 +49,14 @@ let printEntry = fn(entries, idx) {
 };
 printEntry(listing, 0);
 
-let mv = fs_move("example_dir/copy.txt", "example_dir/moved.txt");
-if (mv["ok"]) {
+let mv, err = fs_move("example_dir/copy.txt", "example_dir/moved.txt");
+if (mv) {
     putln("moved file");
 };
 
-let del = fs_delete(path);
-if (del["ok"]) {
+let del, err = fs_delete(path);
+if (del) {
     putln("deleted original file");
 };
+
+

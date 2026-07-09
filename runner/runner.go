@@ -344,6 +344,9 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	}
 
 	last := machine.LastPoppedStackElement()
+	if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
+		return nil, ""
+	}
 	io.WriteString(os.Stdout, last.Inspect())
 	io.WriteString(os.Stdout, "\n")
 
@@ -383,6 +386,7 @@ func registerTypes() {
 	gob.Register(&object.Boolean{})
 	gob.Register(&object.Null{})
 	gob.Register(&object.ReturnValue{})
+	gob.Register(&object.MultiValue{})
 	gob.Register(&object.Error{})
 	gob.Register(&object.Function{})
 	gob.Register(&object.String{})

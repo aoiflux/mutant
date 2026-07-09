@@ -1,11 +1,13 @@
 putln("=== lua_run_file example ===");
 putln("requires capability: filesystem");
 
-let result = lua_run_file("examples/lua_sample_patch.lua");
+let result, err = lua_run_file("examples/lua_sample_patch.lua");
 
-if (result["ok"]) {
-    putln("lua_run_file ok");
-    putln("result: ", result["result"]);
+if (err) {
+    putln("lua_run_file failed: ", err);
 } else {
-    putln("lua_run_file failed: ", result["error"]);
+    putln("lua_run_file ok");
+    putln("result: ", result);
 };
+
+

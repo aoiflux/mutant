@@ -1,56 +1,66 @@
 putln("=== Security Environment Forensics Report ===");
 
-let output_dir = "example_output/security";
-let report_path = output_dir + "/environment_report.json";
+let output_directory = "example_output/security";
+let report_file_path = output_directory + "/environment_report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-let diag = security_diagnostics();
-let dbg = diag["debugger"];
-let sbx = diag["sandbox"];
+let diagnostics, err = security_diagnostics();
+let debugger_status = diagnostics["debugger"];
+let sandbox_status = diagnostics["sandbox"];
+
+let DEBUGGER_SCORE = 40;
+let INDICATOR_WEIGHT = 5;
+let MAX_RISK_SCORE = 100;
+let HIGH_THRESHOLD = 70;
+let MEDIUM_THRESHOLD = 40;
 
 let risk_score = 0;
-if (dbg["detected"]) {
-    risk_score = risk_score + 40;
+if (debugger_status["detected"]) {
+    risk_score = risk_score + DEBUGGER_SCORE;
 };
-if (sbx["detected"]) {
-    risk_score = risk_score + sbx["confidence"];
+if (sandbox_status["detected"]) {
+    risk_score = risk_score + sandbox_status["confidence"];
 };
-if (len(sbx["indicators"]) > 0) {
-    risk_score = risk_score + (len(sbx["indicators"]) * 5);
+let indicator_count, err = len(sandbox_status["indicators"]);
+if (indicator_count > 0) {
+    risk_score = risk_score + (indicator_count * INDICATOR_WEIGHT);
 };
-if (risk_score > 100) {
-    risk_score = 100;
+if (risk_score > MAX_RISK_SCORE) {
+    risk_score = MAX_RISK_SCORE;
 };
 
 let severity = "low";
-if (risk_score > 69) {
+if (risk_score > (HIGH_THRESHOLD - 1)) {
     severity = "high";
 } else {
-    if (risk_score > 39) {
+    if (risk_score > (MEDIUM_THRESHOLD - 1)) {
         severity = "medium";
     };
 };
 
-putln("debugger detected: ", dbg["detected"]);
-putln("sandbox detected: ", sbx["detected"], " type=", sbx["type"]);
+putln("debugger detected: ", debugger_status["detected"]);
+putln("sandbox detected: ", sandbox_status["detected"], " type=", sandbox_status["type"]);
 putln("risk score: ", risk_score, " severity=", severity);
 
 let report = {
     "profile": "environment_forensics",
     "risk_score": risk_score,
     "severity": severity,
-    "debugger": dbg,
-    "sandbox": sbx
+    "debugger": debugger_status,
+    "sandbox": sandbox_status
 };
 
-let report_json = json_stringify(report);
-let write_report = fs_write(report_path, report_json);
-if (write_report["ok"]) {
-    putln("wrote report: ", report_path);
+let report_json, err = json_stringify(report);
+let write_report_result, err = fs_write(report_file_path, report_json);
+if (write_report_result) {
+    putln("wrote report: ", report_file_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+
+

@@ -10,30 +10,30 @@ import (
 
 func JsonStringify(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	value, err := objectToJSONValue(args[0])
 	if err != nil {
-		return newError("argument to `json_stringify` could not be converted to JSON: %s", err.Error())
+		return resultAndError(nil, newError("argument to `json_stringify` could not be converted to JSON: %s", err.Error()))
 	}
 
 	bytes, err := json.Marshal(value)
 	if err != nil {
-		return newError("argument to `json_stringify` could not be converted to JSON: %s", err.Error())
+		return resultAndError(nil, newError("argument to `json_stringify` could not be converted to JSON: %s", err.Error()))
 	}
 
-	return stringObj(string(bytes))
+	return resultAndError(stringObj(string(bytes)), nil)
 }
 
 func JsonParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	input, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument to `json_parse` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `json_parse` must be STRING, got %s", args[0].Type()))
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(input.Value))
@@ -41,15 +41,15 @@ func JsonParse(args ...object.Object) object.Object {
 
 	var raw any
 	if err := decoder.Decode(&raw); err != nil {
-		return newError("argument to `json_parse` is not valid JSON: %s", err.Error())
+		return resultAndError(nil, newError("argument to `json_parse` is not valid JSON: %s", err.Error()))
 	}
 
 	parsed, err := jsonValueToObject(raw)
 	if err != nil {
-		return newError("argument to `json_parse` could not be converted to Mutant object: %s", err.Error())
+		return resultAndError(nil, newError("argument to `json_parse` could not be converted to Mutant object: %s", err.Error()))
 	}
 
-	return parsed
+	return resultAndError(parsed, nil)
 }
 
 func objectToJSONValue(obj object.Object) (any, error) {

@@ -95,18 +95,41 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return Eval(node.Expression, env)
 
 	case *ast.ReturnStatement:
-		val := Eval(node.ReturnValue, env)
-		if isError(val) {
-			return val
+		values, errObj := evalReturnValues(node, env)
+		if errObj != nil {
+			return errObj
 		}
-		return &object.ReturnValue{Value: val}
+
+		switch len(values) {
+		case 0:
+			return &object.ReturnValue{Value: NULL}
+		case 1:
+			return &object.ReturnValue{Value: values[0]}
+		default:
+			return &object.ReturnValue{Value: &object.MultiValue{Values: values}}
+		}
 
 	case *ast.LetStatement:
 		val := Eval(node.Value, env)
 		if isError(val) {
 			return val
 		}
-		env.Set(node.Name.Value, val)
+		names := node.Names
+		if len(names) == 0 && node.Name != nil {
+			names = []*ast.Identifier{node.Name}
+		}
+		if len(names) <= 1 {
+			env.Set(node.Name.Value, val)
+			break
+		}
+
+		values := destructureValues(val, len(names))
+		for i, ident := range names {
+			if ident == nil {
+				continue
+			}
+			env.Set(ident.Value, values[i])
+		}
 
 	case *ast.ForStatement:
 		return evalForStatement(node, env)
@@ -189,13 +212,26 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		evaluated := Eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
-		if result := fun.Fn(args...); result != nil {
-			return result
-		}
-		return NULL
+		return normalizeBuiltinResult(fun.Fn(args...))
 	default:
 		return newError("not a function: %s", fn.Type())
 	}
+}
+
+func normalizeBuiltinResult(result object.Object) object.Object {
+	if result == nil {
+		return &object.MultiValue{Values: []object.Object{NULL, NULL}}
+	}
+
+	if multi, ok := result.(*object.MultiValue); ok {
+		return multi
+	}
+
+	if errObj, ok := result.(*object.Error); ok {
+		return &object.MultiValue{Values: []object.Object{NULL, errObj}}
+	}
+
+	return &object.MultiValue{Values: []object.Object{result, NULL}}
 }
 
 func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Environment {
@@ -208,9 +244,59 @@ func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Enviro
 
 func unwrapReturnValue(obj object.Object) object.Object {
 	if returnValue, ok := obj.(*object.ReturnValue); ok {
-		return returnValue
+		return returnValue.Value
 	}
 	return obj
+}
+
+func evalReturnValues(node *ast.ReturnStatement, env *object.Environment) ([]object.Object, object.Object) {
+	expressions := node.ReturnValues
+	if len(expressions) == 0 && node.ReturnValue != nil {
+		expressions = []ast.Expression{node.ReturnValue}
+	}
+
+	values := make([]object.Object, 0, len(expressions))
+	for _, expr := range expressions {
+		if expr == nil {
+			continue
+		}
+
+		value := Eval(expr, env)
+		if isError(value) {
+			return nil, value
+		}
+		values = append(values, value)
+	}
+
+	return values, nil
+}
+
+func destructureValues(source object.Object, arity int) []object.Object {
+	values := make([]object.Object, arity)
+	for i := range values {
+		values[i] = NULL
+	}
+
+	switch obj := source.(type) {
+	case *object.MultiValue:
+		for i := 0; i < arity && i < len(obj.Values); i++ {
+			if obj.Values[i] != nil {
+				values[i] = obj.Values[i]
+			}
+		}
+	case *object.Array:
+		for i := 0; i < arity && i < len(obj.Elements); i++ {
+			if obj.Elements[i] != nil {
+				values[i] = obj.Elements[i]
+			}
+		}
+	default:
+		if arity > 0 && source != nil {
+			values[0] = source
+		}
+	}
+
+	return values
 }
 
 func isTruthy(obj object.Object) bool {

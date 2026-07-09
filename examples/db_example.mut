@@ -1,6 +1,20 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
 putln("=== GrapheneDB In-Memory Graph ===");
 
-let db = db_open();
+let db, err = db_open();
+check_err(err, "db_open");
 putf("opened graph db, handle: ", db);
 putln("");
 
@@ -9,45 +23,58 @@ let NODE_DOCUMENT = 2;
 let EDGE_KNOWS = 1;
 let EDGE_AUTHORED = 2;
 
-let alice = db_add_node(db, NODE_PERSON);
-let bob   = db_add_node(db, NODE_PERSON);
-let carol = db_add_node(db, NODE_PERSON);
-let doc   = db_add_node(db, NODE_DOCUMENT);
+let alice, err = db_add_node(db, NODE_PERSON);
+let bob, err = db_add_node(db, NODE_PERSON);
+let carol, err = db_add_node(db, NODE_PERSON);
+let doc, err = db_add_node(db, NODE_DOCUMENT);
+check_err(err, "db_add_node document");
 
 putf("added nodes: alice=", alice, " bob=", bob, " carol=", carol, " doc=", doc);
 putln("");
 
-let e1 = db_add_edge(db, alice, bob,   EDGE_KNOWS);
-let e2 = db_add_edge(db, bob,   carol, EDGE_KNOWS);
-let e3 = db_add_edge(db, alice, doc,   EDGE_AUTHORED);
+let e1, err = db_add_edge(db, alice, bob,   EDGE_KNOWS);
+let e2, err = db_add_edge(db, bob,   carol, EDGE_KNOWS);
+let e3, err = db_add_edge(db, alice, doc,   EDGE_AUTHORED);
+check_err(err, "db_add_edge authored");
 
 putf("added edges: ", e1, " ", e2, " ", e3);
 putln("");
 
-let p1 = db_index_prop(db, alice, "name", "Alice");
-let p2 = db_index_prop(db, bob,   "name", "Bob");
-let p3 = db_index_prop(db, carol, "name", "Carol");
+let p1, err = db_index_prop(db, alice, "name", "Alice");
+let p2, err = db_index_prop(db, bob,   "name", "Bob");
+let p3, err = db_index_prop(db, carol, "name", "Carol");
+check_err(err, "db_index_prop Carol");
 putln("indexed properties");
 
-let stats = db_stats(db);
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
 putf("graph stats — nodes: ", stats["nodes"], "  edges: ", stats["edges"]);
 putln("");
 
 putln("");
 putln("=== BFS from Alice (depth 2, outbound) ===");
-let bfs = db_bfs(db, alice, 2, "out");
-putf("nodes reachable: ", len(bfs["nodes"]));
+let bfs, err = db_bfs(db, alice, 2, "out");
+check_err(err, "db_bfs");
+let bfs_nodes_count, err = len(bfs["nodes"]);
+check_err(err, "len bfs nodes");
+putf("nodes reachable: ", bfs_nodes_count);
 putln("");
-putf("edges traversed: ", len(bfs["edges"]));
+let bfs_edges_count, err = len(bfs["edges"]);
+check_err(err, "len bfs edges");
+putf("edges traversed: ", bfs_edges_count);
 putln("");
 
 putln("");
 putln("=== Shortest Path: Alice -> Carol ===");
-let path = db_shortest_path(db, alice, carol);
-putf("path node count: ", len(path));
+let path, err = db_shortest_path(db, alice, carol);
+check_err(err, "db_shortest_path");
+let path_node_count, err = len(path);
+check_err(err, "len path");
+putf("path node count: ", path_node_count);
 putln("");
 let printPath = fn(arr, idx) {
-    if (idx == len(arr)) {
+    let reached_end, err = idx == len(arr);
+    if (reached_end) {
         return 0;
     }
     putf("  node id: ", arr[idx]);
@@ -58,15 +85,22 @@ printPath(path, 0);
 
 putln("");
 putln("=== Query nodes by type ===");
-let people = db_query_nodes(db, NODE_PERSON);
-putf("person nodes: ", len(people));
+let people, err = db_query_nodes(db, NODE_PERSON);
+check_err(err, "db_query_nodes person");
+let people_count, err = len(people);
+check_err(err, "len people");
+putf("person nodes: ", people_count);
 putln("");
-let docs = db_query_nodes(db, NODE_DOCUMENT);
-putf("document nodes: ", len(docs));
+let docs, err = db_query_nodes(db, NODE_DOCUMENT);
+check_err(err, "db_query_nodes document");
+let docs_count, err = len(docs);
+check_err(err, "len docs");
+putf("document nodes: ", docs_count);
 putln("");
 
-let closed = db_close(db);
-if (closed["ok"]) {
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed) {
     putln("graph closed cleanly");
 } else {
     putln("close error: ", closed["error"]);
@@ -74,21 +108,25 @@ if (closed["ok"]) {
 
 putln("");
 putln("=== Disk-backed Graph ===");
-let disk_db = db_open_disk("./example_graph_data");
+let disk_db, err = db_open_disk("./example_graph_data");
+check_err(err, "db_open_disk");
 putf("opened disk graph, handle: ", disk_db);
 putln("");
 
-let n1 = db_add_node(disk_db);
-let n2 = db_add_node(disk_db);
-db_add_edge(disk_db, n1, n2);
-db_index_prop(disk_db, n1, "ip", "192.168.1.1");
-db_index_prop(disk_db, n2, "ip", "192.168.1.2");
+let n1, err = db_add_node(disk_db);
+let n2, err = db_add_node(disk_db);
+check_err(err, "db_add_node disk");
+check(db_add_edge(disk_db, n1, n2), "db_add_edge");
+check(db_index_prop(disk_db, n1, "ip", "192.168.1.1"), "db_index_prop");
+check(db_index_prop(disk_db, n2, "ip", "192.168.1.2"), "db_index_prop");
 
-let disk_stats = db_stats(disk_db);
+let disk_stats, err = db_stats(disk_db);
+check_err(err, "db_stats disk");
 putf("disk graph — nodes: ", disk_stats["nodes"], "  edges: ", disk_stats["edges"]);
 putln("");
 
-let disk_closed = db_close(disk_db);
-if (disk_closed["ok"]) {
+let disk_closed, err = db_close(disk_db);
+check_err(err, "db_close disk");
+if (disk_closed) {
     putln("disk graph closed cleanly");
 };

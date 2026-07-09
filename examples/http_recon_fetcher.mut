@@ -1,69 +1,103 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
 putln("=== http_recon_fetcher ===");
 putln("Safe use: this tool targets public test domains only by default.");
 
-let output_dir = "example_output/http_recon_fetcher";
-let input_path = output_dir + "/domains.json";
-let graph_path = output_dir + "/recon_graph";
-let report_path = output_dir + "/report.json";
+let output_directory = "example_output/http_recon_fetcher";
+let input_file_path = output_directory + "/domains.json";
+let graph_path = output_directory + "/recon_graph";
+let report_path = output_directory + "/report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
+let input_file_exists, err = fs_exists(input_file_path);
+check_err(err, "fs_exists");
+if (input_file_exists == false) {
     let seed = {
         "domains": [
             "https://example.com",
             "https://httpbin.org"
         ]
     };
-    let seed_json = json_stringify(seed);
-    let seed_write = fs_write(input_path, seed_json);
-    if (seed_write["ok"]) {
-        putln("seeded test dataset: ", input_path);
+    let seed_json, err = json_stringify(seed);
+    check_err(err, "json_stringify seed");
+    let seed_write, err = fs_write(input_file_path, seed_json);
+    check_err(err, "fs_write seed");
+    if (seed_write) {
+        putln("seeded test dataset: ", input_file_path);
     } else {
-        putln("failed to seed dataset: ", seed_write["error"]);
+        putln("failed to seed dataset");
     };
 };
 
-let parsed = json_parse(fs_read(input_path));
+let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
 let domains = parsed["domains"];
 
 let NODE_DOMAIN = 1;
 let NODE_ENDPOINT = 2;
 let EDGE_HAS_ENDPOINT = 1;
 
-let db = db_open_disk(graph_path);
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
 let findings = [];
 
-for (let i = 0; i < len(domains); i = i + 1) {
+let domain_count, err = len(domains);
+check_err(err, "len domains");
+for (let i = 0; i < domain_count; i = i + 1) {
     let domain = domains[i];
     putln("scanning: ", domain);
 
-    let domain_node = db_add_node(db, NODE_DOMAIN);
-    db_index_prop(db, domain_node, "url", domain);
+    let domain_node, err = db_add_node(db, NODE_DOMAIN);
+    check_err(err, "db_add_node domain");
+    check(db_index_prop(db, domain_node, "url", domain), "db_index_prop");
 
-    let root = http_get(domain);
-    let robots = http_get(domain + "/robots.txt");
-    let sitemap = http_get(domain + "/sitemap.xml");
+    let root, err = http_get(domain);
+    let robots, err = http_get(domain + "/robots.txt");
+    let sitemap, err = http_get(domain + "/sitemap.xml");
+    check_err(err, "http_get sitemap");
 
-    let root_node = db_add_node(db, NODE_ENDPOINT);
-    db_index_prop(db, root_node, "path", "/");
-    db_index_prop(db, root_node, "status", json_stringify(root["status"]));
-    db_add_edge(db, domain_node, root_node, EDGE_HAS_ENDPOINT);
+    let root_node, err = db_add_node(db, NODE_ENDPOINT);
+    check_err(err, "db_add_node root");
+    check(db_index_prop(db, root_node, "path", "/"), "db_index_prop");
+    let root_status_json, err = json_stringify(root["status"]);
+    check_err(err, "json_stringify root status");
+    check(db_index_prop(db, root_node, "status", root_status_json), "db_index_prop");
+    check(db_add_edge(db, domain_node, root_node, EDGE_HAS_ENDPOINT), "db_add_edge");
 
-    let robots_node = db_add_node(db, NODE_ENDPOINT);
-    db_index_prop(db, robots_node, "path", "/robots.txt");
-    db_index_prop(db, robots_node, "status", json_stringify(robots["status"]));
-    db_add_edge(db, domain_node, robots_node, EDGE_HAS_ENDPOINT);
+    let robots_node, err = db_add_node(db, NODE_ENDPOINT);
+    check_err(err, "db_add_node robots");
+    check(db_index_prop(db, robots_node, "path", "/robots.txt"), "db_index_prop");
+    let robots_status_json, err = json_stringify(robots["status"]);
+    check_err(err, "json_stringify robots status");
+    check(db_index_prop(db, robots_node, "status", robots_status_json), "db_index_prop");
+    check(db_add_edge(db, domain_node, robots_node, EDGE_HAS_ENDPOINT), "db_add_edge");
 
-    let sitemap_node = db_add_node(db, NODE_ENDPOINT);
-    db_index_prop(db, sitemap_node, "path", "/sitemap.xml");
-    db_index_prop(db, sitemap_node, "status", json_stringify(sitemap["status"]));
-    db_add_edge(db, domain_node, sitemap_node, EDGE_HAS_ENDPOINT);
+    let sitemap_node, err = db_add_node(db, NODE_ENDPOINT);
+    check_err(err, "db_add_node sitemap");
+    check(db_index_prop(db, sitemap_node, "path", "/sitemap.xml"), "db_index_prop");
+    let sitemap_status_json, err = json_stringify(sitemap["status"]);
+    check_err(err, "json_stringify sitemap status");
+    check(db_index_prop(db, sitemap_node, "status", sitemap_status_json), "db_index_prop");
+    check(db_add_edge(db, domain_node, sitemap_node, EDGE_HAS_ENDPOINT), "db_add_edge");
 
-    findings = push(findings, {
+    let updated_findings, err = push(findings, {
         "domain": domain,
         "root_status": root["status"],
         "redirect_location": root["headers"]["Location"],
@@ -74,27 +108,39 @@ for (let i = 0; i < len(domains); i = i + 1) {
             "robots": robots["error"],
             "sitemap": sitemap["error"]
         }
-    });
+});
+    check_err(err, "push findings");
+    findings = updated_findings;
 }
 
-let stats = db_stats(db);
-let closed = db_close(db);
-if (closed["ok"] == false) {
-    putln("db close error: ", closed["error"]);
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed == false) {
+    putln("db close error");
 };
 
+let processed_domain_count, err = len(domains);
+check_err(err, "len processed domains");
 let report = {
     "profile": "http_recon_fetcher",
-    "input_file": input_path,
-    "domains_processed": len(domains),
+    "input_file": input_file_path,
+    "domains_processed": processed_domain_count,
     "graph_path": graph_path,
     "graph_stats": stats,
     "findings": findings
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+
+

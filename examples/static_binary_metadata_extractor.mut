@@ -1,23 +1,33 @@
 putln("=== static_binary_metadata_extractor ===");
 putln("Safe use: static metadata only. No execution performed.");
 
-let output_dir = "example_output/static_binary_metadata_extractor";
-let sample_path = "examples/data/sample.exe";
-let lua_parser_path = "examples/static_binary_parser.lua";
-let report_path = output_dir + "/report.json";
-
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
 };
 
-let sample_data = fs_read(sample_path);
-let lua_bundle_result = lua_run_file(lua_parser_path);
+let output_directory = "example_output/static_binary_metadata_extractor";
+let sample_file_path = "examples/data/sample.exe";
+let parser_script_path = "examples/static_binary_parser.lua";
+let report_file_path = output_directory + "/report.json";
 
+let mkdir_result, err = fs_mkdir(output_directory);
+check_err(err, "fs_mkdir");
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let sample_data, err = fs_read(sample_file_path);
+check_err(err, "fs_read sample");
+let lua_bundle_result, lua_bundle_err = lua_run_file(parser_script_path);
+check_err(lua_bundle_err, "lua_run_file parser");
+
+let sample_byte_length, err = len(sample_data);
 let metadata = {
     "format": "unknown",
     "magic_hex": "",
-    "byte_length": len(sample_data),
+    "byte_length": sample_byte_length,
     "pe_offset": 0,
     "pe_signature": "",
     "machine": "",
@@ -44,18 +54,26 @@ let import_diagnostics = {
     "descriptors_with_thunks": 0
 };
 
-if (lua_bundle_result["ok"]) {
-    if (lua_bundle_result["result"] != "") {
-        let bundle = json_parse(lua_bundle_result["result"]);
-        metadata = bundle["metadata"];
-        import_table = bundle["import_table"];
-        import_diagnostics = bundle["import_diagnostics"];
+if (lua_bundle_result["ok"] == false) {
+    putln("lua parser run failed: ", lua_bundle_result["error"]);
+    return;
+};
+
+if (lua_bundle_result["result"] != "") {
+    let parsed_bundle, parse_err = json_parse(lua_bundle_result["result"]);
+    if (parse_err) {
+        putln("lua parser output could not be parsed as JSON: ", parse_err);
+        return;
     };
+    metadata = parsed_bundle["metadata"];
+    import_table = parsed_bundle["import_table"];
+    import_diagnostics = parsed_bundle["import_diagnostics"];
 };
 
 let format_guess = metadata["format"];
 if (format_guess == "unknown") {
-    if (len(sample_data) > 1) {
+    let sample_text_length, err = len(sample_data);
+    if (sample_text_length > 1) {
         if (sample_data[0] == "M") {
             if (sample_data[1] == "Z") {
                 format_guess = "pe_like";
@@ -64,22 +82,24 @@ if (format_guess == "unknown") {
     };
 };
 
+let report_byte_length, err = len(sample_data);
 let report = {
     "profile": "static_binary_metadata_extractor",
-    "sample_path": sample_path,
+    "sample_path": sample_file_path,
     "format_guess": format_guess,
-    "byte_length": len(sample_data),
+    "byte_length": report_byte_length,
     "metadata": metadata,
     "import_table": import_table,
     "import_diagnostics": import_diagnostics,
     "lua_bundle_ok": lua_bundle_result["ok"],
     "lua_bundle_error": lua_bundle_result["error"],
-    "lua_bundle_raw": lua_bundle_result["result"],
+    "lua_bundle_raw": lua_bundle_result["result"]
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
-    putf("wrote report: ", report_path);
+let report_json, err = json_stringify(report);
+let write_report_result, err = fs_write(report_file_path, report_json);
+if (write_report_result) {
+    putf("wrote report: ", report_file_path);
 } else {
-    putf("failed to write report: ", write_report["error"]);
+    putf("failed to write report: ", err);
 };

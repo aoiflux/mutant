@@ -8,9 +8,9 @@ let printAndAdd = fn(current, nextToAdd, remaining) {
 };
 
 putf("Enter starting number: ");
-let start = gets();
+let start, err = gets();
 
 putf("How many lines to print: ");
-let count = gets();
+let count, err = gets();
 
 printAndAdd(start, 1, count);

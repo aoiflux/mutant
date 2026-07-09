@@ -42,6 +42,34 @@ func TestLetStatements(t *testing.T) {
 	}
 }
 
+func TestLetDestructuringStatements(t *testing.T) {
+	input := "let data, err = fs_read(\"a.txt\");"
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain 1 statement. Got = %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("stmt not *ast.LetStatement. Got = %T", program.Statements[0])
+	}
+
+	if len(stmt.Names) != 2 {
+		t.Fatalf("let destructuring target count wrong. got=%d", len(stmt.Names))
+	}
+	if stmt.Names[0].Value != "data" || stmt.Names[1].Value != "err" {
+		t.Fatalf("unexpected let destructuring names: got=%s,%s", stmt.Names[0].Value, stmt.Names[1].Value)
+	}
+	if stmt.Name == nil || stmt.Name.Value != "data" {
+		t.Fatalf("compatibility Name field not set correctly")
+	}
+}
+
 func TestReturnStatements(t *testing.T) {
 	input :=
 		`
@@ -71,10 +99,46 @@ func TestReturnStatements(t *testing.T) {
 			continue
 		}
 
+		if len(returnStatement.ReturnValues) != 1 {
+			t.Errorf("returnStmt.ReturnValues length not 1, got %d", len(returnStatement.ReturnValues))
+			continue
+		}
+
 		if returnStatement.TokenLiteral() != "return" {
 			t.Errorf("returnStmt.TokenLiteral not 'return', got %q", returnStatement.TokenLiteral())
 		}
 	}
+}
+
+func TestMultipleReturnStatements(t *testing.T) {
+	input := "return 1, 2, 3;"
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain 1 statement. Got = %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ReturnStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ReturnStatement. got=%T", program.Statements[0])
+	}
+
+	if len(stmt.ReturnValues) != 3 {
+		t.Fatalf("return statement has wrong number of values. got=%d", len(stmt.ReturnValues))
+	}
+
+	testIntegerLiteral(t, stmt.ReturnValues[0], 1)
+	testIntegerLiteral(t, stmt.ReturnValues[1], 2)
+	testIntegerLiteral(t, stmt.ReturnValues[2], 3)
+
+	if stmt.ReturnValue == nil {
+		t.Fatalf("ReturnValue compatibility field should not be nil")
+	}
+	testIntegerLiteral(t, stmt.ReturnValue, 1)
 }
 
 func TestIdentifierExpression(t *testing.T) {

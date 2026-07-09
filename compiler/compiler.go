@@ -260,14 +260,40 @@ func (c *Compiler) Compile(node ast.Node) error {
 		c.emit(code.OpHash, len(node.Pairs)*2)
 
 	case *ast.LetStatement:
-		symbol := c.symbolTable.Define(node.Name.Value)
+		names := node.Names
+		if len(names) == 0 && node.Name != nil {
+			names = []*ast.Identifier{node.Name}
+		}
+
+		if len(names) <= 1 {
+			symbol := c.symbolTable.Define(node.Name.Value)
+			if err := c.Compile(node.Value); err != nil {
+				return err
+			}
+			if symbol.Scope == GlobalScope {
+				c.emit(code.OpSetGlobal, symbol.Index)
+			} else {
+				c.emit(code.OpSetLocal, symbol.Index)
+			}
+			break
+		}
+
 		if err := c.Compile(node.Value); err != nil {
 			return err
 		}
-		if symbol.Scope == GlobalScope {
-			c.emit(code.OpSetGlobal, symbol.Index)
-		} else {
-			c.emit(code.OpSetLocal, symbol.Index)
+		c.emit(code.OpDestructure, len(names))
+
+		for i := len(names) - 1; i >= 0; i-- {
+			ident := names[i]
+			if ident == nil {
+				continue
+			}
+			symbol := c.symbolTable.Define(ident.Value)
+			if symbol.Scope == GlobalScope {
+				c.emit(code.OpSetGlobal, symbol.Index)
+			} else {
+				c.emit(code.OpSetLocal, symbol.Index)
+			}
 		}
 
 	case *ast.Identifier:
@@ -312,9 +338,31 @@ func (c *Compiler) Compile(node ast.Node) error {
 		fnIndex := c.addConstant(compiledFun)
 		c.emit(code.OpClosure, fnIndex, len(freeSymbols))
 	case *ast.ReturnStatement:
-		if err := c.Compile(node.ReturnValue); err != nil {
-			return err
+		returnExprs := node.ReturnValues
+		if len(returnExprs) == 0 && node.ReturnValue != nil {
+			returnExprs = []ast.Expression{node.ReturnValue}
 		}
+
+		if len(returnExprs) == 0 {
+			c.emit(code.OpReturn)
+			return nil
+		}
+
+		if len(returnExprs) == 1 {
+			if err := c.Compile(returnExprs[0]); err != nil {
+				return err
+			}
+			c.emit(code.OpReturnValue)
+			return nil
+		}
+
+		for _, expr := range returnExprs {
+			if err := c.Compile(expr); err != nil {
+				return err
+			}
+		}
+
+		c.emit(code.OpMultiValue, len(returnExprs))
 		c.emit(code.OpReturnValue)
 
 	case *ast.ForStatement:

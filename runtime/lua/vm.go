@@ -60,6 +60,7 @@ func (vm *SandboxedVM) Open() error {
 		return fmt.Errorf("failed to create Lua state")
 	}
 	vm.state.OpenLibs()
+	stripUnsafeGlobals(vm.state)
 
 	// Validate allowed library names to keep policy intent explicit.
 	for _, libName := range vm.config.AllowedLibs {
@@ -172,6 +173,8 @@ func stripUnsafeGlobals(l *lua.LState) {
 	unsafeNames := []string{
 		"debug",
 		"package",
+		"os",
+		"io",
 		"require",
 		"dofile",
 		"load",

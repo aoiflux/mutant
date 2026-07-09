@@ -196,6 +196,30 @@ func TestIntegerArithmatic(t *testing.T) {
 	runCompilerTests(t, tests)
 }
 
+func TestCompilerSupportsMultiValueReturn(t *testing.T) {
+	tests := []compilerTestCase{
+		{
+			input: "fn() { return 1, 2; }",
+			expectedConstants: []interface{}{
+				1,
+				2,
+				[]code.Instructions{
+					code.Make(code.OpConstant, 0),
+					code.Make(code.OpConstant, 1),
+					code.Make(code.OpMultiValue, 2),
+					code.Make(code.OpReturnValue),
+				},
+			},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpClosure, 2, 0),
+				code.Make(code.OpPop),
+			},
+		},
+	}
+
+	runCompilerTests(t, tests)
+}
+
 func TestBooleanExpressions(t *testing.T) {
 	tests := []compilerTestCase{
 		{

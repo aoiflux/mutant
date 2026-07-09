@@ -3,18 +3,20 @@ putln("=== Persistence Triage via Command Execution ===");
 let output_dir = "example_output/persistence";
 let report_path = output_dir + "/persistence_triage_report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mk, err = fs_mkdir(output_dir);
+if (mk == false) {
+    putln("failed to create output directory");
 };
 
-let startup_builder = cmd_builder("powershell");
-startup_builder = cmd_add(startup_builder, "Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json -Compress");
-let startup = cmd_run(startup_builder);
+let startup_builder, err = cmd_builder("powershell");
+let updated_startup_builder, err = cmd_add(startup_builder, "Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json -Compress");
+startup_builder = updated_startup_builder;
+let startup, err = cmd_run(startup_builder);
 
-let tasks_builder = cmd_builder("powershell");
-tasks_builder = cmd_add(tasks_builder, "Get-ScheduledTask | Select-Object TaskName, TaskPath, State | ConvertTo-Json -Compress");
-let tasks = cmd_run(tasks_builder);
+let tasks_builder, err = cmd_builder("powershell");
+let updated_tasks_builder, err = cmd_add(tasks_builder, "Get-ScheduledTask | Select-Object TaskName, TaskPath, State | ConvertTo-Json -Compress");
+tasks_builder = updated_tasks_builder;
+let tasks, err = cmd_run(tasks_builder);
 
 if (startup["allowed"] == false) {
     putln("command execution blocked by policy");
@@ -30,10 +32,12 @@ let report = {
     "scheduled_tasks_snapshot": tasks
 };
 
-let report_json = json_stringify(report);
-let write_report = fs_write(report_path, report_json);
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+let write_report, err = fs_write(report_path, report_json);
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+

@@ -201,6 +201,7 @@ func registerTypes() {
 	gob.Register(&object.Boolean{})
 	gob.Register(&object.Null{})
 	gob.Register(&object.ReturnValue{})
+	gob.Register(&object.MultiValue{})
 	gob.Register(&object.Error{})
 	gob.Register(&object.Function{})
 	gob.Register(&object.String{})

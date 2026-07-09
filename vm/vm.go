@@ -729,12 +729,56 @@ func (vm *VM) Run() error {
 			if err := vm.push(global.Null); err != nil {
 				return err
 			}
+		case code.OpMultiValue:
+			if ip+2 >= len(ins) {
+				return fmt.Errorf("OpMultiValue: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip += 2
+
+			start := vm.stackPointer - int(count)
+			if start < 0 {
+				return fmt.Errorf("OpMultiValue: stack underflow for count=%d", count)
+			}
+
+			multiValue := vm.buildMultiValue(start, vm.stackPointer)
+			vm.stackPointer -= int(count)
+			if err := vm.push(multiValue); err != nil {
+				return err
+			}
 		case code.OpNull:
 			if err := vm.push(global.Null); err != nil {
 				return err
 			}
 		case code.OpPop:
 			vm.pop()
+		case code.OpDup:
+			if vm.stackPointer <= 0 {
+				return fmt.Errorf("OpDup: stack underflow")
+			}
+			if err := vm.push(vm.decryptForUse(vm.stack[vm.stackPointer-1])); err != nil {
+				return err
+			}
+		case code.OpDestructure:
+			if ip+2 >= len(ins) {
+				return fmt.Errorf("OpDestructure: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip += 2
+
+			source := vm.pop()
+			values := vm.destructureValues(source, int(count))
+			for _, value := range values {
+				if err := vm.push(value); err != nil {
+					return err
+				}
+			}
 		case code.OpBreak:
 			// Push break sentinel value
 			if err := vm.push(&object.Break{}); err != nil {
@@ -1151,6 +1195,8 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 	switch {
 	case left.Type() == object.ARRAY_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execArrayIndex(left, index)
+	case left.Type() == object.MULTI_VALUE_OBJ && index.Type() == object.INTEGER_OBJ:
+		return vm.execMultiValueIndex(left, index)
 	case left.Type() == object.STRING_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execStringIndex(left, index)
 	case left.Type() == object.HASH_OBJ:
@@ -1158,6 +1204,16 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 	default:
 		return fmt.Errorf("index operator not supported: %s", left.Type())
 	}
+}
+
+func (vm *VM) execMultiValueIndex(multiValue, index object.Object) error {
+	multi := multiValue.(*object.MultiValue)
+	i := index.(*object.Integer).Value
+	max := int64(len(multi.Values) - 1)
+	if i > max || i < 0 {
+		return vm.push(global.Null)
+	}
+	return vm.push(multi.Values[i])
 }
 
 func (vm *VM) execStringIndex(str, index object.Object) error {
@@ -1299,6 +1355,42 @@ func (vm *VM) buildArray(startIndex, endIndex int) object.Object {
 	return &object.Array{Elements: elements}
 }
 
+func (vm *VM) buildMultiValue(startIndex, endIndex int) object.Object {
+	values := make([]object.Object, endIndex-startIndex)
+	for i := startIndex; i < endIndex; i++ {
+		values[i-startIndex] = vm.decryptForUse(vm.stack[i])
+	}
+	return &object.MultiValue{Values: values}
+}
+
+func (vm *VM) destructureValues(source object.Object, arity int) []object.Object {
+	values := make([]object.Object, arity)
+	for i := range values {
+		values[i] = global.Null
+	}
+
+	switch obj := source.(type) {
+	case *object.MultiValue:
+		for i := 0; i < arity && i < len(obj.Values); i++ {
+			if obj.Values[i] != nil {
+				values[i] = obj.Values[i]
+			}
+		}
+	case *object.Array:
+		for i := 0; i < arity && i < len(obj.Elements); i++ {
+			if obj.Elements[i] != nil {
+				values[i] = obj.Elements[i]
+			}
+		}
+	default:
+		if arity > 0 && source != nil {
+			values[0] = source
+		}
+	}
+
+	return values
+}
+
 func (vm *VM) buildHash(startIndex, endIndex int) (object.Object, error) {
 	hashedPairs := make(map[object.HashKey]object.HashPair)
 	for i := startIndex; i < endIndex; i += 2 {
@@ -1422,17 +1514,29 @@ func (vm *VM) callBuiltin(builtin *builtin.BuiltIn, numArgs int) error {
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	result := builtin.Fn(args...)
+	result := vm.normalizeBuiltinResult(builtin.Fn(args...))
 
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 
-	if result != nil {
-		vm.push(result)
-	} else {
-		vm.push(global.Null)
-	}
+	vm.push(result)
 
 	return nil
+}
+
+func (vm *VM) normalizeBuiltinResult(result object.Object) object.Object {
+	if result == nil {
+		return &object.MultiValue{Values: []object.Object{global.Null, global.Null}}
+	}
+
+	if multi, ok := result.(*object.MultiValue); ok {
+		return multi
+	}
+
+	if errObj, ok := result.(*object.Error); ok {
+		return &object.MultiValue{Values: []object.Object{global.Null, errObj}}
+	}
+
+	return &object.MultiValue{Values: []object.Object{result, global.Null}}
 }
 
 func nativeBoolToBooleanObject(native bool) *object.Boolean {

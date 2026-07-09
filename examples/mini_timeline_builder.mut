@@ -1,37 +1,64 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
 putln("=== mini_timeline_builder ===");
 putln("Builds a simple file metadata timeline using fs_stat and graph DB.");
 
-let output_dir = "example_output/mini_timeline_builder";
-let input_path = output_dir + "/files.json";
-let graph_path = output_dir + "/timeline_graph";
-let report_path = output_dir + "/report.json";
+let output_directory = "example_output/mini_timeline_builder";
+let input_file_path = output_directory + "/files.json";
+let graph_path = output_directory + "/timeline_graph";
+let report_path = output_directory + "/report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
+let input_file_exists, err = fs_exists(input_file_path);
+check_err(err, "fs_exists");
+if (input_file_exists == false) {
     let seed = {
         "files": [
-            output_dir + "/file1.txt",
-            output_dir + "/file2.log",
-            output_dir + "/archive.zip"
+            output_directory + "/file1.txt",
+            output_directory + "/file2.log",
+            output_directory + "/archive.zip"
         ]
     };
-    let seed_write = fs_write(input_path, json_stringify(seed));
-    if (seed_write["ok"]) {
-        putln("seeded test dataset: ", input_path);
+    let seed_json, err = json_stringify(seed);
+    check_err(err, "json_stringify seed");
+    let seed_write, err = fs_write(input_file_path, seed_json);
+    check_err(err, "fs_write seed");
+    if (seed_write) {
+        putln("seeded test dataset: ", input_file_path);
     };
 };
 
-let parsed = json_parse(fs_read(input_path));
+let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
 let files = parsed["files"];
 
-for (let i = 0; i < len(files); i = i + 1) {
+let file_count, err = len(files);
+check_err(err, "len files");
+for (let i = 0; i < file_count; i = i + 1) {
     let f = files[i];
-    if (fs_exists(f) == false) {
-        fs_write(f, "seed-content-" + json_stringify(i));
+    let file_exists, err = fs_exists(f);
+    check_err(err, "fs_exists file");
+    if (file_exists == false) {
+        let file_index_text, err = json_stringify(i);
+        check_err(err, "json_stringify file index");
+        check(fs_write(f, "seed-content-" + file_index_text), "fs_write");
     };
 }
 
@@ -40,56 +67,80 @@ let NODE_EVENT = 2;
 let EDGE_HAS_EVENT = 1;
 let EDGE_NEXT_EVENT = 2;
 
-let db = db_open_disk(graph_path);
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
 let timeline = [];
 let event_nodes = [];
 
-for (let i = 0; i < len(files); i = i + 1) {
+let timeline_file_count, err = len(files);
+check_err(err, "len timeline files");
+for (let i = 0; i < timeline_file_count; i = i + 1) {
     let f = files[i];
-    let st = fs_stat(f);
+    let st, err = fs_stat(f);
+    check_err(err, "fs_stat");
 
-    let file_node = db_add_node(db, NODE_FILE);
-    db_index_prop(db, file_node, "path", f);
+    let file_node, err = db_add_node(db, NODE_FILE);
+    check_err(err, "db_add_node file");
+    check(db_index_prop(db, file_node, "path", f), "db_index_prop");
 
-    let event_node = db_add_node(db, NODE_EVENT);
-    db_index_prop(db, event_node, "mod_time", st["mod_time"]);
-    db_index_prop(db, event_node, "size", json_stringify(st["size"]));
-    db_index_prop(db, event_node, "error", st["error"]);
+    let event_node, err = db_add_node(db, NODE_EVENT);
+    check_err(err, "db_add_node event");
+    check(db_index_prop(db, event_node, "mod_time", st["mod_time"]), "db_index_prop");
+    let size_text, err = json_stringify(st["size"]);
+    check_err(err, "json_stringify size");
+    check(db_index_prop(db, event_node, "size", size_text), "db_index_prop");
+    check(db_index_prop(db, event_node, "error", st["error"]), "db_index_prop");
 
-    db_add_edge(db, file_node, event_node, EDGE_HAS_EVENT);
+    check(db_add_edge(db, file_node, event_node, EDGE_HAS_EVENT), "db_add_edge");
 
-    event_nodes = push(event_nodes, event_node);
+    let updated_event_nodes, err = push(event_nodes, event_node);
+    check_err(err, "push event_nodes");
+    event_nodes = updated_event_nodes;
 
-    timeline = push(timeline, {
+    let updated_timeline, err = push(timeline, {
         "path": f,
         "size": st["size"],
         "mod_time": st["mod_time"],
         "error": st["error"]
-    });
+});
+    check_err(err, "push timeline");
+    timeline = updated_timeline;
 }
 
-for (let i = 1; i < len(event_nodes); i = i + 1) {
-    db_add_edge(db, event_nodes[i - 1], event_nodes[i], EDGE_NEXT_EVENT);
+let event_node_count, err = len(event_nodes);
+check_err(err, "len event_nodes");
+for (let i = 1; i < event_node_count; i = i + 1) {
+    check(db_add_edge(db, event_nodes[i - 1], event_nodes[i], EDGE_NEXT_EVENT), "db_add_edge");
 }
 
-let stats = db_stats(db);
-let closed = db_close(db);
-if (closed["ok"] == false) {
-    putln("db close error: ", closed["error"]);
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed == false) {
+    putln("db close error");
 };
 
+let processed_file_count, err = len(files);
+check_err(err, "len processed files");
 let report = {
     "profile": "mini_timeline_builder",
-    "input_file": input_path,
-    "files_processed": len(files),
+    "input_file": input_file_path,
+    "files_processed": processed_file_count,
     "graph_path": graph_path,
     "graph_stats": stats,
     "timeline": timeline
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+
+

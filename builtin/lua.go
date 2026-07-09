@@ -17,57 +17,57 @@ import (
 
 func LuaRunString(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return luaErrorf("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	code, ok := args[0].(*object.String)
 	if !ok {
-		return luaErrorf("argument to `lua_run_string` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `lua_run_string` must be STRING, got %s", args[0].Type()))
 	}
 
-	return runLuaSource(code.Value, "builtin:lua_run_string")
+	return resultAndError(runLuaSource(code.Value, "builtin:lua_run_string"), nil)
 }
 
 func LuaRunFile(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return luaErrorf("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	path, ok := args[0].(*object.String)
 	if !ok {
-		return luaErrorf("argument to `lua_run_file` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `lua_run_file` must be STRING, got %s", args[0].Type()))
 	}
 
 	content, err := os.ReadFile(path.Value)
 	if err != nil {
-		return luaResultHash("", err)
+		return resultAndError(nil, newError("lua_run_file: %s", err.Error()))
 	}
 
-	return runLuaSource(string(content), "builtin:lua_run_file")
+	return resultAndError(runLuaSource(string(content), "builtin:lua_run_file"), nil)
 }
 
 func LuaRunHTTP(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return luaErrorf("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	url, ok := args[0].(*object.String)
 	if !ok {
-		return luaErrorf("argument to `lua_run_http` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `lua_run_http` must be STRING, got %s", args[0].Type()))
 	}
 
 	resp, err := httpClient.Get(url.Value)
 	if err != nil {
-		return luaResultHash("", err)
+		return resultAndError(nil, newError("lua_run_http: %s", err.Error()))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return luaResultHash("", err)
+		return resultAndError(nil, newError("lua_run_http: %s", err.Error()))
 	}
 
-	return runLuaSource(string(body), "builtin:lua_run_http")
+	return resultAndError(runLuaSource(string(body), "builtin:lua_run_http"), nil)
 }
 
 func runLuaSource(source string, stage string) object.Object {
@@ -218,8 +218,4 @@ func luaResultHash(result string, err error) object.Object {
 		"error":          stringObj(errMsg),
 		"schema_version": intObj(1),
 	})
-}
-
-func luaErrorf(format string, a ...any) object.Object {
-	return luaResultHash("", fmt.Errorf(format, a...))
 }

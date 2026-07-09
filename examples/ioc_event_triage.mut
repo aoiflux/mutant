@@ -1,33 +1,35 @@
 putln("=== IOC Event Triage ===");
 
-let output_dir = "example_output/ioc";
-let input_path = output_dir + "/events.json";
-let report_path = output_dir + "/ioc_triage_report.json";
+let output_directory = "example_output/ioc";
+let input_file_path = output_directory + "/events.json";
+let report_path = output_directory + "/ioc_triage_report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
+let input_file_exists, err = fs_exists(input_file_path);
+if (input_file_exists == false) {
     let sample_lua = "local q=string.char(34); local s='{'..q..'events'..q..':['..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':6},'..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':5},'..'{'..q..'src'..q..':'..q..'10.10.10.9'..q..','..q..'event'..q..':'..q..'powershell_encoded'..q..','..q..'count'..q..':1},'..'{'..q..'src'..q..':'..q..'10.10.10.11'..q..','..q..'event'..q..':'..q..'service_install'..q..','..q..'count'..q..':2}'..']}' ; return s";
-    let sample_json_result = lua_run_string(sample_lua);
-    let sample_json = sample_json_result["result"];
-    let write_sample = fs_write(input_path, sample_json);
-    if (write_sample["ok"]) {
-        putln("seeded sample events at ", input_path);
+    let sample_json, sample_json_err = lua_run_string(sample_lua);
+    check_err(sample_json_err, "lua_run_string sample");
+    let write_sample, err = fs_write(input_file_path, sample_json);
+    if (write_sample) {
+        putln("seeded sample events at ", input_file_path);
     };
 };
 
-let raw = fs_read(input_path);
-let parsed = json_parse(raw);
+let source_json, err = fs_read(input_file_path);
+let parsed, err = json_parse(source_json);
 let events = parsed["events"];
 
 let findings = [];
 let high_count = 0;
 let medium_count = 0;
 
-for (let i = 0; i < len(events); i = i + 1) {
+let event_count, err = len(events);
+for (let i = 0; i < event_count; i = i + 1) {
     let ev = events[i];
     let score = 10;
 
@@ -56,32 +58,38 @@ for (let i = 0; i < len(events); i = i + 1) {
     };
 
     if (severity != "low") {
-        findings = push(findings, {
+        let updated_findings, err = push(findings, {
             "src": ev["src"],
             "event": ev["event"],
             "count": ev["count"],
             "score": score,
             "severity": severity
-        });
+});
+        findings = updated_findings;
     };
 }
 
-putln("events processed: ", len(events));
+let processed_event_count, err = len(events);
+putln("events processed: ", processed_event_count);
 putln("high findings: ", high_count, " medium findings: ", medium_count);
 
+let report_event_count, err = len(events);
 let report = {
     "profile": "ioc_event_triage",
-    "input_file": input_path,
-    "events_processed": len(events),
+    "input_file": input_file_path,
+    "events_processed": report_event_count,
     "high_findings": high_count,
     "medium_findings": medium_count,
     "findings": findings
 };
 
-let report_json = json_stringify(report);
-let write_report = fs_write(report_path, report_json);
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+let write_report, err = fs_write(report_path, report_json);
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+
+

@@ -9,7 +9,7 @@ import (
 
 func DebugStatus(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	detected := security.IsDebuggerPresent()
@@ -40,12 +40,12 @@ func DebugStatus(args ...object.Object) object.Object {
 		result["probe_error"] = stringObj(probeErr.Error())
 	}
 
-	return makeHashObject(result)
+	return resultAndError(makeHashObject(result), nil)
 }
 
 func SandboxStatus(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	statusType, confidence, err := security.DetectSandboxType()
@@ -96,12 +96,12 @@ func SandboxStatus(args ...object.Object) object.Object {
 		result["probe_error"] = stringObj(probeErr.Error())
 	}
 
-	return makeHashObject(result)
+	return resultAndError(makeHashObject(result), nil)
 }
 
 func SecurityDiagnostics(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	debugDetected, debugMethods := security.DetectDebuggerDetails()
@@ -126,7 +126,7 @@ func SecurityDiagnostics(args ...object.Object) object.Object {
 
 	telemetry := security.SecurityTelemetrySnapshot()
 
-	return makeHashObject(map[string]object.Object{
+	return resultAndError(makeHashObject(map[string]object.Object{
 		"debugger": makeHashObject(map[string]object.Object{
 			"detected":       boolObj(debugDetected),
 			"methods":        stringArrayObj(debugMethods),
@@ -144,7 +144,7 @@ func SecurityDiagnostics(args ...object.Object) object.Object {
 		}),
 		"source":         stringObj("go-security"),
 		"schema_version": intObj(1),
-	})
+	}), nil)
 }
 
 func detectionType(detected bool, name string) string {

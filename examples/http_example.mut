@@ -1,5 +1,5 @@
 putln("=== HTTP GET ===");
-let resp = http_get("https://example.com");
+let resp, err = http_get("https://example.com");
 putln("status: ", resp["status"]);
 putln("body (first 200 chars):");
 putln(resp["body"]);
@@ -7,7 +7,9 @@ putln(resp["body"]);
 putln("");
 putln("=== HTTP REQUEST with custom headers ===");
 let headers = {"Authorization": "Bearer my-token", "X-Custom": "mutant"};
-let req = http_request("GET", "https://example.com", "", headers);
+let req, err = http_request("GET", "https://example.com", "", headers);
 putln("status: ", req["status"]);
 putln("body:");
 putln(req["body"]);
+
+

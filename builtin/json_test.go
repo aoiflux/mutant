@@ -17,9 +17,14 @@ func TestJsonStringifyHash(t *testing.T) {
 
 	result := JsonStringify(input)
 
-	str, ok := result.(*object.String)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	str, ok := payload.(*object.String)
 	if !ok {
-		t.Fatalf("json_stringify() result is not String. got=%T", result)
+		t.Fatalf("json_stringify() result is not String. got=%T", payload)
 	}
 
 	var decoded map[string]any
@@ -35,9 +40,14 @@ func TestJsonStringifyHash(t *testing.T) {
 func TestJsonParseObject(t *testing.T) {
 	result := JsonParse(&object.String{Value: `{"name":"mutant","count":3,"enabled":true}`})
 
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("json_parse() result is not Hash. got=%T", result)
+		t.Fatalf("json_parse() result is not Hash. got=%T", payload)
 	}
 
 	name, ok := hashValueByKey(hash, "name").(*object.String)
@@ -68,9 +78,9 @@ func TestJsonParseObject(t *testing.T) {
 func TestJsonParseInvalidInput(t *testing.T) {
 	result := JsonParse(&object.String{Value: `{"name":`})
 
-	errObj, ok := result.(*object.Error)
-	if !ok {
-		t.Fatalf("json_parse() result is not Error. got=%T", result)
+	_, errObj := unwrapPair(t, result)
+	if errObj == nil {
+		t.Fatalf("json_parse() error slot is nil")
 	}
 
 	if !strings.Contains(errObj.Message, "not valid JSON") {
@@ -81,9 +91,9 @@ func TestJsonParseInvalidInput(t *testing.T) {
 func TestJsonStringifyUnsupportedType(t *testing.T) {
 	result := JsonStringify(&BuiltIn{Len})
 
-	errObj, ok := result.(*object.Error)
-	if !ok {
-		t.Fatalf("json_stringify() result is not Error. got=%T", result)
+	_, errObj := unwrapPair(t, result)
+	if errObj == nil {
+		t.Fatalf("json_stringify() error slot is nil")
 	}
 
 	if !strings.Contains(errObj.Message, "unsupported value type") {

@@ -1,17 +1,33 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+
 putln("=== cloud_metadata_checker ===");
 putln("Safe default: metadata checks are opt-in via config allow_sensitive_endpoints=true.");
 
-let output_dir = "example_output/cloud_metadata_checker";
-let input_path = output_dir + "/metadata_targets.json";
-let graph_path = output_dir + "/metadata_graph";
-let report_path = output_dir + "/report.json";
+let output_directory = "example_output/cloud_metadata_checker";
+let input_file_path = output_directory + "/metadata_targets.json";
+let graph_path = output_directory + "/metadata_graph";
+let report_path = output_directory + "/report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
+let input_file_exists, err = fs_exists(input_file_path);
+check_err(err, "fs_exists");
+if (input_file_exists == false) {
     let seed = {
         "allow_sensitive_endpoints": false,
         "metadata_endpoints": [
@@ -19,15 +35,21 @@ if (fs_exists(input_path) == false) {
             "http://metadata.google.internal/computeMetadata/v1/"
         ]
     };
-    let seed_write = fs_write(input_path, json_stringify(seed));
-    if (seed_write["ok"]) {
-        putln("seeded test dataset: ", input_path);
+    let seed_json, err = json_stringify(seed);
+    check_err(err, "json_stringify seed");
+    let seed_write_result, err = fs_write(input_file_path, seed_json);
+    check_err(err, "fs_write seed");
+    if (seed_write_result) {
+        putln("seeded test dataset: ", input_file_path);
     } else {
-        putln("failed to seed dataset: ", seed_write["error"]);
+        putln("failed to seed dataset");
     };
 };
 
-let parsed = json_parse(fs_read(input_path));
+let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
 let endpoints = parsed["metadata_endpoints"];
 let allow_sensitive = parsed["allow_sensitive_endpoints"];
 
@@ -35,67 +57,88 @@ let NODE_ENDPOINT = 1;
 let NODE_RESULT = 2;
 let EDGE_CHECKED = 1;
 
-let db = db_open_disk(graph_path);
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
 let results = [];
 
-for (let i = 0; i < len(endpoints); i = i + 1) {
+let endpoint_count, err = len(endpoints);
+check_err(err, "len endpoints");
+for (let i = 0; i < endpoint_count; i = i + 1) {
     let endpoint = endpoints[i];
 
     let status = 0;
-    let err = "skipped_by_default";
+    let request_error = "skipped_by_default";
     let body_preview = "";
 
     if (allow_sensitive) {
         if (endpoint == "http://metadata.google.internal/computeMetadata/v1/") {
             let headers = {"Metadata-Flavor": "Google"};
-            let resp = http_request("GET", endpoint, "", headers);
+            let resp, http_err = http_request("GET", endpoint, "", headers);
+            check_err(http_err, "http_request");
             status = resp["status"];
-            err = resp["error"];
+            request_error = resp["error"];
             body_preview = resp["body"];
         } else {
-            let resp = http_get(endpoint);
+            let resp, http_err = http_get(endpoint);
+            check_err(http_err, "http_get");
             status = resp["status"];
-            err = resp["error"];
+            request_error = resp["error"];
             body_preview = resp["body"];
         };
     };
 
-    let endpoint_node = db_add_node(db, NODE_ENDPOINT);
-    db_index_prop(db, endpoint_node, "url", endpoint);
+    let endpoint_node, err = db_add_node(db, NODE_ENDPOINT);
+    check_err(err, "db_add_node endpoint");
+    check(db_index_prop(db, endpoint_node, "url", endpoint), "db_index_prop");
 
-    let result_node = db_add_node(db, NODE_RESULT);
-    db_index_prop(db, result_node, "status", json_stringify(status));
-    db_index_prop(db, result_node, "error", err);
-    db_index_prop(db, result_node, "allow_sensitive", json_stringify(allow_sensitive));
-    db_add_edge(db, endpoint_node, result_node, EDGE_CHECKED);
+    let result_node, err = db_add_node(db, NODE_RESULT);
+    check_err(err, "db_add_node result");
+    let status_json, err = json_stringify(status);
+    check_err(err, "json_stringify status");
+    check(db_index_prop(db, result_node, "status", status_json), "db_index_prop");
+    check(db_index_prop(db, result_node, "error", request_error), "db_index_prop");
+    let allow_sensitive_json, err = json_stringify(allow_sensitive);
+    check_err(err, "json_stringify allow_sensitive");
+    check(db_index_prop(db, result_node, "allow_sensitive", allow_sensitive_json), "db_index_prop");
+    check(db_add_edge(db, endpoint_node, result_node, EDGE_CHECKED), "db_add_edge");
 
-    results = push(results, {
+    let updated_results, err = push(results, {
+        "endpoint_index": i,
         "endpoint": endpoint,
         "status": status,
-        "error": err,
+        "error": request_error,
         "body_preview": body_preview
     });
+    check_err(err, "push results");
+    results = updated_results;
 }
 
-let stats = db_stats(db);
-let closed = db_close(db);
-if (closed["ok"] == false) {
-    putln("db close error: ", closed["error"]);
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed == false) {
+    putln("db close error");
 };
 
+let processed_endpoint_count, err = len(results);
+check_err(err, "len results");
 let report = {
     "profile": "cloud_metadata_checker",
-    "input_file": input_path,
+    "input_file": input_file_path,
     "allow_sensitive_endpoints": allow_sensitive,
-    "endpoints_checked": len(results),
+    "endpoints_checked": processed_endpoint_count,
     "graph_path": graph_path,
     "graph_stats": stats,
     "results": results
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };

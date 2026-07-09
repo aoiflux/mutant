@@ -1,17 +1,32 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
 putln("=== mini_log_correlator ===");
 putln("Safe use: local defensive log analytics only.");
 
-let output_dir = "example_output/mini_log_correlator";
-let input_path = output_dir + "/test_logs.json";
-let graph_path = output_dir + "/correlation_graph";
-let report_path = output_dir + "/report.json";
+let output_directory = "example_output/mini_log_correlator";
+let input_file_path = output_directory + "/test_logs.json";
+let graph_path = output_directory + "/correlation_graph";
+let report_path = output_directory + "/report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
+let input_file_exists, err = fs_exists(input_file_path);
+check_err(err, "fs_exists");
+if (input_file_exists == false) {
     let seed = {
         "logs": [
             {"ts": 1, "ip": "10.0.0.1", "event": "login_failed"},
@@ -19,29 +34,40 @@ if (fs_exists(input_path) == false) {
             {"ts": 3, "ip": "10.0.0.2", "event": "login_success"}
         ]
     };
-    let seed_write = fs_write(input_path, json_stringify(seed));
-    if (seed_write["ok"]) {
-        putln("seeded test dataset: ", input_path);
+    let seed_json, err = json_stringify(seed);
+    check_err(err, "json_stringify seed");
+    let seed_write, err = fs_write(input_file_path, seed_json);
+    check_err(err, "fs_write seed");
+    if (seed_write) {
+        putln("seeded test dataset: ", input_file_path);
     } else {
-        putln("failed to seed dataset: ", seed_write["error"]);
+        putln("failed to seed dataset");
     };
 };
 
-let parsed = json_parse(fs_read(input_path));
+let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
 let logs = parsed["logs"];
 
 let NODE_IP = 1;
 let NODE_PATTERN = 2;
 let EDGE_HAS_PATTERN = 1;
 
-let db = db_open_disk(graph_path);
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
 let suspicious = [];
 
-for (let i = 0; i < len(logs); i = i + 1) {
+let log_count, err = len(logs);
+check_err(err, "len logs");
+for (let i = 0; i < log_count; i = i + 1) {
     let current = logs[i];
     if (current["event"] == "login_failed") {
         let failed_count = 0;
-        for (let j = 0; j < len(logs); j = j + 1) {
+        let compare_count, err = len(logs);
+        check_err(err, "len compare logs");
+        for (let j = 0; j < compare_count; j = j + 1) {
             let candidate = logs[j];
             if (candidate["ip"] == current["ip"]) {
                 if (candidate["event"] == "login_failed") {
@@ -52,51 +78,70 @@ for (let i = 0; i < len(logs); i = i + 1) {
 
         if (failed_count > 1) {
             let known = false;
-            for (let k = 0; k < len(suspicious); k = k + 1) {
+            let suspicious_count, err = len(suspicious);
+            check_err(err, "len suspicious");
+            for (let k = 0; k < suspicious_count; k = k + 1) {
                 if (suspicious[k]["ip"] == current["ip"]) {
                     known = true;
                 };
             }
 
             if (known == false) {
-                let ip_node = db_add_node(db, NODE_IP);
-                db_index_prop(db, ip_node, "ip", current["ip"]);
+                let ip_node, err = db_add_node(db, NODE_IP);
+                check_err(err, "db_add_node ip");
+                check(db_index_prop(db, ip_node, "ip", current["ip"]), "db_index_prop");
 
-                let pattern_node = db_add_node(db, NODE_PATTERN);
-                db_index_prop(db, pattern_node, "pattern", "repeated_login_failed");
-                db_index_prop(db, pattern_node, "count", json_stringify(failed_count));
+                let pattern_node, err = db_add_node(db, NODE_PATTERN);
+                check_err(err, "db_add_node pattern");
+                check(db_index_prop(db, pattern_node, "pattern", "repeated_login_failed"), "db_index_prop");
+                let failed_count_json, err = json_stringify(failed_count);
+                check_err(err, "json_stringify failed_count");
+                check(db_index_prop(db, pattern_node, "count", failed_count_json), "db_index_prop");
 
-                db_add_edge(db, ip_node, pattern_node, EDGE_HAS_PATTERN);
+                check(db_add_edge(db, ip_node, pattern_node, EDGE_HAS_PATTERN), "db_add_edge");
 
-                suspicious = push(suspicious, {
+                let updated_suspicious, err = push(suspicious, {
                     "ip": current["ip"],
                     "pattern": "repeated_login_failed",
                     "failed_count": failed_count
-                });
+});
+                check_err(err, "push suspicious");
+                suspicious = updated_suspicious;
             };
         };
     };
 }
 
-let stats = db_stats(db);
-let closed = db_close(db);
-if (closed["ok"] == false) {
-    putln("db close error: ", closed["error"]);
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed == false) {
+    putln("db close error");
 };
 
+let processed_log_count, err = len(logs);
+let suspicious_pattern_count, err = len(suspicious);
+check_err(err, "len suspicious patterns");
 let report = {
     "profile": "mini_log_correlator",
-    "input_file": input_path,
-    "events_processed": len(logs),
-    "suspicious_patterns": len(suspicious),
+    "input_file": input_file_path,
+    "events_processed": processed_log_count,
+    "suspicious_patterns": suspicious_pattern_count,
     "graph_path": graph_path,
     "graph_stats": stats,
     "findings": suspicious
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
     putln("wrote report: ", report_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };
+
+
+

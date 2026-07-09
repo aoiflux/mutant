@@ -1,51 +1,59 @@
 putln("=== wordlist_mutator ===");
 putln("Safe use: for defensive password-strength research only.");
 
-let output_dir = "example_output/wordlist_mutator";
-let input_path = output_dir + "/test_wordlist.txt";
-let output_path = output_dir + "/mutated_wordlist.txt";
-let report_path = output_dir + "/report.json";
+let output_directory = "example_output/wordlist_mutator";
+let input_file_path = output_directory + "/test_wordlist.txt";
+let mutated_file_path = output_directory + "/mutated_wordlist.txt";
+let report_file_path = output_directory + "/report.json";
 
-let mk = fs_mkdir(output_dir);
-if (mk["ok"] == false) {
-    putln("failed to create output directory: ", mk["error"]);
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
 };
 
-if (fs_exists(input_path) == false) {
-    let seed = "admin\npassword\nguest\n";
-    let seed_write = fs_write(input_path, seed);
-    if (seed_write["ok"]) {
-        putln("seeded test dataset: ", input_path);
+let input_file_exists, err = fs_exists(input_file_path);
+if (input_file_exists == false) {
+    let seed_wordlist = "admin\npassword\nguest\n";
+    let seed_write_result, err = fs_write(input_file_path, seed_wordlist);
+    if (seed_write_result) {
+        putln("seeded test dataset: ", input_file_path);
     } else {
-        putln("failed to seed dataset: ", seed_write["error"]);
+        putln("failed to seed dataset");
     };
 };
 
-let lua_code = "local data,err=mutant.read_file('example_output/wordlist_mutator/test_wordlist.txt'); if not data then return '' end; local out={}; local seen={}; for line in string.gmatch(data, '[^\\n]+') do line=string.gsub(line,'\\r',''); if line ~= '' then local v1=line; local v2=line..'123'; local v3=line..'2026'; local v4='!'..line; local v5=line..'!'; local v6=string.gsub(line,'a','4'); local v7=string.gsub(line,'e','3'); local v8=string.gsub(line,'i','1'); local v9=string.gsub(line,'o','0'); local v10=string.gsub(line,'s','5'); local vars={v1,v2,v3,v4,v5,v6,v7,v8,v9,v10}; for _,v in ipairs(vars) do if v ~= '' and not seen[v] then seen[v]=true; table.insert(out,v); end end end end; return table.concat(out,'\\n')";
-let lua_result = lua_run_string(lua_code);
+let mutation_lua_script = "local data,err=mutant.read_file('example_output/wordlist_mutator/test_wordlist.txt'); if not data then return '' end; local out={}; local seen={}; for line in string.gmatch(data, '[^\\n]+') do line=string.gsub(line,'\\r',''); if line ~= '' then local v1=line; local v2=line..'123'; local v3=line..'2026'; local v4='!'..line; local v5=line..'!'; local v6=string.gsub(line,'a','4'); local v7=string.gsub(line,'e','3'); local v8=string.gsub(line,'i','1'); local v9=string.gsub(line,'o','0'); local v10=string.gsub(line,'s','5'); local vars={v1,v2,v3,v4,v5,v6,v7,v8,v9,v10}; for _,v in ipairs(vars) do if v ~= '' and not seen[v] then seen[v]=true; table.insert(out,v); end end end end; return table.concat(out,'\\n')";
+let mutation_result, mutation_err = lua_run_string(mutation_lua_script);
 
-if (lua_result["ok"] == false) {
-    putln("lua mutation failed: ", lua_result["error"]);
+if (mutation_err) {
+    putln("lua mutation failed: ", mutation_err);
 };
 
-let write_mutated = fs_write(output_path, lua_result["result"]);
-if (write_mutated["ok"]) {
-    putln("wrote mutated list: ", output_path);
+let mutated_wordlist = mutation_result;
+let write_mutated_result, err = fs_write(mutated_file_path, mutated_wordlist);
+if (write_mutated_result) {
+    putln("wrote mutated list: ", mutated_file_path);
 } else {
-    putln("failed to write mutated list: ", write_mutated["error"]);
+    putln("failed to write mutated list");
+};
+
+let lua_ok = true;
+if (mutation_err) {
+    lua_ok = false;
 };
 
 let report = {
     "profile": "wordlist_mutator",
-    "input_file": input_path,
-    "output_file": output_path,
-    "lua_ok": lua_result["ok"],
-    "lua_error": lua_result["error"]
+    "input_file": input_file_path,
+    "output_file": mutated_file_path,
+    "lua_ok": mutation_result["ok"],
+    "lua_error": mutation_result["error"]
 };
 
-let write_report = fs_write(report_path, json_stringify(report));
-if (write_report["ok"]) {
-    putln("wrote report: ", report_path);
+let report_json, err = json_stringify(report);
+let write_report_result, err = fs_write(report_file_path, report_json);
+if (write_report_result) {
+    putln("wrote report: ", report_file_path);
 } else {
-    putln("failed to write report: ", write_report["error"]);
+    putln("failed to write report");
 };

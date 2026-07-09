@@ -195,7 +195,27 @@ func (p *Parser) parseEnumStatement() *ast.EnumStatement {
 func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 	stmt := &ast.ReturnStatement{Token: p.curToken}
 	p.nextToken()
-	stmt.ReturnValue = p.parseExpression(LOWEST)
+
+	if p.curTokenIs(token.SEMICOLON) {
+		return stmt
+	}
+
+	first := p.parseExpression(LOWEST)
+	if first != nil {
+		stmt.ReturnValues = append(stmt.ReturnValues, first)
+		stmt.ReturnValue = first
+	}
+
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		p.nextToken()
+
+		nextExpr := p.parseExpression(LOWEST)
+		if nextExpr != nil {
+			stmt.ReturnValues = append(stmt.ReturnValues, nextExpr)
+		}
+	}
+
 	if p.peekTokenIs(token.SEMICOLON) {
 		p.nextToken()
 	}
@@ -208,9 +228,19 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 		return nil
 	}
 
-	stmt.Name = &ast.Identifier{
+	firstName := &ast.Identifier{
 		Token: p.curToken,
 		Value: p.curToken.Literal,
+	}
+	stmt.Name = firstName
+	stmt.Names = []*ast.Identifier{firstName}
+
+	for p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		if !p.expectPeek(token.IDENT) {
+			return nil
+		}
+		stmt.Names = append(stmt.Names, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
 	}
 
 	if !p.expectPeek(token.ASSIGN) {

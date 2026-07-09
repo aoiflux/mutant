@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"fmt"
+	"mutant/global"
 
 	"mutant/object"
 )
@@ -81,5 +82,18 @@ func GetBuiltinByName(name string) *BuiltIn {
 }
 
 func newError(format string, a ...any) *object.Error {
-	return &object.Error{Message: fmt.Sprintf(format, a...)}
+	return &object.Error{Message: fmt.Sprintf(format, a...), Context: "builtin"}
+}
+
+func resultAndError(result object.Object, errObj *object.Error) object.Object {
+	resultValue := result
+	if resultValue == nil {
+		resultValue = global.Null
+	}
+
+	errValue := object.Object(global.Null)
+	if errObj != nil {
+		errValue = errObj
+	}
+	return &object.MultiValue{Values: []object.Object{resultValue, errValue}}
 }

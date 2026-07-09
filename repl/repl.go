@@ -176,7 +176,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool) {
 		}
 
 		last := machine.LastPoppedStackElement()
-		if last != nil {
+		if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
+			// No-op result; keep the REPL quiet.
+		} else if last != nil {
 			io.WriteString(out, last.Inspect())
 			io.WriteString(out, "\n")
 		}
