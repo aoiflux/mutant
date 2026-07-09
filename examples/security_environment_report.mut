@@ -61,6 +61,3 @@ if (write_report_result) {
 } else {
     putln("failed to write report");
 };
-
-
-

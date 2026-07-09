@@ -12,5 +12,3 @@ for (let i = 0; i < 10; i = i + 1) {
 
 putln("for-loop with break/continue result:");
 putf("sum = ", sum);
-
-

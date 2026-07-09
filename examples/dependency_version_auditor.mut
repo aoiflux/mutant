@@ -222,6 +222,3 @@ if (write_report) {
 } else {
     putln("failed to write report");
 };
-
-
-

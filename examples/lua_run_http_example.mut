@@ -11,5 +11,3 @@ if (err) {
     putln("lua_run_http ok");
     putln("result: ", result);
 };
-
-

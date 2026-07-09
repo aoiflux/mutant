@@ -21,5 +21,3 @@ if (active == Color.Blue) {
 } else {
     putln("this is not blue");
 }
-
-

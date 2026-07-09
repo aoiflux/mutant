@@ -84,6 +84,3 @@ check_err(err, "db_close disk");
 if (disk_closed) {
     putln("disk graph closed cleanly");
 };
-
-
-

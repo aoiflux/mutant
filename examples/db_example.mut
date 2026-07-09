@@ -73,7 +73,9 @@ check_err(err, "len path");
 putf("path node count: ", path_node_count);
 putln("");
 let printPath = fn(arr, idx) {
-    let reached_end, err = idx == len(arr);
+    let total, err = len(arr);
+    check_err(err, "len printPath arr");
+    let reached_end = idx == total;
     if (reached_end) {
         return 0;
     }

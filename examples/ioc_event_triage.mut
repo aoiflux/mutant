@@ -1,5 +1,11 @@
 putln("=== IOC Event Triage ===");
 
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+
 let output_directory = "example_output/ioc";
 let input_file_path = output_directory + "/events.json";
 let report_path = output_directory + "/ioc_triage_report.json";
@@ -14,14 +20,27 @@ if (input_file_exists == false) {
     let sample_lua = "local q=string.char(34); local s='{'..q..'events'..q..':['..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':6},'..'{'..q..'src'..q..':'..q..'10.10.10.5'..q..','..q..'event'..q..':'..q..'login_failed'..q..','..q..'count'..q..':5},'..'{'..q..'src'..q..':'..q..'10.10.10.9'..q..','..q..'event'..q..':'..q..'powershell_encoded'..q..','..q..'count'..q..':1},'..'{'..q..'src'..q..':'..q..'10.10.10.11'..q..','..q..'event'..q..':'..q..'service_install'..q..','..q..'count'..q..':2}'..']}' ; return s";
     let sample_json, sample_json_err = lua_run_string(sample_lua);
     check_err(sample_json_err, "lua_run_string sample");
-    let write_sample, err = fs_write(input_file_path, sample_json);
+    if (sample_json["ok"] == false) {
+        putln("failed to generate sample events: ", sample_json["error"]);
+        return;
+    };
+    let write_sample, err = fs_write(input_file_path, sample_json["result"]);
+    check_err(err, "fs_write sample");
     if (write_sample) {
         putln("seeded sample events at ", input_file_path);
     };
 };
 
 let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+if (err) {
+    return;
+};
 let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
+if (err) {
+    return;
+};
 let events = parsed["events"];
 
 let findings = [];
@@ -90,6 +109,3 @@ if (write_report) {
 } else {
     putln("failed to write report");
 };
-
-
-

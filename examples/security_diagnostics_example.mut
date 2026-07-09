@@ -56,6 +56,3 @@ if (sandbox_status["error"] != "") {
 
 putln("");
 putln("Run this same script in Windows Terminal and PowerShell to compare outputs.");
-
-
-

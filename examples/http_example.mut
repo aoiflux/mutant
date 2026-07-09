@@ -11,5 +11,3 @@ let req, err = http_request("GET", "https://example.com", "", headers);
 putln("status: ", req["status"]);
 putln("body:");
 putln(req["body"]);
-
-

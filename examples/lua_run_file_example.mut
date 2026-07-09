@@ -9,5 +9,3 @@ if (err) {
     putln("lua_run_file ok");
     putln("result: ", result);
 };
-
-

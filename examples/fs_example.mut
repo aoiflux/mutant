@@ -58,5 +58,3 @@ let del, err = fs_delete(path);
 if (del) {
     putln("deleted original file");
 };
-
-

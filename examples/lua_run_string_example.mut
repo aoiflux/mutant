@@ -9,5 +9,3 @@ if (err) {
     putf("result: ", result);
     putln();
 };
-
-
