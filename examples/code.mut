@@ -12,3 +12,4 @@ let num2, err = gets();
 
 let ans = sum(num1, num2);
 putf("Answer is: ", ans);
+putln("");
