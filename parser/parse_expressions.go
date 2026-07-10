@@ -7,6 +7,7 @@ import (
 )
 
 func (p *Parser) parseIfExpression() ast.Expression {
+	start := p.startMark()
 	exp := &ast.IfExpression{Token: p.curToken}
 	if !p.expectPeek(token.LPAREN) {
 		return nil
@@ -32,12 +33,14 @@ func (p *Parser) parseIfExpression() ast.Expression {
 		exp.Alternative = p.parseBlockStatement()
 	}
 
+	p.recordRange(exp, start)
 	return exp
 }
 
 func (p *Parser) parsePrefixExpression() ast.Expression {
 	// defer untrace(trace("parsePrefixExpression"))
 
+	start := p.startMark()
 	expression := &ast.PrefixExpression{
 		Token:    p.curToken,
 		Operator: p.curToken.Literal,
@@ -46,12 +49,21 @@ func (p *Parser) parsePrefixExpression() ast.Expression {
 	p.nextToken()
 	expression.Right = p.parseExpression(PREFIX)
 
+	p.recordRange(expression, start)
 	return expression
 }
 
 func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 	// defer untrace(trace("parseInfixExpression"))
 
+	// The left-hand side has already been parsed; its range is registered
+	// against the sub-node. For the InfixExpression as a whole we use the
+	// left operand's start (if known) so hovers cover the entire binary
+	// expression rather than just the operator onwards.
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
 	expression := &ast.InfixExpression{
 		Token:    p.curToken,
 		Operator: p.curToken.Literal,
@@ -62,6 +74,7 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 	p.nextToken()
 	expression.Right = p.parseExpression(prec)
 
+	p.recordRange(expression, start)
 	return expression
 }
 
@@ -100,6 +113,7 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 	// defer untrace(trace("parseExpressionStatement"))
 
+	start := p.startMark()
 	stmt := &ast.ExpressionStatement{Token: p.curToken}
 	stmt.Expression = p.parseExpression(LOWEST)
 
@@ -107,12 +121,18 @@ func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
 		p.nextToken()
 	}
 
+	p.recordRange(stmt, start)
 	return stmt
 }
 
 func (p *Parser) parseCallExpression(fun ast.Expression) ast.Expression {
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[fun]; ok {
+		start = r.Start
+	}
 	exp := &ast.CallExpression{Token: p.curToken, Function: fun}
 	exp.Arguments = p.parseExpressionList(token.RPAREN)
+	p.recordRange(exp, start)
 	return exp
 }
 
@@ -125,28 +145,57 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expression {
 	}
 
 	p.nextToken()
-	list = append(list, p.parseExpression(LOWEST))
+	for !p.curTokenIs(token.EOF) {
+		exp := p.parseExpression(LOWEST)
+		if exp != nil {
+			list = append(list, exp)
+		}
 
-	for p.peekTokenIs(token.COMMA) {
-		p.nextToken()
-		p.nextToken()
-		list = append(list, p.parseExpression(LOWEST))
-	}
+		if p.peekTokenIs(token.COMMA) {
+			p.nextToken()
+			p.nextToken()
+			continue
+		}
 
-	if !p.expectPeek(end) {
-		return nil
+		if p.peekTokenIs(end) {
+			p.nextToken()
+			return list
+		}
+
+		if p.curTokenIs(end) {
+			return list
+		}
+
+		msg := fmt.Sprintf("expected next token to be %s or %s, but got %s instead", token.COMMA, end, p.peekToken.Type)
+		p.appendError(p.peekToken, msg)
+
+		stop := p.synchronizeToTokenTypes(token.COMMA, end, token.SEMICOLON, token.RBRACE)
+		if stop == token.COMMA {
+			p.nextToken()
+			continue
+		}
+		if stop == end {
+			return list
+		}
+
+		return list
 	}
 
 	return list
 }
 
 func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
 	exp := &ast.IndexExpression{Token: p.curToken, Left: left}
 	p.nextToken()
 	exp.Index = p.parseExpression(LOWEST)
 	if !p.expectPeek(token.RSQUARE) {
 		return nil
 	}
+	p.recordRange(exp, start)
 	return exp
 }
 
@@ -155,26 +204,38 @@ func (p *Parser) parseAssignExpression(left ast.Expression) ast.Expression {
 	case *ast.Identifier, *ast.FieldExpression:
 	default:
 		msg := fmt.Sprintf("invalid assignment target: %T", left)
-		p.errors = append(p.errors, msg)
+		p.appendError(p.curToken, msg)
 		return nil
 	}
 
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
 	exp := &ast.AssignExpression{Token: p.curToken, Left: left}
 	precedence := p.curPrecedence()
 	p.nextToken()
 	exp.Value = p.parseExpression(precedence - 1)
 
+	p.recordRange(exp, start)
 	return exp
 }
 
 func (p *Parser) parseFieldExpression(left ast.Expression) ast.Expression {
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
 	exp := &ast.FieldExpression{Token: p.curToken, Left: left}
 
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
 
+	fieldStart := p.startMark()
 	exp.Field = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	p.recordRange(exp.Field, fieldStart)
+	p.recordRange(exp, start)
 	return exp
 }
 
@@ -184,34 +245,63 @@ func (p *Parser) parseStructLiteralExpression(left ast.Expression) ast.Expressio
 		return left
 	}
 
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
 	lit := &ast.StructLiteral{Token: p.curToken, Name: name, Fields: []*ast.StructFieldValue{}}
 
-	for !p.peekTokenIs(token.RBRACE) {
+	for !p.peekTokenIs(token.RBRACE) && !p.peekTokenIs(token.EOF) {
 		p.nextToken()
 		if !p.curTokenIs(token.IDENT) {
 			msg := fmt.Sprintf("expected struct literal field identifier, got %s", p.curToken.Type)
-			p.errors = append(p.errors, msg)
-			return nil
+			p.appendError(p.curToken, msg)
+			stop := p.synchronizeToTokenTypes(token.COMMA, token.RBRACE, token.SEMICOLON)
+			if stop == token.COMMA {
+				continue
+			}
+			break
 		}
 
-		field := &ast.StructFieldValue{Name: &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}}
+		fieldNameStart := p.startMark()
+		fieldName := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.recordRange(fieldName, fieldNameStart)
+		field := &ast.StructFieldValue{Name: fieldName}
 
 		if !p.expectPeek(token.COLON) {
-			return nil
+			stop := p.synchronizeToTokenTypes(token.COMMA, token.RBRACE, token.SEMICOLON)
+			if stop == token.COMMA {
+				continue
+			}
+			break
 		}
 
 		p.nextToken()
 		field.Value = p.parseExpression(LOWEST)
-		lit.Fields = append(lit.Fields, field)
+		if field.Value != nil {
+			lit.Fields = append(lit.Fields, field)
+		} else {
+			stop := p.synchronizeToTokenTypes(token.COMMA, token.RBRACE, token.SEMICOLON)
+			if stop == token.COMMA {
+				continue
+			}
+			break
+		}
 
 		if !p.peekTokenIs(token.RBRACE) && !p.expectPeek(token.COMMA) {
-			return nil
+			stop := p.synchronizeToTokenTypes(token.COMMA, token.RBRACE, token.SEMICOLON)
+			if stop == token.COMMA {
+				continue
+			}
+			break
 		}
 	}
 
 	if !p.expectPeek(token.RBRACE) {
-		return nil
+		p.recordRange(lit, start)
+		return lit
 	}
 
+	p.recordRange(lit, start)
 	return lit
 }

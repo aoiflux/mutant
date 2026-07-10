@@ -1,0 +1,173 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Mutant",
+    "scopeName": "source.mutant",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#booleans"
+        },
+        {
+            "include": "#typeDeclarations"
+        },
+        {
+            "include": "#functionDeclarations"
+        },
+        {
+            "include": "#builtins"
+        },
+        {
+            "include": "#fieldAccess"
+        },
+        {
+            "include": "#operators"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#keywords"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.mutant",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.mutant",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.mutant",
+                            "match": "\\\\."
+                        }
+                    ]
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.mutant",
+                    "match": "\\b\\d+(?:\\.\\d+)?\\b"
+                }
+            ]
+        },
+        "booleans": {
+            "patterns": [
+                {
+                    "name": "constant.language.boolean.mutant",
+                    "match": "\\b(?:true|false)\\b"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.mutant",
+                    "match": "\\b(?:fn|let|if|else|return|for|break|continue|macro)\\b"
+                }
+            ]
+        },
+        "typeDeclarations": {
+            "patterns": [
+                {
+                    "name": "meta.declaration.type.mutant",
+                    "match": "\\b(struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.mutant"
+                        },
+                        "2": {
+                            "name": "entity.name.type.mutant"
+                        }
+                    }
+                }
+            ]
+        },
+        "functionDeclarations": {
+            "patterns": [
+                {
+                    "name": "meta.declaration.function.mutant",
+                    "match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\s*=\\s*)(fn)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.mutant"
+                        },
+                        "2": {
+                            "name": "entity.name.function.mutant"
+                        },
+                        "4": {
+                            "name": "storage.type.function.mutant"
+                        }
+                    }
+                }
+            ]
+        },
+        "builtins": {
+            "patterns": [
+                {
+                    "name": "support.function.builtin.mutant",
+                    "match": "\\b(?:len|putf|putln|gets|first|last|rest|push|pop|debug_status|sandbox_status|security_diagnostics|exec_string|cmd_builder|cmd_add|cmd_run|fs_read|fs_write|fs_append|fs_delete|fs_exists|fs_stat|fs_list|fs_mkdir|fs_copy|fs_move|net_resolve|net_dial|http_get|http_post|http_request|json_stringify|json_parse|lua_run_string|lua_run_file|lua_run_http|db_open|db_open_disk|db_close|db_add_node|db_add_edge|db_index_prop|db_query_nodes|db_bfs|db_shortest_path|db_stats|bytes_len|bytes_get|bytes_slice|bytes_read_u16_le|bytes_read_u16_be|bytes_read_u32_le|bytes_read_u32_be|bytes_read_u64_le|bytes_read_u64_be|bytes_write_u16_le|bytes_write_u16_be|bytes_write_u32_le|bytes_write_u32_be|bytes_write_u64_le|bytes_write_u64_be|bytes_cstr_at|bytes_hex|bytes_char_from_int|bytes_int_from_char|bytes_cursor_new|bytes_cursor_tell|bytes_cursor_seek|bytes_cursor_eof|bytes_cursor_read_u8|bytes_cursor_read_u16_le|bytes_cursor_read_u16_be|bytes_cursor_read_u32_le|bytes_cursor_read_u32_be|bytes_cursor_read_u64_le|bytes_cursor_read_u64_be)\\b(?=\\s*\\()"
+                }
+            ]
+        },
+        "fieldAccess": {
+            "patterns": [
+                {
+                    "name": "meta.property-access.mutant",
+                    "match": "\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "variable.other.property.mutant"
+                        }
+                    }
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.mutant",
+                    "match": "==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>!=]"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "name": "punctuation.separator.comma.mutant",
+                    "match": ","
+                },
+                {
+                    "name": "punctuation.separator.key-value.mutant",
+                    "match": ":"
+                },
+                {
+                    "name": "punctuation.terminator.statement.mutant",
+                    "match": ";"
+                },
+                {
+                    "name": "punctuation.definition.group.mutant",
+                    "match": "[(){}\\[\\]]"
+                }
+            ]
+        }
+    }
+}

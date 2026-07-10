@@ -1,10 +1,35 @@
 package token
 
+// Position identifies a location in source code.
+//
+// Line and Column are 1-based (LSP-friendly) and count runes, not bytes.
+// Offset is a 0-based byte offset into the source input.
+//
+// A zero-value Position (Line == 0) means "unknown position" and is used
+// by hand-constructed tokens (e.g. in tests) that pre-date position tracking.
+// Consumers that require positions should treat Line == 0 as absent.
+type Position struct {
+	Line   int
+	Column int
+	Offset int
+}
+
+// IsValid reports whether p carries meaningful position information.
+func (p Position) IsValid() bool { return p.Line > 0 }
+
 type TokenType string
 
+// Token is a lexed piece of source text.
+//
+// Start is the position of the first byte of the token.
+// End is the position immediately after the last byte of the token
+// (LSP-exclusive semantics), so a single-character token at line 1
+// column 5 has Start={1,5,4} and End={1,6,5}.
 type Token struct {
 	Type    TokenType
 	Literal string
+	Start   Position
+	End     Position
 }
 
 const (

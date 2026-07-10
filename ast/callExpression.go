@@ -18,9 +18,14 @@ func (ce *CallExpression) String() string {
 	var out bytes.Buffer
 	args := []string{}
 	for _, a := range ce.Arguments {
+		if a == nil {
+			continue
+		}
 		args = append(args, a.String())
 	}
-	out.WriteString(ce.Function.String())
+	if ce.Function != nil {
+		out.WriteString(ce.Function.String())
+	}
 	out.WriteString("(")
 	out.WriteString(strings.Join(args, ", "))
 	out.WriteString(")")

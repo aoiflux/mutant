@@ -3,3 +3,6 @@ mutant
 mutant.exe
 **/.DS_Store
 native/rustffi/lib/target/
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/.vscode-test/

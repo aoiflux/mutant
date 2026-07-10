@@ -347,6 +347,213 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 	}
 }
 
+func TestMalformedCallInNestedBlockDoesNotPanic(t *testing.T) {
+	input := "let handler = fn() { if (true) { run(,); } };"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ParseProgram panicked for malformed nested call: %v", r)
+		}
+	}()
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+
+	if len(p.Errors()) == 0 {
+		t.Fatal("expected parser errors for malformed call, got none")
+	}
+
+	_ = program.String()
+}
+
+func TestParserRecoversAndCollectsMultipleStatementErrors(t *testing.T) {
+	input := "let first = ;\nlet second = ;\nlet ok = 1;\n"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+
+	if len(p.Errors()) < 2 {
+		t.Fatalf("expected at least 2 parser errors, got=%d (%v)", len(p.Errors()), p.Errors())
+	}
+
+	foundRecovered := false
+	for _, stmt := range program.Statements {
+		letStmt, ok := stmt.(*ast.LetStatement)
+		if !ok || letStmt.Name == nil {
+			continue
+		}
+		if letStmt.Name.Value == "ok" {
+			foundRecovered = true
+			break
+		}
+	}
+	if !foundRecovered {
+		t.Fatalf("expected parser recovery to include valid trailing let `ok`, statements=%d", len(program.Statements))
+	}
+}
+
+func TestParserRecoversInsideBlockAndCollectsMultipleErrors(t *testing.T) {
+	input := "let run = fn() {\nlet a = ;\nlet b = ;\nlet c = 3;\n};\n"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+
+	if len(p.Errors()) < 2 {
+		t.Fatalf("expected at least 2 parser errors, got=%d (%v)", len(p.Errors()), p.Errors())
+	}
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 top-level statement, got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected top-level let statement, got=%T", program.Statements[0])
+	}
+
+	fn, ok := stmt.Value.(*ast.FunctionLiteral)
+	if !ok || fn == nil || fn.Body == nil {
+		t.Fatalf("expected function literal body, got=%T", stmt.Value)
+	}
+
+	foundRecovered := false
+	for _, bodyStmt := range fn.Body.Statements {
+		recoveredLet, ok := bodyStmt.(*ast.LetStatement)
+		if !ok || recoveredLet.Name == nil {
+			continue
+		}
+		if recoveredLet.Name.Value == "c" {
+			foundRecovered = true
+			break
+		}
+	}
+	if !foundRecovered {
+		t.Fatalf("expected block recovery to include valid trailing let `c`, body statements=%d", len(fn.Body.Statements))
+	}
+}
+
+func TestParserRecoversWithinCallArguments(t *testing.T) {
+	input := "let out = add(1, , 3);"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+	if len(p.Errors()) == 0 {
+		t.Fatal("expected parser errors for malformed call argument, got none")
+	}
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected let statement, got=%T", program.Statements[0])
+	}
+
+	call, ok := stmt.Value.(*ast.CallExpression)
+	if !ok {
+		t.Fatalf("expected call expression value, got=%T", stmt.Value)
+	}
+
+	if len(call.Arguments) != 2 {
+		t.Fatalf("expected recovered call args length=2, got=%d", len(call.Arguments))
+	}
+	testIntegerLiteral(t, call.Arguments[0], 1)
+	testIntegerLiteral(t, call.Arguments[1], 3)
+}
+
+func TestParserRecoversWithinHashLiteralPairs(t *testing.T) {
+	input := "let h = {\"a\": 1, : 2, \"c\": 3};"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+	if len(p.Errors()) == 0 {
+		t.Fatal("expected parser errors for malformed hash pair, got none")
+	}
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected let statement, got=%T", program.Statements[0])
+	}
+
+	hash, ok := stmt.Value.(*ast.HashLiteral)
+	if !ok {
+		t.Fatalf("expected hash literal value, got=%T", stmt.Value)
+	}
+
+	if len(hash.Pairs) != 2 {
+		t.Fatalf("expected recovered hash pair count=2, got=%d", len(hash.Pairs))
+	}
+}
+
+func TestParserRecoversWithinStructLiteralFields(t *testing.T) {
+	input := "let p = Point{a: 1, : 2, c: 3};"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	if program == nil {
+		t.Fatal("ParseProgram() returned nil")
+	}
+	if len(p.Errors()) == 0 {
+		t.Fatal("expected parser errors for malformed struct field, got none")
+	}
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got=%d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("expected let statement, got=%T", program.Statements[0])
+	}
+
+	strct, ok := stmt.Value.(*ast.StructLiteral)
+	if !ok {
+		t.Fatalf("expected struct literal value, got=%T", stmt.Value)
+	}
+
+	if len(strct.Fields) != 2 {
+		t.Fatalf("expected recovered struct field count=2, got=%d", len(strct.Fields))
+	}
+	if strct.Fields[0].Name == nil || strct.Fields[0].Name.Value != "a" {
+		t.Fatalf("expected first recovered field to be a, got=%#v", strct.Fields[0].Name)
+	}
+	if strct.Fields[1].Name == nil || strct.Fields[1].Name.Value != "c" {
+		t.Fatalf("expected second recovered field to be c, got=%#v", strct.Fields[1].Name)
+	}
+}
+
 func TestBooleanExpression(t *testing.T) {
 	tests := []struct {
 		input           string
