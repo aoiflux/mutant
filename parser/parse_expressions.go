@@ -27,10 +27,32 @@ func (p *Parser) parseIfExpression() ast.Expression {
 
 	if p.peekTokenIs(token.ELSE) {
 		p.nextToken()
-		if !p.expectPeek(token.LBRACE) {
-			return nil
+		if p.peekTokenIs(token.IF) {
+			p.nextToken()
+			alternative := p.parseIfExpression()
+			if alternative == nil {
+				return nil
+			}
+
+			alternativeIf, ok := alternative.(*ast.IfExpression)
+			if !ok || alternativeIf == nil {
+				msg := fmt.Sprintf("expected else-if alternative to parse as if expression, got %T", alternative)
+				p.appendError(p.curToken, msg)
+				return nil
+			}
+
+			exp.Alternative = &ast.BlockStatement{
+				Token: token.Token{Type: token.ELSE, Literal: "else", Start: p.curToken.Start, End: p.curToken.End},
+				Statements: []ast.Statement{
+					&ast.ExpressionStatement{Token: alternativeIf.Token, Expression: alternativeIf},
+				},
+			}
+		} else {
+			if !p.expectPeek(token.LBRACE) {
+				return nil
+			}
+			exp.Alternative = p.parseBlockStatement()
 		}
-		exp.Alternative = p.parseBlockStatement()
 	}
 
 	p.recordRange(exp, start)

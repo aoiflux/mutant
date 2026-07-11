@@ -173,6 +173,40 @@ func TestDidOpenPublishesParserDiagnostics(t *testing.T) {
 	}
 }
 
+func TestDidOpenDoesNotPublishParserDiagnosticsForElseIfSyntax(t *testing.T) {
+	s := New(false)
+	initializeServer(t, s)
+
+	notifications := make([]capturedNotification, 0, 1)
+	_, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidOpen),
+		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        "file:///elseif-valid.mut",
+				LanguageID: "mutant",
+				Version:    1,
+				Text:       "let present, err = fs_exists(\"examples/data/sample_capture.pcap\");\nif (err) {\n  putln(\"fs_exists error:\", err);\n} else if (!present) {\n  putln(\"No sample PCAP found\");\n} else {\n  let report, err = net_pcap_analyze(\"examples/data/sample_capture.pcap\");\n  putln(\"net_pcap_analyze:\", report, \"err:\", err);\n};\n",
+			},
+		}),
+		Notify: func(method string, params any) {
+			notifications = append(notifications, capturedNotification{method: method, params: params})
+		},
+	})
+	if err != nil {
+		t.Fatalf("didOpen returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("didOpen validity flags = method:%t params:%t", validMethod, validParams)
+	}
+
+	diag := onlyDiagnosticsNotification(t, notifications)
+	for _, d := range diag.Diagnostics {
+		if d.Source != nil && *d.Source == "mutant-parser" {
+			t.Fatalf("unexpected parser diagnostic for valid else-if syntax: %#v", d)
+		}
+	}
+}
+
 func TestDidOpenPublishesSupplementalDelimiterDiagnostics(t *testing.T) {
 	s := New(false)
 	initializeServer(t, s)

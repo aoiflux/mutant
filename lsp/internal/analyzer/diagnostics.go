@@ -814,7 +814,7 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 		}
 
 		if len(names) == 1 {
-			c.defineDeclaration(names[0], current)
+			c.defineDeclaration(names[0], current, false)
 		}
 
 		if node.Value != nil {
@@ -823,7 +823,7 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 
 		if len(names) > 1 {
 			for _, ident := range names {
-				c.defineDeclaration(ident, current)
+				c.defineDeclaration(ident, current, true)
 			}
 		}
 	case *mast.ReturnStatement:
@@ -855,9 +855,9 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 			c.collectStatement(node.Body, current)
 		}
 	case *mast.StructStatement:
-		c.defineDeclaration(node.Name, current)
+		c.defineDeclaration(node.Name, current, false)
 	case *mast.EnumStatement:
-		c.defineDeclaration(node.Name, current)
+		c.defineDeclaration(node.Name, current, false)
 	}
 }
 
@@ -890,7 +890,7 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 	case *mast.FunctionLiteral:
 		child := newDeclarationScope(current, current.depth+1)
 		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child)
+			c.defineDeclaration(param, child, false)
 		}
 		if node.Body != nil {
 			c.collectStatement(node.Body, child)
@@ -898,7 +898,7 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 	case *mast.MacroLiteral:
 		child := newDeclarationScope(current, current.depth+1)
 		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child)
+			c.defineDeclaration(param, child, false)
 		}
 		if node.Body != nil {
 			c.collectStatement(node.Body, child)
@@ -971,11 +971,11 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 	}
 }
 
-func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
+func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope, fromMultiNameLet bool) {
 	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
 		return
 	}
-	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: false, topLevel: current.depth == 0})
+	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet, topLevel: current.depth == 0})
 }
 
 func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]struct{} {

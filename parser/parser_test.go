@@ -650,6 +650,124 @@ func TestIfElseExpression(t *testing.T) {
 	}
 }
 
+func TestIfElseIfExpression(t *testing.T) {
+	input := `if (x < y) { x } else if (x > y) { z } else { y }`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
+			1, len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
+			program.Statements[0])
+	}
+
+	exp, ok := stmt.Expression.(*ast.IfExpression)
+	if !ok {
+		t.Fatalf("stmt.Expression is not ast.IfExpression. got=%T", stmt.Expression)
+	}
+
+	if !testInfixExpression(t, exp.Condition, "x", "<", "y") {
+		return
+	}
+
+	if len(exp.Consequence.Statements) != 1 {
+		t.Fatalf("consequence is not 1 statements. got=%d\n", len(exp.Consequence.Statements))
+	}
+
+	if exp.Alternative == nil || len(exp.Alternative.Statements) != 1 {
+		t.Fatalf("exp.Alternative.Statements does not contain 1 statements. got=%d\n", len(exp.Alternative.Statements))
+	}
+
+	elseIfStmt, ok := exp.Alternative.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("exp.Alternative.Statements[0] is not ast.ExpressionStatement. got=%T", exp.Alternative.Statements[0])
+	}
+
+	elseIf, ok := elseIfStmt.Expression.(*ast.IfExpression)
+	if !ok {
+		t.Fatalf("else-if expression is not ast.IfExpression. got=%T", elseIfStmt.Expression)
+	}
+
+	if !testInfixExpression(t, elseIf.Condition, "x", ">", "y") {
+		return
+	}
+
+	if len(elseIf.Consequence.Statements) != 1 {
+		t.Fatalf("else-if consequence is not 1 statements. got=%d\n", len(elseIf.Consequence.Statements))
+	}
+
+	elseIfConsequence, ok := elseIf.Consequence.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("else-if consequence statement is not ast.ExpressionStatement. got=%T", elseIf.Consequence.Statements[0])
+	}
+	if !testIdentifier(t, elseIfConsequence.Expression, "z") {
+		return
+	}
+
+	if elseIf.Alternative == nil || len(elseIf.Alternative.Statements) != 1 {
+		t.Fatalf("else-if alternative is not 1 statements. got=%d\n", len(elseIf.Alternative.Statements))
+	}
+
+	finalElseStmt, ok := elseIf.Alternative.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("else-if alternative statement is not ast.ExpressionStatement. got=%T", elseIf.Alternative.Statements[0])
+	}
+	if !testIdentifier(t, finalElseStmt.Expression, "y") {
+		return
+	}
+}
+
+func TestIfElseIfExpressionWithoutFinalElse(t *testing.T) {
+	input := `if (x < y) { x } else if (x > y) { z }`
+
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain %d statements. got=%d\n",
+			1, len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T",
+			program.Statements[0])
+	}
+
+	exp, ok := stmt.Expression.(*ast.IfExpression)
+	if !ok {
+		t.Fatalf("stmt.Expression is not ast.IfExpression. got=%T", stmt.Expression)
+	}
+
+	if exp.Alternative == nil || len(exp.Alternative.Statements) != 1 {
+		t.Fatalf("exp.Alternative.Statements does not contain 1 statements. got=%d\n", len(exp.Alternative.Statements))
+	}
+
+	elseIfStmt, ok := exp.Alternative.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("exp.Alternative.Statements[0] is not ast.ExpressionStatement. got=%T", exp.Alternative.Statements[0])
+	}
+
+	elseIf, ok := elseIfStmt.Expression.(*ast.IfExpression)
+	if !ok {
+		t.Fatalf("else-if expression is not ast.IfExpression. got=%T", elseIfStmt.Expression)
+	}
+
+	if elseIf.Alternative != nil {
+		t.Fatalf("else-if should not have final alternative, got=%#v", elseIf.Alternative)
+	}
+}
+
 func TestFunctionLiteralParsing(t *testing.T) {
 	input := `fn(x, y) { x + y; }`
 
