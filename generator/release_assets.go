@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,12 +45,17 @@ func GenerateReleaseAssets(outputPath string) error {
 			return err
 		}
 
+		compressedBinaryData, err := compressReleaseRuntimeBinary(binaryData)
+		if err != nil {
+			return err
+		}
+
 		key := fmt.Sprintf("%s/%s", target.goos, target.goarch)
 		fileName := fmt.Sprintf("%s_%s.bin", target.goos, target.goarch)
 		relPath := filepath.ToSlash(filepath.Join("data", fileName))
 		absPath := filepath.Join(dataDir, fileName)
 
-		if err := os.WriteFile(absPath, binaryData, 0644); err != nil {
+		if err := os.WriteFile(absPath, compressedBinaryData, 0644); err != nil {
 			return err
 		}
 		entries[key] = relPath
@@ -117,6 +123,25 @@ func buildReleaseRuntimeBinary(goos, goarch string) ([]byte, error) {
 	}
 
 	return binaryData, nil
+}
+
+func compressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := gz.Write(binaryData); err != nil {
+		_ = gz.Close()
+		return nil, err
+	}
+
+	if err := gz.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func renderReleaseAssetsIndex(entries map[string]string) []byte {

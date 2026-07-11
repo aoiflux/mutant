@@ -4,7 +4,10 @@
 package releaseassets
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"io/fs"
 	"strings"
 )
@@ -27,5 +30,29 @@ func Get(goos, goarch string) ([]byte, error) {
 		return nil, fmt.Errorf("unable to generate release mode builds: embedded runtime asset for %s is invalid: %w", key, err)
 	}
 
-	return binaryData, nil
+	decompressedBinaryData, err := decompressReleaseRuntimeBinary(binaryData)
+	if err != nil {
+		return nil, fmt.Errorf("unable to generate release mode builds: embedded runtime asset for %s failed to decompress: %w", key, err)
+	}
+
+	return decompressedBinaryData, nil
+}
+
+func decompressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
+	if len(binaryData) < 2 || binaryData[0] != 0x1f || binaryData[1] != 0x8b {
+		return binaryData, nil
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(binaryData))
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	decompressedBinaryData, err := io.ReadAll(gz)
+	if err != nil {
+		return nil, err
+	}
+
+	return decompressedBinaryData, nil
 }
