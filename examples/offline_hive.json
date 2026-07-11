@@ -1,0 +1,33 @@
+{
+    "keys": [
+        {
+            "path": "HKLM\\Software",
+            "last_write": "2026-07-01T00:00:00Z",
+            "values": {}
+        },
+        {
+            "path": "HKLM\\Software\\Mutant",
+            "last_write": "2026-07-01T01:00:00Z",
+            "values": {
+                "InstallPath": "C:\\Mutant",
+                "Enabled": true
+            }
+        }
+    ],
+    "deleted_keys": [
+        "HKLM\\Software\\OldMutant"
+    ],
+    "timeline": [
+        {
+            "timestamp": "2026-07-01T01:00:00Z",
+            "path": "HKLM\\Software\\Mutant",
+            "action": "create_key"
+        },
+        {
+            "timestamp": "2026-07-01T01:10:00Z",
+            "path": "HKLM\\Software\\Mutant",
+            "action": "set_value",
+            "name": "InstallPath"
+        }
+    ]
+}

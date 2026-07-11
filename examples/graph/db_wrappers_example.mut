@@ -1,0 +1,25 @@
+putln("=== Graph DB Wrapper Builtins ===");
+
+let h, err = db_open();
+putln("db_open:", h, "err:", err);
+
+let proc, err = db_add_artifact(h, "process", {"pid": 1337, "name": "evil.exe"});
+putln("db_add_artifact process:", proc, "err:", err);
+
+let file, err = db_add_artifact(h, "file", {"path": "C:/Temp/drop.bin"});
+putln("db_add_artifact file:", file, "err:", err);
+
+let proc_id = proc["node_id"];
+let file_id = file["node_id"];
+
+let rel, err = db_add_relation(h, proc_id, file_id, "writes");
+putln("db_add_relation:", rel, "err:", err);
+
+let nodes, err = db_query(h);
+putln("db_query:", nodes, "err:", err);
+
+let timeline, err = db_timeline(h);
+putln("db_timeline:", timeline, "err:", err);
+
+let closed, err = db_close(h);
+putln("db_close:", closed, "err:", err);

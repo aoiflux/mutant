@@ -1,0 +1,16 @@
+putln("=== Regex Builtins ===");
+
+let matched, err = regex_match("^svc-[0-9]+$", "svc-42");
+putln("regex_match:", matched, "err:", err);
+
+let first, err = regex_find("ioc-[0-9]+", "evt:ioc-12 evt:ioc-99");
+putln("regex_find:", first, "err:", err);
+
+let all_matches, err = regex_find_all("ioc-[0-9]+", "ioc-1 ioc-22 ioc-333");
+putln("regex_find_all:", all_matches, "err:", err);
+
+let redacted, err = regex_replace("[0-9]+", "pid=4242 user=alice", "XXXX");
+putln("regex_replace:", redacted, "err:", err);
+
+let groups, err = regex_capture_groups("user=([a-z]+):([0-9]+)", "user=admin:9001");
+putln("regex_capture_groups:", groups, "err:", err);

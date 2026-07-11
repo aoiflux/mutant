@@ -1,0 +1,18 @@
+putln("=== Inline Policy Example ===");
+
+let module = "package triage\n\ndefault allow = false\n\nallow {\n  input.severity == \"low\"\n  input.source != \"guest\"\n}\n\ndecision = {\n  \"allow\": allow,\n  \"severity\": input.severity,\n  \"source\": input.source,\n}\n\nrules = [\n  {\"id\": \"low_only\"},\n  {\"id\": \"deny_guest\"},\n]";
+
+let loaded, err = policy_load("triage_policy", {
+  "module": module,
+  "eval_query": "data.triage.decision",
+  "allow_query": "data.triage.allow",
+  "rules_query": "data.triage.rules"
+});
+putln("policy_load:", loaded, "err:", err);
+
+let facts = {"severity": "low", "source": "sensor-a"};
+let evald, err = policy_eval("triage_policy", facts);
+putln("policy_eval:", evald, "err:", err);
+
+let allow, err = policy_allow("triage_policy", facts);
+putln("policy_allow:", allow, "err:", err);

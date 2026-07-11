@@ -1,0 +1,14 @@
+putln("=== Fuzzy Matching Builtins ===");
+
+let dist, err = text_levenshtein("kitten", "sitting");
+putln("text_levenshtein:", dist, "err:", err);
+
+let sim, err = text_similarity("powershell", "powrshell");
+putln("text_similarity:", sim, "err:", err);
+
+let candidates = ["powershell", "rundll32", "cmd", "wmic"];
+let found, err = text_fuzzy_find("powrshell", candidates);
+putln("text_fuzzy_find:", found, "err:", err);
+
+let jw, err = text_jaro_winkler("martha", "marhta");
+putln("text_jaro_winkler:", jw, "err:", err);

@@ -1,0 +1,21 @@
+putln("=== Memory Forensics Builtins ===");
+
+let dump_path = "examples/memory_dump.bin";
+
+let regions, err = mem_map(dump_path);
+putln("mem_map:", regions, "err:", err);
+
+let chunk, err = mem_read(dump_path, 0, 32);
+putln("mem_read:", chunk, "err:", err);
+
+let hits, err = mem_scan(dump_path, "MZ");
+putln("mem_scan MZ:", hits, "err:", err);
+
+let strings, err = mem_strings(dump_path, 5);
+putln("mem_strings:", strings, "err:", err);
+
+let pe_hits, err = mem_find_pe(dump_path);
+putln("mem_find_pe:", pe_hits, "err:", err);
+
+let shell_hits, err = mem_find_shellcode(dump_path);
+putln("mem_find_shellcode:", shell_hits, "err:", err);

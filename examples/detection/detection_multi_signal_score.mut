@@ -1,0 +1,18 @@
+putln("=== Detection Multi-Signal Score ===");
+
+let priv, err = detect_priv_esc({
+  "token_theft": true,
+  "uac_bypass": false,
+  "lsass_access": true,
+  "se_debug_enabled": true
+});
+putln("detect_priv_esc:", priv, "err:", err);
+
+let persist, err = detect_persistence({
+  "autorun_keys": ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Bad"],
+  "startup_files": ["C:\\Users\\bob\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\evil.lnk"]
+});
+putln("detect_persistence:", persist, "err:", err);
+
+let files, err = detect_suspicious_files(["examples/memory_dump.bin"]);
+putln("detect_suspicious_files:", files, "err:", err);

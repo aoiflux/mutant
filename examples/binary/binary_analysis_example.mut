@@ -1,0 +1,28 @@
+putln("=== Binary Analysis Builtins ===");
+
+let target = "README.md";
+
+let strings_out, err = bin_strings(target, 6);
+putln("bin_strings:", strings_out, "err:", err);
+
+let entropy_out, err = bin_entropy(target);
+putln("bin_entropy:", entropy_out, "err:", err);
+
+let rules = ["mutant", "malware", "signature"];
+let yara_out, err = bin_yara_scan(target, rules);
+putln("bin_yara_scan:", yara_out, "err:", err);
+
+let pe_info, err = bin_pe_parse(target);
+putln("bin_pe_parse:", pe_info, "err:", err);
+
+let elf_info, err = bin_elf_parse(target);
+putln("bin_elf_parse:", elf_info, "err:", err);
+
+let dwarf_info, err = bin_dwarf_parse(target);
+putln("bin_dwarf_parse:", dwarf_info, "err:", err);
+
+let imports_out, err = bin_imports(target);
+putln("bin_imports:", imports_out, "err:", err);
+
+let sections_out, err = bin_sections(target);
+putln("bin_sections:", sections_out, "err:", err);

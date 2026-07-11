@@ -1,0 +1,25 @@
+putln("=== Cache Builtins ===");
+
+let opened, err = cache_open("ioc_cache");
+putln("cache_open:", opened, "err:", err);
+
+let ok, err = cache_put("ioc_cache", "ioc:1", "10.10.10.10");
+putln("cache_put:", ok, "err:", err);
+
+let ok, err = cache_put("ioc_cache", "ioc:2", "malicious-domain.test", 30);
+putln("cache_put(ttl):", ok, "err:", err);
+
+let entry, err = cache_get("ioc_cache", "ioc:1");
+putln("cache_get:", entry, "err:", err);
+
+let keys, err = cache_keys("ioc_cache");
+putln("cache_keys:", keys, "err:", err);
+
+let stats, err = cache_stats("ioc_cache");
+putln("cache_stats:", stats, "err:", err);
+
+let deleted, err = cache_delete("ioc_cache", "ioc:1");
+putln("cache_delete:", deleted, "err:", err);
+
+let removed, err = cache_clear("ioc_cache");
+putln("cache_clear:", removed, "err:", err);
