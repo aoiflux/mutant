@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 var (
@@ -210,7 +212,14 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 		return nil, err
 	}
 	defer security.SecureZero(decodedData)
-	reader := bytes.NewReader(decodedData)
+
+	inflatedData, err := maybeDecompressEncodedByteCode(decodedData)
+	if err != nil {
+		return nil, err
+	}
+	defer security.SecureZero(inflatedData)
+
+	reader := bytes.NewReader(inflatedData)
 
 	var bytecode *compiler.ByteCode
 	registerTypes()
@@ -220,6 +229,25 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	}
 
 	return bytecode, nil
+}
+
+func maybeDecompressEncodedByteCode(data []byte) ([]byte, error) {
+	if len(data) < 4 || data[0] != 0x28 || data[1] != 0xb5 || data[2] != 0x2f || data[3] != 0xfd {
+		return data, nil
+	}
+
+	decoder, err := zstd.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer decoder.Close()
+
+	inflated, err := io.ReadAll(decoder)
+	if err != nil {
+		return nil, err
+	}
+
+	return inflated, nil
 }
 
 func decryptCode(signedCode []byte, password string) ([]byte, error) {

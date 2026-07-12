@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Generate function takes a `string`, it's the path for the source code
@@ -178,7 +180,30 @@ func encode(compByteCode *compiler.ByteCode, password string, privateKey []byte)
 	}
 
 	byteCode := content.Bytes()
-	return encryptCode(byteCode, password, privateKey)
+	compressedByteCode, err := compressEncodedByteCode(byteCode)
+	if err != nil {
+		return nil, err
+	}
+	return encryptCode(compressedByteCode, password, privateKey)
+}
+
+func compressEncodedByteCode(encoded []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := encoder.Write(encoded); err != nil {
+		_ = encoder.Close()
+		return nil, err
+	}
+
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func encryptCode(b64ByteCode []byte, password string, privateKey []byte) ([]byte, error) {
