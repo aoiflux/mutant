@@ -25,7 +25,7 @@ if (debugger_status["detected"]) {
 if (sandbox_status["detected"]) {
     risk_score = risk_score + sandbox_status["confidence"];
 };
-let indicator_count, err = len(sandbox_status["indicators"]);
+let indicator_count = len(sandbox_status["indicators"]);
 if (indicator_count > 0) {
     risk_score = risk_score + (indicator_count * INDICATOR_WEIGHT);
 };

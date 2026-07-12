@@ -2,7 +2,7 @@ putln("=== DNS Resolution ===");
 let addrs, err = net_resolve("example.com");
 putln("example.com resolves to:");
 let printAddrs = fn(arr, idx) {
-    let total, err = len(arr);
+    let total = len(arr);
     let reached_end = idx == total;
     if (reached_end) {
         return 0;

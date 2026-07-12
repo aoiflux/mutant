@@ -45,9 +45,8 @@ check(db_index_prop(db, carol, "name", "Carol"), "db_index_prop");
 let people, err = db_query_nodes(db, NodeType.PERSON);
 let docs, err = db_query_nodes(db, NodeType.DOCUMENT);
 check_err(err, "db_query_nodes DOCUMENT");
-let people_count, err = len(people);
-let docs_count, err = len(docs);
-check_err(err, "len docs");
+let people_count = len(people);
+let docs_count = len(docs);
 putf("person nodes: ", people_count, " document nodes: ", docs_count);
 putln("");
 
@@ -74,8 +73,7 @@ check(db_add_edge(disk_db, h1, h2), "db_add_edge");
 
 let default_nodes, err = db_query_nodes(disk_db);
 check_err(err, "db_query_nodes default");
-let default_node_count, err = len(default_nodes);
-check_err(err, "len default_nodes");
+let default_node_count = len(default_nodes);
 putf("default DATA nodes: ", default_node_count);
 putln("");
 

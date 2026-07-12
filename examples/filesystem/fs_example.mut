@@ -39,7 +39,7 @@ let listing, err = fs_list("example_dir");
 putln("directory listing:");
 let i = 0;
 let printEntry = fn(entries, idx) {
-    let entry_count, err = len(entries);
+    let entry_count = len(entries);
     let reached_end, err = idx == entry_count;
     if (reached_end) {
         return 0;

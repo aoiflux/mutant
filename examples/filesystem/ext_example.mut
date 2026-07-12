@@ -15,7 +15,7 @@ if (list_err) {
 }
 
 putln("Root entries:");
-let itemLen, err = len(items);
+let itemLen = len(items);
 for (let i = 0; i < itemLen; i = i + 1) {
     let e = items[i];
     putln("  -", e["path"], "(dir=", e["is_dir"], ", inode=", e["inode"], ")");

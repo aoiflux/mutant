@@ -15,7 +15,7 @@ if (list_err) {
 }
 
 putf("Root entries:");
-for (let i = 0; i < len(items)[0]; i = i + 1) {
+for (let i = 0; i < len(items); i = i + 1) {
     let e = items[i];
     putf("- ", e["path"], " (dir=", e["is_dir"], ", cnid=", e["cnid"], ")");
 }

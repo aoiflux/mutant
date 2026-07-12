@@ -12,7 +12,7 @@ if (err) {
   let _, err = db_add_relation(db, p["node_id"], n["node_id"], "connects_to");
 
   let timeline, err = db_timeline(db);
-  putln("timeline events:", len(timeline)[0], "err:", err);
+  putln("timeline events:", len(timeline), "err:", err);
 
   let beacon, err = detect_network_beacon([
     {"dst": "198.51.100.25"},

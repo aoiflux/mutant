@@ -14,7 +14,7 @@ let deleted, err = reg_deleted_keys(handle);
 putln("reg_deleted_keys:", deleted, "err:", err);
 
 let timeline, err = reg_timeline(handle);
-putln("reg_timeline count:", len(timeline)[0], "err:", err);
+putln("reg_timeline count:", len(timeline), "err:", err);
 
 let closed, err = reg_close(handle);
 putln("reg_close:", closed, "err:", err);

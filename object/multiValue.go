@@ -30,5 +30,8 @@ func (mv *MultiValue) Inspect() string {
 		}
 		parts = append(parts, value.Inspect())
 	}
+	if len(parts) == 2 && parts[1] == "" {
+		return parts[0]
+	}
 	return "(" + strings.Join(parts, ", ") + ")"
 }

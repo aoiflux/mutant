@@ -61,8 +61,7 @@ let db, err = db_open_disk(graph_path);
 check_err(err, "db_open_disk");
 let results = [];
 
-let endpoint_count, err = len(endpoints);
-check_err(err, "len endpoints");
+let endpoint_count = len(endpoints);
 for (let i = 0; i < endpoint_count; i = i + 1) {
     let endpoint = endpoints[i];
 
@@ -121,8 +120,7 @@ if (closed == false) {
     putln("db close error");
 };
 
-let processed_endpoint_count, err = len(results);
-check_err(err, "len results");
+let processed_endpoint_count = len(results);
 let report = {
     "profile": "cloud_metadata_checker",
     "input_file": input_file_path,

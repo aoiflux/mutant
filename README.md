@@ -226,6 +226,7 @@ For all things mutant, please visit the
 For VS Code language tooling specifics (teaching hovers, signature help, and
 snippet completions), see:
 
+- [docs/WHAT_IS_MUTANT.md](docs/WHAT_IS_MUTANT.md)
 - [docs/VSCODE_LSP_TEACHING_REFERENCE.md](docs/VSCODE_LSP_TEACHING_REFERENCE.md)
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)

@@ -55,12 +55,10 @@ putln("");
 putln("=== BFS from Alice (depth 2, outbound) ===");
 let bfs, err = db_bfs(db, alice, 2, "out");
 check_err(err, "db_bfs");
-let bfs_nodes_count, err = len(bfs["nodes"]);
-check_err(err, "len bfs nodes");
+let bfs_nodes_count = len(bfs["nodes"]);
 putf("nodes reachable: ", bfs_nodes_count);
 putln("");
-let bfs_edges_count, err = len(bfs["edges"]);
-check_err(err, "len bfs edges");
+let bfs_edges_count = len(bfs["edges"]);
 putf("edges traversed: ", bfs_edges_count);
 putln("");
 
@@ -68,13 +66,11 @@ putln("");
 putln("=== Shortest Path: Alice -> Carol ===");
 let path, err = db_shortest_path(db, alice, carol);
 check_err(err, "db_shortest_path");
-let path_node_count, err = len(path);
-check_err(err, "len path");
+let path_node_count = len(path);
 putf("path node count: ", path_node_count);
 putln("");
 let printPath = fn(arr, idx) {
-    let total, err = len(arr);
-    check_err(err, "len printPath arr");
+    let total = len(arr);
     let reached_end = idx == total;
     if (reached_end) {
         return 0;
@@ -89,14 +85,12 @@ putln("");
 putln("=== Query nodes by type ===");
 let people, err = db_query_nodes(db, NODE_PERSON);
 check_err(err, "db_query_nodes person");
-let people_count, err = len(people);
-check_err(err, "len people");
+let people_count = len(people);
 putf("person nodes: ", people_count);
 putln("");
 let docs, err = db_query_nodes(db, NODE_DOCUMENT);
 check_err(err, "db_query_nodes document");
-let docs_count, err = len(docs);
-check_err(err, "len docs");
+let docs_count = len(docs);
 putf("document nodes: ", docs_count);
 putln("");
 

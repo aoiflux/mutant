@@ -79,8 +79,7 @@ let db, err = db_open_disk(graph_path);
 check_err(err, "db_open_disk");
 let findings = [];
 
-let npm_dep_count, err = len(npm_deps);
-check_err(err, "len npm_deps");
+let npm_dep_count = len(npm_deps);
 for (let i = 0; i < npm_dep_count; i = i + 1) {
     let dep = npm_deps[i];
     let dep_node, err = db_add_node(db, NODE_DEP);
@@ -136,8 +135,7 @@ for (let i = 0; i < npm_dep_count; i = i + 1) {
     findings = updated_findings;
 }
 
-let go_dep_count, err = len(go_deps);
-check_err(err, "len go_deps");
+let go_dep_count = len(go_deps);
 for (let i = 0; i < go_dep_count; i = i + 1) {
     let dep = go_deps[i];
     let dep_node, err = db_add_node(db, NODE_DEP);
@@ -201,8 +199,7 @@ if (closed == false) {
     putln("db close error");
 };
 
-let finding_count, err = len(findings);
-check_err(err, "len findings");
+let finding_count = len(findings);
 let report = {
     "profile": "dependency_version_auditor",
     "package_file": package_path,

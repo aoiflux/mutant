@@ -49,8 +49,7 @@ let parsed, err = json_parse(source_json);
 check_err(err, "json_parse input");
 let files = parsed ["files"];
 
-let file_count, err = len(files);
-check_err(err, "len files");
+let file_count = len(files);
 for (let i = 0; i < file_count; i = i + 1) {
     let f = files [i];
     let file_exists, err = fs_exists(f);
@@ -72,8 +71,7 @@ check_err(err, "db_open_disk");
 let timeline = [];
 let event_nodes = [];
 
-let timeline_file_count, err = len(files);
-check_err(err, "len timeline files");
+let timeline_file_count = len(files);
 for (let i = 0; i < timeline_file_count; i = i + 1) {
     let f = files [i];
     let st, err = fs_stat(f);
@@ -107,8 +105,7 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
     timeline = updated_timeline;
 }
 
-let event_node_count, err = len(event_nodes);
-check_err(err, "len event_nodes");
+let event_node_count = len(event_nodes);
 for (let i = 1; i < event_node_count; i = i + 1) {
     check(db_add_edge(db, event_nodes [i - 1], event_nodes [i], EDGE_NEXT_EVENT), "db_add_edge");
 }
@@ -121,8 +118,7 @@ if (closed == false) {
     putln("db close error");
 };
 
-let processed_file_count, err = len(files);
-check_err(err, "len processed files");
+let processed_file_count = len(files);
 let report = {
     "profile": "mini_timeline_builder",
     "input_file": input_file_path,

@@ -59,14 +59,12 @@ let db, err = db_open_disk(graph_path);
 check_err(err, "db_open_disk");
 let suspicious = [];
 
-let log_count, err = len(logs);
-check_err(err, "len logs");
+let log_count = len(logs);
 for (let i = 0; i < log_count; i = i + 1) {
     let current = logs[i];
     if (current["event"] == "login_failed") {
         let failed_count = 0;
-        let compare_count, err = len(logs);
-        check_err(err, "len compare logs");
+        let compare_count = len(logs);
         for (let j = 0; j < compare_count; j = j + 1) {
             let candidate = logs[j];
             if (candidate["ip"] == current["ip"]) {
@@ -78,8 +76,7 @@ for (let i = 0; i < log_count; i = i + 1) {
 
         if (failed_count > 1) {
             let known = false;
-            let suspicious_count, err = len(suspicious);
-            check_err(err, "len suspicious");
+            let suspicious_count = len(suspicious);
             for (let k = 0; k < suspicious_count; k = k + 1) {
                 if (suspicious[k]["ip"] == current["ip"]) {
                     known = true;
@@ -120,9 +117,8 @@ if (closed == false) {
     putln("db close error");
 };
 
-let processed_log_count, err = len(logs);
-let suspicious_pattern_count, err = len(suspicious);
-check_err(err, "len suspicious patterns");
+let processed_log_count = len(logs);
+let suspicious_pattern_count = len(suspicious);
 let report = {
     "profile": "mini_log_correlator",
     "input_file": input_file_path,

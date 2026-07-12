@@ -80,8 +80,7 @@ let feed_node, err = db_add_node(db, NODE_FEED);
 check_err(err, "db_add_node feed");
 check(db_index_prop(db, feed_node, "source", api), "db_index_prop");
 
-let ioc_count, err = len(iocs);
-check_err(err, "len iocs");
+let ioc_count = len(iocs);
 for (let i = 0; i < ioc_count; i = i + 1) {
     let ioc = iocs[i];
     let ioc_node, err = db_add_node(db, NODE_IOC);
@@ -99,8 +98,7 @@ if (closed == false) {
     putln("db close error");
 };
 
-let loaded_ioc_count, err = len(iocs);
-check_err(err, "len loaded iocs");
+let loaded_ioc_count = len(iocs);
 let report = {
     "profile": "ioc_fetcher",
     "source": api,

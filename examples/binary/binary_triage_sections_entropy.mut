@@ -8,7 +8,7 @@ putln("pe summary:", pe);
 
 let sections, err = bin_sections(path);
 putln("bin_sections err:", err);
-putln("section_count:", len(sections)[0]);
+putln("section_count:", len(sections));
 
 let ent, err = bin_entropy(path);
 putln("bin_entropy:", ent, "err:", err);

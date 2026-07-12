@@ -61,8 +61,7 @@ let checks = [];
 let up_count = 0;
 let down_count = 0;
 
-let endpoint_count, err = len(endpoints);
-check_err(err, "len endpoints");
+let endpoint_count = len(endpoints);
 for (let i = 0; i < endpoint_count; i = i + 1) {
     let endpoint = endpoints[i];
     let resp, err = http_get(endpoint);
@@ -134,8 +133,7 @@ if (closed == false) {
     putln("db close error");
 };
 
-let checks_total, err = len(checks);
-check_err(err, "len checks");
+let checks_total = len(checks);
 let report = {
     "profile": "http_status_monitor",
     "mode": "single_shot",

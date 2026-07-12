@@ -7,8 +7,8 @@ let debugger_status = diagnostics["debugger"];
 let sandbox_status = diagnostics["sandbox"];
 
 let print_list_items = fn(items, index) {
-    let item_count, err = len(items);
-    let reached_end, err = index == item_count;
+    let item_count = len(items);
+    let reached_end = index == item_count;
     if (reached_end) {
         return 0;
     }
@@ -22,7 +22,7 @@ putf("detected: ", debugger_status["detected"]);
 putln("");
 putf("event_count: ", debugger_status["event_count"]);
 putln("");
-let method_count, err = len(debugger_status["methods"]);
+let method_count = len(debugger_status["methods"]);
 putf("method_count: ", method_count);
 putln("");
 if (method_count == 0) {
@@ -41,7 +41,7 @@ putf("confidence: ", sandbox_status["confidence"]);
 putln("");
 putf("event_count: ", sandbox_status["event_count"]);
 putln("");
-let indicator_count, err = len(sandbox_status["indicators"]);
+let indicator_count = len(sandbox_status["indicators"]);
 putf("indicator_count: ", indicator_count);
 putln("");
 if (indicator_count == 0) {

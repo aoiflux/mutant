@@ -35,8 +35,7 @@ let host_nodes = [];
 let findings = [];
 let open_count = 0;
 
-let target_host_count, err = len(target_hosts);
-check_err(err, "len target_hosts");
+let target_host_count = len(target_hosts);
 for (let i = 0; i < target_host_count; i = i + 1) {
     let host = target_hosts[i];
     let host_node, err = db_add_node(db, NODE_HOST);
@@ -48,14 +47,12 @@ for (let i = 0; i < target_host_count; i = i + 1) {
 
     let resolved, err = net_resolve(host);
     check_err(err, "net_resolve");
-    let resolved_count, err = len(resolved);
-    check_err(err, "len resolved");
+    let resolved_count = len(resolved);
     if (resolved_count > 0) {
         check(db_index_prop(db, host_node, "resolved_ip", resolved[0]), "db_index_prop");
     };
 
-    let target_port_count, err = len(target_ports);
-    check_err(err, "len target_ports");
+    let target_port_count = len(target_ports);
     for (let j = 0; j < target_port_count; j = j + 1) {
         let port = target_ports[j];
         let dial, err = net_dial(host + ":" + port, 1200);
@@ -88,15 +85,13 @@ for (let i = 0; i < target_host_count; i = i + 1) {
 let stats, err = db_stats(db);
 check_err(err, "db_stats");
 let bfs_node_count = 0;
-let host_node_count, err = len(host_nodes);
-check_err(err, "len host_nodes");
+let host_node_count = len(host_nodes);
 if (host_node_count > 0) {
     let first_host_node, err = first(host_nodes);
     check_err(err, "first host_nodes");
     let bfs, err = db_bfs(db, first_host_node, 1, "out");
     check_err(err, "db_bfs");
-    let bfs_nodes_count, err = len(bfs["nodes"]);
-    check_err(err, "len bfs nodes");
+    let bfs_nodes_count = len(bfs["nodes"]);
     bfs_node_count = bfs_nodes_count;
 };
 

@@ -47,7 +47,7 @@ let findings = [];
 let high_count = 0;
 let medium_count = 0;
 
-let event_count, err = len(events);
+let event_count = len(events);
 for (let i = 0; i < event_count; i = i + 1) {
     let ev = events[i];
     let score = 10;
@@ -88,11 +88,11 @@ for (let i = 0; i < event_count; i = i + 1) {
     };
 }
 
-let processed_event_count, err = len(events);
+let processed_event_count = len(events);
 putln("events processed: ", processed_event_count);
 putln("high findings: ", high_count, " medium findings: ", medium_count);
 
-let report_event_count, err = len(events);
+let report_event_count = len(events);
 let report = {
     "profile": "ioc_event_triage",
     "input_file": input_file_path,
