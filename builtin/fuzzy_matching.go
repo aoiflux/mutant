@@ -9,41 +9,41 @@ import (
 
 func TextLevenshtein(args ...object.Object) object.Object {
 	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
 
 	left, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `text_levenshtein` must be STRING, got %s", args[0].Type()))
+		return newError("argument 1 to `text_levenshtein` must be STRING, got %s", args[0].Type())
 	}
 
 	right, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `text_levenshtein` must be STRING, got %s", args[1].Type()))
+		return newError("argument 2 to `text_levenshtein` must be STRING, got %s", args[1].Type())
 	}
 
 	distance := levenshteinDistance(left.Value, right.Value)
-	return resultAndError(intObj(int64(distance)), nil)
+	return intObj(int64(distance))
 }
 
 func TextSimilarity(args ...object.Object) object.Object {
 	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
 
 	left, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `text_similarity` must be STRING, got %s", args[0].Type()))
+		return newError("argument 1 to `text_similarity` must be STRING, got %s", args[0].Type())
 	}
 
 	right, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `text_similarity` must be STRING, got %s", args[1].Type()))
+		return newError("argument 2 to `text_similarity` must be STRING, got %s", args[1].Type())
 	}
 
 	maxLen := maxRuneLen(left.Value, right.Value)
 	if maxLen == 0 {
-		return resultAndError(&object.Float{Value: 1.0}, nil)
+		return &object.Float{Value: 1.0}
 	}
 
 	distance := levenshteinDistance(left.Value, right.Value)
@@ -52,29 +52,29 @@ func TextSimilarity(args ...object.Object) object.Object {
 		similarity = 0
 	}
 
-	return resultAndError(&object.Float{Value: similarity}, nil)
+	return &object.Float{Value: similarity}
 }
 
 func TextFuzzyFind(args ...object.Object) object.Object {
 	if len(args) != 2 && len(args) != 3 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
+		return newError("wrong number of arguments. got=%d, want=2 or 3", len(args))
 	}
 
 	query, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `text_fuzzy_find` must be STRING, got %s", args[0].Type()))
+		return newError("argument 1 to `text_fuzzy_find` must be STRING, got %s", args[0].Type())
 	}
 
 	candidatesObj, ok := args[1].(*object.Array)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `text_fuzzy_find` must be ARRAY, got %s", args[1].Type()))
+		return newError("argument 2 to `text_fuzzy_find` must be ARRAY, got %s", args[1].Type())
 	}
 
 	maxDistance := int64(2)
 	if len(args) == 3 {
 		distanceObj, ok := args[2].(*object.Integer)
 		if !ok {
-			return resultAndError(nil, newError("argument 3 to `text_fuzzy_find` must be INTEGER, got %s", args[2].Type()))
+			return newError("argument 3 to `text_fuzzy_find` must be INTEGER, got %s", args[2].Type())
 		}
 		maxDistance = distanceObj.Value
 	}
@@ -87,7 +87,7 @@ func TextFuzzyFind(args ...object.Object) object.Object {
 	for idx, candidateObj := range candidatesObj.Elements {
 		candidate, ok := candidateObj.(*object.String)
 		if !ok {
-			return resultAndError(nil, newError("argument 2 to `text_fuzzy_find` must contain only STRING values. element %d got %s", idx, candidateObj.Type()))
+			return newError("argument 2 to `text_fuzzy_find` must contain only STRING values. element %d got %s", idx, candidateObj.Type())
 		}
 
 		distance := int64(levenshteinDistance(queryLower, strings.ToLower(candidate.Value)))
@@ -99,48 +99,48 @@ func TextFuzzyFind(args ...object.Object) object.Object {
 	}
 
 	if bestIndex == -1 {
-		return resultAndError(makeHashObject(map[string]object.Object{
+		return makeHashObject(map[string]object.Object{
 			"found":    boolObj(false),
 			"match":    stringObj(""),
 			"index":    intObj(-1),
 			"distance": intObj(-1),
-		}), nil)
+		})
 	}
 
 	if bestDistance > maxDistance {
-		return resultAndError(makeHashObject(map[string]object.Object{
+		return makeHashObject(map[string]object.Object{
 			"found":    boolObj(false),
 			"match":    stringObj(""),
 			"index":    intObj(-1),
 			"distance": intObj(bestDistance),
-		}), nil)
+		})
 	}
 
-	return resultAndError(makeHashObject(map[string]object.Object{
+	return makeHashObject(map[string]object.Object{
 		"found":    boolObj(true),
 		"match":    stringObj(bestMatch),
 		"index":    intObj(bestIndex),
 		"distance": intObj(bestDistance),
-	}), nil)
+	})
 }
 
 func TextJaroWinkler(args ...object.Object) object.Object {
 	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
 
 	left, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `text_jaro_winkler` must be STRING, got %s", args[0].Type()))
+		return newError("argument 1 to `text_jaro_winkler` must be STRING, got %s", args[0].Type())
 	}
 
 	right, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `text_jaro_winkler` must be STRING, got %s", args[1].Type()))
+		return newError("argument 2 to `text_jaro_winkler` must be STRING, got %s", args[1].Type())
 	}
 
 	score := jaroWinkler(left.Value, right.Value)
-	return resultAndError(&object.Float{Value: score}, nil)
+	return &object.Float{Value: score}
 }
 
 func levenshteinDistance(a, b string) int {

@@ -1614,29 +1614,17 @@ func (vm *VM) callBuiltin(builtin *builtin.BuiltIn, numArgs int) error {
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	result := vm.normalizeBuiltinResult(builtin.Fn(args...))
+	rawResult := builtin.Fn(args...)
+	result := rawResult
+	if result == nil {
+		result = global.Null
+	}
 
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 
 	vm.push(result)
 
 	return nil
-}
-
-func (vm *VM) normalizeBuiltinResult(result object.Object) object.Object {
-	if result == nil {
-		return &object.MultiValue{Values: []object.Object{global.Null, global.Null}}
-	}
-
-	if multi, ok := result.(*object.MultiValue); ok {
-		return multi
-	}
-
-	if errObj, ok := result.(*object.Error); ok {
-		return &object.MultiValue{Values: []object.Object{global.Null, errObj}}
-	}
-
-	return &object.MultiValue{Values: []object.Object{result, global.Null}}
 }
 
 func nativeBoolToBooleanObject(native bool) *object.Boolean {

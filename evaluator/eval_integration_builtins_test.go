@@ -36,8 +36,8 @@ func TestBuiltinIntegrationCacheAndGraphDB(t *testing.T) {
 		"cache_put_err": cput[1],
 		"cache_get_err": cget[1],
 		"close_err": close[1],
-		"timeline_len": len(timeline[0])[0],
-		"query_len": len(query[0])[0],
+		"timeline_len": len(timeline[0]),
+		"query_len": len(query[0]),
 		"cached_found": cget[0]["found"],
 		"cached_value": cget[0]["value"]
 	}
@@ -103,7 +103,7 @@ func TestBuiltinIntegrationMemoryAndDetection(t *testing.T) {
 	{
 		"pe_err": pe[1],
 		"inj_err": inj[1],
-		"pe_count": len(pe[0])[0],
+		"pe_count": len(pe[0]),
 		"detected": inj[0]["detected"]
 	}
 	`, fixture, fixture)

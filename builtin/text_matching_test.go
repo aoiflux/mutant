@@ -10,7 +10,7 @@ import (
 
 func TestTextContains(t *testing.T) {
 	result := TextContains(stringObj("incident-response"), stringObj("response"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -26,7 +26,7 @@ func TestTextContains(t *testing.T) {
 
 func TestTextIndex(t *testing.T) {
 	result := TextIndex(stringObj("abcabc"), stringObj("cab"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -42,7 +42,7 @@ func TestTextIndex(t *testing.T) {
 
 func TestTextCount(t *testing.T) {
 	result := TextCount(stringObj("aaaa"), stringObj("aa"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -58,7 +58,7 @@ func TestTextCount(t *testing.T) {
 
 func TestTextSplit(t *testing.T) {
 	result := TextSplit(stringObj("a,b,c"), stringObj(","))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -104,7 +104,7 @@ func TestTextReplace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := TextReplace(tt.args...)
-			payload, errObj := unwrapPair(t, result)
+			payload, errObj := unwrapSingleOrPair(t, result)
 			if errObj != nil {
 				t.Fatalf("unexpected error: %s", errObj.Inspect())
 			}
@@ -144,7 +144,7 @@ func TestTextBuiltinsTypeErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.call()
-			_, errObj := unwrapPair(t, result)
+			_, errObj := unwrapSingleOrPair(t, result)
 			if errObj == nil {
 				t.Fatalf("expected error, got nil")
 			}

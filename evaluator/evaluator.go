@@ -212,26 +212,14 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		evaluated := Eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
-		return normalizeBuiltinResult(fun.Fn(args...))
+		result := fun.Fn(args...)
+		if result == nil {
+			return NULL
+		}
+		return result
 	default:
 		return newError("not a function: %s", fn.Type())
 	}
-}
-
-func normalizeBuiltinResult(result object.Object) object.Object {
-	if result == nil {
-		return &object.MultiValue{Values: []object.Object{NULL, NULL}}
-	}
-
-	if multi, ok := result.(*object.MultiValue); ok {
-		return multi
-	}
-
-	if errObj, ok := result.(*object.Error); ok {
-		return &object.MultiValue{Values: []object.Object{NULL, errObj}}
-	}
-
-	return &object.MultiValue{Values: []object.Object{result, NULL}}
 }
 
 func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Environment {

@@ -10,7 +10,7 @@ import (
 
 func TestTextLevenshtein(t *testing.T) {
 	result := TextLevenshtein(stringObj("kitten"), stringObj("sitting"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -26,7 +26,7 @@ func TestTextLevenshtein(t *testing.T) {
 
 func TestTextSimilarity(t *testing.T) {
 	result := TextSimilarity(stringObj("abc"), stringObj("abc"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -48,7 +48,7 @@ func TestTextFuzzyFind(t *testing.T) {
 	}}
 
 	result := TextFuzzyFind(stringObj("powrshell"), candidates)
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -81,7 +81,7 @@ func TestTextFuzzyFindNoMatchWithinThreshold(t *testing.T) {
 	}}
 
 	result := TextFuzzyFind(stringObj("zzzz"), candidates, intObj(1))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -103,7 +103,7 @@ func TestTextFuzzyFindNoMatchWithinThreshold(t *testing.T) {
 
 func TestTextJaroWinkler(t *testing.T) {
 	result := TextJaroWinkler(stringObj("martha"), stringObj("marhta"))
-	payload, errObj := unwrapPair(t, result)
+	payload, errObj := unwrapSingleOrPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
 	}
@@ -141,7 +141,7 @@ func TestFuzzyBuiltinsTypeErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.call()
-			_, errObj := unwrapPair(t, result)
+			_, errObj := unwrapSingleOrPair(t, result)
 			if errObj == nil {
 				t.Fatalf("expected error, got nil")
 			}
