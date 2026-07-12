@@ -21,6 +21,7 @@ $targets = @(
 
 $totalSteps = if ($WasmRepl) { 4 } else { 3 }
 $step = 0
+$goBuildArgs = @("-trimpath", "-buildvcs=false", "-ldflags", "-s -w -buildid=")
 
 function Show-Step {
     Param(
@@ -116,7 +117,7 @@ Push-Location $repoRoot
 try {
     Start-Step "Compile Go bootstrap binary"
     Invoke-Checked -What "Go bootstrap build" -Command {
-        go build -o $bootstrapPath .
+        go build @goBuildArgs -o $bootstrapPath .
     }
     Write-Host "    Bootstrap binary: $bootstrapPath" -ForegroundColor DarkGray
 
@@ -147,7 +148,7 @@ try {
 
             Write-Host "    Go => $targetLabel" -ForegroundColor DarkGray
             Invoke-Checked -What "Go final build for $targetLabel" -Command {
-                go build -o $finalPath .
+                go build @goBuildArgs -o $finalPath .
             }
             Write-Host "      binary: $finalPath" -ForegroundColor DarkGray
         }
@@ -177,10 +178,11 @@ try {
         try {
             $env:GOOS = "js"
             $env:GOARCH = "wasm"
+            $env:CGO_ENABLED = "0"
 
             $wasmPath = Join-Path $wasmOutPath "mutant_repl.wasm"
             Invoke-Checked -What "WASM browser REPL build" -Command {
-                go build -o $wasmPath ./cmd/replwasm
+                go build @goBuildArgs -o $wasmPath ./cmd/replwasm
             }
             Write-Host "    wasm: $wasmPath" -ForegroundColor DarkGray
             Write-Host "    wasm_exec.js: $(Join-Path $wasmOutPath "wasm_exec.js")" -ForegroundColor DarkGray

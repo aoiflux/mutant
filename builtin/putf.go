@@ -7,7 +7,7 @@ import (
 
 func Putf(args ...object.Object) object.Object {
 	for _, arg := range args {
-		fmt.Print(arg.Inspect())
+		fmt.Printf("%v", arg.Inspect())
 	}
 	return nil
 }

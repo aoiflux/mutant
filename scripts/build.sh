@@ -148,6 +148,13 @@ if [[ -z "$GO_BIN" ]]; then
   exit 1
 fi
 
+GO_BUILD_FLAGS=(
+  -trimpath
+  -buildvcs=false
+  -ldflags
+  "-s -w -buildid="
+)
+
 GO_HOST_OS="$(run_tool "$GO_BIN" env GOHOSTOS)"
 GO_HOST_ARCH="$(run_tool "$GO_BIN" env GOHOSTARCH)"
 
@@ -240,7 +247,7 @@ cd "$REPO_ROOT"
 assert_releaseassets_data_clean
 
 run_step "Compile Go bootstrap binary"
-run_tool "$GO_BIN" build -o "$BOOTSTRAP_BIN" .
+run_tool "$GO_BIN" build "${GO_BUILD_FLAGS[@]}" -o "$BOOTSTRAP_BIN" .
 echo "    Bootstrap binary: $BOOTSTRAP_BIN"
 
 run_step "Generate embedded release assets"
@@ -262,7 +269,7 @@ for target in "${TARGETS[@]}"; do
 
   FINAL_BIN="$OUTPUT_PATH/$FINAL_NAME-$T_GOOS-$T_GOARCH$T_EXE_SUFFIX"
   echo "    Go => $T_GOOS/$T_GOARCH"
-  run_tool "$GO_BIN" build -o "$FINAL_BIN" .
+  run_tool "$GO_BIN" build "${GO_BUILD_FLAGS[@]}" -o "$FINAL_BIN" .
   echo "      binary: $FINAL_BIN"
 done
 
@@ -288,12 +295,15 @@ if [[ "$WASM_REPL" -eq 1 ]]; then
 
   OLD_GOOS_WASM="${GOOS-}"
   OLD_GOARCH_WASM="${GOARCH-}"
+  OLD_CGO_WASM="${CGO_ENABLED-}"
   export GOOS="js"
   export GOARCH="wasm"
-  run_tool "$GO_BIN" build -o "$REPO_ROOT/$WASM_OUT_DIR/mutant_repl.wasm" ./cmd/replwasm
+  export CGO_ENABLED=0
+  run_tool "$GO_BIN" build "${GO_BUILD_FLAGS[@]}" -o "$REPO_ROOT/$WASM_OUT_DIR/mutant_repl.wasm" ./cmd/replwasm
 
   export GOOS="$OLD_GOOS_WASM"
   export GOARCH="$OLD_GOARCH_WASM"
+  export CGO_ENABLED="$OLD_CGO_WASM"
 
   echo "    wasm: $REPO_ROOT/$WASM_OUT_DIR/mutant_repl.wasm"
   echo "    wasm_exec.js: $REPO_ROOT/$WASM_OUT_DIR/wasm_exec.js"

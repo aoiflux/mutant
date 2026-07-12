@@ -5,11 +5,12 @@ package releaseassets
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
 	"io"
 	"io/fs"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type missingRuntimeFS struct{}
@@ -39,17 +40,17 @@ func Get(goos, goarch string) ([]byte, error) {
 }
 
 func decompressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
-	if len(binaryData) < 2 || binaryData[0] != 0x1f || binaryData[1] != 0x8b {
+	if len(binaryData) < 4 || binaryData[0] != 0x28 || binaryData[1] != 0xb5 || binaryData[2] != 0x2f || binaryData[3] != 0xfd {
 		return binaryData, nil
 	}
 
-	gz, err := gzip.NewReader(bytes.NewReader(binaryData))
+	decoder, err := zstd.NewReader(bytes.NewReader(binaryData))
 	if err != nil {
 		return nil, err
 	}
-	defer gz.Close()
+	defer decoder.Close()
 
-	decompressedBinaryData, err := io.ReadAll(gz)
+	decompressedBinaryData, err := io.ReadAll(decoder)
 	if err != nil {
 		return nil, err
 	}

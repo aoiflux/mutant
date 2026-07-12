@@ -2,13 +2,14 @@ package generator
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type releaseTarget struct {
@@ -103,7 +104,19 @@ func buildReleaseRuntimeBinary(goos, goarch string) ([]byte, error) {
 	}
 	outPath := filepath.Join(tmpDir, outName)
 
-	cmd := exec.Command("go", "build", "-tags", "releaseassetsgen", "-o", outPath, ".")
+	cmd := exec.Command(
+		"go",
+		"build",
+		"-trimpath",
+		"-buildvcs=false",
+		"-ldflags",
+		"-s -w -buildid=",
+		"-tags",
+		"releaseassetsgen",
+		"-o",
+		outPath,
+		".",
+	)
 	cmd.Env = append(os.Environ(),
 		"GOOS="+goos,
 		"GOARCH="+goarch,
@@ -127,17 +140,17 @@ func buildReleaseRuntimeBinary(goos, goarch string) ([]byte, error) {
 
 func compressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	encoder, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := gz.Write(binaryData); err != nil {
-		_ = gz.Close()
+	if _, err := encoder.Write(binaryData); err != nil {
+		_ = encoder.Close()
 		return nil, err
 	}
 
-	if err := gz.Close(); err != nil {
+	if err := encoder.Close(); err != nil {
 		return nil, err
 	}
 
