@@ -109,6 +109,9 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := builtinHoverText(n.Value); ok {
 			return text, rng, true
 		}
+		if text, ok := macroSpecialFormHoverText(n.Value); ok {
+			return text, rng, true
+		}
 		return fmt.Sprintf("identifier `%s`", n.Value), rng, true
 	case *mast.IntegerLiteral:
 		return fmt.Sprintf("integer `%d`", n.Value), rng, true

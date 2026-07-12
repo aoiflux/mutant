@@ -62,6 +62,27 @@ func TestUndefinedCollectorMarksMultiNameLetDeclarations(t *testing.T) {
 	}
 }
 
+func TestMacroSpecialFormsAreNotUndefinedInMacros(t *testing.T) {
+	a := New()
+	s := a.Analyze(`let unless = macro(condition, consequence, alternative) {
+    quote(if (!(unquote(condition))) {
+        unquote(consequence);
+    } else {
+        unquote(alternative);
+    });
+};`)
+
+	diagnostics := Diagnostics(s, DefaultLintConfig())
+	for _, diagnostic := range diagnostics {
+		if strings.Contains(diagnostic.Message, "undefined identifier `quote`") {
+			t.Fatalf("unexpected undefined quote diagnostic: %s", diagnostic.Message)
+		}
+		if strings.Contains(diagnostic.Message, "undefined identifier `unquote`") {
+			t.Fatalf("unexpected undefined unquote diagnostic: %s", diagnostic.Message)
+		}
+	}
+}
+
 func TestBuiltinsHaveCompletionAndTeachingCoverage(t *testing.T) {
 	a := New()
 	s := a.Analyze("let sample = 1;\nsample;\n")

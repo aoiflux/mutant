@@ -86,6 +86,9 @@ func (s *Snapshot) signatureInformationForCall(call *mast.CallExpression, pos ls
 		if fn == nil || fn.Value == "" {
 			return lsp.SignatureInformation{}, false
 		}
+		if sig, ok := macroSpecialFormSignatureInformation(fn.Value); ok {
+			return sig, true
+		}
 		if builtin.GetBuiltinByName(fn.Value) != nil {
 			if sig, ok := builtinSignatureInformation(fn.Value); ok {
 				return sig, true

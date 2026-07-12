@@ -6,9 +6,11 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
+	"mutant/ast"
 	"mutant/builtin"
 	"mutant/compiler"
 	"mutant/errrs"
+	"mutant/evaluator"
 	"mutant/global"
 	"mutant/lexer"
 	"mutant/mutil"
@@ -122,10 +124,17 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 		return nil, fmt.Errorf("pareser error"), errrs.PARSER_ERROR, p.Errors()
 	}
 
+	macroEnv := object.NewEnvironment()
+	evaluator.DefineMacros(program, macroEnv)
+	expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program)
+	if !ok || expanded == nil {
+		return nil, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
+	}
+
 	comp := compiler.NewWithState(symbolTable, constants)
 	comp.EnableSecurityOpcodeInjection()
 	configureCompilerPolymorphism(comp, mutationLevel, mutationSeed)
-	if err := comp.Compile(program); err != nil {
+	if err := comp.Compile(expanded); err != nil {
 		return nil, err, errrs.COMPILER_ERROR, nil
 	}
 

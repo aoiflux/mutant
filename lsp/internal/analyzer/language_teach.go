@@ -25,6 +25,38 @@ var keywordHoverDocs = map[string]string{
 	"false":    "Boolean literal representing falsehood.",
 }
 
+var macroSpecialFormDocs = map[string]struct {
+	signature string
+	summary   string
+}{
+	"quote":   {signature: "quote(node)", summary: "Macro special form that captures an expression as AST without evaluating it."},
+	"unquote": {signature: "unquote(expr)", summary: "Macro special form that evaluates an expression inside quote and splices the resulting AST/value back in."},
+}
+
+func isMacroSpecialFormName(name string) bool {
+	_, ok := macroSpecialFormDocs[name]
+	return ok
+}
+
+func macroSpecialFormHoverText(name string) (string, bool) {
+	doc, ok := macroSpecialFormDocs[name]
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("macro special form `%s`\n\n%s", doc.signature, doc.summary), true
+}
+
+func macroSpecialFormSignatureInformation(name string) (lsp.SignatureInformation, bool) {
+	doc, ok := macroSpecialFormDocs[name]
+	if !ok {
+		return lsp.SignatureInformation{}, false
+	}
+	return lsp.SignatureInformation{
+		Label:         doc.signature,
+		Documentation: lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc.summary},
+	}, true
+}
+
 func builtinHoverText(name string) (string, bool) {
 	if signature, summary, params, ok := builtin.TeachingDoc(name); ok {
 		if len(params) == 0 {

@@ -273,6 +273,12 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 			c.collectStatement(node.Alternative, current)
 		}
 	case *mast.CallExpression:
+		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
+			for _, arg := range node.Arguments {
+				c.collectExpression(arg, current)
+			}
+			return
+		}
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
 		}
@@ -914,6 +920,12 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			c.collectStatement(node.Alternative, current)
 		}
 	case *mast.CallExpression:
+		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
+			for _, arg := range node.Arguments {
+				c.collectExpression(arg, current)
+			}
+			return
+		}
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
 		}
