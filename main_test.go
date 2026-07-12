@@ -533,7 +533,7 @@ func withRuntimeDeps(deps cliRuntime) func() {
 
 func stubRuntimeDeps() cliRuntime {
 	return cliRuntime{
-		runRepl:               func(string, bool) {},
+		runRepl:               func(string, bool, string) {},
 		compileCode:           func(string, string, string, bool, string, int, int64) {},
 		generateReleaseAssets: func(string) {},
 		runCode:               func(string, string, bool, bool) {},

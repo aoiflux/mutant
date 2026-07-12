@@ -28,7 +28,7 @@ const (
 )
 
 type cliRuntime struct {
-	runRepl               func(string, bool)
+	runRepl               func(string, bool, string)
 	compileCode           func(string, string, string, bool, string, int, int64)
 	generateReleaseAssets func(string)
 	runCode               func(string, string, bool, bool)
@@ -117,7 +117,12 @@ func resolveRuntimeExecutionOptions(args []string) (string, bool, bool, bool) {
 
 func runCommandFlow(args []string) int {
 	if len(args) == 1 {
-		runtimeDeps.runRepl(VERSION, false)
+		runtimeDeps.runRepl(VERSION, false, extractReplThemeArg(args))
+		return 0
+	}
+
+	if shouldStartReplFromFlags(args[1:]) {
+		runtimeDeps.runRepl(VERSION, hasEnableMacrosArg(args), extractReplThemeArg(args))
 		return 0
 	}
 
@@ -227,7 +232,7 @@ func handleBuiltinCommand(args []string) bool {
 	}
 
 	if isEnableMacrosArg(args[1]) {
-		runtimeDeps.runRepl(VERSION, true)
+		runtimeDeps.runRepl(VERSION, true, extractReplThemeArg(args))
 		return true
 	}
 
@@ -409,6 +414,7 @@ Global options:
   -h, --help                 Show help.
   -v, --version              Show version information.
   -em, --enable-macros       Start the REPL with experimental macros enabled.
+	--repl-theme <name>        REPL theme: default, neon, pastel, forest, sunset.
 
 Runtime options:
   --secure                   Enforce secure mode. Default behavior.
@@ -422,6 +428,8 @@ Runtime options:
 Examples:
   mutant
   mutant --enable-macros
+	mutant --repl-theme neon
+	mutant --enable-macros --repl-theme sunset
   mutant hello.mut
   mutant hello.mu --secure --signer-auth
   mutant gen --src hello.mut --password "My$tr0ngPass!"
@@ -543,6 +551,72 @@ func isEnableMacrosArg(arg string) bool {
 	default:
 		return false
 	}
+}
+
+func hasEnableMacrosArg(args []string) bool {
+	for _, arg := range args {
+		if isEnableMacrosArg(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldStartReplFromFlags(args []string) bool {
+	if len(args) == 0 || findProgramArg(args) != "" {
+		return false
+	}
+
+	hasReplFlag := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		if isHelpArg(arg) || isVersionArg(arg) || isBuiltinCommand(arg) || arg == HELPCMD {
+			return false
+		}
+
+		if isEnableMacrosArg(arg) {
+			hasReplFlag = true
+			continue
+		}
+
+		if strings.HasPrefix(arg, "--repl-theme=") || strings.HasPrefix(arg, "-repl-theme=") {
+			hasReplFlag = true
+			continue
+		}
+
+		if arg == "--repl-theme" || arg == "-repl-theme" {
+			hasReplFlag = true
+			i++
+			if i >= len(args) {
+				return false
+			}
+			continue
+		}
+
+		return false
+	}
+
+	return hasReplFlag
+}
+
+func extractReplThemeArg(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--repl-theme" || args[i] == "-repl-theme" {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--repl-theme=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "--repl-theme="))
+		}
+		if strings.HasPrefix(args[i], "-repl-theme=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "-repl-theme="))
+		}
+	}
+
+	return ""
 }
 
 func newFlagSet(name string) *flag.FlagSet {
