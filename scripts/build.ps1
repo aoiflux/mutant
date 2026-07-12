@@ -2,7 +2,9 @@ Param(
     [string]$OutputDir = "dist",
     [string]$AssetsOut = "releaseassets",
     [string]$FinalName = "mutant",
-    [switch]$HostOnly
+    [switch]$HostOnly,
+    [switch]$WasmRepl,
+    [string]$WasmOutDir = "examples/wasm-repl"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,7 +19,7 @@ $targets = @(
     @{ GoOS = "darwin"; GoArch = "arm64"; ExeSuffix = "" }
 )
 
-$totalSteps = 3
+$totalSteps = if ($WasmRepl) { 4 } else { 3 }
 $step = 0
 
 function Show-Step {
@@ -70,6 +72,23 @@ function Assert-ReleaseAssetsDataClean {
     if (-not $placeholder) {
         throw "Expected '$dataDir' to contain placeholder.bin before build actions, but it is missing."
     }
+}
+
+function Resolve-WasmExecPath {
+    Param([string]$GoRoot)
+
+    $candidates = @(
+        (Join-Path $GoRoot "lib/wasm/wasm_exec.js"),
+        (Join-Path $GoRoot "misc/wasm/wasm_exec.js")
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "wasm_exec.js not found under '$GoRoot/lib/wasm' or '$GoRoot/misc/wasm'"
 }
 
 Assert-ReleaseAssetsDataClean
@@ -138,6 +157,38 @@ try {
         $env:GOOS = $oldGoos
         $env:GOARCH = $oldGoarch
         $env:CC = $oldCC
+    }
+
+    if ($WasmRepl) {
+        Start-Step "Build browser REPL wasm artifacts"
+        $wasmOutPath = Join-Path $repoRoot $WasmOutDir
+        New-Item -ItemType Directory -Path $wasmOutPath -Force | Out-Null
+
+        $goRoot = (& go env GOROOT).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($goRoot)) {
+            throw "Failed to resolve GOROOT for wasm artifact setup"
+        }
+
+        $wasmExecPath = Resolve-WasmExecPath -GoRoot $goRoot
+        Copy-Item $wasmExecPath (Join-Path $wasmOutPath "wasm_exec.js") -Force
+
+        $oldGoos = $env:GOOS
+        $oldGoarch = $env:GOARCH
+        try {
+            $env:GOOS = "js"
+            $env:GOARCH = "wasm"
+
+            $wasmPath = Join-Path $wasmOutPath "mutant_repl.wasm"
+            Invoke-Checked -What "WASM browser REPL build" -Command {
+                go build -o $wasmPath ./cmd/replwasm
+            }
+            Write-Host "    wasm: $wasmPath" -ForegroundColor DarkGray
+            Write-Host "    wasm_exec.js: $(Join-Path $wasmOutPath "wasm_exec.js")" -ForegroundColor DarkGray
+        }
+        finally {
+            $env:GOOS = $oldGoos
+            $env:GOARCH = $oldGoarch
+        }
     }
 
     Write-Progress -Activity "Mutant Full Build" -Status "Done" -PercentComplete 100 -Completed

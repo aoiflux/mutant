@@ -56,6 +56,18 @@ Common options:
 - `--assets-out <dir>` / `-AssetsOut <dir>`
 - `--final-name <name>` / `-FinalName <name>`
 - `--host-only` / `-HostOnly`
+- `--wasm-repl` / `-WasmRepl`
+- `--wasm-out-dir <dir>` / `-WasmOutDir <dir>`
+
+Wasm build via scripts (optional):
+
+```bash
+./scripts/build.sh --host-only --wasm-repl
+```
+
+```powershell
+./scripts/build.ps1 -HostOnly -WasmRepl
+```
 
 ## CLI Quick Start
 
@@ -122,6 +134,46 @@ available:
 - `--signer-auth` to require trusted signer verification
 - `--security-log-level <none|error|info|debug|trace>`
 - `--log-level <none|error|info|debug|trace>` as an alias
+
+## Browser REPL (WASM, experimental)
+
+Mutant includes an experimental browser REPL build target.
+
+Build wasm artifact:
+
+```bash
+GOOS=js GOARCH=wasm go build -o examples/wasm-repl/mutant_repl.wasm ./cmd/replwasm
+```
+
+Copy Go's `wasm_exec.js` next to the demo page (`examples/wasm-repl/`), then
+serve that folder with any static server.
+
+PowerShell example:
+
+```powershell
+$goRoot = (go env GOROOT)
+Copy-Item "$goRoot/lib/wasm/wasm_exec.js" "examples/wasm-repl/wasm_exec.js" -Force
+```
+
+Some older Go distributions used `misc/wasm/wasm_exec.js`; if `lib/wasm` is
+missing in your setup, use that legacy path instead.
+
+The browser bridge exposes:
+
+- `mutantReplReady` (boolean)
+- `mutantReplEval(input)` -> `{ ok, output?, error?, supported }`
+
+Current wasm REPL support intentionally focuses on a lightweight subset:
+
+- integers, booleans, strings
+- arrays, hashes, indexing
+- `let` bindings and identifiers
+- browser-safe builtins: `len`, `first`, `last`, `rest`, `push`
+- text builtins: `text_contains`, `text_index`, `text_count`, `text_split`,
+  `text_replace`
+- `if/else`
+- prefix `!` and unary `-`
+- infix `+ - * / < > == !=`
 
 ## Practical Security and Forensics Examples
 

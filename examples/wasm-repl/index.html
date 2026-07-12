@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mutant WASM REPL</title>
+  <style>
+    body { font-family: ui-monospace, Consolas, monospace; margin: 2rem; background: #0f172a; color: #e2e8f0; }
+    h1 { margin-top: 0; }
+    .panel { border: 1px solid #334155; border-radius: 10px; padding: 1rem; background: #111827; }
+    textarea, pre { width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #475569; background: #020617; color: #cbd5e1; padding: 0.75rem; }
+    textarea { min-height: 110px; }
+    pre { min-height: 120px; white-space: pre-wrap; }
+    button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; border-radius: 8px; border: 0; background: #22c55e; color: #052e16; font-weight: 700; cursor: pointer; }
+    .meta { margin-top: 0.5rem; color: #94a3b8; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Mutant Browser REPL (WASM)</h1>
+  <div class="panel">
+    <textarea id="input">let x = 2 * 21; x + 1;</textarea>
+    <button id="run">Run</button>
+    <pre id="output"></pre>
+    <div class="meta" id="status">Loading wasm...</div>
+  </div>
+
+  <script src="./wasm_exec.js"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+    const outputEl = document.getElementById('output');
+    const inputEl = document.getElementById('input');
+    const runBtn = document.getElementById('run');
+
+    const go = new Go();
+
+    async function boot() {
+      const result = await WebAssembly.instantiateStreaming(fetch('./mutant_repl.wasm'), go.importObject);
+      go.run(result.instance);
+      if (!window.mutantReplReady) {
+        throw new Error('mutantReplReady flag not set by wasm runtime');
+      }
+      statusEl.textContent = 'WASM ready.';
+    }
+
+    runBtn.addEventListener('click', () => {
+      if (typeof window.mutantReplEval !== 'function') {
+        outputEl.textContent = 'Runtime not ready yet.';
+        return;
+      }
+
+      const response = window.mutantReplEval(inputEl.value);
+      if (!response.ok) {
+        outputEl.textContent = `error: ${response.error}`;
+        return;
+      }
+
+      outputEl.textContent = response.output || '(no output)';
+    });
+
+    boot().catch(err => {
+      statusEl.textContent = `Failed to load wasm: ${err.message}`;
+    });
+  </script>
+</body>
+</html>
