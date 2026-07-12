@@ -1,0 +1,20 @@
+putln("=== FAT Parser Builtins ===");
+
+let fat, err = fat_open("disk-fat.img");
+if (err) {
+    putln("fat_open error:", err);
+} else {
+    let handle = fat["handle"];
+
+    let files, list_err = fat_list_files(handle, "/");
+    putln("fat_list_files:", files, "err:", list_err);
+
+    let metadata, meta_err = fat_metadata(handle, "/hello.txt");
+    putln("fat_metadata:", metadata, "err:", meta_err);
+
+    let content, read_err = fat_read_file(handle, "/hello.txt");
+    putln("fat_read_file:", content, "err:", read_err);
+
+    let closed, close_err = fat_close(handle);
+    putln("fat_close:", closed, "err:", close_err);
+}

@@ -201,7 +201,7 @@ func TestBuiltinRichTeachingCoverageExpansion(t *testing.T) {
 		{name: "fs_magic", wantSignature: "fs_magic(path)", wantSnippet: "file type/magic information"},
 		{name: "bin_sections", wantSignature: "bin_sections(path)", wantSnippet: "section table information"},
 		{name: "net_dns_query", wantSignature: "net_dns_query(name, qtype)", wantSnippet: "Queries DNS records"},
-		{name: "reg_open_hive", wantSignature: "reg_open_hive(path)", wantSnippet: "returns a handle"},
+		{name: "reg_open", wantSignature: "reg_open(path)", wantSnippet: "returns a handle"},
 		{name: "email_urls", wantSignature: "email_urls(raw)", wantSnippet: "Extracts and normalizes URLs"},
 		{name: "mem_scan", wantSignature: "mem_scan(path, pattern)", wantSnippet: "Scans a memory image"},
 		{name: "detect_suspicious_files", wantSignature: "detect_suspicious_files(paths)", wantSnippet: "suspicious file artifacts"},

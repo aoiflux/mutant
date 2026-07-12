@@ -31,3 +31,7 @@ putln("");
 let removed, err = cache_clear("ioc_cache");
 putf("cache_clear: ", removed, " | err: ", err);
 putln("");
+
+let closed, err = cache_close("ioc_cache");
+putf("cache_close: ", closed, " | err: ", err);
+putln("");

@@ -6,15 +6,16 @@ import (
 	"testing"
 
 	"mutant/object"
+	"strings"
 )
 
 func TestRegistryHiveOpenEnumAndGet(t *testing.T) {
 	hivePath := writeRegistryFixture(t)
 
-	openResult := RegOpenHive(stringObj(hivePath))
+	openResult := RegOpen(stringObj(hivePath))
 	openPayload, errObj := unwrapPair(t, openResult)
 	if errObj != nil {
-		t.Fatalf("reg_open_hive error: %s", errObj.Inspect())
+		t.Fatalf("reg_open error: %s", errObj.Inspect())
 	}
 	openHash := regMustHash(t, openPayload)
 	handle := regMustHashString(t, openHash, "handle")
@@ -60,9 +61,9 @@ func TestRegistryHiveOpenEnumAndGet(t *testing.T) {
 
 func TestRegistryDeletedAndTimeline(t *testing.T) {
 	hivePath := writeRegistryFixture(t)
-	openPayload, errObj := unwrapPair(t, RegOpenHive(stringObj(hivePath)))
+	openPayload, errObj := unwrapPair(t, RegOpen(stringObj(hivePath)))
 	if errObj != nil {
-		t.Fatalf("reg_open_hive error: %s", errObj.Inspect())
+		t.Fatalf("reg_open error: %s", errObj.Inspect())
 	}
 	handle := regMustHashString(t, regMustHash(t, openPayload), "handle")
 
@@ -89,6 +90,20 @@ func TestRegistryDeletedAndTimeline(t *testing.T) {
 	if len(timelineArr.Elements) != 2 {
 		t.Fatalf("expected two timeline events")
 	}
+
+	closePayload, errObj := unwrapPair(t, RegClose(stringObj(handle)))
+	if errObj != nil {
+		t.Fatalf("reg_close error: %s", errObj.Inspect())
+	}
+	closeHash := regMustHash(t, closePayload)
+	if regMustHashString(t, closeHash, "status") != "ok" {
+		t.Fatalf("unexpected reg_close status")
+	}
+
+	_, errObj = unwrapPair(t, RegEnumKeys(stringObj(handle), stringObj(`HKLM\\Software`)))
+	if errObj == nil || !strings.Contains(errObj.Message, "unknown hive handle") {
+		t.Fatalf("expected unknown hive handle after close, got: %v", errObj)
+	}
 }
 
 func TestRegistryArgumentAndLookupErrors(t *testing.T) {
@@ -98,7 +113,7 @@ func TestRegistryArgumentAndLookupErrors(t *testing.T) {
 	}{
 		{
 			name: "open bad arg type",
-			call: func() object.Object { return RegOpenHive(intObj(1)) },
+			call: func() object.Object { return RegOpen(intObj(1)) },
 		},
 		{
 			name: "enum bad handle",
@@ -107,6 +122,10 @@ func TestRegistryArgumentAndLookupErrors(t *testing.T) {
 		{
 			name: "get wrong arg count",
 			call: func() object.Object { return RegGetValue(stringObj("h"), stringObj(`x`)) },
+		},
+		{
+			name: "close missing handle",
+			call: func() object.Object { return RegClose(stringObj("missing")) },
 		},
 	}
 

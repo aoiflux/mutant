@@ -1,0 +1,20 @@
+putln("=== XFAT Parser Builtins ===");
+
+let xfat, err = xfat_open("disk.exfat");
+if (err) {
+    putln("xfat_open error:", err);
+} else {
+    let handle = xfat["handle"];
+
+    let root_entries, list_err = xfat_list_files(handle, "/");
+    putln("xfat_list_files:", root_entries, "err:", list_err);
+
+    let metadata, meta_err = xfat_metadata(handle, "/report.txt");
+    putln("xfat_metadata:", metadata, "err:", meta_err);
+
+    let content, read_err = xfat_read_file(handle, "/report.txt");
+    putln("xfat_read_file:", content, "err:", read_err);
+
+    let closed, close_err = xfat_close(handle);
+    putln("xfat_close:", closed, "err:", close_err);
+}

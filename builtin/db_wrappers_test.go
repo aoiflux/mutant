@@ -6,6 +6,50 @@ import (
 	"mutant/object"
 )
 
+func TestDbOpenDiskPersistsAcrossCloseAndReopen(t *testing.T) {
+	dir := t.TempDir()
+
+	openPayload, errObj := unwrapPair(t, DbOpenDisk(stringObj(dir)))
+	if errObj != nil {
+		t.Fatalf("db_open_disk error: %s", errObj.Inspect())
+	}
+	openHandle, ok := openPayload.(*object.Integer)
+	if !ok {
+		t.Fatalf("db_open_disk payload type: %T", openPayload)
+	}
+
+	_, errObj = unwrapPair(t, DbAddNode(openHandle))
+	if errObj != nil {
+		t.Fatalf("db_add_node error: %s", errObj.Inspect())
+	}
+
+	_, errObj = unwrapPair(t, DbClose(openHandle))
+	if errObj != nil {
+		t.Fatalf("db_close error: %s", errObj.Inspect())
+	}
+
+	reopenPayload, errObj := unwrapPair(t, DbOpenDisk(stringObj(dir)))
+	if errObj != nil {
+		t.Fatalf("db_open_disk reopen error: %s", errObj.Inspect())
+	}
+	reopenHandle, ok := reopenPayload.(*object.Integer)
+	if !ok {
+		t.Fatalf("db_open_disk reopen payload type: %T", reopenPayload)
+	}
+	defer func() {
+		_, _ = unwrapPair(t, DbClose(reopenHandle))
+	}()
+
+	statsPayload, errObj := unwrapPair(t, DbStats(reopenHandle))
+	if errObj != nil {
+		t.Fatalf("db_stats reopen error: %s", errObj.Inspect())
+	}
+	statsHash := dbwMustHash(t, statsPayload)
+	if dbwMustHashInt(t, statsHash, "nodes") < 1 {
+		t.Fatalf("expected persisted node count after reopen")
+	}
+}
+
 func TestDbWrappersArtifactRelationQueryTimeline(t *testing.T) {
 	openPayload, errObj := unwrapPair(t, DbOpen())
 	if errObj != nil {

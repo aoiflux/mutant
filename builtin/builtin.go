@@ -3,6 +3,9 @@ package builtin
 import (
 	"fmt"
 	"mutant/global"
+	"runtime"
+	"strings"
+	"unicode"
 
 	"mutant/object"
 )
@@ -57,6 +60,7 @@ var Builtins = []struct {
 	{"cache_keys", &BuiltIn{CacheKeys}},
 	{"cache_stats", &BuiltIn{CacheStats}},
 	{"cache_clear", &BuiltIn{CacheClear}},
+	{"cache_close", &BuiltIn{CacheClose}},
 	// system forensics
 	{"process_list", &BuiltIn{ProcessList}},
 	{"process_tree", &BuiltIn{ProcessTree}},
@@ -94,6 +98,54 @@ var Builtins = []struct {
 	{"fs_diff", &BuiltIn{FsDiff}},
 	{"fs_carve", &BuiltIn{FsCarve}},
 	{"fs_entropy", &BuiltIn{FsEntropy}},
+	// filesystem parsers
+	{"ntfs_open", &BuiltIn{NtfsOpen}},
+	{"ntfs_list_files", &BuiltIn{NtfsListFiles}},
+	{"ntfs_read_file", &BuiltIn{NtfsReadFile}},
+	{"ntfs_metadata", &BuiltIn{NtfsMetadata}},
+	{"ntfs_close", &BuiltIn{NtfsClose}},
+	{"fat_open", &BuiltIn{FatOpen}},
+	{"fat_list_files", &BuiltIn{FatListFiles}},
+	{"fat_read_file", &BuiltIn{FatReadFile}},
+	{"fat_metadata", &BuiltIn{FatMetadata}},
+	{"fat_close", &BuiltIn{FatClose}},
+	{"xfat_open", &BuiltIn{XFATOpen}},
+	{"xfat_list_files", &BuiltIn{XFATListFiles}},
+	{"xfat_read_file", &BuiltIn{XFATReadFile}},
+	{"xfat_metadata", &BuiltIn{XFATMetadata}},
+	{"xfat_close", &BuiltIn{XFATClose}},
+	{"ext_open", &BuiltIn{ExtOpen}},
+	{"ext_list_files", &BuiltIn{ExtListFiles}},
+	{"ext_read_file", &BuiltIn{ExtReadFile}},
+	{"ext_metadata", &BuiltIn{ExtMetadata}},
+	{"ext_close", &BuiltIn{ExtClose}},
+	{"hfs_open", &BuiltIn{HFSOpen}},
+	{"hfs_list_files", &BuiltIn{HFSListFiles}},
+	{"hfs_read_file", &BuiltIn{HFSReadFile}},
+	{"hfs_metadata", &BuiltIn{HFSMetadata}},
+	{"hfs_close", &BuiltIn{HFSClose}},
+	{"xfs_open", &BuiltIn{XFSOpen}},
+	{"xfs_list_files", &BuiltIn{XFSListFiles}},
+	{"xfs_read_file", &BuiltIn{XFSReadFile}},
+	{"xfs_metadata", &BuiltIn{XFSMetadata}},
+	{"xfs_close", &BuiltIn{XFSClose}},
+	{"vhdi_open", &BuiltIn{VHDIOpen}},
+	{"vhdi_metadata", &BuiltIn{VHDIMetadata}},
+	{"vhdi_read_at", &BuiltIn{VHDIReadAt}},
+	{"vhdi_map_offset", &BuiltIn{VHDIMapOffset}},
+	{"vhdi_close", &BuiltIn{VHDIClose}},
+	{"ewf_open", &BuiltIn{EWFOpen}},
+	{"ewf_metadata", &BuiltIn{EWFMetadata}},
+	{"ewf_read_at", &BuiltIn{EWFReadAt}},
+	{"ewf_close", &BuiltIn{EWFClose}},
+	{"raw_open", &BuiltIn{RAWOpen}},
+	{"raw_metadata", &BuiltIn{RAWMetadata}},
+	{"raw_read_at", &BuiltIn{RAWReadAt}},
+	{"raw_close", &BuiltIn{RAWClose}},
+	{"table_open", &BuiltIn{TableOpen}},
+	{"table_list_partitions", &BuiltIn{TableListPartitions}},
+	{"table_partition_info", &BuiltIn{TablePartitionInfo}},
+	{"table_close", &BuiltIn{TableClose}},
 	// binary analysis
 	{"bin_pe_parse", &BuiltIn{BinPEParse}},
 	{"bin_elf_parse", &BuiltIn{BinELFParse}},
@@ -116,12 +168,13 @@ var Builtins = []struct {
 	{"net_flow_reconstruct", &BuiltIn{NetFlowReconstruct}},
 	{"net_os_fingerprint", &BuiltIn{NetOSFingerprint}},
 	// registry forensics
-	{"reg_open_hive", &BuiltIn{RegOpenHive}},
+	{"reg_open", &BuiltIn{RegOpen}},
 	{"reg_enum_keys", &BuiltIn{RegEnumKeys}},
 	{"reg_enum_values", &BuiltIn{RegEnumValues}},
 	{"reg_get_value", &BuiltIn{RegGetValue}},
 	{"reg_deleted_keys", &BuiltIn{RegDeletedKeys}},
 	{"reg_timeline", &BuiltIn{RegTimeline}},
+	{"reg_close", &BuiltIn{RegClose}},
 	// email forensics
 	{"email_parse", &BuiltIn{EmailParse}},
 	{"email_headers", &BuiltIn{EmailHeaders}},
@@ -210,7 +263,75 @@ func GetBuiltinByName(name string) *BuiltIn {
 }
 
 func newError(format string, a ...any) *object.Error {
-	return &object.Error{Message: fmt.Sprintf(format, a...), Context: "builtin"}
+	context := "builtin"
+	pcs := make([]uintptr, 16)
+	n := runtime.Callers(2, pcs)
+	if n > 0 {
+		frames := runtime.CallersFrames(pcs[:n])
+		for {
+			frame, more := frames.Next()
+			name := shortFunctionName(frame.Function)
+			if strings.Contains(frame.Function, "mutant/builtin.") {
+				if builtinName, ok := builtinNameFromFunctionName(name); ok {
+					context = "builtin." + builtinName
+					break
+				}
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	return &object.Error{Message: fmt.Sprintf(format, a...), Context: context}
+}
+
+func shortFunctionName(name string) string {
+	if idx := strings.LastIndex(name, "."); idx >= 0 && idx+1 < len(name) {
+		return name[idx+1:]
+	}
+	return name
+}
+
+func builtinNameFromFunctionName(name string) (string, bool) {
+	if name == "" || name == "newError" || strings.HasPrefix(name, "func") {
+		return "", false
+	}
+
+	runes := []rune(name)
+	if len(runes) == 0 || !unicode.IsUpper(runes[0]) {
+		return "", false
+	}
+
+	if strings.HasPrefix(name, "Bin") && len(name) > len("Bin") {
+		return camelToSnake(name[len("Bin"):]), true
+	}
+
+	return camelToSnake(name), true
+}
+
+func camelToSnake(in string) string {
+	if in == "" {
+		return ""
+	}
+
+	runes := []rune(in)
+	var out []rune
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				prev := runes[i-1]
+				nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+				if unicode.IsLower(prev) || unicode.IsDigit(prev) || nextLower {
+					out = append(out, '_')
+				}
+			}
+			out = append(out, unicode.ToLower(r))
+			continue
+		}
+		out = append(out, r)
+	}
+
+	return string(out)
 }
 
 func resultAndError(result object.Object, errObj *object.Error) object.Object {

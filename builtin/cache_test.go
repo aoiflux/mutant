@@ -132,6 +132,30 @@ func TestCacheDeleteKeysStatsAndClear(t *testing.T) {
 	if !ok || removed.Value != 1 {
 		t.Fatalf("unexpected removed count. got=%v", clearPayload.Inspect())
 	}
+
+	closePayload, errObj := unwrapPair(t, CacheClose(stringObj("t_cache_2")))
+	if errObj != nil {
+		t.Fatalf("unexpected cache_close error: %s", errObj.Inspect())
+	}
+	closeHash, ok := closePayload.(*object.Hash)
+	if !ok {
+		t.Fatalf("cache_close payload is not HASH. got=%T", closePayload)
+	}
+	closedObj := cacheTestMustHashValue(t, closeHash, "closed")
+	closed, ok := closedObj.(*object.Boolean)
+	if !ok || !closed.Value {
+		t.Fatalf("expected closed=true")
+	}
+
+	_, errObj = unwrapPair(t, CacheStats(stringObj("t_cache_2")))
+	if errObj == nil {
+		t.Fatalf("expected cache_stats to fail after cache_close")
+	}
+
+	_, errObj = unwrapPair(t, CacheOpen(stringObj("t_cache_2")))
+	if errObj != nil {
+		t.Fatalf("unexpected cache reopen error: %s", errObj.Inspect())
+	}
 }
 
 func TestCacheBuiltinsErrors(t *testing.T) {

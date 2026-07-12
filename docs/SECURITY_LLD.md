@@ -640,6 +640,20 @@ Current wiring note:
 - `object/secure_memory.go` provides additional wrappers and utilities that can
   be used by integrations, but they are not the primary VM storage path today.
 
+Current policy gate:
+
+- `MUTANT_VM_GLOBAL_MEMORY_MODE=runtime|wrapper`
+- default is `runtime` for performance-safe operation
+- `wrapper` enables optional global wrapper usage where object types are
+  supported
+
+Current helper-scope decision:
+
+- no additional secure-memory helper types are required for this release beyond
+  `SecureGlobal`, `SecureStack`, and `SecureConstantPool`
+- revisit helper expansion only if threat-model requirements exceed current
+  runtime encryption + optional wrapper mode coverage
+
 ### 11.3 Stream Offset Convention for Object Types
 
 `objectStreamOffset`:

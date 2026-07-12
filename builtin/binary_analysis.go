@@ -1,12 +1,15 @@
 package builtin
 
 import (
+	"bytes"
 	"debug/dwarf"
 	"debug/elf"
 	"debug/pe"
 	"os"
 	"sort"
 	"strings"
+
+	saferpe "github.com/saferwall/pe"
 
 	"mutant/object"
 )
@@ -21,19 +24,25 @@ func BinPEParse(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `bin_pe_parse` must be STRING, got %s", args[0].Type()))
 	}
 
-	f, err := pe.Open(pathObj.Value)
+	f, err := saferpe.New(pathObj.Value, &saferpe.Options{Fast: true})
 	if err != nil {
 		return resultAndError(nil, newError("bin_pe_parse: %s", err.Error()))
 	}
 	defer f.Close()
 
+	if err := f.Parse(); err != nil {
+		return resultAndError(nil, newError("bin_pe_parse: %s", err.Error()))
+	}
+
+	header := f.NtHeader.FileHeader
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"path":            stringObj(pathObj.Value),
 		"format":          stringObj("pe"),
-		"machine":         intObj(int64(f.FileHeader.Machine)),
-		"num_sections":    intObj(int64(f.FileHeader.NumberOfSections)),
-		"characteristics": intObj(int64(f.FileHeader.Characteristics)),
-		"timestamp":       intObj(int64(f.FileHeader.TimeDateStamp)),
+		"machine":         intObj(int64(header.Machine)),
+		"num_sections":    intObj(int64(header.NumberOfSections)),
+		"characteristics": intObj(int64(header.Characteristics)),
+		"timestamp":       intObj(int64(header.TimeDateStamp)),
 	}), nil)
 }
 
@@ -279,6 +288,24 @@ func loadDWARF(path string) (string, *dwarf.Data, *object.Error) {
 }
 
 func loadImports(path string) (string, []string, *object.Error) {
+	if peFile, err := saferpe.New(path, &saferpe.Options{Fast: false}); err == nil {
+		defer peFile.Close()
+		if parseErr := peFile.Parse(); parseErr == nil {
+			all := make([]string, 0)
+			for _, imp := range peFile.Imports {
+				if imp.Name != "" {
+					all = append(all, imp.Name)
+				}
+				for _, fn := range imp.Functions {
+					if fn.Name != "" {
+						all = append(all, fn.Name)
+					}
+				}
+			}
+			return "pe", all, nil
+		}
+	}
+
 	if peFile, err := pe.Open(path); err == nil {
 		defer peFile.Close()
 		imports, ierr := peFile.ImportedSymbols()
@@ -308,6 +335,26 @@ func loadImports(path string) (string, []string, *object.Error) {
 }
 
 func loadSections(path string) (string, []object.Object, *object.Error) {
+	if peFile, err := saferpe.New(path, &saferpe.Options{Fast: true}); err == nil {
+		defer peFile.Close()
+		if parseErr := peFile.Parse(); parseErr == nil {
+			sections := make([]object.Object, 0, len(peFile.Sections))
+			for _, sec := range peFile.Sections {
+				name := strings.TrimRight(string(sec.Header.Name[:]), "\x00")
+				name = strings.TrimSpace(name)
+				if name == "" {
+					name = string(bytes.Trim(sec.Header.Name[:], "\x00"))
+				}
+				sections = append(sections, makeHashObject(map[string]object.Object{
+					"name": stringObj(name),
+					"size": intObj(int64(sec.Header.SizeOfRawData)),
+					"addr": intObj(int64(sec.Header.VirtualAddress)),
+				}))
+			}
+			return "pe", sections, nil
+		}
+	}
+
 	if peFile, err := pe.Open(path); err == nil {
 		defer peFile.Close()
 		sections := make([]object.Object, 0, len(peFile.Sections))

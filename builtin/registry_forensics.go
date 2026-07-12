@@ -34,13 +34,13 @@ var registryStore = struct {
 	hives:  map[string]*registryHive{},
 }
 
-func RegOpenHive(args ...object.Object) object.Object {
+func RegOpen(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	pathObj, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `reg_open_hive` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `reg_open` must be STRING, got %s", args[0].Type()))
 	}
 
 	hive, errObj := loadRegistryHiveFromJSON(pathObj.Value)
@@ -230,6 +230,40 @@ func RegTimeline(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: events}, nil)
 }
 
+func RegClose(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+
+	handleObj, ok := args[0].(*object.String)
+	if !ok {
+		return resultAndError(nil, newError("argument 1 to `reg_close` must be STRING handle, got %s", args[0].Type()))
+	}
+
+	registryStore.Lock()
+	hive, found := registryStore.hives[handleObj.Value]
+	if found {
+		delete(registryStore.hives, handleObj.Value)
+	}
+	registryStore.Unlock()
+
+	if !found {
+		return resultAndError(nil, newError("reg_close: unknown hive handle: %s", handleObj.Value))
+	}
+
+	if hive != nil {
+		hive.Keys = map[string]registryKey{}
+		hive.Deleted = nil
+		hive.Timeline = nil
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"handle": stringObj(handleObj.Value),
+		"closed": boolObj(true),
+		"status": stringObj("ok"),
+	}), nil)
+}
+
 func resolveRegistryHive(obj object.Object, opName string) (*registryHive, *object.Error) {
 	handleObj, ok := obj.(*object.String)
 	if !ok {
@@ -248,19 +282,19 @@ func resolveRegistryHive(obj object.Object, opName string) (*registryHive, *obje
 func loadRegistryHiveFromJSON(path string) (*registryHive, *object.Error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, newError("reg_open_hive: %s", err.Error())
+		return nil, newError("reg_open: %s", err.Error())
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(string(content)))
 	decoder.UseNumber()
 	var raw map[string]any
 	if err := decoder.Decode(&raw); err != nil {
-		return nil, newError("reg_open_hive: invalid hive JSON: %s", err.Error())
+		return nil, newError("reg_open: invalid hive JSON: %s", err.Error())
 	}
 
 	keysRaw, ok := raw["keys"].([]any)
 	if !ok {
-		return nil, newError("reg_open_hive: hive JSON must contain array key `keys`")
+		return nil, newError("reg_open: hive JSON must contain array key `keys`")
 	}
 
 	hive := &registryHive{
@@ -273,11 +307,11 @@ func loadRegistryHiveFromJSON(path string) (*registryHive, *object.Error) {
 	for i, item := range keysRaw {
 		entry, ok := item.(map[string]any)
 		if !ok {
-			return nil, newError("reg_open_hive: key entry at index %d must be object", i)
+			return nil, newError("reg_open: key entry at index %d must be object", i)
 		}
 		pathRaw, ok := entry["path"].(string)
 		if !ok || strings.TrimSpace(pathRaw) == "" {
-			return nil, newError("reg_open_hive: key entry at index %d missing string `path`", i)
+			return nil, newError("reg_open: key entry at index %d missing string `path`", i)
 		}
 		values := map[string]any{}
 		if rawValues, ok := entry["values"].(map[string]any); ok {

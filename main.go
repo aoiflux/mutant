@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const defaultPolymorphicLevel = 3
+const defaultPolymorphicLevel = 5
 
 const (
 	RELEASECMD = "release"

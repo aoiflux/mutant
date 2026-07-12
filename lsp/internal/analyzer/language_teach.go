@@ -356,8 +356,8 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "timeoutMs", doc: "Probe timeout in milliseconds."},
 		},
 	},
-	"reg_open_hive": {
-		signature: "reg_open_hive(path)",
+	"reg_open": {
+		signature: "reg_open(path)",
 		summary:   "Opens a registry hive data source and returns a handle.",
 		params:    []builtinParamDoc{{name: "path", doc: "Path to hive JSON file."}},
 	},
@@ -365,7 +365,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "reg_enum_keys(hiveHandle, keyPath)",
 		summary:   "Enumerates subkeys under a registry path.",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open_hive."},
+			{name: "hiveHandle", doc: "Handle returned by reg_open."},
 			{name: "keyPath", doc: "Registry path to enumerate."},
 		},
 	},
@@ -373,7 +373,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "reg_enum_values(hiveHandle, keyPath)",
 		summary:   "Enumerates values under a registry path.",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open_hive."},
+			{name: "hiveHandle", doc: "Handle returned by reg_open."},
 			{name: "keyPath", doc: "Registry path to enumerate."},
 		},
 	},
@@ -381,7 +381,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "reg_get_value(hiveHandle, keyPath, valueName)",
 		summary:   "Reads a specific registry value with type metadata.",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open_hive."},
+			{name: "hiveHandle", doc: "Handle returned by reg_open."},
 			{name: "keyPath", doc: "Registry path that contains the value."},
 			{name: "valueName", doc: "Registry value name to fetch."},
 		},
@@ -393,7 +393,7 @@ var builtinDocs = map[string]builtinDoc{
 	"reg_timeline": {
 		signature: "reg_timeline(hiveHandle)",
 		summary:   "Returns timeline events extracted from an opened registry hive.",
-		params:    []builtinParamDoc{{name: "hiveHandle", doc: "Handle returned by reg_open_hive."}},
+		params:    []builtinParamDoc{{name: "hiveHandle", doc: "Handle returned by reg_open."}},
 	},
 	"email_parse": {
 		signature: "email_parse(raw)",

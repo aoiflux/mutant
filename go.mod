@@ -1,10 +1,20 @@
 module mutant
 
-go 1.26
+go 1.26.2
 
 require (
+	github.com/aoiflux/libewf v0.1.1
+	github.com/aoiflux/libext v0.1.0
+	github.com/aoiflux/libfat v0.1.0
+	github.com/aoiflux/libhfs v0.1.1
+	github.com/aoiflux/libntfs v0.1.4
+	github.com/aoiflux/libtable v0.1.1
+	github.com/aoiflux/libvhdi v0.1.0
+	github.com/aoiflux/libxfat v1.0.6
+	github.com/aoiflux/libxfs v0.1.0
 	github.com/google/gopacket v1.1.19
 	github.com/open-policy-agent/opa v1.18.2
+	github.com/saferwall/pe v1.6.5
 	github.com/shreybatra/crankdb v0.1.0-beta.2
 	github.com/sourcegraph/jsonrpc2 v0.2.1
 	github.com/tliron/glsp v0.2.2
@@ -14,9 +24,11 @@ require (
 
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
+	github.com/ayoubfaouzi/pkcs7 v0.2.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
+	github.com/edsrzf/mmap-go v1.1.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect

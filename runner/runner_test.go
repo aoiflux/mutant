@@ -329,6 +329,177 @@ func TestIsProcessProtectionEnabledDefaultsToTrue(t *testing.T) {
 	}
 }
 
+func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
+	t.Setenv(security.TamperResponseEnv, "")
+
+	tests := []struct {
+		name            string
+		processEnv      string
+		probeEnabled    bool
+		probeErr        error
+		signals         []security.AntiTamperSignal
+		expectProbeCall bool
+		expectErr       bool
+	}{
+		{
+			name:            "process protection disabled by env",
+			processEnv:      "0",
+			probeEnabled:    true,
+			expectProbeCall: false,
+			expectErr:       false,
+		},
+		{
+			name:         "probe framework disabled",
+			processEnv:   "1",
+			probeEnabled: false,
+			signals: []security.AntiTamperSignal{{
+				Name:       "trampoline",
+				Detected:   true,
+				Confidence: processProtectionTerminateConfidence,
+			}},
+			expectProbeCall: true,
+			expectErr:       false,
+		},
+		{
+			name:            "probe returns error",
+			processEnv:      "1",
+			probeEnabled:    true,
+			probeErr:        errors.New("probe failure"),
+			expectProbeCall: true,
+			expectErr:       false,
+		},
+		{
+			name:         "high confidence signal terminates in secure mode",
+			processEnv:   "1",
+			probeEnabled: true,
+			signals: []security.AntiTamperSignal{{
+				Name:       "process_injection",
+				Detected:   true,
+				Confidence: processProtectionTerminateConfidence,
+			}},
+			expectProbeCall: true,
+			expectErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		tc := tt
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(security.ProcessProtectionEnabledEnv, tc.processEnv)
+
+			called := false
+			originalProbe := runAntiTamperProbe
+			runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
+				called = true
+				return tc.signals, tc.probeEnabled, tc.probeErr
+			}
+			defer func() {
+				runAntiTamperProbe = originalProbe
+			}()
+
+			err := enforceProcessProtection(true, "test-stage")
+			if tc.expectErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.expectErr && err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+			if called != tc.expectProbeCall {
+				t.Fatalf("probe call mismatch. got=%t want=%t", called, tc.expectProbeCall)
+			}
+		})
+	}
+}
+
+func TestEnforceRemoteProcessProtectionObserveDoesNotBlock(t *testing.T) {
+	originalScan := runRemoteProcessScan
+	runRemoteProcessScan = func(stage string) ([]security.ProcessRiskVerdict, bool, error) {
+		return []security.ProcessRiskVerdict{{
+			PID:        123,
+			Name:       "target",
+			FinalScore: 95,
+			RiskBand:   "critical",
+		}}, true, nil
+	}
+	defer func() {
+		runRemoteProcessScan = originalScan
+	}()
+
+	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
+	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeObserve)
+
+	err := enforceRemoteProcessProtection(true, "test-stage")
+	if err != nil {
+		t.Fatalf("expected observe mode not to block, got: %v", err)
+	}
+}
+
+func TestEnforceRemoteProcessProtectionScanErrorDoesNotBlock(t *testing.T) {
+	originalScan := runRemoteProcessScan
+	runRemoteProcessScan = func(stage string) ([]security.ProcessRiskVerdict, bool, error) {
+		return nil, true, errors.New("scan failure")
+	}
+	defer func() {
+		runRemoteProcessScan = originalScan
+	}()
+
+	err := enforceRemoteProcessProtection(true, "test-stage")
+	if err != nil {
+		t.Fatalf("expected scan errors to be non-blocking in observe-first mode, got: %v", err)
+	}
+}
+
+func TestEnforceRemoteProcessProtectionEnforceModeBlocksOnCritical(t *testing.T) {
+	originalScan := runRemoteProcessScan
+	runRemoteProcessScan = func(stage string) ([]security.ProcessRiskVerdict, bool, error) {
+		return []security.ProcessRiskVerdict{{
+			PID:        222,
+			Name:       "critical-target",
+			FinalScore: 95,
+			RiskBand:   "critical",
+		}}, true, nil
+	}
+	defer func() {
+		runRemoteProcessScan = originalScan
+	}()
+
+	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
+	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeEnforce)
+	t.Setenv(security.TamperResponseEnv, "")
+
+	err := enforceRemoteProcessProtection(true, "test-stage")
+	if err == nil {
+		t.Fatalf("expected enforce mode to block on critical verdict")
+	}
+	if !errors.Is(err, security.ErrProcessProtectionDetected) {
+		t.Fatalf("expected ErrProcessProtectionDetected, got: %v", err)
+	}
+}
+
+func TestEnforceRemoteProcessProtectionEnforceModeHighNonCriticalDoesNotBlock(t *testing.T) {
+	originalScan := runRemoteProcessScan
+	runRemoteProcessScan = func(stage string) ([]security.ProcessRiskVerdict, bool, error) {
+		return []security.ProcessRiskVerdict{{
+			PID:        333,
+			Name:       "high-target",
+			FinalScore: 80,
+			RiskBand:   "high",
+		}}, true, nil
+	}
+	defer func() {
+		runRemoteProcessScan = originalScan
+	}()
+
+	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
+	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeEnforce)
+	t.Setenv(security.TamperResponseEnv, "")
+
+	err := enforceRemoteProcessProtection(true, "test-stage")
+	if err != nil {
+		t.Fatalf("expected non-critical enforce-mode verdict to continue, got: %v", err)
+	}
+}
+
 func TestExecuteLuaPatchesBeforeVMSucceeds(t *testing.T) {
 	plaintext := []byte("return mutant.version()")
 	password := "runner-lua-success"

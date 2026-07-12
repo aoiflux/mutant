@@ -1,0 +1,48 @@
+let image_path = "./disk.vhdx";
+let opened, open_err = vhdi_open(image_path);
+if (open_err) {
+    putf("vhdi_open failed: " + open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putf("VHDI opened: " + opened["path"] + " (handle=" + handle + ")");
+
+let meta, meta_err = vhdi_metadata(handle);
+if (meta_err) {
+    putf("vhdi_metadata failed: " + meta_err);
+    return;
+}
+
+putf("Metadata:");
+putf("  format=" + meta["format"]);
+putf("  disk_type=" + meta["disk_type"]);
+putf("  virtual_size=" + meta["virtual_size"]);
+putf("  block_size=" + meta["block_size"]);
+putf("  sector_size=" + meta["sector_size"]);
+putf("  identifier=" + meta["identifier"]);
+putf("  is_differencing=", meta["is_differencing"]);
+
+let off_info, off_err = vhdi_map_offset(handle, 0);
+if (off_err) {
+    putf("vhdi_map_offset failed: " + off_err);
+} else {
+    putf("Offset map @0: mapped=", off_info["mapped"], ", file_offset=", off_info["file_offset"]);
+}
+
+let bytes, read_err = vhdi_read_at(handle, 0, 512);
+if (read_err) {
+    putf("vhdi_read_at failed: " + read_err);
+    return;
+}
+
+putf("Read first 512 logical bytes (string rendering):");
+putf(bytes);
+
+let closed, close_err = vhdi_close(handle);
+if (close_err) {
+     putf("vhdi_close failed: " + close_err);
+     return;
+}
+
+putf("Handle closed: " + closed["closed"]);

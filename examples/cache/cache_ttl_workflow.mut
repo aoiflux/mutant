@@ -17,3 +17,6 @@ putln("cache_keys:", keys, "err:", err);
 
 let stats, err = cache_stats("artifact_cache");
 putln("cache_stats:", stats, "err:", err);
+
+let closed, err = cache_close("artifact_cache");
+putln("cache_close:", closed, "err:", err);

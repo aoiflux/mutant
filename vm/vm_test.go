@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"mutant/ast"
+	"mutant/code"
 	"mutant/compiler"
 	"mutant/global"
 	"mutant/lexer"
@@ -10,6 +11,7 @@ import (
 	"mutant/object"
 	"mutant/parser"
 	"mutant/security"
+	"strings"
 	"testing"
 )
 
@@ -221,6 +223,51 @@ func TestIntegerArithmatic(t *testing.T) {
 		{"(5 + 10 * 2 + 15 / 3) * 2 + -10", 50},
 	}
 	runVMTests(t, tests)
+}
+
+func TestResolveVMGlobalMemoryModeDefaultsRuntime(t *testing.T) {
+	t.Setenv(vMGlobalMemoryModeEnv, "")
+	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeRuntime {
+		t.Fatalf("expected default memory mode runtime, got %q", got)
+	}
+}
+
+func TestResolveVMGlobalMemoryModeWrapper(t *testing.T) {
+	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
+	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeWrapper {
+		t.Fatalf("expected memory mode wrapper, got %q", got)
+	}
+}
+
+func TestWrapperGlobalModeStoresSupportedTypeInSecureWrapper(t *testing.T) {
+	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
+	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+
+	vm.ensureGlobalCapacity(3)
+	vm.setGlobal(3, &object.Integer{Value: 42})
+
+	if _, ok := vm.secureGlobals[3]; !ok {
+		t.Fatalf("expected secure wrapper entry for supported global type")
+	}
+	got := vm.getGlobal(3)
+	if err := testIntegerObject(42, got); err != nil {
+		t.Fatalf("expected wrapped global roundtrip value, got error: %v", err)
+	}
+}
+
+func TestWrapperGlobalModeFallsBackForUnsupportedType(t *testing.T) {
+	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
+	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+
+	vm.ensureGlobalCapacity(1)
+	vm.setGlobal(1, &object.Array{Elements: []object.Object{&object.Integer{Value: 1}}})
+
+	if _, ok := vm.secureGlobals[1]; ok {
+		t.Fatalf("expected unsupported wrapper type to fall back to runtime storage")
+	}
+	if vm.globals[1] == nil {
+		t.Fatalf("expected fallback global storage value")
+	}
 }
 
 func TestBooleanExpressions(t *testing.T) {
@@ -549,9 +596,41 @@ func TestCallingFunctionsWithWrongArguments(t *testing.T) {
 
 		if err := vm.Run(); err == nil {
 			t.Fatalf("expected VM error but resulted in none.")
-		} else if err.Error() != tt.expected {
-			t.Fatalf("wrong VM error: want=%q, got=%q", tt.expected, err)
+		} else {
+			expected, ok := tt.expected.(string)
+			if !ok {
+				t.Fatalf("expected string assertion in test case, got=%T", tt.expected)
+			}
+			if !strings.Contains(err.Error(), expected) {
+				t.Fatalf("wrong VM error: want substring=%q, got=%q", expected, err)
+			}
 		}
+	}
+}
+
+func TestRuntimeErrorsIncludeInstructionMetadata(t *testing.T) {
+	program := parse("fn(a) { a; }();")
+	comp := compiler.New()
+
+	if err := comp.Compile(program); err != nil {
+		t.Fatalf("compiler error: %s", err)
+	}
+
+	byteCode := comp.ByteCode()
+	password := fmt.Sprint(security.DerivePasswordFromInstructions(byteCode.Instructions))
+	byteCode = mutil.EncryptByteCode(byteCode, password)
+
+	vm := NewWithGlobalStoreAndPassword(byteCode, make([]object.Object, global.GlobalSize), password)
+	err := vm.Run()
+	if err == nil {
+		t.Fatalf("expected runtime error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "vm_runtime_error ip=") {
+		t.Fatalf("expected runtime metadata in error, got=%q", message)
+	}
+	if !strings.Contains(message, "op=Opcall") {
+		t.Fatalf("expected opcode metadata in error, got=%q", message)
 	}
 }
 

@@ -9,6 +9,14 @@ Status tags:
 2. partial
 3. planned
 
+Canonical design references for this roadmap:
+
+1. [SECURITY_LLD](SECURITY_LLD.md)
+2. [SECURITY_LLD_TRACEABILITY](SECURITY_LLD_TRACEABILITY.md)
+3. [ANTITAMPER_PROBE_ENABLEMENT_LLD](ANTITAMPER_PROBE_ENABLEMENT_LLD.md)
+
+If roadmap wording and LLD differ, update this file to match LLD semantics.
+
 ## 1. Current Baseline
 
 Implemented now:
@@ -72,7 +80,7 @@ Primary anchors:
 
 ### 2.3 Memory Hardening Integration
 
-Status: partial
+Status: implemented for current release scope
 
 Current:
 
@@ -85,6 +93,25 @@ Planned:
 1. Formalize when to use wrapper-based storage in VM path.
 2. Add optional policy gate for higher memory hardening mode.
 3. Add benchmark guardrails to keep overhead bounded.
+
+Decision (2026-07):
+
+1. Keep `runtime` mode as default VM global storage path to preserve throughput.
+2. Keep `wrapper` mode as opt-in hardening path behind
+   `MUTANT_VM_GLOBAL_MEMORY_MODE=wrapper`.
+3. Do not add new secure-memory helper types in this release beyond existing
+   wrappers (`SecureGlobal`, `SecureStack`, `SecureConstantPool`).
+4. Revisit additional helpers only if a new threat model requires object classes
+   not covered by current runtime encryption path and optional wrapper mode.
+
+Measured benchmark snapshot
+(`go test ./vm -run "^$" -bench
+"BenchmarkVMGlobalMemoryMode" -benchmem -count=1`,
+windows/amd64):
+
+1. Integer set/get: runtime `2104 ns/op`, wrapper `2172 ns/op`.
+2. Array set/get: runtime `2666 ns/op`, wrapper `2806 ns/op`.
+3. Runtime mode remains lower-overhead and is retained as default.
 
 Primary anchors:
 

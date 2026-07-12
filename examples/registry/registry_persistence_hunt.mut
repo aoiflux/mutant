@@ -2,14 +2,19 @@ putln("=== Registry Persistence Hunt ===");
 
 let hive_path = "examples/offline_hive.json";
 
-let hive, err = reg_open_hive(hive_path);
-putln("reg_open_hive:", hive, "err:", err);
+let hive, err = reg_open(hive_path);
+putln("reg_open:", hive, "err:", err);
 
-let run_values, err = reg_enum_values(hive, "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+let handle = hive["handle"];
+
+let run_values, err = reg_enum_values(handle, "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 putln("reg_enum_values:", run_values, "err:", err);
 
-let deleted, err = reg_deleted_keys(hive);
+let deleted, err = reg_deleted_keys(handle);
 putln("reg_deleted_keys:", deleted, "err:", err);
 
-let timeline, err = reg_timeline(hive);
+let timeline, err = reg_timeline(handle);
 putln("reg_timeline count:", len(timeline)[0], "err:", err);
+
+let closed, err = reg_close(handle);
+putln("reg_close:", closed, "err:", err);

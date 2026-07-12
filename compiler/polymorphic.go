@@ -7,6 +7,8 @@ import (
 	mathrand "math/rand"
 	"mutant/code"
 	"mutant/object"
+	"os"
+	"strings"
 )
 
 // PolymorphicEngine generates functionally equivalent but structurally different bytecode
@@ -25,6 +27,8 @@ type MutationConfig struct {
 	RandomizeConstants  bool
 	Level               int // 0-10
 }
+
+const polymorphicSafeStagesEnv = "MUTANT_POLYMORPHIC_SAFE_STAGES"
 
 // NewPolymorphicEngine creates a new polymorphic engine
 func NewPolymorphicEngine(level int, seed int64) *PolymorphicEngine {
@@ -71,6 +75,8 @@ func (pe *PolymorphicEngine) Mutate(bytecode *ByteCode) *ByteCode {
 
 // getConfig returns mutation configuration based on level
 func (pe *PolymorphicEngine) getConfig() MutationConfig {
+	safeStagesEnabled := polymorphicSafeStagesEnabled()
+
 	return MutationConfig{
 		// These transformations are intentionally gated off until instruction-boundary
 		// aware rewriting and opcode remap reversal are implemented in VM/runtime.
@@ -78,8 +84,20 @@ func (pe *PolymorphicEngine) getConfig() MutationConfig {
 		ReorderInstructions: false,
 		MutateOpcodes:       false,
 		InsertDeadCode:      false,
-		RandomizeConstants:  false,
-		Level:               pe.mutationLevel,
+		// First safe stage: deterministic constant-pool randomization with
+		// instruction-boundary aware reference rewriting.
+		RandomizeConstants: safeStagesEnabled && pe.mutationLevel >= 6,
+		Level:              pe.mutationLevel,
+	}
+}
+
+func polymorphicSafeStagesEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(polymorphicSafeStagesEnv)))
+	switch raw {
+	case "0", "false", "off", "no", "disabled":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -291,24 +309,30 @@ func (pe *PolymorphicEngine) updateConstantReferences(instructions code.Instruct
 	result := make(code.Instructions, len(instructions))
 	copy(result, instructions)
 
-	for i := 0; i < len(result); i++ {
-		if code.Opcode(result[i]) == code.OpConstant {
-			// Safety check: ensure we have space for operand bytes
-			if i+2 >= len(result) {
-				break
-			}
+	for i := 0; i < len(result); {
+		opcode := code.Opcode(result[i])
+		def, err := code.Lookup(result[i])
+		if err != nil {
+			break
+		}
 
-			// Read old index
+		instLen := 1
+		for _, width := range def.OperandWidths {
+			instLen += width
+		}
+		if i+instLen > len(result) {
+			break
+		}
+
+		if opcode == code.OpConstant && i+3 <= len(result) {
 			oldIdx := binary.BigEndian.Uint16(result[i+1 : i+3])
-
-			// Map to new index
 			if int(oldIdx) < len(mapping) {
 				newIdx := uint16(mapping[oldIdx])
 				binary.BigEndian.PutUint16(result[i+1:i+3], newIdx)
 			}
-
-			i += 2 // Skip operand bytes
 		}
+
+		i += instLen
 	}
 
 	return result

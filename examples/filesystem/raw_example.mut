@@ -1,0 +1,35 @@
+let opened, open_err = raw_open("./disk.raw");
+if (open_err) {
+    putf("raw_open failed: " + open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putf("RAW opened (handle=" + handle + ")");
+
+let meta, meta_err = raw_metadata(handle);
+if (meta_err) {
+    putf("raw_metadata failed: " + meta_err);
+    return;
+}
+
+putf("RAW metadata:");
+putf("  file_size=" + meta["file_size"]);
+putf("  sector_size=" + meta["sector_size"]);
+
+let first, read_err = raw_read_at(handle, 0, 512);
+if (read_err) {
+    putf("raw_read_at failed: " + read_err);
+    return;
+}
+
+putf("First 512 bytes (string rendering):");
+putf(first);
+
+let closed, close_err = raw_close(handle);
+if (close_err) {
+    putf("raw_close failed: " + close_err);
+    return;
+}
+
+putf("Handle closed: " + closed["closed"]);

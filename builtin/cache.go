@@ -297,6 +297,38 @@ func CacheClear(args ...object.Object) object.Object {
 	return resultAndError(intObj(removed), nil)
 }
 
+func CacheClose(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+
+	cacheNameObj, ok := args[0].(*object.String)
+	if !ok {
+		return resultAndError(nil, newError("argument 1 to `cache_close` must be STRING, got %s", args[0].Type()))
+	}
+
+	runtimeCacheStores.Lock()
+	store, ok := runtimeCacheStores.stores[cacheNameObj.Value]
+	if ok {
+		delete(runtimeCacheStores.stores, cacheNameObj.Value)
+	}
+	runtimeCacheStores.Unlock()
+
+	if !ok {
+		return resultAndError(nil, newError("cache `%s` not found; call `cache_open` first", cacheNameObj.Value))
+	}
+
+	runtimeCacheStores.Lock()
+	store.entries = map[string]cacheEntry{}
+	store.db = nil
+	runtimeCacheStores.Unlock()
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"name":   stringObj(cacheNameObj.Value),
+		"closed": boolObj(true),
+	}), nil)
+}
+
 func cacheNameAndKey(opName string, cacheNameObj object.Object, keyObj object.Object) (string, string, *object.Error) {
 	cacheName, ok := cacheNameObj.(*object.String)
 	if !ok {

@@ -7,7 +7,8 @@ let debugger_status = diagnostics["debugger"];
 let sandbox_status = diagnostics["sandbox"];
 
 let print_list_items = fn(items, index) {
-    let reached_end, err = index == len(items);
+    let item_count, err = len(items);
+    let reached_end, err = index == item_count;
     if (reached_end) {
         return 0;
     }
@@ -55,4 +56,4 @@ if (sandbox_status["error"] != "") {
 };
 
 putln("");
-putln("Run this same script in Windows Terminal and PowerShell to compare outputs.");
+putln("Run this same script in Windows Terminal and PowerShell to compare outputf.");

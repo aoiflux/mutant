@@ -3,6 +3,21 @@
 This runbook explains how to triage and respond to Mutant runtime security
 events using current code behavior.
 
+### 1.1 Source-of-Truth Alignment
+
+This runbook is operational guidance. When any statement here conflicts with
+low-level design, treat the following as authoritative and update this file:
+
+1. [SECURITY_LLD](SECURITY_LLD.md)
+2. [SECURITY_LLD_TRACEABILITY](SECURITY_LLD_TRACEABILITY.md)
+3. [ANTITAMPER_PROBE_ENABLEMENT_LLD](ANTITAMPER_PROBE_ENABLEMENT_LLD.md)
+
+Alignment rules:
+
+1. Keep mode and policy semantics identical to LLD definitions.
+2. Keep environment variable names and defaults identical to implementation.
+3. Avoid introducing undocumented flags or implied capabilities.
+
 ## 2. Primary Runtime Events
 
 1. signature_failed
@@ -120,3 +135,92 @@ sha256sum ./mutant > "$dir/hashes.txt"
 2. Do not globally relax policy to solve one false positive.
 3. Prefer scoped allowlists and short-lived exceptions.
 4. Track post-incident hardening actions in backlog.
+
+## 9. Common Policy and Environment Combinations
+
+Use these presets as starting points. Prefer short-lived overrides and document
+every change in incident notes.
+
+### 9.1 Production Strict (Fail Closed)
+
+Use when running trusted release artifacts in production.
+
+```powershell
+$env:MUTANT_TAMPER_RESPONSE = "terminate"
+$env:MUTANT_PROTECTION_PROFILE = "paranoid"
+$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
+$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
+$env:MUTANT_SECURITY_AUDIT = "1"
+$env:MUTANT_SECURITY_TELEMETRY_FILE = ".\telemetry.json"
+```
+
+### 9.2 Production Standard (Balanced)
+
+Use for broad production rollout with strong defaults and lower friction.
+
+```powershell
+$env:MUTANT_TAMPER_RESPONSE = "terminate"
+$env:MUTANT_PROTECTION_PROFILE = "standard"
+$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
+$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
+$env:MUTANT_SECURITY_AUDIT = "1"
+```
+
+### 9.3 Investigation Mode (Delay + Observe)
+
+Use during controlled triage when you need more evidence before termination.
+
+```powershell
+$env:MUTANT_TAMPER_RESPONSE = "delay"
+$env:MUTANT_TAMPER_DELAY_MS = "1500"
+$env:MUTANT_PROTECTION_PROFILE = "standard"
+$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
+$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
+$env:MUTANT_SECURITY_AUDIT = "1"
+$env:MUTANT_SECURITY_TELEMETRY_FILE = ".\telemetry.json"
+```
+
+### 9.4 Compatibility Triage (Temporary)
+
+Use only for short-lived false-positive isolation and root-cause analysis.
+
+```powershell
+$env:MUTANT_TAMPER_RESPONSE = "warn"
+$env:MUTANT_PROTECTION_PROFILE = "minimal"
+$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
+$env:MUTANT_ENABLE_PROCESS_PROTECTION = "0"
+$env:MUTANT_SECURITY_AUDIT = "1"
+```
+
+### 9.5 Probe Off (Debug Baseline)
+
+Use to separate probe-related signals from other runtime controls.
+
+```powershell
+$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "0"
+$env:MUTANT_ENABLE_PROCESS_PROTECTION = "0"
+$env:MUTANT_TAMPER_RESPONSE = "warn"
+```
+
+### 9.6 Linux Example (Strict)
+
+```bash
+export MUTANT_TAMPER_RESPONSE=terminate
+export MUTANT_PROTECTION_PROFILE=paranoid
+export MUTANT_ENABLE_ANTITAMPER_PROBE=1
+export MUTANT_ENABLE_PROCESS_PROTECTION=1
+export MUTANT_SECURITY_AUDIT=1
+export MUTANT_SECURITY_TELEMETRY_FILE=./telemetry.json
+```
+
+### 9.7 Reset to Defaults
+
+```powershell
+Remove-Item Env:MUTANT_TAMPER_RESPONSE -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_TAMPER_DELAY_MS -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_PROTECTION_PROFILE -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_ENABLE_ANTITAMPER_PROBE -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_ENABLE_PROCESS_PROTECTION -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_SECURITY_AUDIT -ErrorAction SilentlyContinue
+Remove-Item Env:MUTANT_SECURITY_TELEMETRY_FILE -ErrorAction SilentlyContinue
+```

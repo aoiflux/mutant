@@ -1,0 +1,20 @@
+putln("=== NTFS Parser Builtins ===");
+
+let ntfs, err = ntfs_open("disk.img");
+if (err) {
+    putln("ntfs_open error:", err);
+} else {
+    let handle = ntfs["handle"];
+
+    let files, list_err = ntfs_list_files(handle, "/");
+    putln("ntfs_list_files:", files, "err:", list_err);
+
+    let metadata, meta_err = ntfs_metadata(handle, "/Windows/System32/notepad.exe");
+    putln("ntfs_metadata:", metadata, "err:", meta_err);
+
+    let content, read_err = ntfs_read_file(handle, "/Windows/win.ini");
+    putln("ntfs_read_file:", content, "err:", read_err);
+
+    let closed, close_err = ntfs_close(handle);
+    putln("ntfs_close:", closed, "err:", close_err);
+}

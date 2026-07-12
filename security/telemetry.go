@@ -19,6 +19,10 @@ var (
 	telemetryProcessProtect   uint64
 	telemetryProbeInvoked     uint64
 	telemetryProbeError       uint64
+	telemetryRemoteScanInvoke uint64
+	telemetryRemoteScanError  uint64
+	telemetryRemoteSuspicious uint64
+	telemetryRemoteCritical   uint64
 	telemetryCommandAttempt   uint64
 	telemetryCommandBlocked   uint64
 	telemetryCommandSucceeded uint64
@@ -60,6 +64,26 @@ func RecordProbeError(stage string) {
 	auditEvent("anti_tamper_probe_error", stage)
 }
 
+func RecordRemoteProcessScanInvoked(stage string) {
+	atomic.AddUint64(&telemetryRemoteScanInvoke, 1)
+	auditEvent("remote_process_scan_invoked", stage)
+}
+
+func RecordRemoteProcessScanError(stage string) {
+	atomic.AddUint64(&telemetryRemoteScanError, 1)
+	auditEvent("remote_process_scan_error", stage)
+}
+
+func RecordRemoteProcessSuspicious(stage string) {
+	atomic.AddUint64(&telemetryRemoteSuspicious, 1)
+	auditEvent("remote_process_suspicious", stage)
+}
+
+func RecordRemoteProcessCritical(stage string) {
+	atomic.AddUint64(&telemetryRemoteCritical, 1)
+	auditEvent("remote_process_critical", stage)
+}
+
 func RecordCommandAttempt(stage string) {
 	atomic.AddUint64(&telemetryCommandAttempt, 1)
 	auditEvent("command_attempt", stage)
@@ -89,6 +113,10 @@ func SecurityTelemetrySnapshot() map[string]uint64 {
 		"process_protection_detected": atomic.LoadUint64(&telemetryProcessProtect),
 		"anti_tamper_probe_invoked":   atomic.LoadUint64(&telemetryProbeInvoked),
 		"anti_tamper_probe_error":     atomic.LoadUint64(&telemetryProbeError),
+		"remote_process_scan_invoked": atomic.LoadUint64(&telemetryRemoteScanInvoke),
+		"remote_process_scan_error":   atomic.LoadUint64(&telemetryRemoteScanError),
+		"remote_process_suspicious":   atomic.LoadUint64(&telemetryRemoteSuspicious),
+		"remote_process_critical":     atomic.LoadUint64(&telemetryRemoteCritical),
 		"command_attempt":             atomic.LoadUint64(&telemetryCommandAttempt),
 		"command_blocked":             atomic.LoadUint64(&telemetryCommandBlocked),
 		"command_succeeded":           atomic.LoadUint64(&telemetryCommandSucceeded),
@@ -122,6 +150,10 @@ func ResetSecurityTelemetry() {
 	atomic.StoreUint64(&telemetryProcessProtect, 0)
 	atomic.StoreUint64(&telemetryProbeInvoked, 0)
 	atomic.StoreUint64(&telemetryProbeError, 0)
+	atomic.StoreUint64(&telemetryRemoteScanInvoke, 0)
+	atomic.StoreUint64(&telemetryRemoteScanError, 0)
+	atomic.StoreUint64(&telemetryRemoteSuspicious, 0)
+	atomic.StoreUint64(&telemetryRemoteCritical, 0)
 	atomic.StoreUint64(&telemetryCommandAttempt, 0)
 	atomic.StoreUint64(&telemetryCommandBlocked, 0)
 	atomic.StoreUint64(&telemetryCommandSucceeded, 0)

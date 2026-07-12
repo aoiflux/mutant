@@ -22,10 +22,11 @@ import (
 )
 
 var (
-	isDebuggerPresent  = security.IsDebuggerPresent
-	isSandboxed        = security.IsSandboxed
-	executeLuaPatches  = luaruntime.ExecutePatches
-	runAntiTamperProbe = security.RunAntiTamperProbe
+	isDebuggerPresent    = security.IsDebuggerPresent
+	isSandboxed          = security.IsSandboxed
+	executeLuaPatches    = luaruntime.ExecutePatches
+	runAntiTamperProbe   = security.RunAntiTamperProbe
+	runRemoteProcessScan = security.RunRemoteProcessScan
 )
 
 const processProtectionTerminateConfidence = 80
@@ -106,6 +107,9 @@ func enforceAntiRev(secureMode bool, stage string) error {
 	if err := enforceProcessProtection(secureMode, stage); err != nil {
 		return err
 	}
+	if err := enforceRemoteProcessProtection(secureMode, stage); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -171,6 +175,33 @@ func isProcessProtectionEnabled() bool {
 	default:
 		return true
 	}
+}
+
+func enforceRemoteProcessProtection(secureMode bool, stage string) error {
+	verdicts, enabled, err := runRemoteProcessScan("runner:" + stage)
+	if err != nil || !enabled {
+		return nil
+	}
+	cfg := security.ResolveRemoteScanConfig()
+	if cfg.Mode != security.RemoteScanModeEnforce {
+		return nil
+	}
+
+	for _, verdict := range verdicts {
+		if verdict.FinalScore < cfg.CriticalScore {
+			continue
+		}
+
+		security.RecordProcessProtectionDetected(stage)
+		return security.ApplyTamperResponse(
+			"remote_process_protection_detected",
+			stage,
+			secureMode,
+			security.ErrProcessProtectionDetected,
+		)
+	}
+
+	return nil
 }
 
 func decode(data []byte, password string) (*compiler.ByteCode, error) {
