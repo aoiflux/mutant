@@ -77,7 +77,7 @@ func compileAndRun(t *testing.T, input string, level int, seed int64) object.Obj
 	t.Helper()
 	b := compileBytecodeWithSecurityChecks(t, input, level, seed)
 	b.Instructions = stripPolymorphicMarker(b.Instructions)
-	b = mutil.EncryptByteCode(b, "poly-test-pass")
+	mutil.EncryptByteCode(b, "poly-test-pass")
 
 	machine := vm.NewWithPasswordAndGlobalStore(b, "poly-test-pass", make([]object.Object, global.GlobalSize))
 	if err := machine.Run(); err != nil {
