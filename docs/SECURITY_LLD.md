@@ -14,6 +14,11 @@ It is implementation-accurate to the current codebase and intended for:
 This LLD focuses on anti-tamper and anti-piracy controls under an offline-first
 threat model.
 
+Companion deep dives:
+
+1. [BINARY_ARTIFACT_SECURITY_DEEP_DIVE](BINARY_ARTIFACT_SECURITY_DEEP_DIVE.md)
+2. [REMOTE_PROCESS_SCAN_DEEP_DIVE](REMOTE_PROCESS_SCAN_DEEP_DIVE.md)
+
 ---
 
 ## 2. Security Objectives
@@ -60,10 +65,11 @@ Mutant currently has three practical launch postures:
 
 1. Secure mode (`--secure`, default):
 
-- Signature verification requires trusted signer pinning.
+- Runtime posture defaults to secure execution gates.
+- Trusted signer pinning is enforced only when `--signer-auth` is enabled.
 - Default tamper response is `terminate`.
 - If trusted key env is not set, runtime bootstraps a local persistent keypair
-  and uses the local public key as trusted key.
+  and uses the local public key as trusted key for signer-auth verification.
 
 2. Compatibility mode (`--compat`):
 
@@ -417,12 +423,14 @@ sequenceDiagram
     U->>R: Run(path, password, secureMode)
     R->>R: Read .mu bytes
 
-    alt secureMode
+    alt secureMode && signerAuth
         R->>S: VerifyCodeWithTrustedPublicKey
         S-->>R: ok / error
-    else compat/dev
+    else !secureMode
         R->>S: VerifyCode
         S-->>R: ok / error
+    else secureMode && !signerAuth
+      R->>R: Skip signature verification path
     end
 
     alt signature error
@@ -522,6 +530,30 @@ Response path:
 - Telemetry event: `process_protection_detected`
 - Policy dispatch: `ApplyTamperResponse(process_protection_detected, ...)`
 - Default result: terminate in secure mode, warn in compatibility/dev mode.
+
+### 9.4 Remote Process Scan Enforcement
+
+Runner executes `RunRemoteProcessScan` at both `pre-decode` and `pre-execution`
+stages.
+
+Gates and modes:
+
+1. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN=1` enables scan execution.
+2. `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce` controls decision behavior.
+3. Scanner errors are telemetry-visible and non-blocking.
+
+Current enforcement behavior:
+
+1. `observe`: records telemetry only, never blocks execution.
+2. `enforce`: blocks only when a verdict reaches the configured critical score.
+3. High-risk but non-critical verdicts remain advisory.
+
+Current implementation status:
+
+1. Configuration, correlator, telemetry, and runner policy integration are
+   implemented.
+2. `ScanRemoteProcessesWindows` currently returns no verdicts (safe no-op), so
+   remote verdict generation is scaffolding-ready but not yet signal-rich.
 
 ---
 
@@ -738,6 +770,18 @@ Atomic counters:
 1. `debugger_detected`
 2. `integrity_failed`
 3. `signature_failed`
+4. `sandbox_detected`
+5. `process_protection_detected`
+6. `anti_tamper_probe_invoked`
+7. `anti_tamper_probe_error`
+8. `remote_process_scan_invoked`
+9. `remote_process_scan_error`
+10. `remote_process_suspicious`
+11. `remote_process_critical`
+12. `command_attempt`
+13. `command_blocked`
+14. `command_succeeded`
+15. `command_failed`
 
 ### 13.2 APIs
 
@@ -778,7 +822,19 @@ If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
 1. `MUTANT_TAMPER_RESPONSE` = `warn|delay|terminate`
 2. `MUTANT_TAMPER_DELAY_MS` = integer ms in `[0..5000]`
 
-### 14.3 Observability
+### 14.3 Probe and Process-Scan Gates
+
+1. `MUTANT_ENABLE_ANTITAMPER_PROBE` = `1` enables anti-tamper probe execution.
+2. `MUTANT_ENABLE_PROCESS_PROTECTION` gates runner enforcement of the focused
+   5-probe process-protection set.
+3. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN` = `1` enables remote process scan
+   manager.
+4. `MUTANT_REMOTE_SCAN_MODE` = `off|observe|enforce`.
+5. `MUTANT_REMOTE_SCAN_MAX_PROCESSES` = positive integer, default `32`.
+6. `MUTANT_REMOTE_SCAN_INTERVAL_MS` = positive integer, default `1000`.
+7. `MUTANT_REMOTE_SCAN_ALLOWLIST` = comma-separated process names.
+
+### 14.4 Observability
 
 1. `MUTANT_SECURITY_AUDIT` = `1` to enable stderr audit lines
 2. `MUTANT_SECURITY_TELEMETRY_FILE` = output path for telemetry JSON
@@ -793,7 +849,9 @@ If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
 2. `ErrPasswordRequired`
 3. `ErrInvalidMetadata`
 4. `ErrDebuggerDetected`
-5. `ErrUntrustedSigner`
+5. `ErrSandboxDetected`
+6. `ErrProcessProtectionDetected`
+7. `ErrUntrustedSigner`
 
 ### 15.2 Policy-Dependent Behavior
 
@@ -879,9 +937,10 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ## 18. Security Invariants (Must Hold)
 
-1. In secure mode, trusted public key must be configured or execution fails.
-2. In secure mode, signature mismatch/untrusted signer must fail unless policy
-   explicitly downgraded by env.
+1. When `--signer-auth` is enabled in secure mode, trusted signer verification
+   must be enforced (trusted env key or local bootstrap trusted key).
+2. In signer-auth path, signature mismatch/untrusted signer must fail unless
+   policy is explicitly downgraded by env.
 3. Integrity mismatch must always record telemetry before policy action.
 4. Metadata parser must reject malformed Argon2 parameters.
 5. Opcode/operand decode must stay offset-aware.

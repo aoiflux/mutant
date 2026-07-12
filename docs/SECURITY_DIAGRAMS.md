@@ -4,18 +4,25 @@
 
 ```mermaid
 flowchart TD
-    A[Load artifact] --> B[Signature verification]
-    B --> C[Anti-debug pre-decode]
-    C --> D[Sandbox pre-decode]
-    D --> E[Process-protection pre-decode]
-    E --> F[Decrypt and decode bytecode]
-    F --> G[Anti-debug pre-execution]
-    G --> H[Sandbox pre-execution]
-    H --> I[Process-protection pre-execution]
-    I --> J[VM execution]
-    J --> K[Integrity probes periodic+jitter+sweep]
-    K --> L[Tamper response policy]
-    L --> M[Telemetry export]
+    A[Load artifact] --> B{Mode and signer-auth}
+    B -->|secure + signer-auth| C[Trusted-key signature verification]
+    B -->|compat/dev| D[Embedded-key signature verification]
+    B -->|secure without signer-auth| E[Skip signature verify path]
+    C --> F[Anti-debug pre-decode]
+    D --> F
+    E --> F
+    F --> G[Sandbox pre-decode]
+    G --> H[Process-protection pre-decode]
+    H --> I[Remote process scan pre-decode]
+    I --> J[Decrypt and decode bytecode]
+    J --> K[Anti-debug pre-execution]
+    K --> L[Sandbox pre-execution]
+    L --> M[Process-protection pre-execution]
+    M --> N[Remote process scan pre-execution]
+    N --> O[VM execution]
+    O --> P[Integrity probes periodic+jitter+sweep]
+    P --> Q[Tamper response policy]
+    Q --> R[Telemetry export]
 ```
 
 ## 2. Policy Decision Flow

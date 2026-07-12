@@ -21,6 +21,14 @@ Yes, as part of anti-tamper process-protection probes.
 3. High-confidence signals (detected=true and confidence >= 80) trigger
    process_protection_detected policy flow.
 
+Remote scan status:
+
+1. Remote scan manager integration exists behind
+   MUTANT_ENABLE_REMOTE_PROCESS_SCAN.
+2. Mode gate is MUTANT_REMOTE_SCAN_MODE=off|observe|enforce.
+3. Current windows scanner is scaffolding-safe no-op, so integration is present
+   while detector depth is still partial.
+
 See:
 
 1. [ANTITAMPER_PROBE](ANTITAMPER_PROBE.md)
@@ -39,7 +47,18 @@ See:
 
 1. [POLYMORPHIC_BYTECODE_LLD](POLYMORPHIC_BYTECODE_LLD.md)
 
-## 4. Is memory security implemented?
+## 4. Does secure mode always enforce trusted signer pinning?
+
+Not always.
+
+1. Secure mode is the default runtime posture.
+2. Trusted signer verification runs when `--signer-auth` is enabled.
+3. Without `--signer-auth`, secure mode keeps runtime hardening gates but does
+   not run signer pinning verification.
+4. Trusted key source is MUTANT_TRUSTED_PUBLIC_KEY_HEX (with local bootstrap
+   fallback if unset).
+
+## 5. Is memory security implemented?
 
 Partially.
 
@@ -48,7 +67,7 @@ Partially.
    SecureConstantPool.
 3. Wrapper-first runtime path is not the default VM storage path today.
 
-## 5. Which docs should students read first?
+## 6. Which docs should students read first?
 
 1. [SECURITY_ANSWERS](SECURITY_ANSWERS.md)
 2. [SECURITY_LLD](SECURITY_LLD.md)
@@ -56,8 +75,9 @@ Partially.
 4. [SECURITY_RUNBOOK](SECURITY_RUNBOOK.md)
 5. [SECURITY_LLD_TRACEABILITY](SECURITY_LLD_TRACEABILITY.md)
 
-## 6. What changed from older docs?
+## 7. What changed from older docs?
 
 1. Removed stale claims about unsupported CLI flags and unfinished integrations.
 2. Clarified gate semantics for anti-tamper probes.
 3. Clarified current polymorphic and memory-security status.
+4. Clarified signer-auth semantics and remote scan integration depth.

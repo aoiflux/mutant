@@ -6,3 +6,7 @@ native/rustffi/lib/target/
 vscode-extension/node_modules/
 vscode-extension/out/
 vscode-extension/.vscode-test/
+releaseassets/data/
+dist/
+
+!releaseassets/data/placeholder.bin

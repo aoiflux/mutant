@@ -30,6 +30,8 @@ Implemented now:
 7. Windows process-protection probes (process injection, trampoline, iat/got,
    module markers, RWX anomalies).
 8. VM integrity probing and telemetry export.
+9. Remote process scan manager with config, correlator, telemetry, and runner
+   observe/enforce policy integration.
 
 Partial now:
 
@@ -42,15 +44,14 @@ Partial now:
 
 ### 2.1 Anti-Tamper Quality
 
-Status: partial
+Status: partial (integration complete, detector depth pending)
 
 Goals:
 
-1. Expand process-protection from self-process heuristics to optional
-   cross-process visibility.
-2. Improve confidence correlation from per-signal thresholding to weighted
-   multi-signal verdicts.
-3. Add allowlist support for approved enterprise tooling.
+1. Expand remote process scanner from scaffolding/no-op platform path to
+   signal-rich inspectors.
+2. Keep weighted correlation tuning calibrated against false-positive datasets.
+3. Continue allowlist tuning for approved enterprise tooling.
 
 Primary anchors:
 
@@ -150,12 +151,12 @@ Primary anchors:
 ### Phase B (mid-term)
 
 1. Complete safe polymorphic transforms rollout.
-2. Add stronger anti-tamper correlation logic.
-3. Add optional remote process scan in observe mode.
+2. Add stronger anti-tamper signal quality for remote scanner inspectors.
+3. Add processscan platform detector coverage beyond scaffolding.
 
 ### Phase C (later)
 
-1. Controlled enforcement for remote-process high-confidence verdicts.
+1. Controlled rollout expansion for remote-process enforcement confidence gates.
 2. Expanded policy controls and allowlist tuning.
 3. Optional deeper memory hardening mode for high-security deployments.
 

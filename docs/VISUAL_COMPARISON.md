@@ -42,7 +42,21 @@ flowchart LR
     C[Builtins] --> D[Broader diagnostic probe sets]
 ```
 
-## 4. Polymorphic Status Snapshot
+## 4. Remote Scan Gate Model
+
+```mermaid
+flowchart TD
+    A[RunRemoteProcessScan] --> B{MUTANT_ENABLE_REMOTE_PROCESS_SCAN == 1?}
+    B -->|No| C[Disabled, no scan]
+    B -->|Yes| D{MUTANT_REMOTE_SCAN_MODE}
+    D -->|off| C
+    D -->|observe| E[Telemetry only]
+    D -->|enforce| F{Any verdict >= critical?}
+    F -->|No| G[Continue]
+    F -->|Yes| H[Apply tamper policy]
+```
+
+## 5. Polymorphic Status Snapshot
 
 ```mermaid
 flowchart TD
@@ -52,7 +66,7 @@ flowchart TD
     D --> E[Currently gated]
 ```
 
-## 5. Memory Hardening Snapshot
+## 6. Memory Hardening Snapshot
 
 ```mermaid
 flowchart LR
@@ -60,7 +74,7 @@ flowchart LR
     C[Additional primitives] --> D[SecureGlobal/SecureStack/SecureConstantPool]
 ```
 
-## 6. Source of Truth
+## 7. Source of Truth
 
 1. [SECURITY_DIAGRAMS](SECURITY_DIAGRAMS.md)
 2. [SECURITY_LLD](SECURITY_LLD.md)

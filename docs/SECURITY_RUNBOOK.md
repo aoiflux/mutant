@@ -11,6 +11,8 @@ low-level design, treat the following as authoritative and update this file:
 1. [SECURITY_LLD](SECURITY_LLD.md)
 2. [SECURITY_LLD_TRACEABILITY](SECURITY_LLD_TRACEABILITY.md)
 3. [ANTITAMPER_PROBE_ENABLEMENT_LLD](ANTITAMPER_PROBE_ENABLEMENT_LLD.md)
+4. [BINARY_ARTIFACT_SECURITY_DEEP_DIVE](BINARY_ARTIFACT_SECURITY_DEEP_DIVE.md)
+5. [REMOTE_PROCESS_SCAN_DEEP_DIVE](REMOTE_PROCESS_SCAN_DEEP_DIVE.md)
 
 Alignment rules:
 
@@ -26,8 +28,11 @@ Alignment rules:
 4. process_protection_detected
 5. integrity_failed
 6. anti_tamper_probe_error
-7. command_blocked
-8. command_failed
+7. remote_process_scan_error
+8. remote_process_suspicious
+9. remote_process_critical
+10. command_blocked
+11. command_failed
 
 ## 3. Key Controls
 
@@ -36,12 +41,18 @@ Alignment rules:
 1. `MUTANT_TAMPER_RESPONSE` = `warn|delay|terminate`
 2. `MUTANT_TAMPER_DELAY_MS` = delay duration (0..5000)
 3. `MUTANT_PROTECTION_PROFILE` = `minimal|standard|paranoid`
+4. `--signer-auth` enables trusted signer verification in secure mode.
 
 ### 3.2 Probe Controls
 
 1. `MUTANT_ENABLE_ANTITAMPER_PROBE=1` enables anti-tamper probe execution.
 2. `MUTANT_ENABLE_PROCESS_PROTECTION` controls runner process-protection
    enforcement when probes are enabled.
+3. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN=1` enables remote scan manager execution.
+4. `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce` controls block vs observe
+   behavior.
+5. `MUTANT_REMOTE_SCAN_MAX_PROCESSES` and `MUTANT_REMOTE_SCAN_ALLOWLIST` tune
+   scan scope.
 
 ### 3.3 Telemetry Controls
 

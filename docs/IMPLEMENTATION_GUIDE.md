@@ -27,18 +27,26 @@ Suggested files:
 
 ## 3. Phase B: Process-protection depth expansion
 
-1. Add optional remote process scan manager in observe mode first.
-2. Add normalized signal schema for cross-process evidence.
-3. Add weighted correlator and risk bands.
+Current status:
+
+1. Remote process scan manager integration is implemented.
+2. Normalized signal schema, weighted correlator, and risk bands are
+   implemented.
+3. Runner observe/enforce policy wiring is implemented.
+
+Next steps:
+
+1. Implement windows scanner inspectors (modules/memory/thread/hook signals).
+2. Calibrate weights and thresholds using false-positive datasets.
+3. Add evidence-rich integration tests for platform-specific scanners.
 
 Suggested file plan:
 
-1. `security/processscan_types.go`
-2. `security/processscan_config.go`
-3. `security/processscan_correlator.go`
-4. `security/processscan_manager.go`
-5. `security/processscan_windows.go`
-6. `security/processscan_windows_stub.go`
+1. `security/processscan_windows.go`
+2. `security/processscan_windows_stub.go`
+3. `security/processscan_manager_test.go`
+4. `security/processscan_correlator_test.go`
+5. `runner/runner_test.go`
 
 Design reference:
 

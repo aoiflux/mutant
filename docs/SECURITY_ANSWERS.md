@@ -21,8 +21,10 @@ Mutant signs and verifies artifacts using Ed25519-based signing flow.
 Secure mode behavior:
 
 1. Secure mode is default.
-2. Signer-auth can be explicitly enforced with `--signer-auth`.
-3. Trusted key pinning uses `MUTANT_TRUSTED_PUBLIC_KEY_HEX`.
+2. Signer-auth is optional and can be explicitly enforced with `--signer-auth`.
+3. Without `--signer-auth`, secure mode keeps runtime hardening gates but does
+   not run signer pinning verification.
+4. Trusted key pinning uses `MUTANT_TRUSTED_PUBLIC_KEY_HEX`.
 
 Compatibility/dev behavior:
 

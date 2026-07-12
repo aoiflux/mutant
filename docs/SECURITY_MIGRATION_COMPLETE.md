@@ -11,10 +11,11 @@ runtime security with staged enforcement.
 
 ### 2.1 Core Runtime Security
 
-1. Signed artifact verification integrated with runner.
-2. Tamper response policy abstraction in place.
-3. Secure/compat/dev posture handling implemented.
-4. Protection profile defaulting implemented.
+1. Signed artifact verification paths integrated with runner.
+2. Trusted signer pinning is available through secure mode with `--signer-auth`.
+3. Tamper response policy abstraction in place.
+4. Secure/compat/dev posture handling implemented.
+5. Protection profile defaulting implemented.
 
 ### 2.2 Anti-Reverse Engineering Pipeline
 
@@ -29,7 +30,16 @@ runtime security with staged enforcement.
 3. Confidence thresholding for enforcement implemented (`>= 80`).
 4. Probe and process-protection telemetry counters implemented.
 
-### 2.4 Runtime Integrity
+### 2.4 Remote Process Scan Integration
+
+1. Remote scan manager, config parsing, and correlator are implemented.
+2. Runner observe/enforce integration is implemented at pre-decode and
+   pre-execution stages.
+3. Remote scan telemetry counters are implemented.
+4. Current windows scanner is scaffolding-safe (`nil` verdict no-op), so
+   detector depth remains partial.
+
+### 2.5 Runtime Integrity
 
 1. VM integrity baseline registration implemented.
 2. Periodic/jitter/sweep integrity checks implemented.
@@ -54,7 +64,7 @@ runtime security with staged enforcement.
 ### 4.1 Probe Depth and Correlation
 
 1. Optional cross-process visibility (with sufficient privileges).
-2. Multi-signal weighted correlator for reduced false positives.
+2. Expand windows remote scanner from scaffolding to signal-rich inspectors.
 3. Allowlist tuning for operational environments.
 
 ### 4.2 Polymorphic Completion
@@ -75,4 +85,6 @@ runtime security with staged enforcement.
 2. Enforcement architecture: complete.
 3. Advanced obfuscation depth: partial.
 4. Advanced process-protection depth: partial.
-5. Operational clarity and docs: now synchronized with code baseline.
+5. Remote scan manager integration: complete.
+6. Remote scan detector depth: partial.
+7. Operational clarity and docs: now synchronized with code baseline.

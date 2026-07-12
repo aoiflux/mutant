@@ -232,4 +232,56 @@ integration depth:
 
 ---
 
+## 11. 2026-07 Code Sync Addendum
+
+This addendum captures code-accurate deltas that must be read together with the
+matrix above.
+
+### 11.1 Signer-Auth Runtime Semantics
+
+Current implementation:
+
+1. Secure mode selection and signer-auth are independent runtime switches.
+2. Trusted signer verification path runs only when `--signer-auth` is present.
+3. `--no-signer-auth` keeps secure-mode runtime gates but skips signature
+   verification path in runner.
+
+Anchors:
+
+1. [main.go](main.go#L578)
+2. [runner/runner.go](runner/runner.go#L44)
+3. [runner/runner_test.go](runner/runner_test.go#L189)
+
+### 11.2 Remote Process Scan Control Surface
+
+Current implementation:
+
+1. Remote scan manager is gated by `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`.
+2. Mode is controlled by `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce`.
+3. Runner blocks only on enforce-mode critical verdicts.
+4. Scan errors are non-blocking and telemetry-visible.
+
+Anchors:
+
+1. [security/processscan_config.go](security/processscan_config.go#L9)
+2. [security/processscan_manager.go](security/processscan_manager.go#L7)
+3. [runner/runner.go](runner/runner.go#L161)
+4. [runner/runner_test.go](runner/runner_test.go#L404)
+
+### 11.3 Remote Scan Runtime Depth
+
+Current implementation status:
+
+1. Types/config/correlator/manager/telemetry and runner integration are
+   implemented.
+2. Windows scanner implementation currently returns empty verdicts (`nil, nil`),
+   so enforcement path is wired but detector depth is still scaffolding-first.
+
+Anchors:
+
+1. [security/processscan_windows.go](security/processscan_windows.go#L5)
+2. [security/processscan_manager_test.go](security/processscan_manager_test.go#L36)
+
+---
+
 End of document.

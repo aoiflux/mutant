@@ -467,6 +467,8 @@ Why this split:
 
 ### 13.2 Proposed domain model (security/processscan_types.go)
 
+Status: implemented (with current fields in code).
+
 ```go
 package security
 
@@ -511,7 +513,7 @@ type ProcessRiskVerdict struct {
 
 ### 13.3 Config and env gates (security/processscan_config.go)
 
-Recommended new env vars:
+Current env vars:
 
 1. MUTANT_ENABLE_REMOTE_PROCESS_SCAN
 2. MUTANT_REMOTE_SCAN_MODE (off, observe, enforce)
@@ -534,6 +536,8 @@ type RemoteScanConfig struct {
 ```
 
 ### 13.4 Correlator contract (security/processscan_correlator.go)
+
+Status: implemented and covered by unit tests.
 
 ```go
 func CorrelateProcessSignals(target RemoteProcessTarget, signals []RemoteProcessSignal) ProcessRiskVerdict
@@ -564,15 +568,11 @@ type RemoteInspector interface {
 func ScanRemoteProcessesWindows(cfg RemoteScanConfig) ([]ProcessRiskVerdict, error)
 ```
 
-Implementation notes:
+Current implementation notes:
 
-1. Enumerator discovers candidate PIDs and basic metadata.
-2. Inspector applies modular checks:
-   - inspectModules
-   - inspectMemoryRegions
-   - inspectThreadStartAddresses
-   - inspectHookPatterns
-3. Each check emits normalized RemoteProcessSignal entries.
+1. Scanner hook and contract are implemented.
+2. Current windows scanner returns empty verdicts (`nil, nil`) as safe no-op.
+3. Enumerator/inspector depth remains planned work.
 
 ### 13.6 Cross-platform stub (security/processscan_windows_stub.go)
 
@@ -586,7 +586,7 @@ Behavior:
 
 ### 13.7 Manager/orchestration (security/processscan_manager.go)
 
-Recommended API:
+Current API:
 
 ```go
 func RunRemoteProcessScan(stage string) ([]ProcessRiskVerdict, bool, error)
@@ -601,6 +601,8 @@ Behavior:
 5. Return results for runner policy integration.
 
 ### 13.8 Runner integration plan (runner/runner.go)
+
+Status: implemented.
 
 Add one function call in enforcement pipeline after existing
 enforceProcessProtection:
@@ -620,7 +622,7 @@ Decision model:
 
 ### 13.9 Telemetry schema extension (security/telemetry.go)
 
-Recommended event names:
+Current event names:
 
 1. remote_process_scan_invoked
 2. remote_process_scan_error
@@ -665,9 +667,9 @@ Runner tests:
 
 Sprint A (scaffolding):
 
-1. Add types/config/correlator with tests.
-2. Add manager with no-op windows scanner.
-3. Add telemetry wiring.
+1. Add types/config/correlator with tests. [done]
+2. Add manager with no-op windows scanner. [done]
+3. Add telemetry wiring. [done]
 
 Sprint B (read-only scanner):
 
@@ -683,9 +685,16 @@ Sprint C (full signal set):
 
 Sprint D (enforcement):
 
-1. Enable enforce mode behind env gate.
-2. Roll out to secure profile first.
-3. Keep emergency kill-switch env var.
+1. Enable enforce mode behind env gate. [done]
+2. Roll out to secure profile first. [in progress]
+3. Keep emergency kill-switch env var. [done via mode/off gate]
+
+### 13.13 Deep-dive reference
+
+For a code-accurate deep dive on current remote-scan architecture and behavior,
+see:
+
+1. [REMOTE_PROCESS_SCAN_DEEP_DIVE.md](REMOTE_PROCESS_SCAN_DEEP_DIVE.md)
 
 ### 13.12 Mermaid implementation dependency graph
 
