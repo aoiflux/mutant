@@ -18,9 +18,11 @@ import (
 	"mutant/vm"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -58,6 +60,7 @@ type replTheme struct {
 	Prompt        string
 	Welcome       string
 	Info          string
+	Tip           string
 	WelcomeEgg    string
 	Idle          string
 	TinyTask      string
@@ -74,6 +77,7 @@ var activeReplTheme = replTheme{
 	Prompt:        ansiBoldCyan,
 	Welcome:       ansiBoldGreen,
 	Info:          ansiGray,
+	Tip:           ansiBoldMagenta,
 	WelcomeEgg:    ansiBoldMagenta,
 	Idle:          ansiBoldBlue,
 	TinyTask:      ansiBoldYellow,
@@ -88,6 +92,7 @@ var replThemes = map[string]replTheme{
 		Prompt:        ansiBrightCyan,
 		Welcome:       ansiBrightGreen,
 		Info:          ansiCyan,
+		Tip:           ansiMagenta,
 		WelcomeEgg:    ansiMagenta,
 		Idle:          ansiBrightBlue,
 		TinyTask:      ansiYellow,
@@ -99,6 +104,7 @@ var replThemes = map[string]replTheme{
 		Prompt:        ansiCyan,
 		Welcome:       ansiGreen,
 		Info:          ansiGray,
+		Tip:           ansiMagenta,
 		WelcomeEgg:    ansiMagenta,
 		Idle:          ansiBlue,
 		TinyTask:      ansiYellow,
@@ -110,6 +116,7 @@ var replThemes = map[string]replTheme{
 		Prompt:        ansiGreen,
 		Welcome:       ansiBoldGreen,
 		Info:          ansiGray,
+		Tip:           ansiYellow,
 		WelcomeEgg:    ansiYellow,
 		Idle:          ansiCyan,
 		TinyTask:      ansiYellow,
@@ -121,6 +128,7 @@ var replThemes = map[string]replTheme{
 		Prompt:        ansiBoldYellow,
 		Welcome:       ansiBoldMagenta,
 		Info:          ansiGray,
+		Tip:           ansiBoldYellow,
 		WelcomeEgg:    ansiBoldYellow,
 		Idle:          ansiBoldRed,
 		TinyTask:      ansiBoldYellow,
@@ -230,7 +238,7 @@ var replBanners = []string{
 |_|  |_|\__,_|\__\___|_| |_|
 
 	[::]
-  [::::]   tiny reactor stable
+   [::::]   tiny reactor stable
 	[::]
 	 ||`,
 	` __  __       _       _
@@ -355,6 +363,11 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 	replColorEnabled = shouldUseColor(out)
 	activeReplTheme, resolvedReplThemeName, replThemeFallbackFrom = resolveReplTheme(themeName)
 	welcome(out, version, enableMacros)
+
+	replSignals := make(chan os.Signal, 1)
+	signal.Notify(replSignals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
+	defer signal.Stop(replSignals)
+
 	scanner := bufio.NewScanner(in)
 	if scanner.Err() != nil {
 		log.Fatalln(scanner.Err())
@@ -372,7 +385,10 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 
 	for {
 		fmt.Fprintf(out, "\n\n%s", styledPrompt())
-		line, scanned := scanLineWithIdle(scanner, out)
+		line, scanned, interrupted := scanLineWithIdle(scanner, out, replSignals)
+		if interrupted {
+			gracefulExit()
+		}
 		if !scanned {
 			return
 		}
@@ -475,7 +491,7 @@ func welcome(out io.Writer, version string, enableMacros bool) {
 		fmt.Fprintf(out, "%s\n", styledInfoLine("Running Mutant REPL in experimental mode. Macros are enabled."))
 	}
 	fmt.Fprintf(out, "%s\n", styledInfoLine("Please get started by using this REPL"))
-	fmt.Fprintf(out, "%s\n", styledInfoLine("Tip: if you leave it alone for a bit, it may serenade you."))
+	fmt.Fprintf(out, "%s\n", styledTipLine("Tip: if you leave it alone for a bit, it may serenade you."))
 	if shouldShowWelcomeEasterEgg() {
 		fmt.Fprintf(out, "%s\n", styledWelcomeEasterEgg("Tiny surprise: "+randomWelcomeMessage()))
 	}
@@ -512,8 +528,8 @@ func vanity(line string, out io.Writer, enableMacros bool) bool {
 		return true
 	}
 
-	if line == "exit" {
-		GracefulExit()
+	if isExitCommand(line) {
+		gracefulExit()
 	}
 
 	if enableMacros {
@@ -528,7 +544,7 @@ func vanity(line string, out io.Writer, enableMacros bool) bool {
 	return false
 }
 
-func scanLineWithIdle(scanner *bufio.Scanner, out io.Writer) (string, bool) {
+func scanLineWithIdle(scanner *bufio.Scanner, out io.Writer, signalCh <-chan os.Signal) (string, bool, bool) {
 	type scanResult struct {
 		line string
 		ok   bool
@@ -549,7 +565,9 @@ func scanLineWithIdle(scanner *bufio.Scanner, out io.Writer) (string, bool) {
 	for {
 		select {
 		case result := <-resultCh:
-			return result.line, result.ok
+			return result.line, result.ok, false
+		case <-signalCh:
+			return "", false, true
 		case <-ticker.C:
 			if shouldShowIdleEasterEgg() {
 				fmt.Fprintf(out, "\n%s\n%s", styledIdleMessage(randomIdleMessage()), styledPrompt())
@@ -607,6 +625,10 @@ func styledWelcomeLine(line string) string {
 
 func styledInfoLine(line string) string {
 	return colorize(line, activeReplTheme.Info)
+}
+
+func styledTipLine(line string) string {
+	return colorize(line, activeReplTheme.Tip)
 }
 
 func styledWelcomeEasterEgg(line string) string {
@@ -685,6 +707,16 @@ func macroCheck(line string) bool {
 		strings.Contains(lowerLine, "unquote")
 }
 
+func isExitCommand(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	for strings.HasSuffix(trimmed, ";") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	}
+
+	lower := strings.ToLower(trimmed)
+	return lower == "exit" || lower == "quit" || lower == "bye"
+}
+
 func tinyTask(line string) bool {
 	trimmed := strings.TrimSpace(strings.TrimSuffix(line, ";"))
 	if trimmed == "" {
@@ -755,7 +787,7 @@ func randomWelcomeMessage() string {
 	return welcomeMessages[replRNG.Intn(len(welcomeMessages))]
 }
 
-func GracefulExit() {
+func gracefulExit() {
 	fmt.Printf("\n\n")
 	fmt.Println(colorize(exitMessages[replRNG.Intn(len(exitMessages))], activeReplTheme.Exit))
 	fmt.Printf("\n\n")
