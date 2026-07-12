@@ -19,6 +19,7 @@ Some examples use fixture files in:
 ## Folder map
 
 - `examples/basics/` language syntax and control flow
+- `examples/macros/` quote/unquote and macro expansion patterns
 - `examples/text/` text, fuzzy matching, regex pipelines
 - `examples/policy/` OPA/Rego policy loading and decisions
 - `examples/cache/` cache open/put/get/ttl/stats workflows
@@ -37,7 +38,7 @@ Some examples use fixture files in:
 ## Suggested learning path
 
 1. Start with `examples/basics/`
-2. Move to `examples/text/` and `examples/cache/`
+2. Move to `examples/macros/`, `examples/text/`, and `examples/cache/`
 3. Explore `examples/policy/` for policy gates
 4. Use forensic folders (`memory`, `registry`, `email`, `network`, `binary`)
 5. Finish with `examples/graph/` and `examples/detection/` for correlation

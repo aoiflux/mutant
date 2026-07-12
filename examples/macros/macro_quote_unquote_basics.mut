@@ -1,0 +1,26 @@
+putln("== macro quote/unquote basics ==");
+
+let emit_literal = macro() {
+	quote(7);
+};
+
+let add_expr = macro(left, right) {
+	quote(unquote(left) + unquote(right));
+};
+
+let negate_expr = macro(value) {
+	quote(-(unquote(value)));
+};
+
+putf("emit_literal() => ", emit_literal());
+putln("");
+
+putf("add_expr(3, 9) => ", add_expr(3, 9));
+putln("");
+
+let dynamic = 12;
+putf("add_expr(dynamic, 5) => ", add_expr(dynamic, 5));
+putln("");
+
+putf("negate_expr(11) => ", negate_expr(11));
+putln("");

@@ -1,12 +1,19 @@
 .vscode/
 mutant
-mutant.exe
-**/.DS_Store
+*.exe
 native/rustffi/lib/target/
 vscode-extension/node_modules/
 vscode-extension/out/
 vscode-extension/.vscode-test/
 releaseassets/data/
 dist/
+.DS_Store
+._.DS_Store
+**/.DS_Store
+**/._.DS_Store
+.mu
+._.mu
+**/.mu
+**/._.mu
 
 !releaseassets/data/placeholder.bin

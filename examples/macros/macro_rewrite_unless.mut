@@ -1,0 +1,22 @@
+putln("== macro unless rewrite demo ==");
+
+let unless = macro(condition, consequence, alternative) {
+    quote(if (!(unquote(condition))) {
+        unquote(consequence);
+    } else {
+        unquote(alternative);
+    });
+};
+
+let score = 42;
+
+unless(score > 50,
+    putln("score is low"),
+    putln("score is high")
+);
+
+let mode = "analysis";
+unless(mode == "analysis",
+    putln("switching to analysis mode"),
+    putln("already in analysis mode")
+);

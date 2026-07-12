@@ -29,9 +29,9 @@ check_err(err, "fs_exists");
 if (input_file_exists == false) {
     let seed = {
         "files": [
-            output_directory + "/file1.txt",
-            output_directory + "/file2.log",
-            output_directory + "/archive.zip"
+        output_directory + "/file1.txt",
+        output_directory + "/file2.log",
+        output_directory + "/archive.zip"
         ]
     };
     let seed_json, err = json_stringify(seed);
@@ -47,12 +47,12 @@ let source_json, err = fs_read(input_file_path);
 check_err(err, "fs_read input");
 let parsed, err = json_parse(source_json);
 check_err(err, "json_parse input");
-let files = parsed["files"];
+let files = parsed ["files"];
 
 let file_count, err = len(files);
 check_err(err, "len files");
 for (let i = 0; i < file_count; i = i + 1) {
-    let f = files[i];
+    let f = files [i];
     let file_exists, err = fs_exists(f);
     check_err(err, "fs_exists file");
     if (file_exists == false) {
@@ -75,7 +75,7 @@ let event_nodes = [];
 let timeline_file_count, err = len(files);
 check_err(err, "len timeline files");
 for (let i = 0; i < timeline_file_count; i = i + 1) {
-    let f = files[i];
+    let f = files [i];
     let st, err = fs_stat(f);
     check_err(err, "fs_stat");
 
@@ -85,11 +85,11 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
 
     let event_node, err = db_add_node(db, NODE_EVENT);
     check_err(err, "db_add_node event");
-    check(db_index_prop(db, event_node, "mod_time", st["mod_time"]), "db_index_prop");
-    let size_text, err = json_stringify(st["size"]);
+    check(db_index_prop(db, event_node, "mod_time", st ["mod_time"]), "db_index_prop");
+    let size_text, err = json_stringify(st ["size"]);
     check_err(err, "json_stringify size");
     check(db_index_prop(db, event_node, "size", size_text), "db_index_prop");
-    check(db_index_prop(db, event_node, "error", st["error"]), "db_index_prop");
+    check(db_index_prop(db, event_node, "error", st ["error"]), "db_index_prop");
 
     check(db_add_edge(db, file_node, event_node, EDGE_HAS_EVENT), "db_add_edge");
 
@@ -99,10 +99,10 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
 
     let updated_timeline, err = push(timeline, {
         "path": f,
-        "size": st["size"],
-        "mod_time": st["mod_time"],
-        "error": st["error"]
-});
+        "size": st ["size"],
+        "mod_time": st ["mod_time"],
+        "error": st ["error"]
+    });
     check_err(err, "push timeline");
     timeline = updated_timeline;
 }
@@ -110,7 +110,7 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
 let event_node_count, err = len(event_nodes);
 check_err(err, "len event_nodes");
 for (let i = 1; i < event_node_count; i = i + 1) {
-    check(db_add_edge(db, event_nodes[i - 1], event_nodes[i], EDGE_NEXT_EVENT), "db_add_edge");
+    check(db_add_edge(db, event_nodes [i - 1], event_nodes [i], EDGE_NEXT_EVENT), "db_add_edge");
 }
 
 let stats, err = db_stats(db);
