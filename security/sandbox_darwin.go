@@ -17,6 +17,7 @@ const (
 	darwinSandboxTypeParallels  = "Parallels"
 	darwinSandboxTypeUTM        = "UTM"
 	darwinSandboxTypeQEMU       = "QEMU"
+	darwinSandboxTypeVM         = "VM"
 
 	darwinConfidenceAppSandboxEnv = 85
 	darwinConfidenceDYLDEnv       = 35
@@ -25,6 +26,7 @@ const (
 	darwinConfidenceParallelsDir  = 60
 	darwinConfidenceColimaBin     = 70
 	darwinConfidenceVMProcess     = 70
+	darwinConfidenceCPUIDVendor   = 35
 
 	darwinEnvAppSandboxContainer = "APP_SANDBOX_CONTAINER_ID"
 	darwinEnvDYLDInsertLibraries = "DYLD_INSERT_LIBRARIES"
@@ -38,6 +40,7 @@ const (
 	darwinIndicatorProcParallels = "darwin:process:parallels_tools"
 	darwinIndicatorProcQEMU      = "darwin:process:qemu_system"
 	darwinIndicatorProcColima    = "darwin:process:colima"
+	darwinIndicatorCPUIDHypervis = "darwin:cpuid:hypervisor"
 )
 
 var darwinSandboxPathChecks = []struct {
@@ -101,6 +104,10 @@ func detectSandboxDarwin() (sandboxDetection, error) {
 		if strings.Contains(procs, "colima") {
 			add(darwinSandboxTypeColima, darwinConfidenceVMProcess, darwinIndicatorProcColima)
 		}
+	}
+
+	if hypervisorVendor := getCPUIDHypervisorVendor(); hasAnyHypervisorVendor(hypervisorVendor) {
+		add(darwinSandboxTypeVM, darwinConfidenceCPUIDVendor, darwinIndicatorCPUIDHypervis)
 	}
 
 	bestType := ""

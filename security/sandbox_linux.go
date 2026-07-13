@@ -5,6 +5,7 @@ package security
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -31,9 +32,12 @@ const (
 	linuxConfidenceSystemdNspawn  = 60
 	linuxConfidenceHypervisorFlag = 30
 	linuxConfidenceVMVendorCPU    = 80
+	linuxConfidenceHyperVCPU      = 85
 	linuxConfidenceWSLKernel      = 90
 	linuxConfidenceDMIVendor      = 75
 	linuxConfidenceXenProcFile    = 85
+	linuxConfidenceHyperVLinuxSig = 80
+	linuxConfidenceCPUIDVendor    = 35
 
 	linuxPathContainerEnv   = "/run/.containerenv"
 	linuxPathProc1Cgroup    = "/proc/1/cgroup"
@@ -44,6 +48,11 @@ const (
 	linuxPathDMIProduct     = "/sys/class/dmi/id/product_name"
 	linuxPathDMISysVendor   = "/sys/class/dmi/id/sys_vendor"
 	linuxPathDMIBoardVendor = "/sys/class/dmi/id/board_vendor"
+	linuxPathDMIBIOSVendor  = "/sys/class/dmi/id/bios_vendor"
+	linuxPathBusVMBus       = "/sys/bus/vmbus/devices"
+	linuxPathHvKvpDaemon    = "/usr/sbin/hv_kvp_daemon"
+	linuxPathHvFcopyDaemon  = "/usr/sbin/hv_fcopy_daemon"
+	linuxPathHvVssDaemon    = "/usr/sbin/hv_vss_daemon"
 
 	linuxEnvKubernetesHost = "KUBERNETES_SERVICE_HOST"
 	linuxEnvKubernetesPort = "KUBERNETES_SERVICE_PORT"
@@ -62,19 +71,27 @@ const (
 	linuxIndicatorCPUVMware         = "linux:cpu:vmware"
 	linuxIndicatorCPUVirtualBox     = "linux:cpu:virtualbox"
 	linuxIndicatorCPUXen            = "linux:cpu:xen"
+	linuxIndicatorCPUHyperV         = "linux:cpu:hyperv"
 	linuxIndicatorKernelMicrosoft   = "linux:kernel:microsoft"
 	linuxIndicatorDMIVMware         = "linux:dmi:vmware"
 	linuxIndicatorDMIVirtualBox     = "linux:dmi:virtualbox"
 	linuxIndicatorDMIKVMQEMU        = "linux:dmi:kvm_qemu"
 	linuxIndicatorDMIXen            = "linux:dmi:xen"
 	linuxIndicatorDMIHyperV         = "linux:dmi:hyperv"
+	linuxIndicatorDMIMicrosoftVM    = "linux:dmi:microsoft_virtual_machine"
 	linuxIndicatorFileProcXen       = "linux:file:/proc/xen"
+	linuxIndicatorFileVMBus         = "linux:file:/sys/bus/vmbus/devices"
+	linuxIndicatorModuleHvVMBus     = "linux:module:hv_vmbus"
+	linuxIndicatorHvDaemon          = "linux:file:hyperv_daemon"
+	linuxIndicatorCPUIDHypervisor   = "linux:cpuid:hypervisor"
+	linuxIndicatorCPUIDHyperVVendor = "linux:cpuid:microsoft_hv"
 )
 
 var (
 	linuxCgroupPaths       = []string{linuxPathProc1Cgroup, linuxPathProcSelfCgrp}
 	linuxContainerRuntimes = []string{"docker", "containerd", "podman", "libpod", "crio"}
-	linuxDMIPaths          = []string{linuxPathDMIProduct, linuxPathDMISysVendor, linuxPathDMIBoardVendor}
+	linuxDMIPaths          = []string{linuxPathDMIProduct, linuxPathDMISysVendor, linuxPathDMIBoardVendor, linuxPathDMIBIOSVendor}
+	linuxHyperVDaemonPaths = []string{linuxPathHvKvpDaemon, linuxPathHvFcopyDaemon, linuxPathHvVssDaemon}
 )
 
 func detectSandboxLinux() (sandboxDetection, error) {
@@ -132,6 +149,9 @@ func detectSandboxLinux() (sandboxDetection, error) {
 		if strings.Contains(cpu, "hypervisor") {
 			add(linuxSandboxTypeVM, linuxConfidenceHypervisorFlag, linuxIndicatorCPUHypervisorFlag)
 		}
+		if strings.Contains(cpu, "microsoft hv") || strings.Contains(cpu, "hyper-v") {
+			add(linuxSandboxTypeHyperV, linuxConfidenceHyperVCPU, linuxIndicatorCPUHyperV)
+		}
 		if strings.Contains(cpu, "kvm") || strings.Contains(cpu, "qemu") {
 			add(linuxSandboxTypeKVMQEMU, linuxConfidenceVMVendorCPU, linuxIndicatorCPUKVMQEMU)
 		}
@@ -146,6 +166,13 @@ func detectSandboxLinux() (sandboxDetection, error) {
 		}
 	}
 
+	if hypervisorVendor := getCPUIDHypervisorVendor(); hasAnyHypervisorVendor(hypervisorVendor) {
+		add(linuxSandboxTypeVM, linuxConfidenceCPUIDVendor, linuxIndicatorCPUIDHypervisor)
+		if isMicrosoftHypervisorVendor(hypervisorVendor) {
+			add(linuxSandboxTypeHyperV, linuxConfidenceHyperVCPU, linuxIndicatorCPUIDHyperVVendor)
+		}
+	}
+
 	if data, err := os.ReadFile(linuxPathProcVersion); err == nil {
 		kernel := strings.ToLower(string(data))
 		if strings.Contains(kernel, "microsoft") {
@@ -153,9 +180,18 @@ func detectSandboxLinux() (sandboxDetection, error) {
 		}
 	}
 
+	dmiHasMicrosoftVendor := false
+	dmiHasVirtualMachine := false
+
 	for _, dmiPath := range linuxDMIPaths {
 		if data, err := os.ReadFile(dmiPath); err == nil {
 			v := strings.ToLower(string(data))
+			if strings.Contains(v, "microsoft corporation") {
+				dmiHasMicrosoftVendor = true
+			}
+			if strings.Contains(v, "virtual machine") || strings.Contains(v, "virtual") {
+				dmiHasVirtualMachine = true
+			}
 			if strings.Contains(v, "vmware") {
 				add(linuxSandboxTypeVMware, linuxConfidenceDMIVendor, linuxIndicatorDMIVMware)
 			}
@@ -174,8 +210,24 @@ func detectSandboxLinux() (sandboxDetection, error) {
 		}
 	}
 
+	if dmiHasMicrosoftVendor && dmiHasVirtualMachine {
+		add(linuxSandboxTypeHyperV, linuxConfidenceDMIVendor, linuxIndicatorDMIMicrosoftVM)
+	}
+
 	if fileExists(linuxPathProcXen) {
 		add(linuxSandboxTypeXen, linuxConfidenceXenProcFile, linuxIndicatorFileProcXen)
+	}
+
+	if hasLinuxHyperVVMBus(linuxPathBusVMBus) {
+		add(linuxSandboxTypeHyperV, linuxConfidenceHyperVLinuxSig, linuxIndicatorFileVMBus)
+	}
+
+	if hasLinuxHyperVModule() {
+		add(linuxSandboxTypeHyperV, linuxConfidenceHyperVLinuxSig, linuxIndicatorModuleHvVMBus)
+	}
+
+	if hasLinuxHyperVDaemon(linuxHyperVDaemonPaths) {
+		add(linuxSandboxTypeHyperV, linuxConfidenceHyperVLinuxSig, linuxIndicatorHvDaemon)
 	}
 
 	bestType := ""
@@ -195,4 +247,29 @@ func detectSandboxLinux() (sandboxDetection, error) {
 	detection.Confidence = bestScore
 	detection.Indicators = uniqueStrings(indicators)
 	return detection, nil
+}
+
+func hasLinuxHyperVVMBus(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+func hasLinuxHyperVModule() bool {
+	out, err := exec.Command("lsmod").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), "hv_vmbus")
+}
+
+func hasLinuxHyperVDaemon(paths []string) bool {
+	for _, daemonPath := range paths {
+		if fileExists(daemonPath) {
+			return true
+		}
+	}
+	return false
 }

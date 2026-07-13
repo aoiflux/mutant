@@ -21,6 +21,107 @@ func TestDetectSandboxWindowsFromTasklistHyperV(t *testing.T) {
 	}
 }
 
+func TestDetectSandboxWindowsFromTasklistHyperVVmicsvc(t *testing.T) {
+	detection := detectSandboxWindowsFromTasklist("svchost.exe vmicsvc.exe")
+	if detection.Type != windowsSandboxTypeHyperV {
+		t.Fatalf("expected %s detection, got %q", windowsSandboxTypeHyperV, detection.Type)
+	}
+	if detection.Confidence < windowsConfidenceHyperVIntegration {
+		t.Fatalf("expected Hyper-V confidence >= %d, got %d", windowsConfidenceHyperVIntegration, detection.Confidence)
+	}
+}
+
+func TestIsWindowsHyperVBaseboardOutput(t *testing.T) {
+	out := "Manufacturer           Product\r\nMicrosoft Corporation  Virtual Machine\r\n"
+	if !isWindowsHyperVBaseboardOutput(out) {
+		t.Fatalf("expected Hyper-V baseboard output to be detected")
+	}
+}
+
+func TestIsWindowsHyperVBaseboardOutputNegative(t *testing.T) {
+	out := "Manufacturer Product\r\nDell Inc. Latitude\r\n"
+	if isWindowsHyperVBaseboardOutput(out) {
+		t.Fatalf("expected non-Hyper-V baseboard output to be ignored")
+	}
+}
+
+func TestIsWindowsHyperVVendorModelOutput(t *testing.T) {
+	out := "Manufacturer           Model\r\nMicrosoft Corporation  Virtual Machine\r\n"
+	if !isWindowsHyperVVendorModelOutput(out) {
+		t.Fatalf("expected Hyper-V vendor/model output to be detected")
+	}
+}
+
+func TestIsWindowsHyperVVendorModelOutputNegative(t *testing.T) {
+	out := "Manufacturer  Model\r\nDell Inc.     Precision\r\n"
+	if isWindowsHyperVVendorModelOutput(out) {
+		t.Fatalf("expected non-Hyper-V vendor/model output to be ignored")
+	}
+}
+
+func TestIsWindowsHyperVSMBIOS(t *testing.T) {
+	data := []byte("...Microsoft Corporation...Virtual Machine...")
+	if !isWindowsHyperVSMBIOS(data) {
+		t.Fatalf("expected Hyper-V SMBIOS marker to be detected")
+	}
+}
+
+func TestIsWindowsHyperVSMBIOSNegative(t *testing.T) {
+	data := []byte("...Dell Inc...Latitude...")
+	if isWindowsHyperVSMBIOS(data) {
+		t.Fatalf("expected non-Hyper-V SMBIOS marker to be ignored")
+	}
+}
+
+func TestIsWindowsHyperVPnPOutput(t *testing.T) {
+	out := "Name\r\nMicrosoft Hyper-V Virtual Machine Bus Provider\r\n"
+	if !isWindowsHyperVPnPOutput(out) {
+		t.Fatalf("expected Hyper-V PnP output to be detected")
+	}
+}
+
+func TestIsWindowsHyperVPnPOutputNegative(t *testing.T) {
+	out := "Name\r\nMicrosoft Hyper-V Virtual Ethernet Adapter\r\n"
+	if isWindowsHyperVPnPOutput(out) {
+		t.Fatalf("expected host-side Hyper-V adapter output to be ignored")
+	}
+}
+
+func TestHasWindowsHyperVHostProcesses(t *testing.T) {
+	if !hasWindowsHyperVHostProcesses("svchost.exe vmcompute.exe") {
+		t.Fatalf("expected Hyper-V host process set to be detected")
+	}
+}
+
+func TestHasWindowsHyperVHostProcessesNegative(t *testing.T) {
+	if hasWindowsHyperVHostProcesses("svchost.exe explorer.exe") {
+		t.Fatalf("expected non-host process list to be ignored")
+	}
+}
+
+func TestIsWindowsRegistryVirtualMachineKeyOutput(t *testing.T) {
+	out := "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VirtualMachine\\Guest"
+	if !isWindowsRegistryVirtualMachineKeyOutput(out) {
+		t.Fatalf("expected Hyper-V virtual machine key output to be detected")
+	}
+}
+
+func TestIsWindowsHyperVRegistryBIOSOutput(t *testing.T) {
+	manufacturer := "SystemManufacturer    REG_SZ    Microsoft Corporation"
+	product := "SystemProductName      REG_SZ    Virtual Machine"
+	if !isWindowsHyperVRegistryBIOSOutput(manufacturer, product) {
+		t.Fatalf("expected Hyper-V BIOS registry output to be detected")
+	}
+}
+
+func TestIsWindowsHyperVRegistryBIOSOutputNegative(t *testing.T) {
+	manufacturer := "SystemManufacturer    REG_SZ    Dell Inc."
+	product := "SystemProductName      REG_SZ    Latitude"
+	if isWindowsHyperVRegistryBIOSOutput(manufacturer, product) {
+		t.Fatalf("expected non-Hyper-V BIOS registry output to be ignored")
+	}
+}
+
 func TestDetectSandboxWindowsFromTasklistHostHyperVProcessesNoSignal(t *testing.T) {
 	detection := detectSandboxWindowsFromTasklist("vmcompute.exe vmwp.exe vmms.exe")
 	if detection.Type != "" || detection.Confidence != 0 {
@@ -113,6 +214,17 @@ func TestFinalizeWindowsDetectionCapsConfidence(t *testing.T) {
 	}
 	if detection.Type != windowsSandboxTypeWSL {
 		t.Fatalf("expected type %q, got %q", windowsSandboxTypeWSL, detection.Type)
+	}
+}
+
+func TestFinalizeWindowsDetectionTieBreakPrefersHyperV(t *testing.T) {
+	typeScore := map[string]int{
+		windowsSandboxTypeHyperV: 85,
+		windowsSandboxTypeWSL:    85,
+	}
+	detection := finalizeWindowsDetection(typeScore, []string{windowsIndicatorWMICBaseboardHV, windowsIndicatorEnvWSLContext})
+	if detection.Type != windowsSandboxTypeHyperV {
+		t.Fatalf("expected tie-break to prefer %q, got %q", windowsSandboxTypeHyperV, detection.Type)
 	}
 }
 
