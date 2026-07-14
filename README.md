@@ -306,3 +306,10 @@ snippet completions), see:
 - [docs/VSCODE_LSP_TEACHING_REFERENCE.md](docs/VSCODE_LSP_TEACHING_REFERENCE.md)
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
+
+## License
+
+Mutant (including the programming language implementation and LSP in this
+repository) is licensed under GNU AGPL v3.0 only.
+
+See [LICENSE](LICENSE).

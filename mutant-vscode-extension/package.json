@@ -4,6 +4,11 @@
     "description": "Language support for Mutant with LSP-powered navigation, diagnostics, and rename.",
     "version": "0.0.1",
     "publisher": "mutant",
+    "license": "AGPL-3.0-only",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/aoiflux/mutant.git"
+    },
     "engines": {
         "vscode": "^1.90.0"
     },
@@ -70,7 +75,7 @@
                 "mutant.languageServer.path": {
                     "type": "string",
                     "default": "",
-                    "description": "Path or command name for the Mutant language server executable. Leave empty to auto-detect in the current workspace."
+                    "description": "Path or command name for the Mutant language server executable. Leave empty to auto-detect packaged platform binary first, then workspace/PATH."
                 },
                 "mutant.languageServer.args": {
                     "type": "array",
@@ -143,7 +148,8 @@
         }
     },
     "scripts": {
-        "vscode:prepublish": "npm run compile",
+        "prepare:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs",
+        "vscode:prepublish": "npm run prepare:lsp-bins && npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
         "lint": "eslint src --ext ts",

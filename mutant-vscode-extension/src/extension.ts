@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { chmodSync, existsSync, readdirSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   CloseAction,
   ErrorAction,
@@ -14,6 +14,7 @@ let lspState: "starting" | "running" | "failed" | "stopped" = "stopped";
 let lspLastError = "";
 let lspCommand = "";
 let lspOutput: vscode.OutputChannel | undefined;
+let extensionInstallPath = "";
 const maxBufferedLogLines = 1000;
 const lspLogBuffer: string[] = [];
 const restartBackoffWindowMs = 3 * 60 * 1000;
@@ -32,6 +33,7 @@ type BinaryCandidate = {
 };
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionInstallPath = context.extensionPath;
   lspOutput = vscode.window.createOutputChannel("Mutant LSP");
   context.subscriptions.push(lspOutput);
 
@@ -102,17 +104,30 @@ function resolveLanguageServerCommand(config: vscode.WorkspaceConfiguration): st
   const configured = config.get<string>("languageServer.path", "").trim();
   const folders = vscode.workspace.workspaceFolders ?? [];
   const roots = folders.map((folder) => folder.uri.fsPath);
-  return resolveLanguageServerCommandFromInputs(configured, roots, process.platform);
+  return resolveLanguageServerCommandFromInputs(
+    configured,
+    roots,
+    process.platform,
+    process.arch,
+    extensionInstallPath
+  );
 }
 
 function resolveLanguageServerCommandFromInputs(
   configured: string,
   workspaceRoots: string[],
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  arch: string,
+  extensionPath?: string
 ): string {
   const trimmedConfigured = configured.trim();
   if (trimmedConfigured.length > 0) {
     return trimmedConfigured;
+  }
+
+  const bundledServerPath = resolveBundledLanguageServerPath(platform, arch, extensionPath);
+  if (bundledServerPath) {
+    return bundledServerPath;
   }
 
   const searchDirectories = new Set<string>();
@@ -130,6 +145,53 @@ function resolveLanguageServerCommandFromInputs(
     return "mlsp.exe";
   }
   return "mlsp";
+}
+
+function resolveBundledLanguageServerPath(
+  platform: NodeJS.Platform,
+  arch: string,
+  extensionPath?: string
+): string | undefined {
+  if (!extensionPath) {
+    return undefined;
+  }
+
+  const bundleName = bundledLanguageServerBinaryName(platform, arch);
+  if (!bundleName) {
+    return undefined;
+  }
+
+  const candidate = join(extensionPath, "bin", bundleName);
+  if (!existsSync(candidate)) {
+    return undefined;
+  }
+
+  return candidate;
+}
+
+function bundledLanguageServerBinaryName(platform: NodeJS.Platform, arch: string): string | undefined {
+  let osName = "";
+  if (platform === "win32") {
+    osName = "windows";
+  } else if (platform === "linux") {
+    osName = "linux";
+  } else if (platform === "darwin") {
+    osName = "darwin";
+  } else {
+    return undefined;
+  }
+
+  let archName = "";
+  if (arch === "x64") {
+    archName = "amd64";
+  } else if (arch === "arm64") {
+    archName = "arm64";
+  } else {
+    return undefined;
+  }
+
+  const suffix = platform === "win32" ? ".exe" : "";
+  return `mlsp-${osName}-${archName}${suffix}`;
 }
 
 function findLatestServerBinary(searchDirectories: string[]): string | undefined {
@@ -334,6 +396,15 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
   lspCommand = command;
   lspState = "starting";
   lspLastError = "";
+
+  if (process.platform !== "win32" && isAbsolute(command) && existsSync(command)) {
+    try {
+      chmodSync(command, 0o755);
+    } catch {
+      // Continue even if permissions cannot be adjusted; startup errors are surfaced below.
+    }
+  }
+
   logLsp(`Starting language server. Command: ${command}`);
   if (args.length > 0) {
     logLsp(`Server args: ${args.join(" ")}`);
@@ -516,8 +587,14 @@ export const __test = {
   resolveLanguageServerCommandFromInputs(
     configured: string,
     workspaceRoots: string[],
-    platform: NodeJS.Platform
+    platform: NodeJS.Platform,
+    arch: string,
+    extensionPath?: string
   ): string {
-    return resolveLanguageServerCommandFromInputs(configured, workspaceRoots, platform);
+    return resolveLanguageServerCommandFromInputs(configured, workspaceRoots, platform, arch, extensionPath);
+  },
+
+  bundledLanguageServerBinaryName(platform: NodeJS.Platform, arch: string): string | undefined {
+    return bundledLanguageServerBinaryName(platform, arch);
   },
 };

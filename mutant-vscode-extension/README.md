@@ -12,7 +12,7 @@ VS Code language support for Mutant.
 ## Configuration
 
 - `mutant.languageServer.path`: executable/command path for Mutant LSP (default:
-  empty string; auto-detect in workspace)
+  empty string; auto-detect packaged binary first, then workspace)
 - `mutant.languageServer.args`: additional CLI args for the server
 - `mutant.lint.rules.duplicateTopLevelDeclaration.severity`: severity for the
   duplicate declaration lint rule (`error`, `warning`, `information`, `hint`,
@@ -32,9 +32,19 @@ configuration defaults, so canonical style is enforced when saving. By default,
 `editor.formatOnType` remains disabled for Mutant files; enable
 `mutant.format.onType.enabled` if you want live formatting while typing.
 
-When `mutant.languageServer.path` is empty, the extension checks common local
-paths such as `mlsp(.exe)` in the workspace and parent folder before falling
-back to command lookup from PATH.
+When `mutant.languageServer.path` is empty, the extension first tries packaged
+platform binaries in `bin/`:
+
+- `mlsp-windows-amd64.exe`
+- `mlsp-windows-arm64.exe`
+- `mlsp-linux-amd64`
+- `mlsp-linux-arm64`
+- `mlsp-darwin-amd64`
+- `mlsp-darwin-arm64`
+
+If no packaged binary matches the current platform/arch, it then checks common
+local paths such as `mlsp(.exe)` in the workspace and parent folder before
+falling back to command lookup from PATH.
 
 Setting a lint rule severity to `off` suppresses that rule.
 
@@ -49,11 +59,33 @@ Setting a lint rule severity to `off` suppresses that rule.
 ```
 
 ```bash
-./lsp/build.sh --host-only
+../lsp/build.sh --host-only
 ```
 
-This produces `mlsp` artifacts in `lsp/dist/` for local extension use. 4. Press
-`F5` in VS Code to launch the extension development host
+This produces `mlsp` artifacts in `lsp/dist/` for local extension use.
+
+4. Press `F5` in VS Code to launch the extension development host.
+
+For publishing with bundled binaries:
+
+1. Build all LSP targets:
+
+```powershell
+../lsp/build.ps1
+```
+
+```bash
+../lsp/build.sh
+```
+
+2. Stage binaries into extension `bin/`:
+
+```bash
+npm run prepare:lsp-bins
+```
+
+3. Package/publish the extension. `vscode:prepublish` already runs
+   `prepare:lsp-bins` automatically.
 
 Debug configuration is included in `.vscode/launch.json` and build tasks are in
 `.vscode/tasks.json`.
@@ -95,3 +127,9 @@ Key settings:
   semantic highlighting.
 - Formatting: run `Format Document` and confirm trailing spaces are removed and
   a single final newline remains.
+
+## License
+
+This extension is licensed under GNU AGPL v3.0 only.
+
+See [LICENSE](LICENSE).

@@ -1,5 +1,5 @@
 import * as assert from "node:assert";
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -137,7 +137,8 @@ suite("Mutant extension integration", () => {
       const selected = __test.resolveLanguageServerCommandFromInputs(
         "",
         [workspaceRoot, join(parentRoot, "child")],
-        "win32"
+        "win32",
+        "x64"
       );
 
       assert.strictEqual(selected, newer, "expected newest local binary to be selected");
@@ -151,7 +152,8 @@ suite("Mutant extension integration", () => {
     const selected = __test.resolveLanguageServerCommandFromInputs(
       "  C:/tools/mlsp.exe  ",
       ["C:/repo"],
-      "win32"
+      "win32",
+      "x64"
     );
 
     assert.strictEqual(selected, "C:/tools/mlsp.exe");
@@ -165,10 +167,43 @@ suite("Mutant extension integration", () => {
       writeFileSync(legacy, "legacy");
       utimesSync(legacy, new Date(3_000), new Date(3_000));
 
-      const selected = __test.resolveLanguageServerCommandFromInputs("", [workspaceRoot], "win32");
+      const selected = __test.resolveLanguageServerCommandFromInputs("", [workspaceRoot], "win32", "x64");
       assert.strictEqual(selected, legacy, "expected legacy mutantlsp binary to remain discoverable");
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }
+  });
+
+  test("prefers bundled platform binary when present", () => {
+    const extensionRoot = mkdtempSync(join(tmpdir(), "mutant-ext-root-"));
+
+    try {
+      mkdirSync(join(extensionRoot, "bin"), { recursive: true });
+      const bundled = join(extensionRoot, "bin", "mlsp-windows-amd64.exe");
+      writeFileSync(bundled, "bundled");
+
+      const selected = __test.resolveLanguageServerCommandFromInputs(
+        "",
+        [join(extensionRoot, "workspace")],
+        "win32",
+        "x64",
+        extensionRoot
+      );
+
+      assert.strictEqual(selected, bundled, "expected bundled binary to be selected first");
+    } finally {
+      rmSync(extensionRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("maps platform and arch to release binary names", () => {
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("win32", "x64"), "mlsp-windows-amd64.exe");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("win32", "arm64"), "mlsp-windows-arm64.exe");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("linux", "x64"), "mlsp-linux-amd64");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("linux", "arm64"), "mlsp-linux-arm64");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("darwin", "x64"), "mlsp-darwin-amd64");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("darwin", "arm64"), "mlsp-darwin-arm64");
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("freebsd", "x64"), undefined);
+    assert.strictEqual(__test.bundledLanguageServerBinaryName("linux", "arm"), undefined);
   });
 });
