@@ -14,5 +14,5 @@ let persist, err = detect_persistence({
 });
 putln("detect_persistence:", persist, "err:", err);
 
-let files, err = detect_suspicious_files(["examples/memory_dump.bin"]);
+let files, err = detect_suspicious_files(["examples/data/memory_dump.bin"]);
 putln("detect_suspicious_files:", files, "err:", err);

@@ -1,6 +1,6 @@
 putln("=== Registry Forensics Builtins ===");
 
-let hive, err = reg_open("examples/offline_hive.json");
+let hive, err = reg_open("examples/data/offline_hive.json");
 putln("reg_open:", hive, "err:", err);
 
 let handle = hive["handle"];

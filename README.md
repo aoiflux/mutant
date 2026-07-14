@@ -139,29 +139,68 @@ available:
 
 Mutant includes an experimental browser REPL build target.
 
-Build wasm artifact:
+Build the wasm bundle into the default output folder:
 
 ```bash
-GOOS=js GOARCH=wasm go build -o examples/wasm-repl/mutant_repl.wasm ./cmd/replwasm
+./scripts/build.sh --host-only --wasm-repl
 ```
-
-Copy Go's `wasm_exec.js` next to the demo page (`examples/wasm-repl/`), then
-serve that folder with any static server.
-
-PowerShell example:
 
 ```powershell
-$goRoot = (go env GOROOT)
-Copy-Item "$goRoot/lib/wasm/wasm_exec.js" "examples/wasm-repl/wasm_exec.js" -Force
+./scripts/build.ps1 -HostOnly -WasmRepl
 ```
 
-Some older Go distributions used `misc/wasm/wasm_exec.js`; if `lib/wasm` is
-missing in your setup, use that legacy path instead.
+By default that produces a browser bundle in `dist/wasm-repl/`.
 
-The browser bridge exposes:
+There is now a checked-in example page at `examples/wasm-repl/index.html`. Build
+into that folder if you want the HTML page and wasm artifacts side by side:
+
+```bash
+./scripts/build.sh --host-only --wasm-repl --wasm-out-dir examples/wasm-repl
+```
+
+```powershell
+./scripts/build.ps1 -HostOnly -WasmRepl -WasmOutDir examples/wasm-repl
+```
+
+Then serve `examples/wasm-repl/` with any static server. The page expects these
+files to exist side-by-side:
+
+- `examples/wasm-repl/index.html`
+- `examples/wasm-repl/mutant_repl.wasm`
+- `examples/wasm-repl/wasm_exec.js`
+
+The browser bridge currently exposes:
 
 - `mutantReplReady` (boolean)
-- `mutantReplEval(input)` -> `{ ok, output?, error?, supported }`
+- `mutantReplEval(input)` -> `{ ok, output?, error?, supported, builtins }`
+- `mutantReplComplete(prefix, mode)` -> `{ ok, candidates }`
+- `mutantReplCompleteLine(line, mode)` -> `{ ok, candidates }`
+
+Minimal JavaScript usage:
+
+```html
+<script src="./wasm_exec.js"></script>
+<script>
+  const go = new Go();
+
+  async function start() {
+    const response = await fetch("./mutant_repl.wasm");
+    const { instance } = await WebAssembly.instantiateStreaming(
+      response,
+      go.importObject,
+    );
+    go.run(instance);
+
+    const result = window.mutantReplEval("len([1, 2, 3])");
+    console.log(result.output);
+
+    const completions = window.mutantReplCompleteLine("text_", "supported");
+    console.log(completions.candidates);
+  }
+
+  start();
+</script>
+```
 
 Current wasm REPL support intentionally focuses on a lightweight subset:
 

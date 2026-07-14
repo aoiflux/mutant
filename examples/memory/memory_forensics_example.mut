@@ -1,6 +1,6 @@
 putln("=== Memory Forensics Builtins ===");
 
-let dump_path = "examples/memory_dump.bin";
+let dump_path = "examples/data/memory_dump.bin";
 
 let regions, err = mem_map(dump_path);
 putln("mem_map:", regions, "err:", err);

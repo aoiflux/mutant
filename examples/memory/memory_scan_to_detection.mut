@@ -1,6 +1,6 @@
 putln("=== Memory Scan To Detection ===");
 
-let dump = "examples/memory_dump.bin";
+let dump = "examples/data/memory_dump.bin";
 
 let strings, err = mem_strings(dump, 5);
 putln("mem_strings count:", len(strings), "err:", err);

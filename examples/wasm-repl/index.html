@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mutant WASM REPL</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5efe4;
+      --panel: rgba(255, 252, 246, 0.92);
+      --panel-strong: #fffaf0;
+      --ink: #1c1917;
+      --muted: #6b5f56;
+      --accent: #0f766e;
+      --accent-strong: #134e4a;
+      --border: rgba(28, 25, 23, 0.14);
+      --shadow: 0 22px 60px rgba(28, 25, 23, 0.12);
+      --radius: 18px;
+      --mono: "Cascadia Code", "Fira Code", Consolas, monospace;
+      --sans: "Segoe UI", "Aptos", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.22), transparent 32%),
+        radial-gradient(circle at top right, rgba(217, 119, 6, 0.18), transparent 28%),
+        linear-gradient(180deg, #f9f2e6 0%, var(--bg) 100%);
+      padding: 32px 18px 48px;
+    }
+
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      gap: 20px;
+    }
+
+    .hero,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero {
+      padding: 28px;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.1);
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 14px 0 10px;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 1.02;
+    }
+
+    .hero p,
+    .hint,
+    .meta {
+      color: var(--muted);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+      gap: 20px;
+    }
+
+    .panel {
+      padding: 22px;
+    }
+
+    h2,
+    h3 {
+      margin: 0 0 12px;
+    }
+
+    .editor {
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      font: 15px/1.5 var(--mono);
+      color: var(--ink);
+      background: var(--panel-strong);
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+      align-items: center;
+    }
+
+    button,
+    select {
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      font: inherit;
+    }
+
+    button {
+      padding: 11px 16px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #f8fffe;
+      border-color: transparent;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: var(--accent-strong);
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--ink);
+      border-color: var(--border);
+    }
+
+    select {
+      padding: 10px 12px;
+      background: #fff;
+    }
+
+    .output,
+    .code,
+    .list {
+      white-space: pre-wrap;
+      word-break: break-word;
+      border-radius: 14px;
+      background: #1f2937;
+      color: #ecfeff;
+      padding: 16px;
+      font: 14px/1.55 var(--mono);
+      min-height: 88px;
+    }
+
+    .code {
+      background: #172554;
+    }
+
+    .list {
+      background: #292524;
+      min-height: 64px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .status::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #d97706;
+    }
+
+    .status.ready::before {
+      background: #16a34a;
+    }
+
+    .meta {
+      margin-top: 10px;
+      font-size: 14px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    @media (max-width: 920px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      body {
+        padding: 18px 12px 28px;
+      }
+
+      .hero,
+      .panel {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">Mutant Browser Runtime</span>
+      <h1>Latest WASM REPL example</h1>
+      <p>
+        This page uses the current browser bridge exported by <code>cmd/replwasm</code>:
+        <code>mutantReplEval</code>, <code>mutantReplComplete</code>, and <code>mutantReplCompleteLine</code>.
+      </p>
+      <div id="status" class="status">Booting wasm runtime...</div>
+      <div class="meta">Serve this folder statically after building the wasm bundle.</div>
+    </section>
+
+    <section class="layout">
+      <div class="panel">
+        <h2>Try code</h2>
+        <p class="hint">The sample uses only the browser-safe subset exposed by the wasm REPL.</p>
+        <textarea id="source" class="editor" spellcheck="false">let names = ["mutant", "wasm", "repl"];
+let banner = text_replace("hello browser", "browser", "wasm repl");
+{
+  "banner": banner,
+  "count": len(names),
+  "first": first(names),
+  "rest": rest(names),
+  "has_repl": text_contains(last(names), "repl")
+}</textarea>
+
+        <div class="controls">
+          <button id="run" type="button">Run</button>
+          <button id="complete-line" class="secondary" type="button">Complete Current Line</button>
+          <button id="complete-prefix" class="secondary" type="button">Complete Prefix</button>
+          <label>
+            Completion mode
+            <select id="mode">
+              <option value="supported" selected>supported</option>
+              <option value="all">all</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h3>Output</h3>
+          <div id="output" class="output">Waiting for runtime...</div>
+        </section>
+
+        <section class="panel">
+          <h3>Completion candidates</h3>
+          <div id="candidates" class="list">No completion request yet.</div>
+        </section>
+
+        <section class="panel">
+          <h3>Supported syntax</h3>
+          <div id="supported" class="code">Loading...</div>
+        </section>
+
+        <section class="panel">
+          <h3>Builtins exposed in wasm</h3>
+          <div id="builtins" class="list">Loading...</div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="./wasm_exec.js"></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+    const candidatesEl = document.getElementById("candidates");
+    const supportedEl = document.getElementById("supported");
+    const builtinsEl = document.getElementById("builtins");
+    const sourceEl = document.getElementById("source");
+    const modeEl = document.getElementById("mode");
+
+    function setStatus(text, ready) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("ready", Boolean(ready));
+    }
+
+    function renderCandidates(candidates) {
+      if (!Array.isArray(candidates) || candidates.length === 0) {
+        candidatesEl.textContent = "No candidates.";
+        return;
+      }
+      candidatesEl.textContent = candidates.join("\n");
+    }
+
+    function ensureApi() {
+      if (typeof window.mutantReplEval !== "function") {
+        throw new Error("mutantReplEval is not available yet");
+      }
+    }
+
+    async function boot() {
+      if (typeof Go !== "function") {
+        setStatus("Go wasm runtime loader is missing.", false);
+        outputEl.textContent = "Expected wasm_exec.js to define the Go runtime.";
+        return;
+      }
+
+      const go = new Go();
+      const response = await fetch("./mutant_repl.wasm");
+      if (!response.ok) {
+        throw new Error(`unable to load wasm: ${response.status} ${response.statusText}`);
+      }
+
+      const { instance } = await WebAssembly.instantiateStreaming(response, go.importObject);
+      go.run(instance);
+
+      if (!window.mutantReplReady) {
+        throw new Error("wasm runtime started without setting mutantReplReady");
+      }
+
+      setStatus("Runtime ready.", true);
+      runSnippet();
+    }
+
+    function runSnippet() {
+      ensureApi();
+      const result = window.mutantReplEval(sourceEl.value);
+      if (!result.ok) {
+        outputEl.textContent = result.error || "Unknown error";
+        return;
+      }
+
+      outputEl.textContent = result.output || "<null>";
+      supportedEl.textContent = result.supported || "";
+      builtinsEl.textContent = Array.isArray(result.builtins) ? result.builtins.join("\n") : "";
+    }
+
+    function completePrefix() {
+      ensureApi();
+      const prefix = window.prompt("Prefix to complete", "text_");
+      if (prefix === null) {
+        return;
+      }
+      const result = window.mutantReplComplete(prefix, modeEl.value);
+      renderCandidates(result.candidates);
+    }
+
+    function completeLine() {
+      ensureApi();
+      const value = sourceEl.value;
+      const selectionEnd = sourceEl.selectionEnd || value.length;
+      const currentLine = value.slice(0, selectionEnd).split(/\r?\n/).pop() || "";
+      const result = window.mutantReplCompleteLine(currentLine, modeEl.value);
+      renderCandidates(result.candidates);
+    }
+
+    document.getElementById("run").addEventListener("click", runSnippet);
+    document.getElementById("complete-prefix").addEventListener("click", completePrefix);
+    document.getElementById("complete-line").addEventListener("click", completeLine);
+
+    boot().catch((error) => {
+      setStatus("Runtime failed to load.", false);
+      outputEl.textContent = error instanceof Error ? error.message : String(error);
+      supportedEl.textContent = "Unavailable";
+      builtinsEl.textContent = "Unavailable";
+    });
+  </script>
+</body>
+</html>

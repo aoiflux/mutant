@@ -8,7 +8,7 @@ let persistence_facts = {
 let persistence, err = detect_persistence(persistence_facts);
 putln("detect_persistence:", persistence, "err:", err);
 
-let injection, err = detect_injection({"mem_path": "examples/memory_dump.bin"});
+let injection, err = detect_injection({"mem_path": "examples/data/memory_dump.bin"});
 putln("detect_injection:", injection, "err:", err);
 
 let flows = [
@@ -28,5 +28,5 @@ let priv_esc, err = detect_priv_esc({
 });
 putln("detect_priv_esc:", priv_esc, "err:", err);
 
-let suspicious, err = detect_suspicious_files(["examples/memory_dump.bin"]);
+let suspicious, err = detect_suspicious_files(["examples/data/memory_dump.bin"]);
 putln("detect_suspicious_files:", suspicious, "err:", err);

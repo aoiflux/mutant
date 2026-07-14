@@ -1,6 +1,6 @@
 putln("=== Registry Persistence Hunt ===");
 
-let hive_path = "examples/offline_hive.json";
+let hive_path = "examples/data/offline_hive.json";
 
 let hive, err = reg_open(hive_path);
 putln("reg_open:", hive, "err:", err);

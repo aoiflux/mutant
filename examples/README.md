@@ -13,8 +13,8 @@ mutant examples/text/text_matching_example.mut
 Some examples use fixture files in:
 
 - `examples/data/`
-- `examples/memory_dump.bin`
-- `examples/offline_hive.json`
+- `examples/data/memory_dump.bin`
+- `examples/data/offline_hive.json`
 
 ## Folder map
 

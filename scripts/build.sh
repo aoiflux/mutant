@@ -49,7 +49,7 @@ Options:
   --host-only         Build only GOHOSTOS/GOHOSTARCH target
   --wasm-repl         Build browser REPL wasm artifact and copy wasm_exec.js (default: enabled)
   --no-wasm-repl      Skip browser REPL wasm build
-  --wasm-out-dir <d>  Output directory for wasm artifacts (default: examples/wasm-repl)
+  --wasm-out-dir <d>  Output directory for wasm artifacts (default: dist/wasm-repl)
 EOF
       exit 0
       ;;
