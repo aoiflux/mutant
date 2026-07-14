@@ -23,6 +23,10 @@ const (
 )
 
 func ResolveTamperResponse(secureMode bool) string {
+	if securityDevModeEnabled() {
+		return TamperResponseWarn
+	}
+
 	configured := strings.ToLower(strings.TrimSpace(os.Getenv(TamperResponseEnv)))
 	switch configured {
 	case TamperResponseWarn, TamperResponseDelay, TamperResponseTerminate:

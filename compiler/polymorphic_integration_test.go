@@ -11,6 +11,7 @@ import (
 	"mutant/object"
 	"mutant/parser"
 	"mutant/vm"
+	"os"
 	"strings"
 	"testing"
 )
@@ -85,12 +86,23 @@ func compileAndRun(t *testing.T, input string, level int, seed int64) object.Obj
 	b.Instructions = stripPolymorphicMarker(b.Instructions)
 	mutil.EncryptByteCode(b, "poly-test-pass")
 
-	machine := vm.NewWithPasswordAndGlobalStore(b, "poly-test-pass", make([]object.Object, global.GlobalSize))
+	secureMode := !devModeEnabled()
+	machine := vm.NewWithPasswordAndGlobalStoreMode(b, "poly-test-pass", make([]object.Object, global.GlobalSize), secureMode)
 	if err := machine.Run(); err != nil {
 		t.Fatalf("vm run failed: %v", err)
 	}
 
 	return machine.LastPoppedStackElement()
+}
+
+func devModeEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv("MUTANT_DEV_MODE")))
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func compileBytecode(t *testing.T, input string, level int, seed int64) *compiler.ByteCode {
