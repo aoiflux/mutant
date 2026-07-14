@@ -11,14 +11,11 @@ import (
 	"mutant/object"
 	"mutant/parser"
 	"mutant/vm"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestPolymorphicSemanticEquivalenceSafeConstantStage(t *testing.T) {
-	t.Setenv("MUTANT_DEV_MODE", "1")
-
 	programText := "let a = 2; let b = 3; let c = 5; (a + b) * c"
 
 	baselineObj := compileAndRun(t, programText, 0, 0)
@@ -36,8 +33,6 @@ func TestPolymorphicSemanticEquivalenceSafeConstantStage(t *testing.T) {
 }
 
 func TestPolymorphicReproducibilityBySeedForSafeStage(t *testing.T) {
-	t.Setenv("MUTANT_DEV_MODE", "1")
-
 	programText := "let x = 10; let y = 20; let z = 30; x + y + z"
 	seed := int64(20260712)
 	level := 7
@@ -51,10 +46,6 @@ func TestPolymorphicReproducibilityBySeedForSafeStage(t *testing.T) {
 }
 
 func TestPolymorphicSafeStagesRollbackPath(t *testing.T) {
-	t.Setenv("MUTANT_DEV_MODE", "1")
-
-	t.Setenv("MUTANT_POLYMORPHIC_SAFE_STAGES", "0")
-
 	programText := "let a = 1; let b = 2; let c = 3; a + b + c"
 	seed := int64(99)
 
@@ -86,23 +77,12 @@ func compileAndRun(t *testing.T, input string, level int, seed int64) object.Obj
 	b.Instructions = stripPolymorphicMarker(b.Instructions)
 	mutil.EncryptByteCode(b, "poly-test-pass")
 
-	secureMode := !devModeEnabled()
-	machine := vm.NewWithPasswordAndGlobalStoreMode(b, "poly-test-pass", make([]object.Object, global.GlobalSize), secureMode)
+	machine := vm.NewWithPasswordAndGlobalStoreMode(b, "poly-test-pass", make([]object.Object, global.GlobalSize), false)
 	if err := machine.Run(); err != nil {
 		t.Fatalf("vm run failed: %v", err)
 	}
 
 	return machine.LastPoppedStackElement()
-}
-
-func devModeEnabled() bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv("MUTANT_DEV_MODE")))
-	switch raw {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 func compileBytecode(t *testing.T, input string, level int, seed int64) *compiler.ByteCode {

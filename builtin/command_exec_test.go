@@ -89,8 +89,6 @@ func TestCmdRunEmptyBuilderErrors(t *testing.T) {
 }
 
 func TestExecStringBlockedWhenExecutionExplicitlyDisabled(t *testing.T) {
-	t.Setenv(security.CommandExecEnabledEnv, "0")
-
 	result := ExecString(&object.String{Value: "Write-Output 'mutant'"})
 	payload, errObj := unwrapPair(t, result)
 	if errObj != nil {

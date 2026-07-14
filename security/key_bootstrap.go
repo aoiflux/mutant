@@ -10,10 +10,6 @@ import (
 )
 
 func ResolveLocalKeyStoreDir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv(LocalKeyStoreDirEnv)); dir != "" {
-		return dir, nil
-	}
-
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)
@@ -64,11 +60,6 @@ func EnsureLocalSigningKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, bool, s
 }
 
 func ResolveTrustedPublicKeyHex() (string, bool, string, error) {
-	trusted := strings.TrimSpace(os.Getenv(TrustedPublicKeyEnv))
-	if trusted != "" {
-		return trusted, false, "", nil
-	}
-
 	_, publicKey, created, baseDir, err := EnsureLocalSigningKeyPair()
 	if err != nil {
 		return "", false, "", err

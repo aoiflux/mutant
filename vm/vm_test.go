@@ -226,22 +226,20 @@ func TestIntegerArithmatic(t *testing.T) {
 }
 
 func TestResolveVMGlobalMemoryModeDefaultsRuntime(t *testing.T) {
-	t.Setenv(vMGlobalMemoryModeEnv, "")
 	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeRuntime {
 		t.Fatalf("expected default memory mode runtime, got %q", got)
 	}
 }
 
 func TestResolveVMGlobalMemoryModeWrapper(t *testing.T) {
-	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
-	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeWrapper {
-		t.Fatalf("expected memory mode wrapper, got %q", got)
+	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeRuntime {
+		t.Fatalf("expected deterministic memory mode runtime, got %q", got)
 	}
 }
 
 func TestWrapperGlobalModeStoresSupportedTypeInSecureWrapper(t *testing.T) {
-	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
 	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+	vm.memoryMode = vMMemoryModeWrapper
 
 	vm.ensureGlobalCapacity(3)
 	vm.setGlobal(3, &object.Integer{Value: 42})
@@ -256,8 +254,8 @@ func TestWrapperGlobalModeStoresSupportedTypeInSecureWrapper(t *testing.T) {
 }
 
 func TestWrapperGlobalModeFallsBackForUnsupportedType(t *testing.T) {
-	t.Setenv(vMGlobalMemoryModeEnv, "wrapper")
 	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+	vm.memoryMode = vMMemoryModeWrapper
 
 	vm.ensureGlobalCapacity(1)
 	vm.setGlobal(1, &object.Array{Elements: []object.Object{&object.Integer{Value: 1}}})

@@ -2,13 +2,12 @@ package security
 
 import (
 	"crypto/sha256"
-	"os"
-	"strings"
 )
 
-const ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
-
 const (
+	// Deprecated compatibility constant: env-driven profile selection removed.
+	ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
+
 	ProtectionProfileMinimal  = "minimal"
 	ProtectionProfileStandard = "standard"
 	ProtectionProfileParanoid = "paranoid"
@@ -20,13 +19,7 @@ const (
 )
 
 func ResolveProtectionProfile() string {
-	configured := strings.ToLower(strings.TrimSpace(os.Getenv(ProtectionProfileEnv)))
-	switch configured {
-	case ProtectionProfileMinimal, ProtectionProfileStandard, ProtectionProfileParanoid:
-		return configured
-	default:
-		return defaultProtectionProfile
-	}
+	return defaultProtectionProfile
 }
 
 func ResolveProtectionProfileCode() byte {

@@ -3,12 +3,6 @@ package security
 import "testing"
 
 func TestResolveRemoteScanConfigDefaults(t *testing.T) {
-	t.Setenv(RemoteProcessScanEnabledEnv, "")
-	t.Setenv(RemoteProcessScanModeEnv, "")
-	t.Setenv(RemoteProcessScanMaxEnv, "")
-	t.Setenv(RemoteProcessScanIntervalEnv, "")
-	t.Setenv(RemoteProcessScanAllowlistEnv, "")
-
 	cfg := ResolveRemoteScanConfig()
 	if cfg.Enabled {
 		t.Fatalf("expected remote scan disabled by default")
@@ -28,12 +22,6 @@ func TestResolveRemoteScanConfigDefaults(t *testing.T) {
 }
 
 func TestResolveRemoteScanConfigInvalidValuesFallback(t *testing.T) {
-	t.Setenv(RemoteProcessScanEnabledEnv, "1")
-	t.Setenv(RemoteProcessScanModeEnv, "invalid")
-	t.Setenv(RemoteProcessScanMaxEnv, "0")
-	t.Setenv(RemoteProcessScanIntervalEnv, "-1")
-	t.Setenv(RemoteProcessScanAllowlistEnv, "mutant.exe, System, , explorer.exe")
-
 	cfg := ResolveRemoteScanConfig()
 	if !cfg.Enabled {
 		t.Fatalf("expected remote scan enabled")

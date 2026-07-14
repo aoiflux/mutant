@@ -5,25 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	CommandExecEnabledEnv      = "MUTANT_ENABLE_COMMAND_EXEC"
-	CommandExecAllowedShells   = "MUTANT_COMMAND_EXEC_ALLOWED_SHELLS"
-	CommandExecTimeoutMsEnv    = "MUTANT_COMMAND_EXEC_TIMEOUT_MS"
-	CommandExecMaxOutputBytes  = "MUTANT_COMMAND_EXEC_MAX_OUTPUT_BYTES"
-	defaultCommandExecTimeout  = 3000
-	defaultCommandMaxOutput    = 8192
-	minimumCommandExecTimeout  = 100
-	maximumCommandExecTimeout  = 60000
-	minimumCommandMaxOutput    = 256
-	maximumCommandMaxOutput    = 1048576
-	defaultAllowedShellsConfig = "powershell,cmd"
+	defaultCommandExecTimeout = 3000
+	defaultCommandMaxOutput   = 8192
 
 	policyBlockedEmpty    = "blocked_empty"
 	policyBlockedDisabled = "blocked_disabled"
@@ -74,7 +63,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 		}
 	}
 
-	if strings.TrimSpace(os.Getenv(CommandExecEnabledEnv)) != "1" {
+	if true {
 		RecordCommandBlocked(stage)
 		return CommandResult{
 			Allowed:        false,
@@ -160,41 +149,11 @@ func buildShellCommand(shell, command string) (string, []string, error) {
 }
 
 func resolveCommandExecTimeout() time.Duration {
-	raw := strings.TrimSpace(os.Getenv(CommandExecTimeoutMsEnv))
-	if raw == "" {
-		return time.Duration(defaultCommandExecTimeout) * time.Millisecond
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return time.Duration(defaultCommandExecTimeout) * time.Millisecond
-	}
-	if parsed < minimumCommandExecTimeout {
-		parsed = minimumCommandExecTimeout
-	}
-	if parsed > maximumCommandExecTimeout {
-		parsed = maximumCommandExecTimeout
-	}
-	return time.Duration(parsed) * time.Millisecond
+	return time.Duration(defaultCommandExecTimeout) * time.Millisecond
 }
 
 func resolveCommandExecMaxOutput() int {
-	raw := strings.TrimSpace(os.Getenv(CommandExecMaxOutputBytes))
-	if raw == "" {
-		return defaultCommandMaxOutput
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return defaultCommandMaxOutput
-	}
-	if parsed < minimumCommandMaxOutput {
-		parsed = minimumCommandMaxOutput
-	}
-	if parsed > maximumCommandMaxOutput {
-		parsed = maximumCommandMaxOutput
-	}
-	return parsed
+	return defaultCommandMaxOutput
 }
 
 func truncateOutput(value string, limit int) string {

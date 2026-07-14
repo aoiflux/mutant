@@ -1,7 +1,6 @@
 package security
 
 import (
-	"os"
 	"strings"
 )
 
@@ -28,7 +27,7 @@ func RunAntiTamperProbe(requested []string, stage string) ([]AntiTamperSignal, b
 }
 
 func isAntiTamperProbeEnabled() bool {
-	return strings.TrimSpace(strings.ToLower(os.Getenv(AntiTamperProbeEnableEnv))) == "1"
+	return true
 }
 
 func runNativeProbe(requested []string) []AntiTamperSignal {

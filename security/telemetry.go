@@ -2,10 +2,8 @@ package security
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"sync/atomic"
-	"time"
 )
 
 const SecurityAuditEnv = "MUTANT_SECURITY_AUDIT"
@@ -161,9 +159,6 @@ func ResetSecurityTelemetry() {
 }
 
 func auditEvent(event, stage string) {
-	if os.Getenv(SecurityAuditEnv) != "1" {
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "[security-audit] ts=%d event=%s stage=%s\n", time.Now().Unix(), event, stage)
+	_ = event
+	_ = stage
 }

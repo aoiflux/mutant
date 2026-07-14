@@ -23,8 +23,6 @@ func TestResolvePolymorphismSeedUsesTimestampWhenMissing(t *testing.T) {
 }
 
 func TestGenerateCompiledMacroProgramRuns(t *testing.T) {
-	t.Setenv("MUTANT_DEV_MODE", "1")
-
 	tempDir := t.TempDir()
 	src := filepath.Join(tempDir, "macro_example.mut")
 	dst := filepath.Join(tempDir, "macro_example")

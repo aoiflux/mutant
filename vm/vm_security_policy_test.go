@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"mutant/code"
 	"mutant/compiler"
@@ -16,8 +15,8 @@ import (
 func TestVMIntegrityTamperResponseModes(t *testing.T) {
 	t.Run("warn", func(t *testing.T) {
 		security.ResetSecurityTelemetry()
-		t.Setenv(security.TamperResponseEnv, security.TamperResponseWarn)
 		vm := tamperedVMForPolicyTest()
+		vm.secureMode = false
 
 		err := vm.verifyCurrentFrameIntegrity()
 		if err != nil {
@@ -30,31 +29,8 @@ func TestVMIntegrityTamperResponseModes(t *testing.T) {
 		}
 	})
 
-	t.Run("delay", func(t *testing.T) {
-		security.ResetSecurityTelemetry()
-		t.Setenv(security.TamperResponseEnv, security.TamperResponseDelay)
-		t.Setenv(security.TamperDelayMsEnv, "1")
-		vm := tamperedVMForPolicyTest()
-
-		start := time.Now()
-		err := vm.verifyCurrentFrameIntegrity()
-		elapsed := time.Since(start)
-		if err != nil {
-			t.Fatalf("expected delay mode to continue, got: %v", err)
-		}
-		if elapsed <= 0 {
-			t.Fatalf("expected measurable delay in delay mode")
-		}
-
-		snapshot := security.SecurityTelemetrySnapshot()
-		if snapshot["integrity_failed"] == 0 {
-			t.Fatalf("expected integrity failure telemetry increment in delay mode")
-		}
-	})
-
 	t.Run("terminate", func(t *testing.T) {
 		security.ResetSecurityTelemetry()
-		t.Setenv(security.TamperResponseEnv, security.TamperResponseTerminate)
 		vm := tamperedVMForPolicyTest()
 
 		err := vm.verifyCurrentFrameIntegrity()
@@ -173,7 +149,6 @@ func TestIntegrityProbeScheduleAdvancesWithinBounds(t *testing.T) {
 
 func TestControlFlowIntegrityRejectsInvalidInstructionPointer(t *testing.T) {
 	security.ResetSecurityTelemetry()
-	t.Setenv(security.TamperResponseEnv, security.TamperResponseTerminate)
 
 	bc := &compiler.ByteCode{Instructions: append(code.Make(code.OpConstant, 0), code.Make(code.OpNull)...)}
 	encrypted := mutil.EncryptByteCode(bc, "testpwd")
@@ -193,7 +168,6 @@ func TestControlFlowIntegrityRejectsInvalidInstructionPointer(t *testing.T) {
 
 func TestControlFlowIntegrityAllowsInitialFrameSentinel(t *testing.T) {
 	security.ResetSecurityTelemetry()
-	t.Setenv(security.TamperResponseEnv, security.TamperResponseTerminate)
 
 	bc := &compiler.ByteCode{Instructions: append(code.Make(code.OpConstant, 0), code.Make(code.OpNull)...)}
 	encrypted := mutil.EncryptByteCode(bc, "testpwd")

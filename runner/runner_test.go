@@ -72,31 +72,8 @@ func TestHasStandalonePayloadReportsPresence(t *testing.T) {
 	}
 }
 
-func TestRunSecureModeRejectsMalformedPayload(t *testing.T) {
-	keyPair, err := security.GenerateKeyPair()
-	if err != nil {
-		t.Fatalf("failed to generate key pair: %v", err)
-	}
-
-	t.Setenv(security.TrustedPublicKeyEnv, toHex(t, keyPair.PublicKey))
-
-	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", true, true)
-	if err == nil {
-		t.Fatalf("expected secure mode to reject malformed payload")
-	}
-	if errType != errrs.ERROR {
-		t.Fatalf("expected errrs.ERROR, got %q", errType)
-	}
-	if !errors.Is(err, security.ErrWrongSignature) {
-		t.Fatalf("expected ErrWrongSignature, got: %v", err)
-	}
-}
-
 func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 	keyDir := t.TempDir()
-	t.Setenv(security.LocalKeyStoreDirEnv, keyDir)
-	t.Setenv(security.TrustedPublicKeyEnv, "")
 
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
 	err, errType := Run(path, "", true, true)
@@ -122,8 +99,6 @@ func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 }
 
 func TestRunCompatModeWarnsAndContinuesOnMalformedPayload(t *testing.T) {
-	t.Setenv(security.TamperResponseEnv, security.TamperResponseWarn)
-
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
 	err, errType := Run(path, "", false, false)
 	if err == nil {
@@ -142,8 +117,6 @@ func TestRunSecureModeRejectsTamperedSignedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to generate key pair: %v", err)
 	}
-
-	t.Setenv(security.TrustedPublicKeyEnv, toHex(t, keyPair.PublicKey))
 
 	signed, err := security.SignCode("not-valid-metadata", keyPair.PrivateKey)
 	if err != nil {
@@ -171,8 +144,6 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 		t.Fatalf("failed to generate key pair: %v", err)
 	}
 
-	t.Setenv(security.TrustedPublicKeyEnv, toHex(t, keyPair.PublicKey))
-
 	signed, err := security.SignCode("not-valid-metadata", keyPair.PrivateKey)
 	if err != nil {
 		t.Fatalf("failed to sign payload: %v", err)
@@ -192,8 +163,6 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 }
 
 func TestRunSecureModeWithoutSignerAuthFlagSkipsSignatureVerification(t *testing.T) {
-	t.Setenv(security.TamperResponseEnv, "")
-
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
 	err, errType := Run(path, "", true, false)
 	if err == nil {
@@ -228,7 +197,6 @@ func TestEnforceAntiSandboxSecureModeTerminates(t *testing.T) {
 		isSandboxed = originalSandbox
 	}()
 
-	t.Setenv(security.TamperResponseEnv, "")
 	err := enforceAntiSandbox(true, "test-stage")
 	if err == nil {
 		t.Fatalf("expected secure mode to terminate on sandbox detection")
@@ -245,7 +213,6 @@ func TestEnforceAntiSandboxCompatModeWarnsAndContinues(t *testing.T) {
 		isSandboxed = originalSandbox
 	}()
 
-	t.Setenv(security.TamperResponseEnv, security.TamperResponseWarn)
 	err := enforceAntiSandbox(false, "test-stage")
 	if err != nil {
 		t.Fatalf("expected compat warn mode to continue, got: %v", err)
@@ -266,7 +233,6 @@ func TestEnforceProcessProtectionSecureModeTerminatesOnHighConfidence(t *testing
 		runAntiTamperProbe = originalProbe
 	}()
 
-	t.Setenv(security.TamperResponseEnv, "")
 	err := enforceProcessProtection(true, "test-stage")
 	if err == nil {
 		t.Fatalf("expected secure mode to terminate on high-confidence process protection signal")
@@ -312,7 +278,6 @@ func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
 		runAntiTamperProbe = originalProbe
 	}()
 
-	t.Setenv(security.ProcessProtectionEnabledEnv, "0")
 	err := enforceProcessProtection(true, "test-stage")
 	if err != nil {
 		t.Fatalf("expected disabled process protection to skip enforcement, got: %v", err)
@@ -323,15 +288,12 @@ func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
 }
 
 func TestIsProcessProtectionEnabledDefaultsToTrue(t *testing.T) {
-	t.Setenv(security.ProcessProtectionEnabledEnv, "")
 	if !isProcessProtectionEnabled() {
 		t.Fatalf("expected process protection enabled by default")
 	}
 }
 
 func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
-	t.Setenv(security.TamperResponseEnv, "")
-
 	tests := []struct {
 		name            string
 		processEnv      string
@@ -385,8 +347,6 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 	for _, tt := range tests {
 		tc := tt
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(security.ProcessProtectionEnabledEnv, tc.processEnv)
-
 			called := false
 			originalProbe := runAntiTamperProbe
 			runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
@@ -425,9 +385,6 @@ func TestEnforceRemoteProcessProtectionObserveDoesNotBlock(t *testing.T) {
 		runRemoteProcessScan = originalScan
 	}()
 
-	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
-	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeObserve)
-
 	err := enforceRemoteProcessProtection(true, "test-stage")
 	if err != nil {
 		t.Fatalf("expected observe mode not to block, got: %v", err)
@@ -463,10 +420,6 @@ func TestEnforceRemoteProcessProtectionEnforceModeBlocksOnCritical(t *testing.T)
 		runRemoteProcessScan = originalScan
 	}()
 
-	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
-	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeEnforce)
-	t.Setenv(security.TamperResponseEnv, "")
-
 	err := enforceRemoteProcessProtection(true, "test-stage")
 	if err == nil {
 		t.Fatalf("expected enforce mode to block on critical verdict")
@@ -489,10 +442,6 @@ func TestEnforceRemoteProcessProtectionEnforceModeHighNonCriticalDoesNotBlock(t 
 	defer func() {
 		runRemoteProcessScan = originalScan
 	}()
-
-	t.Setenv(security.RemoteProcessScanEnabledEnv, "1")
-	t.Setenv(security.RemoteProcessScanModeEnv, security.RemoteScanModeEnforce)
-	t.Setenv(security.TamperResponseEnv, "")
 
 	err := enforceRemoteProcessProtection(true, "test-stage")
 	if err != nil {
@@ -571,7 +520,6 @@ func toHex(t *testing.T, b []byte) string {
 
 func makeStandaloneBinaryBlob(t *testing.T, payload []byte) []byte {
 	t.Helper()
-	t.Setenv(security.ProtectionProfileEnv, security.ProtectionProfileStandard)
 	prefix := []byte("runtime-binary")
 	checksum := sha256.Sum256(payload)
 	canary := deriveStandaloneTailCanary(payload, checksum[:])

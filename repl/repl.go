@@ -955,31 +955,12 @@ func completionPrefix(line string) string {
 }
 
 func shouldUseColor(out io.Writer) bool {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("MUTANT_REPL_COLOR")))
-	switch mode {
-	case "1", "true", "on", "always":
-		return true
-	case "0", "false", "off", "never":
-		return false
-	}
-
-	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
-		return false
-	}
-
 	if out != os.Stdout {
 		return false
 	}
 
 	if runtime.GOOS == global.WINDOWS {
-		if os.Getenv("WT_SESSION") != "" || os.Getenv("ANSICON") != "" || strings.ToUpper(os.Getenv("ConEmuANSI")) == "ON" {
-			return true
-		}
-	}
-
-	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
-	if term == "" || term == "dumb" {
-		return runtime.GOOS == global.WINDOWS && os.Getenv("WT_SESSION") != ""
+		return false
 	}
 
 	return true
@@ -1027,9 +1008,6 @@ func styledGeneralSuccessMessage(line string) string {
 
 func resolveReplTheme(name string) (replTheme, string, string) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
-	if normalized == "" {
-		normalized = strings.ToLower(strings.TrimSpace(os.Getenv("MUTANT_REPL_THEME")))
-	}
 	if normalized == "" {
 		return replThemes[defaultReplTheme], defaultReplTheme, ""
 	}

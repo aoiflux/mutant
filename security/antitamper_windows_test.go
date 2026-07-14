@@ -67,34 +67,6 @@ func TestIsLikelyHookBytes(t *testing.T) {
 	}
 }
 
-func TestFindInjectionEnvMarkers(t *testing.T) {
-	t.Setenv("COR_ENABLE_PROFILING", "1")
-	t.Setenv("COR_PROFILER", "")
-	t.Setenv("COR_PROFILER_PATH", "C:\\hooks\\profiler.dll")
-	t.Setenv("JAVA_TOOL_OPTIONS", "")
-	t.Setenv("_NT_SYMBOL_PATH", "srv*")
-
-	markers := findInjectionEnvMarkers()
-	if len(markers) != 3 {
-		t.Fatalf("expected 3 env markers, got %d (%v)", len(markers), markers)
-	}
-
-	expected := map[string]struct{}{
-		"COR_ENABLE_PROFILING": {},
-		"COR_PROFILER_PATH":    {},
-		"_NT_SYMBOL_PATH":      {},
-	}
-	for _, marker := range markers {
-		if _, ok := expected[marker]; !ok {
-			t.Fatalf("unexpected marker %q", marker)
-		}
-		delete(expected, marker)
-	}
-	if len(expected) != 0 {
-		t.Fatalf("missing markers: %v", expected)
-	}
-}
-
 func TestDetectModuleIntegrity(t *testing.T) {
 	withWindowsProbeMocks(
 		t,

@@ -91,27 +91,7 @@ func detectFridaPtrace() AntiTamperSignal {
 }
 
 func detectLDPreload() AntiTamperSignal {
-	if runtime.GOOS == "windows" {
-		present := make([]string, 0, len(windowsInjectionEnvMarkers))
-		for _, name := range windowsInjectionEnvMarkers {
-			if value, ok := os.LookupEnv(name); ok && strings.TrimSpace(value) != "" {
-				present = append(present, name+"="+value)
-			}
-		}
-
-		if len(present) == 0 {
-			return makeSignal(ProbeLDPreload, false, ConfidenceNone, "no windows injection env markers")
-		}
-
-		return makeSignal(ProbeLDPreload, true, ConfidenceLDPreloadWindowsMarkers, "windows_env_markers="+strings.Join(present, ";"))
-	}
-
-	preload := strings.TrimSpace(os.Getenv("LD_PRELOAD"))
-	if preload == "" {
-		return makeSignal(ProbeLDPreload, false, ConfidenceNone, "LD_PRELOAD empty")
-	}
-
-	return makeSignal(ProbeLDPreload, true, ConfidenceLDPreloadDetected, "LD_PRELOAD="+preload)
+	return makeSignal(ProbeLDPreload, false, ConfidenceNone, "env-based preload checks disabled")
 }
 
 func detectCPUIDHypervisor() AntiTamperSignal {

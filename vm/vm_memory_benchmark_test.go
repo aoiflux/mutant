@@ -11,8 +11,8 @@ var benchGlobalObjectSink object.Object
 
 func benchmarkSetGetGlobal(b *testing.B, mode string, valueFactory func(int) object.Object) {
 	b.Helper()
-	b.Setenv(vMGlobalMemoryModeEnv, mode)
 	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+	vm.memoryMode = mode
 	vm.ensureGlobalCapacity(0)
 
 	b.ReportAllocs()

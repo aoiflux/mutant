@@ -6,10 +6,6 @@ import (
 	"strings"
 )
 
-const SecurityDevLogEnv = "MUTANT_SECURITY_DEV_LOG"
-const SecurityLogLevelEnv = "MUTANT_SECURITY_LOG_LEVEL"
-const SecurityDevModeEnv = "MUTANT_DEV_MODE"
-
 const (
 	securityLogLevelNone  = 0
 	securityLogLevelError = 1
@@ -18,41 +14,35 @@ const (
 	securityLogLevelTrace = 4
 )
 
-func boolEnvTrue(name string) bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+var securityDevMode bool
+var securityLogLevel = securityLogLevelNone
+
+func SetSecurityDevMode(enabled bool) {
+	securityDevMode = enabled
+}
+
+func SetSecurityLogLevel(level string) {
+	raw := strings.TrimSpace(strings.ToLower(level))
 	switch raw {
-	case "1", "true", "yes", "on":
-		return true
+	case "error", "err":
+		securityLogLevel = securityLogLevelError
+	case "info":
+		securityLogLevel = securityLogLevelInfo
+	case "debug":
+		securityLogLevel = securityLogLevelDebug
+	case "trace":
+		securityLogLevel = securityLogLevelTrace
 	default:
-		return false
+		securityLogLevel = securityLogLevelNone
 	}
 }
 
 func securityDevModeEnabled() bool {
-	return boolEnvTrue(SecurityDevModeEnv)
+	return securityDevMode
 }
 
 func resolveSecurityLogLevel() int {
-	if boolEnvTrue(SecurityDevLogEnv) {
-		// Backward compatibility for the old binary switch.
-		return securityLogLevelDebug
-	}
-
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(SecurityLogLevelEnv)))
-	switch raw {
-	case "", "none", "off", "silent":
-		return securityLogLevelNone
-	case "error", "err":
-		return securityLogLevelError
-	case "info":
-		return securityLogLevelInfo
-	case "debug":
-		return securityLogLevelDebug
-	case "trace":
-		return securityLogLevelTrace
-	default:
-		return securityLogLevelNone
-	}
+	return securityLogLevel
 }
 
 func securityDevLogEnabled() bool {

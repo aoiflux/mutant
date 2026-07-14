@@ -3,7 +3,6 @@ package security
 import "testing"
 
 func TestRunAntiTamperProbeDisabled(t *testing.T) {
-	t.Setenv(AntiTamperProbeEnableEnv, "0")
 	ResetSecurityTelemetry()
 
 	signals, enabled, err := RunAntiTamperProbe([]string{ProbeCPUIDHypervisor}, "test-disabled")
@@ -24,7 +23,6 @@ func TestRunAntiTamperProbeDisabled(t *testing.T) {
 }
 
 func TestRunAntiTamperProbeEnabled(t *testing.T) {
-	t.Setenv(AntiTamperProbeEnableEnv, "1")
 	ResetSecurityTelemetry()
 
 	signals, enabled, err := RunAntiTamperProbe([]string{ProbeCPUIDHypervisor}, "test-enabled")
@@ -51,8 +49,6 @@ func TestRunAntiTamperProbeEnabled(t *testing.T) {
 }
 
 func TestRunAntiTamperProbeRoutesProcessProtectionSignals(t *testing.T) {
-	t.Setenv(AntiTamperProbeEnableEnv, "1")
-
 	requested := []string{ProbeProcessInjection, ProbeTrampoline, ProbeIATGOT, ProbeModuleIntegrity, ProbeMemoryPageAnomaly, ProbeSyscallTable}
 	signals, enabled, err := RunAntiTamperProbe(requested, "test-process-protection")
 	if err != nil {
@@ -73,8 +69,6 @@ func TestRunAntiTamperProbeRoutesProcessProtectionSignals(t *testing.T) {
 }
 
 func TestRunAntiTamperProbeRoutesAllSupportedNames(t *testing.T) {
-	t.Setenv(AntiTamperProbeEnableEnv, "1")
-
 	requested := append([]string(nil), AntiTamperSupportedProbes...)
 	signals, enabled, err := RunAntiTamperProbe(requested, "test-all-supported")
 	if err != nil {

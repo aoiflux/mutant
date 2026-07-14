@@ -7,8 +7,6 @@ import (
 	mathrand "math/rand"
 	"mutant/code"
 	"mutant/object"
-	"os"
-	"strings"
 )
 
 // PolymorphicEngine generates functionally equivalent but structurally different bytecode
@@ -27,8 +25,6 @@ type MutationConfig struct {
 	RandomizeConstants  bool
 	Level               int // 0-10
 }
-
-const polymorphicSafeStagesEnv = "MUTANT_POLYMORPHIC_SAFE_STAGES"
 
 // NewPolymorphicEngine creates a new polymorphic engine
 func NewPolymorphicEngine(level int, seed int64) *PolymorphicEngine {
@@ -92,13 +88,7 @@ func (pe *PolymorphicEngine) getConfig() MutationConfig {
 }
 
 func polymorphicSafeStagesEnabled() bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(polymorphicSafeStagesEnv)))
-	switch raw {
-	case "0", "false", "off", "no", "disabled":
-		return false
-	default:
-		return true
-	}
+	return true
 }
 
 // insertNOPs inserts no-operation instructions

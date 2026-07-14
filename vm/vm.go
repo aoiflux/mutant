@@ -13,7 +13,6 @@ import (
 	"mutant/object"
 	"mutant/security"
 	"os"
-	"strings"
 )
 
 // VM structure defines virtual machine
@@ -58,21 +57,12 @@ const (
 	integritySweepSpread   = uint64(83)
 	integrityProbeSpread   = uint64(31)
 
-	vMGlobalMemoryModeEnv = "MUTANT_VM_GLOBAL_MEMORY_MODE"
-	vMMemoryModeRuntime   = "runtime"
-	vMMemoryModeWrapper   = "wrapper"
+	vMMemoryModeRuntime = "runtime"
+	vMMemoryModeWrapper = "wrapper"
 )
 
 func resolveVMGlobalMemoryMode() string {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(vMGlobalMemoryModeEnv)))
-	switch raw {
-	case vMMemoryModeWrapper:
-		return vMMemoryModeWrapper
-	case vMMemoryModeRuntime, "":
-		return vMMemoryModeRuntime
-	default:
-		return vMMemoryModeRuntime
-	}
+	return vMMemoryModeRuntime
 }
 
 func deriveIntegritySeed(instructions []byte) uint64 {
@@ -1602,7 +1592,7 @@ func (vm *VM) verifyFrameIntegrity(frame *Frame, stage string) error {
 	actual := sha256.Sum256(fn.Instructions)
 	if !security.SecureCompare(expected[:], actual[:]) {
 		security.RecordIntegrityFailure(stage)
-		return security.ApplyTamperResponse("integrity_failed", stage, true, fmt.Errorf("runtime integrity check failed"))
+		return security.ApplyTamperResponse("integrity_failed", stage, vm.secureMode, fmt.Errorf("runtime integrity check failed"))
 	}
 
 	return nil

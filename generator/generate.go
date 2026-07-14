@@ -2,9 +2,7 @@ package generator
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"encoding/gob"
-	"encoding/hex"
 	"fmt"
 	"mutant/ast"
 	"mutant/builtin"
@@ -19,7 +17,6 @@ import (
 	"mutant/security"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -48,8 +45,7 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 			}
 			privateKey = keyPair.PrivateKey
 
-			// In production, you should inject a persistent private key using
-			// MUTANT_SIGNING_PRIVATE_KEY_HEX to avoid ephemeral signer identities.
+			// Local keypair bootstrap provides deterministic signer identity per host.
 		}
 	}
 
@@ -78,34 +74,18 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 }
 
 func loadSigningPrivateKeyFromEnv() ([]byte, error) {
-	privateKeyHex := strings.TrimSpace(os.Getenv(security.SigningPrivateKeyEnv))
-	if privateKeyHex == "" {
-		privateKey, _, created, keyDir, err := security.EnsureLocalSigningKeyPair()
-		if err != nil {
-			return nil, err
-		}
-
-		if created {
-			privatePath, publicPath := security.LocalKeyPairPaths(keyDir)
-			fmt.Fprintf(os.Stderr,
-				"[security] generated local signing keypair for reuse\n[security] private=%s\n[security] public=%s\n[security] set %s from %s in secure environments\n",
-				filepath.Clean(privatePath),
-				filepath.Clean(publicPath),
-				security.TrustedPublicKeyEnv,
-				filepath.Clean(publicPath),
-			)
-		}
-
-		return privateKey, nil
-	}
-
-	privateKey, err := hex.DecodeString(privateKeyHex)
+	privateKey, _, created, keyDir, err := security.EnsureLocalSigningKeyPair()
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s: %w", security.SigningPrivateKeyEnv, err)
+		return nil, err
 	}
 
-	if len(privateKey) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("invalid %s size: expected %d bytes", security.SigningPrivateKeyEnv, ed25519.PrivateKeySize)
+	if created {
+		privatePath, publicPath := security.LocalKeyPairPaths(keyDir)
+		fmt.Fprintf(os.Stderr,
+			"[security] generated local signing keypair for reuse\n[security] private=%s\n[security] public=%s\n",
+			filepath.Clean(privatePath),
+			filepath.Clean(publicPath),
+		)
 	}
 
 	return privateKey, nil

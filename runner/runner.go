@@ -18,7 +18,6 @@ import (
 	"mutant/vm"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -34,13 +33,6 @@ var (
 const processProtectionTerminateConfidence = 80
 
 func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
-	telemetryPath := os.Getenv(security.SecurityTelemetryFileEnv)
-	if telemetryPath != "" {
-		defer func() {
-			_ = security.ExportSecurityTelemetry(telemetryPath)
-		}()
-	}
-
 	signedCode, err := os.ReadFile(srcpath)
 	if err != nil {
 		return err, errrs.ERROR
@@ -61,10 +53,9 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 		if generated {
 			privatePath, publicPath := security.LocalKeyPairPaths(keyDir)
 			fmt.Fprintf(os.Stderr,
-				"[security] generated local keypair for secure mode bootstrap\n[security] private=%s\n[security] public=%s\n[security] optional: set %s to the public key for explicit pinning\n",
+				"[security] generated local keypair for secure mode bootstrap\n[security] private=%s\n[security] public=%s\n",
 				filepath.Clean(privatePath),
 				filepath.Clean(publicPath),
-				security.TrustedPublicKeyEnv,
 			)
 		}
 
@@ -166,17 +157,7 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 }
 
 func isProcessProtectionEnabled() bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(security.ProcessProtectionEnabledEnv)))
-	if raw == "" {
-		return true
-	}
-
-	switch raw {
-	case "0", "false", "off", "no":
-		return false
-	default:
-		return true
-	}
+	return true
 }
 
 func enforceRemoteProcessProtection(secureMode bool, stage string) error {

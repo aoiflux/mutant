@@ -637,16 +637,10 @@ func findProgramArg(args []string) string {
 }
 
 func configureSecurityLogging(args []string, devMode bool) {
-	if devMode {
-		_ = os.Setenv(security.SecurityDevModeEnv, "1")
-	} else {
-		_ = os.Unsetenv(security.SecurityDevModeEnv)
-	}
+	security.SetSecurityDevMode(devMode)
 
 	level := extractSecurityLogLevelArg(args)
-	if level != "" {
-		_ = os.Setenv(security.SecurityLogLevelEnv, level)
-	}
+	security.SetSecurityLogLevel(level)
 }
 
 // extractSignerAuthArg scans args for explicit signer-auth flags.
