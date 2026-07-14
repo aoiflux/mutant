@@ -6,7 +6,7 @@ ASSETS_OUT="releaseassets"
 FINAL_NAME="mutant"
 HOST_ONLY=0
 WASM_REPL=1
-WASM_OUT_DIR="examples/wasm-repl"
+WASM_OUT_DIR="$OUTPUT_DIR/wasm-repl"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

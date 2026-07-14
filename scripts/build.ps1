@@ -4,7 +4,7 @@ Param(
     [string]$FinalName = "mutant",
     [switch]$HostOnly,
     [switch]$WasmRepl,
-    [string]$WasmOutDir = "examples/wasm-repl"
+    [string]$WasmOutDir = "$OutputDir/wasm-repl"
 )
 
 $ErrorActionPreference = "Stop"
