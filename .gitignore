@@ -4,9 +4,9 @@ mutant
 *.DS_Store
 *.mu
 native/rustffi/lib/target/
-vscode-extension/node_modules/
-vscode-extension/out/
-vscode-extension/.vscode-test/
+mutant-vscode-extension/node_modules/
+mutant-vscode-extension/out/
+mutant-vscode-extension/.vscode-test/
 releaseassets/data/
 dist/
 
