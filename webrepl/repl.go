@@ -1192,9 +1192,31 @@ func webHelp(_ *REPL, args ...object.Object) object.Object {
 }
 
 func webPutf(repl *REPL, args ...object.Object) object.Object {
-	for _, arg := range args {
-		repl.output.WriteString(arg.Inspect())
+	if len(args) == 0 {
+		return nullObj
 	}
+
+	format := args[0].Inspect()
+
+	vals := make([]any, 0, len(args)-1)
+	for _, arg := range args[1:] {
+		switch v := arg.(type) {
+		case *object.Integer:
+			vals = append(vals, v.Value)
+		case *object.String:
+			vals = append(vals, v.Value)
+		case *object.Boolean:
+			vals = append(vals, v.Value)
+		case *object.Float:
+			vals = append(vals, v.Value)
+		default:
+			vals = append(vals, v.Inspect())
+		}
+
+	}
+
+	out := fmt.Sprintf(format, vals...)
+	repl.output.WriteString(out)
 	return nullObj
 }
 
