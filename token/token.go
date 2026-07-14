@@ -1,5 +1,7 @@
 package token
 
+import "sort"
+
 // Position identifies a location in source code.
 //
 // Line and Column are 1-based (LSP-friendly) and count runes, not bytes.
@@ -109,4 +111,14 @@ func LookupIdent(ident string) TokenType {
 		return tok
 	}
 	return IDENT
+}
+
+// KeywordLiterals returns all language keyword spellings in sorted order.
+func KeywordLiterals() []string {
+	items := make([]string, 0, len(keywords))
+	for keyword := range keywords {
+		items = append(items, keyword)
+	}
+	sort.Strings(items)
+	return items
 }

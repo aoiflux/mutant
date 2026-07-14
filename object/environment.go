@@ -1,5 +1,7 @@
 package object
 
+import "sort"
+
 type Environment struct {
 	store map[string]Object
 	outer *Environment
@@ -40,4 +42,21 @@ func (e *Environment) Update(name string, val Object) (Object, bool) {
 	}
 
 	return nil, false
+}
+
+// Keys returns all currently defined symbols in this environment chain.
+func (e *Environment) Keys() []string {
+	seen := make(map[string]struct{})
+	for current := e; current != nil; current = current.outer {
+		for key := range current.store {
+			seen[key] = struct{}{}
+		}
+	}
+
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

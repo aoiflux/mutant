@@ -2,6 +2,7 @@ package builtin
 
 const (
 	BuiltinNameLen                   = "len"
+	BuiltinNameHelp                  = "help"
 	BuiltinNamePutf                  = "putf"
 	BuiltinNamePutln                 = "putln"
 	BuiltinNameGets                  = "gets"

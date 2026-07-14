@@ -122,3 +122,54 @@ func TestSupportedSyntaxSummaryIncludesExpandedFeatures(t *testing.T) {
 		}
 	}
 }
+
+func TestEvalHelpCommands(t *testing.T) {
+	repl := New()
+
+	out, err := repl.Eval(":help docs")
+	if err != nil {
+		t.Fatalf("Eval(:help docs) unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "https://mudocs.aoiflux.xyz") {
+		t.Fatalf("expected docs URL in :help output, got %q", out)
+	}
+
+	out, err = repl.Eval("help(\"builtins\")")
+	if err != nil {
+		t.Fatalf("Eval(help) unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Mutant builtins") {
+		t.Fatalf("expected builtin listing in help output, got %q", out)
+	}
+}
+
+func TestCompletionCandidatesIncludeBuiltinsAndSymbols(t *testing.T) {
+	repl := New()
+	_, _ = repl.Eval("let custom_symbol = 42;")
+
+	candidates := repl.CompletionCandidates("cu", "supported")
+	joined := strings.Join(candidates, "\n")
+	if !strings.Contains(joined, "custom_symbol") {
+		t.Fatalf("completion candidates missing session symbol: %v", candidates)
+	}
+
+	builtinCandidates := repl.CompletionCandidates("text_", "supported")
+	joinedBuiltins := strings.Join(builtinCandidates, "\n")
+	if !strings.Contains(joinedBuiltins, "text_split") {
+		t.Fatalf("completion candidates missing supported builtin: %v", builtinCandidates)
+	}
+}
+
+func TestCompletionCandidatesForLineHelpContext(t *testing.T) {
+	repl := New()
+
+	topicCandidates := repl.CompletionCandidatesForLine(":help bu", "supported")
+	if len(topicCandidates) == 0 || topicCandidates[0] != "builtins" {
+		t.Fatalf("expected builtins topic candidate, got %v", topicCandidates)
+	}
+
+	modeCandidates := repl.CompletionCandidatesForLine("help(\"builtins\", \"a", "supported")
+	if len(modeCandidates) == 0 || modeCandidates[0] != "\"all" {
+		t.Fatalf("expected quoted all mode candidate, got %v", modeCandidates)
+	}
+}

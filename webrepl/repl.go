@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"mutant/ast"
+	"mutant/builtin"
 	"mutant/lexer"
 	"mutant/object"
 	"mutant/parser"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -25,7 +27,22 @@ type REPL struct {
 
 type webBuiltin func(args ...object.Object) object.Object
 
+var webSupportedBuiltinNames = []string{
+	"help",
+	"len",
+	"first",
+	"last",
+	"rest",
+	"push",
+	"text_contains",
+	"text_index",
+	"text_count",
+	"text_split",
+	"text_replace",
+}
+
 var webBuiltins = map[string]webBuiltin{
+	"help":          webHelp,
 	"len":           webLen,
 	"first":         webFirst,
 	"last":          webLast,
@@ -43,6 +60,10 @@ func New() *REPL {
 }
 
 func (r *REPL) Eval(input string) (string, error) {
+	if helpOutput, handled := r.handleMetaHelp(input); handled {
+		return helpOutput, nil
+	}
+
 	l := lexer.New(input)
 	p := parser.New(l)
 	program := p.ParseProgram()
@@ -62,6 +83,44 @@ func (r *REPL) Eval(input string) (string, error) {
 	}
 
 	return result.Inspect(), nil
+}
+
+func (r *REPL) CompletionCandidates(prefix string, mode string) []string {
+	return builtin.ReplCompletionCandidates(prefix, builtin.ReplHelpOptions{
+		Mode:              mode,
+		SupportedBuiltins: webBuiltinsSet(),
+		Symbols:           r.env.Keys(),
+	})
+}
+
+func (r *REPL) CompletionCandidatesForLine(line string, mode string) []string {
+	return builtin.ReplCompletionCandidatesForLine(line, builtin.ReplHelpOptions{
+		Mode:              mode,
+		SupportedBuiltins: webBuiltinsSet(),
+		Symbols:           r.env.Keys(),
+	})
+}
+
+func (r *REPL) handleMetaHelp(input string) (string, bool) {
+	trimmed := trimCommandLine(input)
+	if !strings.HasPrefix(strings.ToLower(trimmed), ":help") {
+		return "", false
+	}
+
+	args := strings.Fields(trimmed)
+	topic := ""
+	mode := ""
+	if len(args) > 1 {
+		topic = args[1]
+	}
+	if len(args) > 2 {
+		mode = args[2]
+	}
+
+	return builtin.RenderReplHelp(topic, builtin.ReplHelpOptions{
+		Mode:              mode,
+		SupportedBuiltins: webBuiltinsSet(),
+	}), true
 }
 
 func evalNode(node ast.Node, env *object.Environment) object.Object {
@@ -340,6 +399,15 @@ func evalCall(call *ast.CallExpression, env *object.Environment) object.Object {
 	if !ok {
 		return newError("unsupported call target in browser REPL")
 	}
+
+	if ident.Value == "help" {
+		args := evalExpressions(call.Arguments, env)
+		if len(args) == 1 && isError(args[0]) {
+			return args[0]
+		}
+		return webHelp(args...)
+	}
+
 	builtinFn, ok := webBuiltins[ident.Value]
 	if !ok {
 		return newError("unknown function: %s", ident.Value)
@@ -507,6 +575,35 @@ func webTextReplace(args ...object.Object) object.Object {
 	return &object.String{Value: strings.ReplaceAll(value.Value, oldPart.Value, newPart.Value)}
 }
 
+func webHelp(args ...object.Object) object.Object {
+	if len(args) > 2 {
+		return newError("wrong number of arguments. got=%d, want=0..2", len(args))
+	}
+
+	topic := ""
+	mode := "supported"
+	if len(args) >= 1 {
+		topicValue, ok := args[0].(*object.String)
+		if !ok {
+			return newError("argument 1 to help must be STRING, got %s", args[0].Type())
+		}
+		topic = topicValue.Value
+	}
+	if len(args) == 2 {
+		modeValue, ok := args[1].(*object.String)
+		if !ok {
+			return newError("argument 2 to help must be STRING, got %s", args[1].Type())
+		}
+		mode = modeValue.Value
+	}
+
+	output := builtin.RenderReplHelp(topic, builtin.ReplHelpOptions{
+		Mode:              mode,
+		SupportedBuiltins: webBuiltinsSet(),
+	})
+	return &object.String{Value: output}
+}
+
 func destructureValues(value object.Object, want int) []object.Object {
 	result := make([]object.Object, want)
 	for i := range result {
@@ -558,6 +655,29 @@ func nativeBool(v bool) *object.Boolean {
 
 func newError(format string, args ...any) *object.Error {
 	return &object.Error{Message: fmt.Sprintf(format, args...), Context: "webrepl"}
+}
+
+func trimCommandLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for strings.HasSuffix(trimmed, ";") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	}
+	return trimmed
+}
+
+func webBuiltinsSet() map[string]struct{} {
+	set := make(map[string]struct{}, len(webSupportedBuiltinNames))
+	for _, name := range webSupportedBuiltinNames {
+		set[name] = struct{}{}
+	}
+	return set
+}
+
+func SupportedBuiltinNames() []string {
+	names := make([]string, len(webSupportedBuiltinNames))
+	copy(names, webSupportedBuiltinNames)
+	sort.Strings(names)
+	return names
 }
 
 // SupportedSyntaxSummary returns a short summary for browser clients.

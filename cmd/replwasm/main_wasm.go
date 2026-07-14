@@ -31,6 +31,39 @@ func main() {
 			"ok":        true,
 			"output":    output,
 			"supported": webrepl.SupportedSyntaxSummary(),
+			"builtins":  webrepl.SupportedBuiltinNames(),
+		}
+	}))
+
+	js.Global().Set("mutantReplComplete", js.FuncOf(func(this js.Value, args []js.Value) any {
+		prefix := ""
+		mode := "supported"
+		if len(args) >= 1 {
+			prefix = args[0].String()
+		}
+		if len(args) >= 2 {
+			mode = args[1].String()
+		}
+
+		return map[string]any{
+			"ok":         true,
+			"candidates": repl.CompletionCandidates(prefix, mode),
+		}
+	}))
+
+	js.Global().Set("mutantReplCompleteLine", js.FuncOf(func(this js.Value, args []js.Value) any {
+		line := ""
+		mode := "supported"
+		if len(args) >= 1 {
+			line = args[0].String()
+		}
+		if len(args) >= 2 {
+			mode = args[1].String()
+		}
+
+		return map[string]any{
+			"ok":         true,
+			"candidates": repl.CompletionCandidatesForLine(line, mode),
 		}
 	}))
 
