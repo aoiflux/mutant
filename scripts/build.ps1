@@ -9,6 +9,11 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
+$buildWasmRepl = $true
+if ($PSBoundParameters.ContainsKey("WasmRepl")) {
+    $buildWasmRepl = $WasmRepl.IsPresent
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $targets = @(
     @{ GoOS = "windows"; GoArch = "amd64"; ExeSuffix = ".exe" },
@@ -19,7 +24,7 @@ $targets = @(
     @{ GoOS = "darwin"; GoArch = "arm64"; ExeSuffix = "" }
 )
 
-$totalSteps = if ($WasmRepl) { 4 } else { 3 }
+$totalSteps = if ($buildWasmRepl) { 4 } else { 3 }
 $step = 0
 $goBuildArgs = @("-trimpath", "-buildvcs=false", "-ldflags", "-s -w -buildid=")
 
@@ -160,7 +165,7 @@ try {
         $env:CC = $oldCC
     }
 
-    if ($WasmRepl) {
+    if ($buildWasmRepl) {
         Start-Step "Build browser REPL wasm artifacts"
         $wasmOutPath = Join-Path $repoRoot $WasmOutDir
         New-Item -ItemType Directory -Path $wasmOutPath -Force | Out-Null

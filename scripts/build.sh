@@ -5,7 +5,7 @@ OUTPUT_DIR="dist"
 ASSETS_OUT="releaseassets"
 FINAL_NAME="mutant"
 HOST_ONLY=0
-WASM_REPL=0
+WASM_REPL=1
 WASM_OUT_DIR="examples/wasm-repl"
 
 while [[ $# -gt 0 ]]; do
@@ -30,6 +30,10 @@ while [[ $# -gt 0 ]]; do
       WASM_REPL=1
       shift
       ;;
+    --no-wasm-repl)
+      WASM_REPL=0
+      shift
+      ;;
     --wasm-out-dir)
       WASM_OUT_DIR="$2"
       shift 2
@@ -43,7 +47,8 @@ Options:
   --assets-out <dir>  Release assets output directory (default: releaseassets)
   --final-name <name> Final binary name (default: mutant)
   --host-only         Build only GOHOSTOS/GOHOSTARCH target
-  --wasm-repl         Build browser REPL wasm artifact and copy wasm_exec.js
+  --wasm-repl         Build browser REPL wasm artifact and copy wasm_exec.js (default: enabled)
+  --no-wasm-repl      Skip browser REPL wasm build
   --wasm-out-dir <d>  Output directory for wasm artifacts (default: examples/wasm-repl)
 EOF
       exit 0
