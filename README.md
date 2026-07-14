@@ -226,8 +226,11 @@ Minimal JavaScript usage:
 Current wasm REPL support intentionally focuses on a lightweight subset:
 
 - integers, booleans, strings
+- float literals and numeric expressions
 - arrays, hashes, indexing
 - `let` bindings and identifiers
+- function literals and user-defined function calls
+- struct/enum declarations, struct literals, and field access
 - browser-safe collection/print builtins: `len`, `first`, `last`, `rest`,
   `push`, `pop`, `putf`, `putln`
 - browser-safe bytes builtins: `bytes_len`, `bytes_get`, `bytes_slice`,
@@ -247,9 +250,25 @@ Current wasm REPL support intentionally focuses on a lightweight subset:
 - browser-safe JSON builtins: `json_parse`, `json_stringify`
 - browser-safe regex builtins: `regex_match`, `regex_find`, `regex_find_all`,
   `regex_replace`, `regex_capture_groups`
+- browser-safe policy builtins: `policy_load`, `policy_eval`, `policy_allow`,
+  `policy_rules`, `policy_trace`
+- browser-safe cache builtins: `cache_open`, `cache_put`, `cache_get`,
+  `cache_delete`, `cache_keys`, `cache_stats`, `cache_clear`, `cache_close`
+- browser-safe in-memory graph builtins: `db_open`, `db_close`, `db_add_node`,
+  `db_add_edge`, `db_add_artifact`, `db_add_relation`, `db_index_prop`,
+  `db_query_nodes`, `db_query`, `db_bfs`, `db_shortest_path`, `db_timeline`,
+  `db_stats`
+- assignment expressions (for example `i = i + 1`)
+- `for` loops with init/condition/post
+- `break` and `continue` inside loops
+- `return` statements with function short-circuit behavior
 - `if/else`
 - prefix `!` and unary `-`
 - infix `+ - * / < > == !=`
+
+For the definitive WASM REPL support matrix and usage guide, see:
+
+- [docs/WASM_REPL_REFERENCE.md](docs/WASM_REPL_REFERENCE.md)
 
 ## Practical Security and Forensics Examples
 
