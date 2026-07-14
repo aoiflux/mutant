@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -156,6 +157,9 @@ func (s *Server) didOpen(ctx *glsp.Context, params *lsp.DidOpenTextDocumentParam
 func (s *Server) didChange(ctx *glsp.Context, params *lsp.DidChangeTextDocumentParams) error {
 	doc, err := s.documents.Update(params.TextDocument.URI, lsp.UInteger(params.TextDocument.Version), params.ContentChanges)
 	if err != nil {
+		if errors.Is(err, workspace.ErrStaleDocumentVersion) {
+			return nil
+		}
 		return err
 	}
 	snapshot := s.analyzer.Analyze(doc.Text)
@@ -787,10 +791,15 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 }
 
 func (s *Server) publishDiagnostics(ctx *glsp.Context, uri lsp.DocumentUri, version lsp.UInteger, snapshot *analyzer.Snapshot) {
+	diagnostics := analyzer.Diagnostics(snapshot, s.currentLintConfig())
+	if len(diagnostics) == 0 {
+		diagnostics = []lsp.Diagnostic{}
+	}
+
 	params := lsp.PublishDiagnosticsParams{
 		URI:         uri,
 		Version:     &version,
-		Diagnostics: analyzer.Diagnostics(snapshot, s.currentLintConfig()),
+		Diagnostics: diagnostics,
 	}
 	ctx.Notify(string(lsp.ServerTextDocumentPublishDiagnostics), params)
 }

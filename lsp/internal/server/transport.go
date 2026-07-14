@@ -66,7 +66,7 @@ func (b rpcBridge) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 
 func runOverStdio(handler glsp.Handler) error {
 	stream := jsonrpc2.NewBufferedStream(stdioRWC{}, jsonrpc2.VSCodeObjectCodec{})
-	conn := jsonrpc2.NewConn(context.Background(), stream, jsonrpc2.AsyncHandler(rpcBridge{handler: handler}))
+	conn := jsonrpc2.NewConn(context.Background(), stream, rpcBridge{handler: handler})
 	<-conn.DisconnectNotify()
 	return nil
 }
