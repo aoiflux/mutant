@@ -9,7 +9,17 @@ import (
 	"strings"
 )
 
+var localKeyStoreDirOverride = ""
+
+func SetLocalKeyStoreDirForTesting(dir string) {
+	localKeyStoreDirOverride = strings.TrimSpace(dir)
+}
+
 func ResolveLocalKeyStoreDir() (string, error) {
+	if localKeyStoreDirOverride != "" {
+		return localKeyStoreDirOverride, nil
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)

@@ -6,6 +6,9 @@ import (
 )
 
 func TestRunRemoteProcessScanDisabled(t *testing.T) {
+	ResetRemoteScanConfigForTesting()
+	defer ResetRemoteScanConfigForTesting()
+
 	called := false
 	original := scanRemoteProcesses
 	scanRemoteProcesses = func(cfg RemoteScanConfig) ([]ProcessRiskVerdict, error) {
@@ -37,6 +40,9 @@ func TestRunRemoteProcessScanDisabled(t *testing.T) {
 }
 
 func TestRunRemoteProcessScanRecordsTelemetry(t *testing.T) {
+	SetRemoteScanConfigForTesting(RemoteScanConfig{Enabled: true, Mode: RemoteScanModeObserve})
+	defer ResetRemoteScanConfigForTesting()
+
 	original := scanRemoteProcesses
 	scanRemoteProcesses = func(cfg RemoteScanConfig) ([]ProcessRiskVerdict, error) {
 		return []ProcessRiskVerdict{
@@ -69,6 +75,9 @@ func TestRunRemoteProcessScanRecordsTelemetry(t *testing.T) {
 }
 
 func TestRunRemoteProcessScanNormalizesVerdictsFromSignals(t *testing.T) {
+	SetRemoteScanConfigForTesting(RemoteScanConfig{Enabled: true, Mode: RemoteScanModeObserve})
+	defer ResetRemoteScanConfigForTesting()
+
 	original := scanRemoteProcesses
 	scanRemoteProcesses = func(cfg RemoteScanConfig) ([]ProcessRiskVerdict, error) {
 		return []ProcessRiskVerdict{
@@ -105,6 +114,9 @@ func TestRunRemoteProcessScanNormalizesVerdictsFromSignals(t *testing.T) {
 }
 
 func TestRunRemoteProcessScanError(t *testing.T) {
+	SetRemoteScanConfigForTesting(RemoteScanConfig{Enabled: true, Mode: RemoteScanModeObserve})
+	defer ResetRemoteScanConfigForTesting()
+
 	original := scanRemoteProcesses
 	scanRemoteProcesses = func(cfg RemoteScanConfig) ([]ProcessRiskVerdict, error) {
 		return nil, errors.New("scan failed")

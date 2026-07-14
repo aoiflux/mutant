@@ -4,6 +4,8 @@ import "testing"
 
 func TestRunAntiTamperProbeDisabled(t *testing.T) {
 	ResetSecurityTelemetry()
+	SetAntiTamperProbeEnabledForTesting(false)
+	defer SetAntiTamperProbeEnabledForTesting(true)
 
 	signals, enabled, err := RunAntiTamperProbe([]string{ProbeCPUIDHypervisor}, "test-disabled")
 	if err != nil {
@@ -24,6 +26,7 @@ func TestRunAntiTamperProbeDisabled(t *testing.T) {
 
 func TestRunAntiTamperProbeEnabled(t *testing.T) {
 	ResetSecurityTelemetry()
+	SetAntiTamperProbeEnabledForTesting(true)
 
 	signals, enabled, err := RunAntiTamperProbe([]string{ProbeCPUIDHypervisor}, "test-enabled")
 	if !enabled {

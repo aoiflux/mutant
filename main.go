@@ -580,12 +580,12 @@ func shouldStartReplFromFlags(args []string) bool {
 			continue
 		}
 
-		if strings.HasPrefix(arg, "--repl-theme=") || strings.HasPrefix(arg, "-repl-theme=") {
+		if strings.HasPrefix(arg, "--repl-theme=") || strings.HasPrefix(arg, "-repl-theme=") || strings.HasPrefix(arg, "--theme=") || strings.HasPrefix(arg, "-theme=") {
 			hasReplFlag = true
 			continue
 		}
 
-		if arg == "--repl-theme" || arg == "-repl-theme" {
+		if arg == "--repl-theme" || arg == "-repl-theme" || arg == "--theme" || arg == "-theme" {
 			hasReplFlag = true
 			i++
 			if i >= len(args) {
@@ -602,7 +602,7 @@ func shouldStartReplFromFlags(args []string) bool {
 
 func extractReplThemeArg(args []string) string {
 	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "--repl-theme" || args[i] == "-repl-theme" {
+		if args[i] == "--repl-theme" || args[i] == "-repl-theme" || args[i] == "--theme" || args[i] == "-theme" {
 			return strings.TrimSpace(args[i+1])
 		}
 	}
@@ -613,6 +613,12 @@ func extractReplThemeArg(args []string) string {
 		}
 		if strings.HasPrefix(args[i], "-repl-theme=") {
 			return strings.TrimSpace(strings.TrimPrefix(args[i], "-repl-theme="))
+		}
+		if strings.HasPrefix(args[i], "--theme=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "--theme="))
+		}
+		if strings.HasPrefix(args[i], "-theme=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "-theme="))
 		}
 	}
 

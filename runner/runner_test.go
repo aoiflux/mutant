@@ -74,6 +74,8 @@ func TestHasStandalonePayloadReportsPresence(t *testing.T) {
 
 func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 	keyDir := t.TempDir()
+	security.SetLocalKeyStoreDirForTesting(keyDir)
+	defer security.SetLocalKeyStoreDirForTesting("")
 
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
 	err, errType := Run(path, "", true, true)
@@ -139,12 +141,16 @@ func TestRunSecureModeRejectsTamperedSignedPayload(t *testing.T) {
 }
 
 func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
-	keyPair, err := security.GenerateKeyPair()
+	keyDir := t.TempDir()
+	security.SetLocalKeyStoreDirForTesting(keyDir)
+	defer security.SetLocalKeyStoreDirForTesting("")
+
+	privateKey, _, _, _, err := security.EnsureLocalSigningKeyPair()
 	if err != nil {
-		t.Fatalf("failed to generate key pair: %v", err)
+		t.Fatalf("failed to ensure local key pair: %v", err)
 	}
 
-	signed, err := security.SignCode("not-valid-metadata", keyPair.PrivateKey)
+	signed, err := security.SignCode("not-valid-metadata", privateKey)
 	if err != nil {
 		t.Fatalf("failed to sign payload: %v", err)
 	}
@@ -263,6 +269,10 @@ func TestEnforceProcessProtectionIgnoresLowConfidence(t *testing.T) {
 }
 
 func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
+	originalEnabled := processProtectionOn
+	processProtectionOn = func() bool { return false }
+	defer func() { processProtectionOn = originalEnabled }()
+
 	originalProbe := runAntiTamperProbe
 	called := false
 	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
@@ -296,7 +306,7 @@ func TestIsProcessProtectionEnabledDefaultsToTrue(t *testing.T) {
 func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 	tests := []struct {
 		name            string
-		processEnv      string
+		enabled         bool
 		probeEnabled    bool
 		probeErr        error
 		signals         []security.AntiTamperSignal
@@ -304,15 +314,15 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 		expectErr       bool
 	}{
 		{
-			name:            "process protection disabled by env",
-			processEnv:      "0",
+			name:            "process protection disabled",
+			enabled:         false,
 			probeEnabled:    true,
 			expectProbeCall: false,
 			expectErr:       false,
 		},
 		{
 			name:         "probe framework disabled",
-			processEnv:   "1",
+			enabled:      true,
 			probeEnabled: false,
 			signals: []security.AntiTamperSignal{{
 				Name:       "trampoline",
@@ -324,7 +334,7 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 		},
 		{
 			name:            "probe returns error",
-			processEnv:      "1",
+			enabled:         true,
 			probeEnabled:    true,
 			probeErr:        errors.New("probe failure"),
 			expectProbeCall: true,
@@ -332,7 +342,7 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 		},
 		{
 			name:         "high confidence signal terminates in secure mode",
-			processEnv:   "1",
+			enabled:      true,
 			probeEnabled: true,
 			signals: []security.AntiTamperSignal{{
 				Name:       "process_injection",
@@ -356,6 +366,10 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 			defer func() {
 				runAntiTamperProbe = originalProbe
 			}()
+
+			originalEnabled := processProtectionOn
+			processProtectionOn = func() bool { return tc.enabled }
+			defer func() { processProtectionOn = originalEnabled }()
 
 			err := enforceProcessProtection(true, "test-stage")
 			if tc.expectErr && err == nil {
@@ -408,6 +422,7 @@ func TestEnforceRemoteProcessProtectionScanErrorDoesNotBlock(t *testing.T) {
 
 func TestEnforceRemoteProcessProtectionEnforceModeBlocksOnCritical(t *testing.T) {
 	originalScan := runRemoteProcessScan
+	originalCfg := resolveRemoteScanCfg
 	runRemoteProcessScan = func(stage string) ([]security.ProcessRiskVerdict, bool, error) {
 		return []security.ProcessRiskVerdict{{
 			PID:        222,
@@ -418,7 +433,14 @@ func TestEnforceRemoteProcessProtectionEnforceModeBlocksOnCritical(t *testing.T)
 	}
 	defer func() {
 		runRemoteProcessScan = originalScan
+		resolveRemoteScanCfg = originalCfg
 	}()
+
+	resolveRemoteScanCfg = func() security.RemoteScanConfig {
+		cfg := security.ResolveRemoteScanConfig()
+		cfg.Mode = security.RemoteScanModeEnforce
+		return cfg
+	}
 
 	err := enforceRemoteProcessProtection(true, "test-stage")
 	if err == nil {

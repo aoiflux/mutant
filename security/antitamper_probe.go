@@ -4,6 +4,12 @@ import (
 	"strings"
 )
 
+var antiTamperProbeEnabled = true
+
+func SetAntiTamperProbeEnabledForTesting(enabled bool) {
+	antiTamperProbeEnabled = enabled
+}
+
 type AntiTamperSignal struct {
 	Name       string
 	Detected   bool
@@ -27,7 +33,7 @@ func RunAntiTamperProbe(requested []string, stage string) ([]AntiTamperSignal, b
 }
 
 func isAntiTamperProbeEnabled() bool {
-	return true
+	return antiTamperProbeEnabled
 }
 
 func runNativeProbe(requested []string) []AntiTamperSignal {

@@ -11,15 +11,57 @@ const (
 	defaultRemoteScanCritical     = 85
 )
 
-func ResolveRemoteScanConfig() RemoteScanConfig {
-	cfg := RemoteScanConfig{
-		Enabled:       isRemoteProcessScanEnabled(),
-		Mode:          resolveRemoteProcessScanMode(),
+var remoteScanConfigState = RemoteScanConfig{
+	Enabled:       false,
+	Mode:          RemoteScanModeObserve,
+	MaxProcesses:  defaultRemoteScanMaxProcesses,
+	IntervalMs:    defaultRemoteScanIntervalMs,
+	Allowlist:     map[string]struct{}{},
+	HighRiskScore: defaultRemoteScanHighRisk,
+	CriticalScore: defaultRemoteScanCritical,
+}
+
+func SetRemoteScanConfigForTesting(cfg RemoteScanConfig) {
+	if cfg.MaxProcesses <= 0 {
+		cfg.MaxProcesses = defaultRemoteScanMaxProcesses
+	}
+	if cfg.IntervalMs <= 0 {
+		cfg.IntervalMs = defaultRemoteScanIntervalMs
+	}
+	if cfg.HighRiskScore <= 0 {
+		cfg.HighRiskScore = defaultRemoteScanHighRisk
+	}
+	if cfg.CriticalScore <= 0 {
+		cfg.CriticalScore = defaultRemoteScanCritical
+	}
+	if cfg.Allowlist == nil {
+		cfg.Allowlist = map[string]struct{}{}
+	}
+	if cfg.Mode != RemoteScanModeOff && cfg.Mode != RemoteScanModeObserve && cfg.Mode != RemoteScanModeEnforce {
+		cfg.Mode = RemoteScanModeObserve
+	}
+	remoteScanConfigState = cfg
+}
+
+func ResetRemoteScanConfigForTesting() {
+	remoteScanConfigState = RemoteScanConfig{
+		Enabled:       false,
+		Mode:          RemoteScanModeObserve,
 		MaxProcesses:  defaultRemoteScanMaxProcesses,
 		IntervalMs:    defaultRemoteScanIntervalMs,
-		Allowlist:     parseRemoteProcessAllowlist(),
+		Allowlist:     map[string]struct{}{},
 		HighRiskScore: defaultRemoteScanHighRisk,
 		CriticalScore: defaultRemoteScanCritical,
+	}
+}
+
+func ResolveRemoteScanConfig() RemoteScanConfig {
+	cfg := remoteScanConfigState
+	if cfg.Mode != RemoteScanModeOff && cfg.Mode != RemoteScanModeObserve && cfg.Mode != RemoteScanModeEnforce {
+		cfg.Mode = RemoteScanModeObserve
+	}
+	if cfg.Allowlist == nil {
+		cfg.Allowlist = map[string]struct{}{}
 	}
 	if cfg.CriticalScore < cfg.HighRiskScore {
 		cfg.CriticalScore = cfg.HighRiskScore
@@ -28,11 +70,11 @@ func ResolveRemoteScanConfig() RemoteScanConfig {
 }
 
 func isRemoteProcessScanEnabled() bool {
-	return false
+	return remoteScanConfigState.Enabled
 }
 
 func resolveRemoteProcessScanMode() string {
-	return RemoteScanModeObserve
+	return remoteScanConfigState.Mode
 }
 
 func parseRemoteProcessAllowlist() map[string]struct{} {

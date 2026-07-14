@@ -28,6 +28,8 @@ var (
 	executeLuaPatches    = luaruntime.ExecutePatches
 	runAntiTamperProbe   = security.RunAntiTamperProbe
 	runRemoteProcessScan = security.RunRemoteProcessScan
+	resolveRemoteScanCfg = security.ResolveRemoteScanConfig
+	processProtectionOn  = isProcessProtectionEnabled
 )
 
 const processProtectionTerminateConfidence = 80
@@ -125,7 +127,7 @@ func enforceAntiSandbox(secureMode bool, stage string) error {
 }
 
 func enforceProcessProtection(secureMode bool, stage string) error {
-	if !isProcessProtectionEnabled() {
+	if !processProtectionOn() {
 		return nil
 	}
 
@@ -166,6 +168,7 @@ func enforceRemoteProcessProtection(secureMode bool, stage string) error {
 		return nil
 	}
 	cfg := security.ResolveRemoteScanConfig()
+	cfg = resolveRemoteScanCfg()
 	if cfg.Mode != security.RemoteScanModeEnforce {
 		return nil
 	}

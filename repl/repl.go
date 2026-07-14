@@ -220,9 +220,9 @@ var replBanners = []string{
 
 	 .-""-.
 	/ .--. \
-  / /    \ \   cozy compiler hours
-  | |    | |
-  \ \____/ /
+   / /    \ \   cozy compiler hours
+   | |    | |
+   \ \____/ /
 	'------'`,
 	` __  __       _       _
 |  \/  | __ _| |_ ___| |__
@@ -251,7 +251,7 @@ var replBanners = []string{
 |_|  |_|\__,_|\__\___|_| |_|
 
 	/^_^\
-  /|   |\   compiler familiar online
+   /|   |\   compiler familiar online
 	|___|`,
 	` __  __       _       _
 |  \/  | __ _| |_ ___| |__
@@ -960,7 +960,7 @@ func shouldUseColor(out io.Writer) bool {
 	}
 
 	if runtime.GOOS == global.WINDOWS {
-		return false
+		return true
 	}
 
 	return true

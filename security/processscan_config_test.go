@@ -3,6 +3,7 @@ package security
 import "testing"
 
 func TestResolveRemoteScanConfigDefaults(t *testing.T) {
+	ResetRemoteScanConfigForTesting()
 	cfg := ResolveRemoteScanConfig()
 	if cfg.Enabled {
 		t.Fatalf("expected remote scan disabled by default")
@@ -22,6 +23,20 @@ func TestResolveRemoteScanConfigDefaults(t *testing.T) {
 }
 
 func TestResolveRemoteScanConfigInvalidValuesFallback(t *testing.T) {
+	ResetRemoteScanConfigForTesting()
+	SetRemoteScanConfigForTesting(RemoteScanConfig{
+		Enabled:      true,
+		Mode:         "invalid-mode",
+		MaxProcesses: -1,
+		IntervalMs:   0,
+		Allowlist: map[string]struct{}{
+			"mutant.exe":  {},
+			"mlsp":        {},
+			"procmon.exe": {},
+		},
+	})
+	defer ResetRemoteScanConfigForTesting()
+
 	cfg := ResolveRemoteScanConfig()
 	if !cfg.Enabled {
 		t.Fatalf("expected remote scan enabled")
