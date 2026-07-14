@@ -2,6 +2,7 @@ package repl
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/chzyer/readline"
 )
 
 const PROMPT = ">> "
@@ -365,7 +368,7 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 	welcome(out, version, enableMacros)
 
 	replSignals := make(chan os.Signal, 1)
-	signal.Notify(replSignals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
+	signal.Notify(replSignals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(replSignals)
 
 	scanner := bufio.NewScanner(in)
@@ -373,6 +376,10 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		log.Fatalln(scanner.Err())
 	}
 	env := object.NewEnvironment()
+	lineReader := newInteractiveLineReader(in, out, env)
+	if lineReader != nil {
+		defer lineReader.Close()
+	}
 	macroEnv := object.NewEnvironment()
 
 	constants := []object.Object{}
@@ -385,7 +392,7 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 
 	for {
 		fmt.Fprintf(out, "\n\n%s", styledPrompt())
-		line, scanned, interrupted := scanLineWithIdle(scanner, out, replSignals)
+		line, scanned, interrupted := scanLine(scanner, lineReader, out, replSignals)
 		if interrupted {
 			gracefulExit()
 		}
@@ -393,7 +400,7 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 			return
 		}
 
-		if vanity(line, out, enableMacros) {
+		if vanity(line, out, enableMacros, env) {
 			continue
 		}
 
@@ -471,6 +478,51 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 	}
 }
 
+type interactiveLineReader struct {
+	rl *readline.Instance
+}
+
+func (r *interactiveLineReader) Readline() (string, error) {
+	if r == nil || r.rl == nil {
+		return "", io.EOF
+	}
+	return r.rl.Readline()
+}
+
+func (r *interactiveLineReader) Close() error {
+	if r == nil || r.rl == nil {
+		return nil
+	}
+	return r.rl.Close()
+}
+
+func newInteractiveLineReader(in io.Reader, out io.Writer, env *object.Environment) *interactiveLineReader {
+	stdinFile, inOK := in.(*os.File)
+	stdoutFile, outOK := out.(*os.File)
+	if !inOK || !outOK || stdinFile != os.Stdin || stdoutFile != os.Stdout {
+		return nil
+	}
+
+	completer := readline.NewPrefixCompleter(
+		readline.PcItemDynamic(func(line string) []string {
+			return builtin.ReplCompletionCandidatesForLine(line, builtin.ReplHelpOptions{Symbols: env.Keys()})
+		}),
+	)
+
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:                 "",
+		AutoComplete:           completer,
+		InterruptPrompt:        "",
+		EOFPrompt:              "",
+		DisableAutoSaveHistory: true,
+	})
+	if err != nil {
+		return nil
+	}
+
+	return &interactiveLineReader{rl: rl}
+}
+
 func welcome(out io.Writer, version string, enableMacros bool) {
 	fmt.Fprint(out, styledBanner(randomBanner()))
 	fmt.Fprint(out, "\n")
@@ -497,8 +549,19 @@ func welcome(out io.Writer, version string, enableMacros bool) {
 	}
 }
 
-func vanity(line string, out io.Writer, enableMacros bool) bool {
+func vanity(line string, out io.Writer, enableMacros bool, env *object.Environment) bool {
 	if line == "" {
+		return true
+	}
+
+	trimmed := trimCommandLine(line)
+	if handled := handleMetaHelpCommand(trimmed, out, env); handled {
+		return true
+	}
+	if handled := handleHelpFunctionCommand(trimmed, out, env); handled {
+		return true
+	}
+	if handled := handleCompleteCommand(trimmed, out, env); handled {
 		return true
 	}
 
@@ -544,6 +607,189 @@ func vanity(line string, out io.Writer, enableMacros bool) bool {
 	return false
 }
 
+func trimCommandLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for strings.HasSuffix(trimmed, ";") {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	}
+	return trimmed
+}
+
+func handleMetaHelpCommand(trimmed string, out io.Writer, env *object.Environment) bool {
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, ":help") {
+		return false
+	}
+
+	args := strings.Fields(trimmed)
+	topic := ""
+	mode := ""
+	if len(args) > 1 {
+		topic = args[1]
+	}
+	if len(args) > 2 {
+		mode = args[2]
+	}
+
+	helpText := builtin.RenderReplHelp(topic, builtin.ReplHelpOptions{Mode: mode})
+	io.WriteString(out, helpText)
+	io.WriteString(out, "\n")
+	_ = env
+	return true
+}
+
+func handleHelpFunctionCommand(trimmed string, out io.Writer, env *object.Environment) bool {
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "help(") || !strings.HasSuffix(trimmed, ")") {
+		return false
+	}
+
+	topic, mode, ok := parseHelpCall(trimmed)
+	if !ok {
+		io.WriteString(out, "Invalid help syntax. Use help(), help(\"topic\"), or help(\"topic\", \"all\").\n")
+		return true
+	}
+
+	helpText := builtin.RenderReplHelp(topic, builtin.ReplHelpOptions{Mode: mode})
+	io.WriteString(out, helpText)
+	io.WriteString(out, "\n")
+	_ = env
+	return true
+}
+
+func handleCompleteCommand(trimmed string, out io.Writer, env *object.Environment) bool {
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, ":complete") {
+		return false
+	}
+
+	parts := strings.Fields(trimmed)
+	prefix := ""
+	if len(parts) > 1 {
+		prefix = parts[1]
+	}
+
+	candidates := builtin.ReplCompletionCandidatesForLine(prefix, builtin.ReplHelpOptions{Symbols: env.Keys()})
+	if len(candidates) == 0 {
+		io.WriteString(out, "No completion candidates.\n")
+		return true
+	}
+
+	io.WriteString(out, "Completion candidates:\n")
+	for _, candidate := range candidates {
+		io.WriteString(out, "- "+candidate+"\n")
+	}
+	return true
+}
+
+func parseHelpCall(trimmed string) (string, string, bool) {
+	start := strings.Index(trimmed, "(")
+	end := strings.LastIndex(trimmed, ")")
+	if start < 0 || end <= start {
+		return "", "", false
+	}
+	inner := strings.TrimSpace(trimmed[start+1 : end])
+	if inner == "" {
+		return "", "", true
+	}
+
+	parts := splitHelpArgs(inner)
+	if len(parts) == 0 || len(parts) > 2 {
+		return "", "", false
+	}
+
+	topic, ok := unquoteDouble(parts[0])
+	if !ok {
+		return "", "", false
+	}
+	mode := ""
+	if len(parts) == 2 {
+		mode, ok = unquoteDouble(parts[1])
+		if !ok {
+			return "", "", false
+		}
+	}
+	return topic, mode, true
+}
+
+func splitHelpArgs(inner string) []string {
+	parts := make([]string, 0, 2)
+	var current strings.Builder
+	inQuotes := false
+	for _, r := range inner {
+		switch r {
+		case '"':
+			inQuotes = !inQuotes
+			current.WriteRune(r)
+		case ',':
+			if inQuotes {
+				current.WriteRune(r)
+				continue
+			}
+			parts = append(parts, strings.TrimSpace(current.String()))
+			current.Reset()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	parts = append(parts, strings.TrimSpace(current.String()))
+
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		cleaned = append(cleaned, part)
+	}
+	return cleaned
+}
+
+func unquoteDouble(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+		return "", false
+	}
+	return trimmed[1 : len(trimmed)-1], true
+}
+
+func scanLine(scanner *bufio.Scanner, lineReader *interactiveLineReader, out io.Writer, signalCh <-chan os.Signal) (string, bool, bool) {
+	if lineReader != nil {
+		return scanLineWithReadline(lineReader, signalCh)
+	}
+	return scanLineWithIdle(scanner, out, signalCh)
+}
+
+func scanLineWithReadline(lineReader *interactiveLineReader, signalCh <-chan os.Signal) (string, bool, bool) {
+	type scanResult struct {
+		line        string
+		ok          bool
+		interrupted bool
+	}
+
+	resultCh := make(chan scanResult, 1)
+	go func() {
+		line, err := lineReader.Readline()
+		if err == nil {
+			resultCh <- scanResult{line: line, ok: true}
+			return
+		}
+		if errors.Is(err, readline.ErrInterrupt) {
+			resultCh <- scanResult{interrupted: true}
+			return
+		}
+		resultCh <- scanResult{ok: false}
+	}()
+
+	for {
+		select {
+		case result := <-resultCh:
+			return result.line, result.ok, result.interrupted
+		case <-signalCh:
+			return "", false, true
+		}
+	}
+}
+
 func scanLineWithIdle(scanner *bufio.Scanner, out io.Writer, signalCh <-chan os.Signal) (string, bool, bool) {
 	type scanResult struct {
 		line string
@@ -574,6 +820,10 @@ func scanLineWithIdle(scanner *bufio.Scanner, out io.Writer, signalCh <-chan os.
 			}
 		}
 	}
+}
+
+func completionPrefix(line string) string {
+	return strings.TrimSpace(line)
 }
 
 func shouldUseColor(out io.Writer) bool {
