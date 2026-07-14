@@ -1,0 +1,43 @@
+let segments = ["./image.E01", "./image.E02"];
+let opened, open_err = ewf_open(segments);
+if (open_err) {
+    putf("ewf_open failed: " + open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putf("EWF opened (handle=" + handle + ", segment_count=" + opened["segment_count"] + ")");
+
+let meta, meta_err = ewf_metadata(handle);
+if (meta_err) {
+    putf("ewf_metadata failed: " + meta_err);
+    return;
+}
+
+putf("Metadata:");
+putf("  version=" + meta["major_version"] + "." + meta["minor_version"]);
+putf("  section_count=" + meta["section_count"]);
+putf("  is_encrypted=", meta["is_encrypted"]);
+putf("  has_media=", meta["has_media"]);
+putf("  bytes_per_sector=" + meta["bytes_per_sector"]);
+putf("  sectors_per_chunk=" + meta["sectors_per_chunk"]);
+putf("  number_of_sectors=" + meta["number_of_sectors"]);
+putf("  number_of_chunks=" + meta["number_of_chunks"]);
+putf("  total_logical_bytes=" + meta["total_logical_bytes"]);
+
+let first, read_err = ewf_read_at(handle, 0, 512);
+if (read_err) {
+    putf("ewf_read_at failed: " + read_err);
+    return;
+}
+
+putf("First 512 decoded bytes (string rendering):");
+putf(first);
+
+let closed, close_err = ewf_close(handle);
+if (close_err) {
+    putf("ewf_close failed: " + close_err);
+    return;
+}
+
+putf("Handle closed: " + closed["closed"]);

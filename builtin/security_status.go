@@ -9,7 +9,7 @@ import (
 
 func DebugStatus(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	detected := security.IsDebuggerPresent()
@@ -31,7 +31,7 @@ func DebugStatus(args ...object.Object) object.Object {
 	}
 
 	probeSignals, probeEnabled, probeErr := security.RunAntiTamperProbe(
-		[]string{"hardware_breakpoint", "timing", "syscall", "frida_ptrace", "trampoline", "iat_got"},
+		[]string{"hardware_breakpoint", "timing", "syscall", "frida_ptrace", "trampoline", "iat_got", "process_injection", "module_integrity", "memory_page_anomaly"},
 		"builtin:debug_status",
 	)
 	result["probe_enabled"] = boolObj(probeEnabled)
@@ -40,12 +40,12 @@ func DebugStatus(args ...object.Object) object.Object {
 		result["probe_error"] = stringObj(probeErr.Error())
 	}
 
-	return makeHashObject(result)
+	return resultAndError(makeHashObject(result), nil)
 }
 
 func SandboxStatus(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	statusType, confidence, err := security.DetectSandboxType()
@@ -87,7 +87,7 @@ func SandboxStatus(args ...object.Object) object.Object {
 	}
 
 	probeSignals, probeEnabled, probeErr := security.RunAntiTamperProbe(
-		[]string{"cpuid_hypervisor", "rdtsc_drift", "acpi_pci", "gpu_feature", "ld_preload", "syscall_table"},
+		[]string{"cpuid_hypervisor", "rdtsc_drift", "acpi_pci", "gpu_feature", "ld_preload", "syscall_table", "module_integrity", "memory_page_anomaly"},
 		"builtin:sandbox_status",
 	)
 	result["probe_enabled"] = boolObj(probeEnabled)
@@ -96,12 +96,12 @@ func SandboxStatus(args ...object.Object) object.Object {
 		result["probe_error"] = stringObj(probeErr.Error())
 	}
 
-	return makeHashObject(result)
+	return resultAndError(makeHashObject(result), nil)
 }
 
 func SecurityDiagnostics(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 
 	debugDetected, debugMethods := security.DetectDebuggerDetails()
@@ -126,7 +126,7 @@ func SecurityDiagnostics(args ...object.Object) object.Object {
 
 	telemetry := security.SecurityTelemetrySnapshot()
 
-	return makeHashObject(map[string]object.Object{
+	return resultAndError(makeHashObject(map[string]object.Object{
 		"debugger": makeHashObject(map[string]object.Object{
 			"detected":       boolObj(debugDetected),
 			"methods":        stringArrayObj(debugMethods),
@@ -144,7 +144,7 @@ func SecurityDiagnostics(args ...object.Object) object.Object {
 		}),
 		"source":         stringObj("go-security"),
 		"schema_version": intObj(1),
-	})
+	}), nil)
 }
 
 func detectionType(detected bool, name string) string {

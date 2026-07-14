@@ -1,0 +1,55 @@
+let volume_path = "./disk.hfs";
+let opened, open_err = hfs_open(volume_path);
+if (open_err) {
+    putf("hfs_open failed: " + open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putf("HFS opened: " + opened["path"] + " (handle=" + handle + ")");
+
+let items, list_err = hfs_list_files(handle, "/");
+if (list_err) {
+    putf("hfs_list_files failed: " + list_err);
+    return;
+}
+
+putf("Root entries:");
+for (let i = 0; i < len(items); i = i + 1) {
+    let e = items[i];
+    putf("- ", e["path"], " (dir=", e["is_dir"], ", cnid=", e["cnid"], ")");
+}
+
+let target = "/etc/hosts";
+let content, read_err = hfs_read_file(handle, target);
+if (!read_err) {
+    putf("File content from " + target + ":");
+    putf(content);
+}
+
+let meta, meta_err = hfs_metadata(handle, target);
+if (meta_err) {
+    putf("hfs_metadata failed: " + meta_err);
+    return;
+}
+
+putf("Metadata:");
+putf("  path=" + meta["path"]);
+putf("  name=" + meta["name"]);
+putf("  cnid=" + meta["cnid"]);
+putf("  kind=" + meta["kind"]);
+putf("  block_size=" + meta["block_size"]);
+putf("  total_blocks=" + meta["total_blocks"]);
+putf("  free_blocks=" + meta["free_blocks"]);
+putf("  file_count=" + meta["file_count"]);
+putf("  folder_count=" + meta["folder_count"]);
+putf("  is_dir=", meta["is_dir"]);
+putf("  size=" + meta["size"]);
+
+let closed, close_err = hfs_close(handle);
+if (close_err) {
+    putf("hfs_close failed: " + close_err);
+    return;
+}
+
+putf("Handle closed: " + closed["closed"]);

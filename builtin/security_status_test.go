@@ -11,9 +11,14 @@ func TestDebugStatusBuiltin(t *testing.T) {
 	security.ResetSecurityTelemetry()
 
 	result := DebugStatus()
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("debug_status() result is not Hash. got=%T", result)
+		t.Fatalf("debug_status() result is not Hash. got=%T", payload)
 	}
 
 	assertHashHasKeyType(t, hash, "detected", object.BOOLEAN_OBJ)
@@ -34,9 +39,14 @@ func TestSandboxStatusBuiltin(t *testing.T) {
 	security.ResetSecurityTelemetry()
 
 	result := SandboxStatus()
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("sandbox_status() result is not Hash. got=%T", result)
+		t.Fatalf("sandbox_status() result is not Hash. got=%T", payload)
 	}
 
 	assertHashHasKeyType(t, hash, "detected", object.BOOLEAN_OBJ)
@@ -57,9 +67,14 @@ func TestSecurityDiagnosticsBuiltin(t *testing.T) {
 	security.ResetSecurityTelemetry()
 
 	result := SecurityDiagnostics()
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("security_diagnostics() result is not Hash. got=%T", result)
+		t.Fatalf("security_diagnostics() result is not Hash. got=%T", payload)
 	}
 
 	assertHashHasKeyType(t, hash, "debugger", object.HASH_OBJ)
@@ -85,18 +100,21 @@ func TestSecurityDiagnosticsBuiltin(t *testing.T) {
 
 func TestSecurityStatusBuiltinWrongArgs(t *testing.T) {
 	debugErr := DebugStatus(&object.Integer{Value: 1})
-	if _, ok := debugErr.(*object.Error); !ok {
-		t.Fatalf("expected error for debug_status wrong args, got=%T", debugErr)
+	_, debugErrObj := unwrapPair(t, debugErr)
+	if debugErrObj == nil {
+		t.Fatalf("expected error for debug_status wrong args")
 	}
 
 	sandboxErr := SandboxStatus(&object.Integer{Value: 1})
-	if _, ok := sandboxErr.(*object.Error); !ok {
-		t.Fatalf("expected error for sandbox_status wrong args, got=%T", sandboxErr)
+	_, sandboxErrObj := unwrapPair(t, sandboxErr)
+	if sandboxErrObj == nil {
+		t.Fatalf("expected error for sandbox_status wrong args")
 	}
 
 	diagnosticsErr := SecurityDiagnostics(&object.Integer{Value: 1})
-	if _, ok := diagnosticsErr.(*object.Error); !ok {
-		t.Fatalf("expected error for security_diagnostics wrong args, got=%T", diagnosticsErr)
+	_, diagnosticsErrObj := unwrapPair(t, diagnosticsErr)
+	if diagnosticsErrObj == nil {
+		t.Fatalf("expected error for security_diagnostics wrong args")
 	}
 }
 

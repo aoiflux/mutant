@@ -12,6 +12,48 @@ import (
 	"unsafe"
 )
 
+const (
+	darwinDebugMethodPTraced    = "darwin:p_traced"
+	darwinDebugMethodParentProc = "darwin:parent_debugger_process"
+	darwinDebugMethodEnvMarkers = "darwin:debugger_environment"
+
+	darwinSysctlCTLKern     = 1
+	darwinSysctlKernProc    = 14
+	darwinSysctlKernProcPID = 1
+
+	darwinDYLDInsertLibsEnv = "DYLD_INSERT_LIBRARIES"
+	darwinPsCommand         = "ps"
+	darwinPgrepCommand      = "pgrep"
+	darwinOtoolCommand      = "otool"
+)
+
+var (
+	darwinParentDebuggerPatterns = []string{
+		"lldb", "gdb", "xcode", "simulator", "instruments",
+		"dtrace", "fs_usage", "sample", "trace", "sc_usage",
+		"leaks", "malloc_history", "heap", "vmmap",
+		"frida-server", "idb", "appium",
+	}
+
+	darwinDebuggerEnvVars = []string{
+		"LLDB_DEBUGSERVER_PORT",
+		"LLDB_MasterPort",
+		"GDB_OPTS",
+		"GDBHISTFILE",
+		"XCODE_DEBUG_PORT",
+		darwinDYLDInsertLibsEnv,
+		"DYLD_ROOT_PATH",
+		"XCODE_VERSION_ACTUAL",
+		"XPC_DEBUG",
+		"LLVM_DEBUG",
+		"FRIDA_DEBUG",
+	}
+
+	darwinSuspiciousDYLDLibs = []string{"libgmalloc", "libc++abi", "libsystem_trace", "libsystem_sandbox"}
+	darwinRunningDebuggers   = []string{"lldb", "gdb", "xcode", "Instruments", "Simulator", "frida-server", "idb"}
+	darwinOtoolIndicators    = []string{"liblldb", "libgdb", "libdebug", "/tmp/", "/var/tmp/"}
+)
+
 // isDebuggerPresentDarwin performs multiple anti-debugging checks on macOS/Darwin
 // Uses techniques employed by security vendors like Objective-See
 func isDebuggerPresentDarwin() bool {
@@ -24,17 +66,17 @@ func detectDebuggerDetailsDarwin() (bool, []string) {
 
 	// Check 1: P_TRACED flag (ptrace-based debuggers like lldb, gdb)
 	if isProcessBeingTraced() {
-		methods = append(methods, "darwin:p_traced")
+		methods = append(methods, darwinDebugMethodPTraced)
 	}
 
 	// Check 2: Check parent process for known debuggers
 	if isParentDebuggerDarwin() {
-		methods = append(methods, "darwin:parent_debugger_process")
+		methods = append(methods, darwinDebugMethodParentProc)
 	}
 
 	// Check 3: Environment variables set by debugging tools
 	if hasDebuggerEnvironmentMarkersDarwin() {
-		methods = append(methods, "darwin:debugger_environment")
+		methods = append(methods, darwinDebugMethodEnvMarkers)
 	}
 
 	return len(methods) > 0, methods
@@ -56,7 +98,7 @@ func isProcessBeingTraced() bool {
 
 	// sysctl MIB for querying process info
 	// CTL_KERN.KERN_PROC.KERN_PROC_PID.<pid>
-	mib := []int32{1, 14, 1, int32(os.Getpid()), int32(unsafe.Sizeof(kinfoProc{})), 1}
+	mib := []int32{darwinSysctlCTLKern, darwinSysctlKernProc, darwinSysctlKernProcPID, int32(os.Getpid()), int32(unsafe.Sizeof(kinfoProc{})), 1}
 
 	var info kinfoProc
 	size := uintptr(unsafe.Sizeof(info))
@@ -85,7 +127,7 @@ func isParentDebuggerDarwin() bool {
 
 	// Try to get parent process name via /proc
 	// Note: macOS /proc is limited, so we use ps command
-	cmd := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(ppid))
+	cmd := exec.Command(darwinPsCommand, "-o", "comm=", "-p", strconv.Itoa(ppid))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -93,15 +135,7 @@ func isParentDebuggerDarwin() bool {
 
 	parentName := strings.ToLower(strings.TrimSpace(string(output)))
 
-	// Known macOS debuggers and development tools
-	debuggerPatterns := []string{
-		"lldb", "gdb", "xcode", "simulator", "instruments",
-		"dtrace", "fs_usage", "sample", "trace", "sc_usage",
-		"leaks", "malloc_history", "heap", "vmmap",
-		"frida-server", "idb", "appium",
-	}
-
-	for _, pattern := range debuggerPatterns {
+	for _, pattern := range darwinParentDebuggerPatterns {
 		if strings.Contains(parentName, pattern) {
 			return true
 		}
@@ -112,33 +146,16 @@ func isParentDebuggerDarwin() bool {
 
 // hasDebuggerEnvironmentMarkersDarwin checks for debugger environment markers on macOS
 func hasDebuggerEnvironmentMarkersDarwin() bool {
-	debugEnvVars := []string{
-		"LLDB_DEBUGSERVER_PORT",
-		"LLDB_MasterPort",
-		"GDB_OPTS",
-		"GDBHISTFILE",
-		"XCODE_DEBUG_PORT",
-		"DYLD_INSERT_LIBRARIES", // Code injection
-		"DYLD_ROOT_PATH",        // Simulator indicator
-		"XCODE_VERSION_ACTUAL",  // Xcode debugging
-		"XPC_DEBUG",             // XPC debugging
-		"LLVM_DEBUG",
-		"FRIDA_DEBUG",
-	}
-
-	for _, envVar := range debugEnvVars {
+	for _, envVar := range darwinDebuggerEnvVars {
 		if _, exists := os.LookupEnv(envVar); exists {
 			return true
 		}
 	}
 
 	// Check for unusual DYLD settings which indicate debugging
-	if dyldLibs, exists := os.LookupEnv("DYLD_INSERT_LIBRARIES"); exists {
+	if dyldLibs, exists := os.LookupEnv(darwinDYLDInsertLibsEnv); exists {
 		// Check if suspicious libraries are being injected
-		suspiciousLibs := []string{
-			"libgmalloc", "libc++abi", "libsystem_trace", "libsystem_sandbox",
-		}
-		for _, lib := range suspiciousLibs {
+		for _, lib := range darwinSuspiciousDYLDLibs {
 			if strings.Contains(dyldLibs, lib) {
 				return true
 			}
@@ -150,13 +167,8 @@ func hasDebuggerEnvironmentMarkersDarwin() bool {
 
 // hasDebuggerProcessRunningDarwin checks if known debuggers are running
 func hasDebuggerProcessRunningDarwin() bool {
-	debuggers := []string{
-		"lldb", "gdb", "xcode", "Instruments", "Simulator",
-		"frida-server", "idb",
-	}
-
-	for _, debugger := range debuggers {
-		cmd := exec.Command("pgrep", "-x", debugger)
+	for _, debugger := range darwinRunningDebuggers {
+		cmd := exec.Command(darwinPgrepCommand, "-x", debugger)
 		err := cmd.Run()
 		if err == nil {
 			return true
@@ -174,18 +186,13 @@ func hasInjectedCode() bool {
 
 	// Alternative: Check for unusual library loading
 	// Check if standard system libraries are loaded from unusual paths
-	cmd := exec.Command("otool", "-L", "/proc/self/exe")
+	cmd := exec.Command(darwinOtoolCommand, "-L", "/proc/self/exe")
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		outputStr := strings.ToLower(string(output))
 
 		// Debuggers often load debugging libraries
-		suspiciousIndicators := []string{
-			"liblldb", "libgdb", "libdebug",
-			"/tmp/", "/var/tmp/", // Unusual library locations
-		}
-
-		for _, indicator := range suspiciousIndicators {
+		for _, indicator := range darwinOtoolIndicators {
 			if strings.Contains(outputStr, indicator) {
 				return true
 			}

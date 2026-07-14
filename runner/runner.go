@@ -18,22 +18,23 @@ import (
 	"mutant/vm"
 	"os"
 	"path/filepath"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 var (
-	isDebuggerPresent = security.IsDebuggerPresent
-	isSandboxed       = security.IsSandboxed
-	executeLuaPatches = luaruntime.ExecutePatches
+	isDebuggerPresent    = security.IsDebuggerPresent
+	isSandboxed          = security.IsSandboxed
+	executeLuaPatches    = luaruntime.ExecutePatches
+	runAntiTamperProbe   = security.RunAntiTamperProbe
+	runRemoteProcessScan = security.RunRemoteProcessScan
+	resolveRemoteScanCfg = security.ResolveRemoteScanConfig
+	processProtectionOn  = isProcessProtectionEnabled
 )
 
-func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
-	telemetryPath := os.Getenv(security.SecurityTelemetryFileEnv)
-	if telemetryPath != "" {
-		defer func() {
-			_ = security.ExportSecurityTelemetry(telemetryPath)
-		}()
-	}
+const processProtectionTerminateConfidence = 80
 
+func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
 	signedCode, err := os.ReadFile(srcpath)
 	if err != nil {
 		return err, errrs.ERROR
@@ -54,10 +55,9 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 		if generated {
 			privatePath, publicPath := security.LocalKeyPairPaths(keyDir)
 			fmt.Fprintf(os.Stderr,
-				"[security] generated local keypair for secure mode bootstrap\n[security] private=%s\n[security] public=%s\n[security] optional: set %s to the public key for explicit pinning\n",
+				"[security] generated local keypair for secure mode bootstrap\n[security] private=%s\n[security] public=%s\n",
 				filepath.Clean(privatePath),
 				filepath.Clean(publicPath),
-				security.TrustedPublicKeyEnv,
 			)
 		}
 
@@ -99,6 +99,12 @@ func enforceAntiRev(secureMode bool, stage string) error {
 	if err := enforceAntiSandbox(secureMode, stage); err != nil {
 		return err
 	}
+	if err := enforceProcessProtection(secureMode, stage); err != nil {
+		return err
+	}
+	if err := enforceRemoteProcessProtection(secureMode, stage); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -120,13 +126,84 @@ func enforceAntiSandbox(secureMode bool, stage string) error {
 	return security.ApplyTamperResponse("sandbox_detected", stage, secureMode, security.ErrSandboxDetected)
 }
 
+func enforceProcessProtection(secureMode bool, stage string) error {
+	if !processProtectionOn() {
+		return nil
+	}
+
+	probes := []string{"process_injection", "trampoline", "iat_got", "module_integrity", "memory_page_anomaly"}
+	signals, enabled, err := runAntiTamperProbe(probes, "runner:"+stage)
+	if err != nil {
+		security.RecordProbeError("runner:" + stage)
+		return nil
+	}
+	if !enabled {
+		return nil
+	}
+
+	for _, signal := range signals {
+		if !signal.Detected || signal.Confidence < processProtectionTerminateConfidence {
+			continue
+		}
+
+		security.RecordProcessProtectionDetected(stage)
+		return security.ApplyTamperResponse(
+			"process_protection_detected",
+			stage,
+			secureMode,
+			security.ErrProcessProtectionDetected,
+		)
+	}
+
+	return nil
+}
+
+func isProcessProtectionEnabled() bool {
+	return true
+}
+
+func enforceRemoteProcessProtection(secureMode bool, stage string) error {
+	verdicts, enabled, err := runRemoteProcessScan("runner:" + stage)
+	if err != nil || !enabled {
+		return nil
+	}
+	cfg := security.ResolveRemoteScanConfig()
+	cfg = resolveRemoteScanCfg()
+	if cfg.Mode != security.RemoteScanModeEnforce {
+		return nil
+	}
+
+	for _, verdict := range verdicts {
+		if verdict.FinalScore < cfg.CriticalScore {
+			continue
+		}
+
+		security.RecordProcessProtectionDetected(stage)
+		return security.ApplyTamperResponse(
+			"remote_process_protection_detected",
+			stage,
+			secureMode,
+			security.ErrProcessProtectionDetected,
+		)
+	}
+
+	return nil
+}
+
 func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	decodedData, err := decryptCode(data, password)
 	if err != nil {
 		return nil, err
 	}
 	defer security.SecureZero(decodedData)
-	reader := bytes.NewReader(decodedData)
+
+	inflatedData, err := maybeDecompressEncodedByteCode(decodedData)
+	if err != nil {
+		return nil, err
+	}
+	defer security.SecureZero(inflatedData)
+
+	reader := bytes.NewReader(inflatedData)
 
 	var bytecode *compiler.ByteCode
 	registerTypes()
@@ -136,6 +213,25 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	}
 
 	return bytecode, nil
+}
+
+func maybeDecompressEncodedByteCode(data []byte) ([]byte, error) {
+	if len(data) < 4 || data[0] != 0x28 || data[1] != 0xb5 || data[2] != 0x2f || data[3] != 0xfd {
+		return data, nil
+	}
+
+	decoder, err := zstd.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer decoder.Close()
+
+	inflated, err := io.ReadAll(decoder)
+	if err != nil {
+		return nil, err
+	}
+
+	return inflated, nil
 }
 
 func decryptCode(signedCode []byte, password string) ([]byte, error) {
@@ -291,6 +387,9 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	}
 
 	last := machine.LastPoppedStackElement()
+	if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
+		return nil, ""
+	}
 	io.WriteString(os.Stdout, last.Inspect())
 	io.WriteString(os.Stdout, "\n")
 
@@ -330,6 +429,7 @@ func registerTypes() {
 	gob.Register(&object.Boolean{})
 	gob.Register(&object.Null{})
 	gob.Register(&object.ReturnValue{})
+	gob.Register(&object.MultiValue{})
 	gob.Register(&object.Error{})
 	gob.Register(&object.Function{})
 	gob.Register(&object.String{})

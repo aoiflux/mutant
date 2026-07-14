@@ -1,0 +1,32 @@
+putln("=== Detection Builtins ===");
+
+let persistence_facts = {
+    "autorun_keys": ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce\\Bad"],
+    "startup_files": ["C:\\Users\\alice\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\evil.lnk"],
+    "scheduled_tasks": ["\\Microsoft\\Windows\\Defrag\\ScheduledDefrag"]
+};
+let persistence, err = detect_persistence(persistence_facts);
+putln("detect_persistence:", persistence, "err:", err);
+
+let injection, err = detect_injection({"mem_path": "examples/data/memory_dump.bin"});
+putln("detect_injection:", injection, "err:", err);
+
+let flows = [
+    {"dst": "c2.example"},
+    {"dst": "c2.example"},
+    {"dst": "c2.example"},
+    {"dst": "normal.example"}
+];
+let beacon, err = detect_network_beacon(flows);
+putln("detect_network_beacon:", beacon, "err:", err);
+
+let priv_esc, err = detect_priv_esc({
+    "token_theft": true,
+    "uac_bypass": false,
+    "lsass_access": true,
+    "se_debug_enabled": false
+});
+putln("detect_priv_esc:", priv_esc, "err:", err);
+
+let suspicious, err = detect_suspicious_files(["examples/data/memory_dump.bin"]);
+putln("detect_suspicious_files:", suspicious, "err:", err);

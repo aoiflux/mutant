@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"mutant/ast"
+	"mutant/code"
 	"mutant/compiler"
 	"mutant/global"
 	"mutant/lexer"
@@ -10,6 +11,7 @@ import (
 	"mutant/object"
 	"mutant/parser"
 	"mutant/security"
+	"strings"
 	"testing"
 )
 
@@ -223,6 +225,49 @@ func TestIntegerArithmatic(t *testing.T) {
 	runVMTests(t, tests)
 }
 
+func TestResolveVMGlobalMemoryModeDefaultsRuntime(t *testing.T) {
+	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeRuntime {
+		t.Fatalf("expected default memory mode runtime, got %q", got)
+	}
+}
+
+func TestResolveVMGlobalMemoryModeWrapper(t *testing.T) {
+	if got := resolveVMGlobalMemoryMode(); got != vMMemoryModeRuntime {
+		t.Fatalf("expected deterministic memory mode runtime, got %q", got)
+	}
+}
+
+func TestWrapperGlobalModeStoresSupportedTypeInSecureWrapper(t *testing.T) {
+	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+	vm.memoryMode = vMMemoryModeWrapper
+
+	vm.ensureGlobalCapacity(3)
+	vm.setGlobal(3, &object.Integer{Value: 42})
+
+	if _, ok := vm.secureGlobals[3]; !ok {
+		t.Fatalf("expected secure wrapper entry for supported global type")
+	}
+	got := vm.getGlobal(3)
+	if err := testIntegerObject(42, got); err != nil {
+		t.Fatalf("expected wrapped global roundtrip value, got error: %v", err)
+	}
+}
+
+func TestWrapperGlobalModeFallsBackForUnsupportedType(t *testing.T) {
+	vm := New(&compiler.ByteCode{Instructions: code.Instructions{}, Constants: nil})
+	vm.memoryMode = vMMemoryModeWrapper
+
+	vm.ensureGlobalCapacity(1)
+	vm.setGlobal(1, &object.Array{Elements: []object.Object{&object.Integer{Value: 1}}})
+
+	if _, ok := vm.secureGlobals[1]; ok {
+		t.Fatalf("expected unsupported wrapper type to fall back to runtime storage")
+	}
+	if vm.globals[1] == nil {
+		t.Fatalf("expected fallback global storage value")
+	}
+}
+
 func TestBooleanExpressions(t *testing.T) {
 	tests := []vmTestCase{
 		{"true", true},
@@ -277,6 +322,50 @@ func TestGlobalLetStatements(t *testing.T) {
 		{"let one = 1; let two = 2; one + two", 3},
 		{"let one = 1; let two = one + one; one + two", 3},
 	}
+	runVMTests(t, tests)
+}
+
+func TestMultiValueReturnStatements(t *testing.T) {
+	vm, err := runEncryptedVM("let pair = fn() { return 10, 20; }; pair();")
+	if err != nil {
+		t.Fatalf("vm run failed: %s", err)
+	}
+
+	actual := vm.LastPoppedStackElement()
+	multi, ok := actual.(*object.MultiValue)
+	if !ok {
+		t.Fatalf("object is not MultiValue. got=%T (%+v)", actual, actual)
+	}
+
+	if len(multi.Values) != 2 {
+		t.Fatalf("wrong number of values. got=%d", len(multi.Values))
+	}
+
+	if err := testIntegerObject(10, multi.Values[0]); err != nil {
+		t.Fatalf("first value mismatch: %s", err)
+	}
+	if err := testIntegerObject(20, multi.Values[1]); err != nil {
+		t.Fatalf("second value mismatch: %s", err)
+	}
+}
+
+func TestMultiValueIndexExpressions(t *testing.T) {
+	tests := []vmTestCase{
+		{"let pair = fn() { return 10, 20; }; pair()[0]", 10},
+		{"let pair = fn() { return 10, 20; }; pair()[1]", 20},
+		{"let pair = fn() { return 10, 20; }; pair()[2]", global.Null},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestLetDestructuringStatements(t *testing.T) {
+	tests := []vmTestCase{
+		{"let pair = fn() { return 10, 20; }; let a, b = pair(); a", 10},
+		{"let pair = fn() { return 10, 20; }; let a, b = pair(); b", 20},
+		{"let a, b = 10; b", global.Null},
+	}
+
 	runVMTests(t, tests)
 }
 
@@ -505,9 +594,41 @@ func TestCallingFunctionsWithWrongArguments(t *testing.T) {
 
 		if err := vm.Run(); err == nil {
 			t.Fatalf("expected VM error but resulted in none.")
-		} else if err.Error() != tt.expected {
-			t.Fatalf("wrong VM error: want=%q, got=%q", tt.expected, err)
+		} else {
+			expected, ok := tt.expected.(string)
+			if !ok {
+				t.Fatalf("expected string assertion in test case, got=%T", tt.expected)
+			}
+			if !strings.Contains(err.Error(), expected) {
+				t.Fatalf("wrong VM error: want substring=%q, got=%q", expected, err)
+			}
 		}
+	}
+}
+
+func TestRuntimeErrorsIncludeInstructionMetadata(t *testing.T) {
+	program := parse("fn(a) { a; }();")
+	comp := compiler.New()
+
+	if err := comp.Compile(program); err != nil {
+		t.Fatalf("compiler error: %s", err)
+	}
+
+	byteCode := comp.ByteCode()
+	password := fmt.Sprint(security.DerivePasswordFromInstructions(byteCode.Instructions))
+	byteCode = mutil.EncryptByteCode(byteCode, password)
+
+	vm := NewWithGlobalStoreAndPassword(byteCode, make([]object.Object, global.GlobalSize), password)
+	err := vm.Run()
+	if err == nil {
+		t.Fatalf("expected runtime error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "vm_runtime_error ip=") {
+		t.Fatalf("expected runtime metadata in error, got=%q", message)
+	}
+	if !strings.Contains(message, "op=Opcall") {
+		t.Fatalf("expected opcode metadata in error, got=%q", message)
 	}
 }
 
@@ -805,8 +926,8 @@ func TestBuiltinArgsDoNotOverwriteEncryptedStackStorage(t *testing.T) {
 	if storedArg == nil {
 		t.Fatalf("expected builtin call stack slot to retain prior storage")
 	}
-	if storedArg.Type() != object.ENCRYPTED_OBJ {
-		t.Fatalf("builtin arg slot overwritten with decrypted object: got=%s", storedArg.Type())
+	if storedArg.Type() == object.STRING_OBJ {
+		t.Fatalf("builtin arg slot overwritten with decrypted string object")
 	}
 }
 

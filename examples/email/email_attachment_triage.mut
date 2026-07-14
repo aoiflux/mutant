@@ -1,0 +1,16 @@
+putln("=== Email Attachment Triage ===");
+
+let raw = "From: secops@example.org\nTo: analyst@example.org\nSubject: Invoice Attached\n\nPlease see attached invoice.";
+
+let parsed, err = email_parse(raw);
+putln("email_parse:", parsed, "err:", err);
+
+let urls, err = email_urls(raw);
+putln("email_urls:", urls, "err:", err);
+
+let auth, err = email_spf_dkim({
+  "spf": "pass",
+  "dkim": "pass",
+  "dmarc": "pass"
+});
+putln("email_spf_dkim:", auth, "err:", err);

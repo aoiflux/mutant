@@ -8,20 +8,13 @@ import (
 	"mutant/repl"
 	"mutant/runner"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-func RunRepl(version string, enableMacros bool) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	go func() {
-		<-c
-		repl.GracefulExit()
-	}()
-	repl.Start(os.Stdin, os.Stdout, version, enableMacros)
+func RunRepl(version string, enableMacros bool, theme string) {
+	repl.Start(os.Stdin, os.Stdout, version, enableMacros, theme)
 }
 
 func CompileCode(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) {

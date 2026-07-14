@@ -1,0 +1,122 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+putln("=== Network Service Recon + Graph Artifact ===");
+
+let output_directory = "example_output/recon";
+let graph_path = output_directory + "/service_graph";
+let report_path = output_directory + "/network_recon_report.json";
+
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let target_hosts = ["example.com", "cloudflare.com"];
+let target_ports = ["80", "443", "22", "3389"];
+
+let NODE_HOST = 1;
+let NODE_SERVICE = 2;
+let EDGE_EXPOSES = 1;
+
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
+let host_nodes = [];
+let findings = [];
+let open_count = 0;
+
+let target_host_count = len(target_hosts);
+for (let i = 0; i < target_host_count; i = i + 1) {
+    let host = target_hosts[i];
+    let host_node, err = db_add_node(db, NODE_HOST);
+    check_err(err, "db_add_node host");
+    check(db_index_prop(db, host_node, "host", host), "db_index_prop");
+    let updated_host_nodes, err = push(host_nodes, host_node);
+    check_err(err, "push host_nodes");
+    host_nodes = updated_host_nodes;
+
+    let resolved, err = net_resolve(host);
+    check_err(err, "net_resolve");
+    let resolved_count = len(resolved);
+    if (resolved_count > 0) {
+        check(db_index_prop(db, host_node, "resolved_ip", resolved[0]), "db_index_prop");
+    };
+
+    let target_port_count = len(target_ports);
+    for (let j = 0; j < target_port_count; j = j + 1) {
+        let port = target_ports[j];
+        let dial, err = net_dial(host + ":" + port, 1200);
+        check_err(err, "net_dial");
+
+        if (dial) {
+            open_count = open_count + 1;
+            let service_node, err = db_add_node(db, NODE_SERVICE);
+            check_err(err, "db_add_node service");
+            check(db_index_prop(db, service_node, "port", port), "db_index_prop");
+            let latency_json, err = json_stringify(dial["latency_ms"]);
+            check_err(err, "json_stringify latency");
+            check(db_index_prop(db, service_node, "latency_ms", latency_json), "db_index_prop");
+            check(db_add_edge(db, host_node, service_node, EDGE_EXPOSES), "db_add_edge");
+
+            let updated_findings, err = push(findings, {
+                "host": host,
+                "port": port,
+                "latency_ms": dial["latency_ms"],
+                "status": "open"
+});
+            check_err(err, "push findings");
+            findings = updated_findings;
+
+            putln("open: ", host, ":", port, " latency_ms=", dial["latency_ms"]);
+        };
+    }
+}
+
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let bfs_node_count = 0;
+let host_node_count = len(host_nodes);
+if (host_node_count > 0) {
+    let first_host_node, err = first(host_nodes);
+    check_err(err, "first host_nodes");
+    let bfs, err = db_bfs(db, first_host_node, 1, "out");
+    check_err(err, "db_bfs");
+    let bfs_nodes_count = len(bfs["nodes"]);
+    bfs_node_count = bfs_nodes_count;
+};
+
+let close_result, err = db_close(db);
+check_err(err, "db_close");
+if (close_result == false) {
+    putln("db_close error");
+};
+
+let report = {
+    "profile": "network_recon_graph",
+    "targets": target_hosts,
+    "open_service_count": open_count,
+    "graph_stats": stats,
+    "bfs_node_count": bfs_node_count,
+    "findings": findings
+};
+
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
+    putln("wrote report: ", report_path);
+    putln("graph path: ", graph_path);
+} else {
+    putln("failed to write report");
+};

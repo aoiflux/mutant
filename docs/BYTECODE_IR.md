@@ -1,9 +1,16 @@
 # Mutant IR / ByteCode Reference
 
-> **Audience:** compiler/VM contributors. This document covers every layer of
-> the bytecode pipeline: instruction encoding, the constant pool, compiler
-> internals, the stack-machine VM, security machinery, and the polymorphic
-> mutation engine.
+> This document covers every layer of the bytecode pipeline: instruction
+> encoding, the constant pool, compiler internals, the stack-machine VM,
+> security machinery, and the polymorphic mutation engine.
+
+> **Status note:** this is a deep technical reference. For current feature
+> enablement and rollout status (especially anti-tamper gates and polymorphic
+> activation depth), use:
+>
+> 1. [ANTITAMPER_PROBE_ENABLEMENT_LLD](ANTITAMPER_PROBE_ENABLEMENT_LLD.md)
+> 2. [PROCESS_INJECTION_DETECTION_LLD](PROCESS_INJECTION_DETECTION_LLD.md)
+> 3. [POLYMORPHIC_BYTECODE_LLD](POLYMORPHIC_BYTECODE_LLD.md)
 
 ---
 

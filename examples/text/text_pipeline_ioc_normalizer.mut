@@ -1,0 +1,15 @@
+putln("=== IOC Normalizer Pipeline ===");
+
+let raw = " URL=http://evil.example/login?user=alice  ";
+let lowered = text_replace(raw, "URL=", "url=")[0];
+let compact = regex_replace(lowered, "\\s+", "")[0];
+let host = regex_find(compact, "https?://([^/]+)")[0];
+
+putln("raw:", raw);
+putln("compact:", compact);
+putln("host_match:", host);
+
+let has_http = text_contains(compact, "http://")[0];
+let sim = text_similarity("evil.example", "evii.example")[0];
+putln("has_http:", has_http);
+putln("domain_similarity:", sim);

@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"mutant/object"
+	"strings"
 	"testing"
 )
 
@@ -153,7 +154,88 @@ func TestErrorHandling(t *testing.T) {
 		if errObj.Message != tt.expected {
 			t.Errorf("wrong error message. expected=%q, got=%q", tt.expected, errObj.Message)
 		}
+		if errObj.Context != "evaluator" {
+			t.Errorf("wrong error context. expected=%q, got=%q", "evaluator", errObj.Context)
+		}
 	}
+}
+
+func TestMultiValueReturnStatements(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []int64
+	}{
+		{"let pair = fn() { return 10, 20; }; pair();", []int64{10, 20}},
+		{"return 1, 2;", []int64{1, 2}},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		multi, ok := evaluated.(*object.MultiValue)
+		if !ok {
+			t.Fatalf("object is not MultiValue. got=%T (%+v)", evaluated, evaluated)
+		}
+
+		if len(multi.Values) != len(tt.expected) {
+			t.Fatalf("wrong number of values. got=%d, want=%d", len(multi.Values), len(tt.expected))
+		}
+
+		for idx, want := range tt.expected {
+			testIntegerObject(t, multi.Values[idx], want)
+		}
+	}
+}
+
+func TestMultiValueIndexExpressions(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected interface{}
+	}{
+		{"let pair = fn() { return 10, 20; }; pair()[0];", 10},
+		{"let pair = fn() { return 10, 20; }; pair()[1];", 20},
+		{"let pair = fn() { return 10, 20; }; pair()[2];", nil},
+	}
+
+	for _, tt := range tests {
+		evaluated := testEval(tt.input)
+		switch expected := tt.expected.(type) {
+		case int:
+			testIntegerObject(t, evaluated, int64(expected))
+		default:
+			testNullObject(t, evaluated)
+		}
+	}
+}
+
+func TestFsRead2BuiltinResultAndError(t *testing.T) {
+	missing := testEval(`fs_read("__definitely_missing_mutant_test_file__.txt")`)
+	missingMulti, ok := missing.(*object.MultiValue)
+	if !ok {
+		t.Fatalf("fs_read did not return MultiValue. got=%T", missing)
+	}
+
+	if len(missingMulti.Values) != 2 {
+		t.Fatalf("fs_read returned wrong arity. got=%d", len(missingMulti.Values))
+	}
+
+	if _, ok := missingMulti.Values[1].(*object.Error); !ok {
+		t.Fatalf("fs_read error slot is not Error. got=%T", missingMulti.Values[1])
+	}
+}
+
+func TestLetDestructuringFromMultiValue(t *testing.T) {
+	result := testEval(`let data, err = fs_read("__definitely_missing_mutant_test_file__.txt"); err`)
+	if _, ok := result.(*object.Error); !ok {
+		t.Fatalf("expected err binding to be Error. got=%T", result)
+	}
+
+	dataResult := testEval(`let data, err = fs_read("__definitely_missing_mutant_test_file__.txt"); data`)
+	testNullObject(t, dataResult)
+}
+
+func TestLetDestructuringNullFill(t *testing.T) {
+	second := testEval(`let a, b = 10; b`)
+	testNullObject(t, second)
 }
 
 func TestLetStatements(t *testing.T) {
@@ -276,9 +358,20 @@ func TestBuiltInFunctions(t *testing.T) {
 func TestSecurityStatusBuiltins(t *testing.T) {
 	for _, input := range []string{"debug_status()", "sandbox_status()"} {
 		evaluated := testEval(input)
-		hash, ok := evaluated.(*object.Hash)
+		pair, ok := evaluated.(*object.MultiValue)
 		if !ok {
-			t.Fatalf("%s did not return Hash. got=%T", input, evaluated)
+			t.Fatalf("%s did not return MultiValue. got=%T", input, evaluated)
+		}
+		if len(pair.Values) != 2 {
+			t.Fatalf("%s returned wrong arity. got=%d", input, len(pair.Values))
+		}
+		if pair.Values[1].Type() != object.NULL_OBJ {
+			t.Fatalf("%s error slot is not NULL. got=%T", input, pair.Values[1])
+		}
+
+		hash, ok := pair.Values[0].(*object.Hash)
+		if !ok {
+			t.Fatalf("%s result slot did not return Hash. got=%T", input, pair.Values[0])
 		}
 
 		for _, key := range []string{"detected", "type", "confidence", "indicators", "probe_signals", "probe_enabled", "probe_error", "source", "advisory", "event_count", "error", "schema_version"} {
@@ -291,12 +384,21 @@ func TestSecurityStatusBuiltins(t *testing.T) {
 }
 
 func TestCommandExecutionBuiltins(t *testing.T) {
-	t.Setenv("MUTANT_BUILTIN_CAPABILITIES", "command_exec")
-
 	evaluated := testEval(`exec_string("Write-Output 'mutant'")`)
-	hash, ok := evaluated.(*object.Hash)
+	pair, ok := evaluated.(*object.MultiValue)
 	if !ok {
-		t.Fatalf("exec_string did not return Hash. got=%T", evaluated)
+		t.Fatalf("exec_string did not return MultiValue. got=%T", evaluated)
+	}
+	if len(pair.Values) != 2 {
+		t.Fatalf("exec_string returned wrong arity. got=%d", len(pair.Values))
+	}
+	if pair.Values[1].Type() != object.NULL_OBJ {
+		t.Fatalf("exec_string error slot is not NULL. got=%T", pair.Values[1])
+	}
+
+	hash, ok := pair.Values[0].(*object.Hash)
+	if !ok {
+		t.Fatalf("exec_string result slot did not return Hash. got=%T", pair.Values[0])
 	}
 
 	for _, key := range []string{"ok", "allowed", "policy_decision", "exit_code", "stdout", "stderr", "timed_out", "error", "schema_version"} {
@@ -314,10 +416,21 @@ func TestCommandExecutionBuiltins(t *testing.T) {
 		t.Fatalf("unexpected policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
 	}
 
-	builderResult := testEval(`cmd_run(cmd_add(cmd_builder("powershell"), "Write-Output 'a'"))`)
-	builderHash, ok := builderResult.(*object.Hash)
+	builderResult := testEval(`let b, be = cmd_builder("powershell"); let b2, ae = cmd_add(b, "Write-Output 'a'"); cmd_run(b2)`)
+	builderPair, ok := builderResult.(*object.MultiValue)
 	if !ok {
-		t.Fatalf("cmd_run did not return Hash. got=%T", builderResult)
+		t.Fatalf("cmd_run did not return MultiValue. got=%T", builderResult)
+	}
+	if len(builderPair.Values) != 2 {
+		t.Fatalf("cmd_run returned wrong arity. got=%d", len(builderPair.Values))
+	}
+	if builderPair.Values[1].Type() != object.NULL_OBJ {
+		t.Fatalf("cmd_run error slot is not NULL. got=%T", builderPair.Values[1])
+	}
+
+	builderHash, ok := builderPair.Values[0].(*object.Hash)
+	if !ok {
+		t.Fatalf("cmd_run result slot did not return Hash. got=%T", builderPair.Values[0])
 	}
 	decisionObj, ok = hashValue(builderHash, "policy_decision").(*object.String)
 	if !ok {
@@ -325,6 +438,29 @@ func TestCommandExecutionBuiltins(t *testing.T) {
 	}
 	if decisionObj.Value != "blocked_disabled" {
 		t.Fatalf("unexpected cmd_run policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
+	}
+}
+
+func TestJSONBuiltins(t *testing.T) {
+	parsed := testEval(`json_parse("[1,2,3]")[0][1]`)
+	testIntegerObject(t, parsed, 2)
+
+	stringified := testEval(`json_stringify({"name": "mutant", "flags": [true, false]})[0]`)
+	strObj, ok := stringified.(*object.String)
+	if !ok {
+		t.Fatalf("json_stringify did not return String. got=%T", stringified)
+	}
+	if len(strObj.Value) == 0 {
+		t.Fatalf("json_stringify returned empty string")
+	}
+
+	invalid := testEval(`json_parse("[1,")[1]`)
+	errObj, ok := invalid.(*object.Error)
+	if !ok {
+		t.Fatalf("json_parse invalid input did not return Error. got=%T", invalid)
+	}
+	if !strings.Contains(errObj.Message, "not valid JSON") {
+		t.Fatalf("unexpected json_parse error: %q", errObj.Message)
 	}
 }
 

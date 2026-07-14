@@ -127,6 +127,16 @@ func evalArrayIndexExpression(array, index object.Object) object.Object {
 	return arrayObject.Elements[idx]
 }
 
+func evalMultiValueIndexExpression(multiValue, index object.Object) object.Object {
+	multi := multiValue.(*object.MultiValue)
+	idx := index.(*object.Integer).Value
+	max := int64(len(multi.Values) - 1)
+	if idx < 0 || idx > max {
+		return NULL
+	}
+	return multi.Values[idx]
+}
+
 func evalHashIndexExpression(hash, index object.Object) object.Object {
 	hashObject := hash.(*object.Hash)
 	key, ok := index.(object.Hashable)
@@ -144,6 +154,8 @@ func evalIndexExpression(left, index object.Object) object.Object {
 	switch {
 	case left.Type() == object.ARRAY_OBJ && index.Type() == object.INTEGER_OBJ:
 		return evalArrayIndexExpression(left, index)
+	case left.Type() == object.MULTI_VALUE_OBJ && index.Type() == object.INTEGER_OBJ:
+		return evalMultiValueIndexExpression(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
 	default:

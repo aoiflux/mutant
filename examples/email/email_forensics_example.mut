@@ -1,0 +1,46 @@
+putln("=== Email Forensics Builtins ===");
+
+let raw_email = "From: sender@example.com\r\n"
+    + "To: analyst@example.com\r\n"
+    + "Subject: Incident update\r\n"
+    + "Date: Mon, 01 Jul 2026 10:00:00 +0000\r\n"
+    + "Message-ID: <msg-1@example.com>\r\n"
+    + "Received-SPF: pass (example.com: sender is authorized)\r\n"
+    + "DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=mail;\r\n"
+    + "Authentication-Results: mx.example; spf=pass; dkim=pass; dmarc=pass\r\n"
+    + "Content-Type: text/plain; charset=UTF-8\r\n"
+    + "\r\n"
+    + "Please review https://example.com/report and http://suspicious.test/dropper\r\n";
+
+let parsed, err = email_parse(raw_email);
+putln("email_parse:", parsed, "err:", err);
+
+let headers, err = email_headers(raw_email);
+putln("email_headers:", headers, "err:", err);
+
+let auth, err = email_spf_dkim(raw_email);
+putln("email_spf_dkim:", auth, "err:", err);
+
+let urls, err = email_urls(raw_email);
+putln("email_urls:", urls, "err:", err);
+
+let multipart_email = "From: sender@example.com\r\n"
+    + "To: analyst@example.com\r\n"
+    + "Subject: IOC list\r\n"
+    + "MIME-Version: 1.0\r\n"
+    + "Content-Type: multipart/mixed; boundary=BOUNDARY123\r\n"
+    + "\r\n"
+    + "--BOUNDARY123\r\n"
+    + "Content-Type: text/plain; charset=UTF-8\r\n"
+    + "\r\n"
+    + "See attached IOC list.\r\n"
+    + "--BOUNDARY123\r\n"
+    + "Content-Type: text/plain\r\n"
+    + "Content-Disposition: attachment; filename=\"ioc.txt\"\r\n"
+    + "Content-Transfer-Encoding: base64\r\n"
+    + "\r\n"
+    + "aW9jLTEyMwppb2MtNDU2Cg==\r\n"
+    + "--BOUNDARY123--\r\n";
+
+let atts, err = email_attachments(multipart_email);
+putln("email_attachments:", atts, "err:", err);

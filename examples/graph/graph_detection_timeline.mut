@@ -1,0 +1,26 @@
+putln("=== Graph + Detection Timeline ===");
+
+let db, err = db_open();
+if (err) {
+  putln("db_open error:", err);
+} else {
+  let p, err = db_add_artifact(db, "process", {"pid": 4021, "name": "powershell.exe"});
+  let f, err = db_add_artifact(db, "file", {"path": "C:/Users/Public/updater.ps1"});
+  let n, err = db_add_artifact(db, "network", {"dst": "198.51.100.25", "port": 443});
+
+  let _, err = db_add_relation(db, p["node_id"], f["node_id"], "writes");
+  let _, err = db_add_relation(db, p["node_id"], n["node_id"], "connects_to");
+
+  let timeline, err = db_timeline(db);
+  putln("timeline events:", len(timeline), "err:", err);
+
+  let beacon, err = detect_network_beacon([
+    {"dst": "198.51.100.25"},
+    {"dst": "198.51.100.25"},
+    {"dst": "198.51.100.25"}
+  ]);
+  putln("detect_network_beacon:", beacon, "err:", err);
+
+  let _, cerr = db_close(db);
+  putln("db_close err:", cerr);
+}

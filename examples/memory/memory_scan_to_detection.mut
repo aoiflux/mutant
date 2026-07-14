@@ -1,0 +1,15 @@
+putln("=== Memory Scan To Detection ===");
+
+let dump = "examples/data/memory_dump.bin";
+
+let strings, err = mem_strings(dump, 5);
+putln("mem_strings count:", len(strings), "err:", err);
+
+let pe_hits, err = mem_find_pe(dump);
+putln("mem_find_pe count:", len(pe_hits), "err:", err);
+
+let shell_hits, err = mem_find_shellcode(dump);
+putln("mem_find_shellcode count:", len(shell_hits), "err:", err);
+
+let inj, err = detect_injection({"mem_path": dump});
+putln("detect_injection:", inj, "err:", err);

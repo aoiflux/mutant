@@ -1,0 +1,128 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+putln("=== GrapheneDB In-Memory Graph ===");
+
+let db, err = db_open();
+check_err(err, "db_open");
+putf("opened graph db, handle: ", db);
+putln("");
+
+let NODE_PERSON = 1;
+let NODE_DOCUMENT = 2;
+let EDGE_KNOWS = 1;
+let EDGE_AUTHORED = 2;
+
+let alice, err = db_add_node(db, NODE_PERSON);
+let bob, err = db_add_node(db, NODE_PERSON);
+let carol, err = db_add_node(db, NODE_PERSON);
+let doc, err = db_add_node(db, NODE_DOCUMENT);
+check_err(err, "db_add_node document");
+
+putf("added nodes: alice=", alice, " bob=", bob, " carol=", carol, " doc=", doc);
+putln("");
+
+let e1, err = db_add_edge(db, alice, bob,   EDGE_KNOWS);
+let e2, err = db_add_edge(db, bob,   carol, EDGE_KNOWS);
+let e3, err = db_add_edge(db, alice, doc,   EDGE_AUTHORED);
+check_err(err, "db_add_edge authored");
+
+putf("added edges: ", e1, " ", e2, " ", e3);
+putln("");
+
+let p1, err = db_index_prop(db, alice, "name", "Alice");
+let p2, err = db_index_prop(db, bob,   "name", "Bob");
+let p3, err = db_index_prop(db, carol, "name", "Carol");
+check_err(err, "db_index_prop Carol");
+putln("indexed properties");
+
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+putf("graph stats — nodes: ", stats["nodes"], "  edges: ", stats["edges"]);
+putln("");
+
+putln("");
+putln("=== BFS from Alice (depth 2, outbound) ===");
+let bfs, err = db_bfs(db, alice, 2, "out");
+check_err(err, "db_bfs");
+let bfs_nodes_count = len(bfs["nodes"]);
+putf("nodes reachable: ", bfs_nodes_count);
+putln("");
+let bfs_edges_count = len(bfs["edges"]);
+putf("edges traversed: ", bfs_edges_count);
+putln("");
+
+putln("");
+putln("=== Shortest Path: Alice -> Carol ===");
+let path, err = db_shortest_path(db, alice, carol);
+check_err(err, "db_shortest_path");
+let path_node_count = len(path);
+putf("path node count: ", path_node_count);
+putln("");
+let printPath = fn(arr, idx) {
+    let total = len(arr);
+    let reached_end = idx == total;
+    if (reached_end) {
+        return 0;
+    }
+    putf("  node id: ", arr[idx]);
+    putln("");
+    return printPath(arr, idx + 1);
+};
+printPath(path, 0);
+
+putln("");
+putln("=== Query nodes by type ===");
+let people, err = db_query_nodes(db, NODE_PERSON);
+check_err(err, "db_query_nodes person");
+let people_count = len(people);
+putf("person nodes: ", people_count);
+putln("");
+let docs, err = db_query_nodes(db, NODE_DOCUMENT);
+check_err(err, "db_query_nodes document");
+let docs_count = len(docs);
+putf("document nodes: ", docs_count);
+putln("");
+
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed) {
+    putln("graph closed cleanly");
+} else {
+    putln("close error: ", closed["error"]);
+};
+
+putln("");
+putln("=== Disk-backed Graph ===");
+let disk_db, err = db_open_disk("./example_graph_data");
+check_err(err, "db_open_disk");
+putf("opened disk graph, handle: ", disk_db);
+putln("");
+
+let n1, err = db_add_node(disk_db);
+let n2, err = db_add_node(disk_db);
+check_err(err, "db_add_node disk");
+check(db_add_edge(disk_db, n1, n2), "db_add_edge");
+check(db_index_prop(disk_db, n1, "ip", "192.168.1.1"), "db_index_prop");
+check(db_index_prop(disk_db, n2, "ip", "192.168.1.2"), "db_index_prop");
+
+let disk_stats, err = db_stats(disk_db);
+check_err(err, "db_stats disk");
+putf("disk graph — nodes: ", disk_stats["nodes"], "  edges: ", disk_stats["edges"]);
+putln("");
+
+let disk_closed, err = db_close(disk_db);
+check_err(err, "db_close disk");
+if (disk_closed) {
+    putln("disk graph closed cleanly");
+};

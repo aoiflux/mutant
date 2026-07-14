@@ -11,9 +11,14 @@ func TestExecStringBuiltinDisabledByDefault(t *testing.T) {
 	security.ResetSecurityTelemetry()
 
 	result := ExecString(&object.String{Value: "Write-Output 'mutant'"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("exec_string() result is not Hash. got=%T", result)
+		t.Fatalf("exec_string() result is not Hash. got=%T", payload)
 	}
 
 	assertHashHasKeyType(t, hash, "ok", object.BOOLEAN_OBJ)
@@ -36,9 +41,23 @@ func TestExecStringBuiltinDisabledByDefault(t *testing.T) {
 }
 
 func TestCommandBuilderRoundTrip(t *testing.T) {
-	builder := CmdBuilder(&object.String{Value: "powershell"})
-	builder = CmdAdd(builder, &object.String{Value: "$x='a'"})
-	builder = CmdAdd(builder, &object.String{Value: "Write-Output $x"})
+	builderPair := CmdBuilder(&object.String{Value: "powershell"})
+	builder, errObj := unwrapPair(t, builderPair)
+	if errObj != nil {
+		t.Fatalf("unexpected error from cmd_builder: %s", errObj.Inspect())
+	}
+
+	builderPair = CmdAdd(builder, &object.String{Value: "$x='a'"})
+	builder, errObj = unwrapPair(t, builderPair)
+	if errObj != nil {
+		t.Fatalf("unexpected error from cmd_add: %s", errObj.Inspect())
+	}
+
+	builderPair = CmdAdd(builder, &object.String{Value: "Write-Output $x"})
+	builder, errObj = unwrapPair(t, builderPair)
+	if errObj != nil {
+		t.Fatalf("unexpected error from cmd_add: %s", errObj.Inspect())
+	}
 
 	hash, ok := builder.(*object.Hash)
 	if !ok {
@@ -56,20 +75,29 @@ func TestCommandBuilderRoundTrip(t *testing.T) {
 }
 
 func TestCmdRunEmptyBuilderErrors(t *testing.T) {
-	builder := CmdBuilder()
+	builderPair := CmdBuilder()
+	builder, errObj := unwrapPair(t, builderPair)
+	if errObj != nil {
+		t.Fatalf("unexpected error from cmd_builder: %s", errObj.Inspect())
+	}
+
 	result := CmdRun(builder)
-	if _, ok := result.(*object.Error); !ok {
-		t.Fatalf("expected Error, got=%T", result)
+	_, errObj = unwrapPair(t, result)
+	if errObj == nil {
+		t.Fatalf("expected error in pair slot, got nil")
 	}
 }
 
 func TestExecStringBlockedWhenExecutionExplicitlyDisabled(t *testing.T) {
-	t.Setenv(security.CommandExecEnabledEnv, "0")
-
 	result := ExecString(&object.String{Value: "Write-Output 'mutant'"})
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("exec_string() result is not Hash. got=%T", result)
+		t.Fatalf("exec_string() result is not Hash. got=%T", payload)
 	}
 
 	decisionObj, ok := hashValueByKey(hash, "policy_decision").(*object.String)
@@ -80,11 +108,11 @@ func TestExecStringBlockedWhenExecutionExplicitlyDisabled(t *testing.T) {
 		t.Fatalf("unexpected policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
 	}
 
-	errObj, ok := hashValueByKey(hash, "error").(*object.String)
+	errMsgObj, ok := hashValueByKey(hash, "error").(*object.String)
 	if !ok {
 		t.Fatalf("error is not String")
 	}
-	if errObj.Value != "command execution disabled" {
-		t.Fatalf("unexpected error message. got=%q, want=%q", errObj.Value, "command execution disabled")
+	if errMsgObj.Value != "command execution disabled" {
+		t.Fatalf("unexpected error message. got=%q, want=%q", errMsgObj.Value, "command execution disabled")
 	}
 }

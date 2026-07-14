@@ -1,0 +1,16 @@
+let printAndAdd = fn(current, nextToAdd, remaining) {
+    if (remaining == 0) {
+        return 0;
+    }
+
+    putln(current);
+    return printAndAdd(current + nextToAdd, nextToAdd + 1, remaining - 1);
+};
+
+putf("Enter starting number: ");
+let start, err = gets();
+
+putf("How many lines to print: ");
+let count, err = gets();
+
+printAndAdd(start, 1, count);

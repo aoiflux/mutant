@@ -1,0 +1,84 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+enum NodeType { DATA, PERSON, DOCUMENT, HOST };
+enum EdgeType { DATA, KNOWS, AUTHORED, CONNECTS_TO };
+
+putln("=== GrapheneDB Example With Enums ===");
+
+let db, err = db_open();
+check_err(err, "db_open");
+putf("opened graph db, handle: ", db);
+putln("");
+
+let alice, err = db_add_node(db, NodeType.PERSON);
+let bob, err = db_add_node(db, NodeType.PERSON);
+let carol, err = db_add_node(db, NodeType.PERSON);
+let doc, err = db_add_node(db, NodeType.DOCUMENT);
+check_err(err, "db_add_node DOCUMENT");
+
+putf("added nodes: alice=", alice, " bob=", bob, " carol=", carol, " doc=", doc);
+putln("");
+
+let e1, err = db_add_edge(db, alice, bob,   EdgeType.KNOWS);
+let e2, err = db_add_edge(db, bob,   carol, EdgeType.KNOWS);
+let e3, err = db_add_edge(db, alice, doc,   EdgeType.AUTHORED);
+check_err(err, "db_add_edge AUTHORED");
+
+putf("added edges: ", e1, " ", e2, " ", e3);
+putln("");
+
+check(db_index_prop(db, alice, "name", "Alice"), "db_index_prop");
+check(db_index_prop(db, bob,   "name", "Bob"), "db_index_prop");
+check(db_index_prop(db, carol, "name", "Carol"), "db_index_prop");
+
+let people, err = db_query_nodes(db, NodeType.PERSON);
+let docs, err = db_query_nodes(db, NodeType.DOCUMENT);
+check_err(err, "db_query_nodes DOCUMENT");
+let people_count = len(people);
+let docs_count = len(docs);
+putf("person nodes: ", people_count, " document nodes: ", docs_count);
+putln("");
+
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+putf("graph stats — nodes: ", stats["nodes"], " edges: ", stats["edges"]);
+putln("");
+
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed) {
+    putln("graph closed cleanly");
+};
+
+putln("");
+putln("=== Default DATA Type Demo ===");
+
+let disk_db, err = db_open_disk("./example_graph_data_enums");
+check_err(err, "db_open_disk");
+let h1, err = db_add_node(disk_db);
+let h2, err = db_add_node(disk_db);
+check_err(err, "db_add_node default");
+check(db_add_edge(disk_db, h1, h2), "db_add_edge");
+
+let default_nodes, err = db_query_nodes(disk_db);
+check_err(err, "db_query_nodes default");
+let default_node_count = len(default_nodes);
+putf("default DATA nodes: ", default_node_count);
+putln("");
+
+let disk_closed, err = db_close(disk_db);
+check_err(err, "db_close disk");
+if (disk_closed) {
+    putln("disk graph closed cleanly");
+};

@@ -1,0 +1,155 @@
+putln("=== bytes_cursor_sample_demo ===");
+putln("Safe use: reads static metadata from examples/data/sample_win.exe");
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] " + op + ": " + err);
+    };
+};
+
+let fail_err = fn(err, op) {
+    if (err) {
+        putln("[error] " + op + ": " + err);
+        return true;
+    };
+    return false;
+};
+
+let output_directory = "example_output/bytes_cursor_sample_demo";
+let report_path = output_directory + "/report_win.json";
+let sample_path = "examples/data/sample_win.exe";
+
+let mkdir_result, err = fs_mkdir(output_directory);
+check_err(err, "fs_mkdir");
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let sample_bytes, err = fs_read(sample_path);
+if (fail_err(err, "fs_read sample")) {
+    return;
+};
+
+let sample_len, err = bytes_len(sample_bytes);
+if (fail_err(err, "bytes_len sample")) {
+    return;
+};
+
+let b1, err = bytes_get(sample_bytes, 0);
+if (fail_err(err, "bytes_get b1")) {
+    return;
+};
+let b2, err = bytes_get(sample_bytes, 1);
+if (fail_err(err, "bytes_get b2")) {
+    return;
+};
+
+let dos_magic = "";
+if (b1 == 77) {
+    if (b2 == 90) {
+        dos_magic = "MZ";
+    };
+};
+
+let pe_offset, err = bytes_read_u32_le(sample_bytes, 60);
+if (fail_err(err, "bytes_read_u32_le e_lfanew")) {
+    return;
+};
+
+let pe_signature_raw, err = bytes_read_u32_le(sample_bytes, pe_offset);
+if (fail_err(err, "bytes_read_u32_le pe signature")) {
+    return;
+};
+let pe_signature_hex, err = bytes_hex(pe_signature_raw, 8);
+if (fail_err(err, "bytes_hex pe signature")) {
+    return;
+};
+
+let machine_raw, err = bytes_read_u16_le(sample_bytes, pe_offset + 4);
+if (fail_err(err, "bytes_read_u16_le machine")) {
+    return;
+};
+let machine_hex, err = bytes_hex(machine_raw, 4);
+if (fail_err(err, "bytes_hex machine")) {
+    return;
+};
+
+let section_count, err = bytes_read_u16_le(sample_bytes, pe_offset + 6);
+if (fail_err(err, "bytes_read_u16_le section count")) {
+    return;
+};
+
+let optional_magic_raw, err = bytes_read_u16_le(sample_bytes, pe_offset + 24);
+if (fail_err(err, "bytes_read_u16_le optional magic")) {
+    return;
+};
+let optional_magic_hex, err = bytes_hex(optional_magic_raw, 4);
+if (fail_err(err, "bytes_hex optional magic")) {
+    return;
+};
+
+let first16, err = bytes_slice(sample_bytes, 0, 16);
+if (fail_err(err, "bytes_slice first16")) {
+    return;
+};
+
+let first16_hex = "";
+for (let i = 0; i < 16; i = i + 1) {
+    let byte_val, err = bytes_get(first16, i);
+    if (fail_err(err, "bytes_get first16")) {
+        return;
+    };
+
+    let byte_hex, err = bytes_hex(byte_val, 2);
+    if (fail_err(err, "bytes_hex first16")) {
+        return;
+    };
+
+    if (i == 0) {
+        first16_hex = byte_hex;
+    } else {
+        first16_hex = first16_hex + " " + byte_hex;
+    };
+}
+
+putln("sample bytes: ", sample_len);
+putln("dos magic: ", dos_magic);
+putln("pe offset: ", pe_offset);
+putln("pe signature: ", pe_signature_hex);
+let section_count_text, err = json_stringify(section_count);
+if (fail_err(err, "json_stringify section_count")) {
+    return;
+};
+putln("machine: " + machine_hex + " sections: " + section_count_text);
+putln("optional magic: ", optional_magic_hex);
+putln("first16: ", first16_hex);
+
+let report = {
+    "profile": "bytes_cursor_sample_demo",
+    "sample_path": sample_path,
+    "format": "pe_like",
+    "byte_length": sample_len,
+    "dos_magic": dos_magic,
+    "pe_offset": pe_offset,
+    "pe_signature_hex": pe_signature_hex,
+    "machine_hex": machine_hex,
+    "section_count": section_count,
+    "optional_magic_hex": optional_magic_hex,
+    "first16_hex": first16_hex
+};
+
+let report_json, err = json_stringify(report);
+if (fail_err(err, "json_stringify report")) {
+    return;
+};
+
+let write_ok, err = fs_write(report_path, report_json);
+if (fail_err(err, "fs_write report")) {
+    return;
+};
+
+if (write_ok) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report");
+};

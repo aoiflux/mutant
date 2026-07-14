@@ -6,7 +6,7 @@ import (
 )
 
 func newError(format string, a ...interface{}) *object.Error {
-	return &object.Error{Message: fmt.Sprintf(format, a...)}
+	return &object.Error{Message: fmt.Sprintf(format, a...), Context: "evaluator"}
 }
 
 func isError(obj object.Object) bool {

@@ -1,0 +1,14 @@
+putln("=== Binary Triage: Sections + Entropy ===");
+
+let path = "examples/data/sample_win.exe";
+
+let pe, err = bin_pe_parse(path);
+putln("bin_pe_parse err:", err);
+putln("pe summary:", pe);
+
+let sections, err = bin_sections(path);
+putln("bin_sections err:", err);
+putln("section_count:", len(sections));
+
+let ent, err = bin_entropy(path);
+putln("bin_entropy:", ent, "err:", err);

@@ -6,18 +6,29 @@ import (
 )
 
 // Lexer is the data structure for our lexer
-// It performs lexical analysis and tokenizes code
+// It performs lexical analysis and tokenizes code.
+//
+// Position tracking (line, column, offset) is maintained alongside the
+// existing cursor state and stamped onto every emitted token so that
+// downstream tools (the language server, formatter, linter) can map any
+// token back to a source range.
 type Lexer struct {
 	input        string
-	position     int // current character index
-	readPosition int // next character index
+	position     int // current character index (byte offset of l.ch)
+	readPosition int // next character index (byte offset of the next rune to read)
 	ch           rune
+
+	// line is the 1-based line number of l.ch.
+	line int
+	// lineStart is the byte offset in input at which the current line begins.
+	// Column of l.ch = l.position - l.lineStart + 1.
+	lineStart int
 }
 
 // New function initializes our lexer, takes input as a string
 // that input is the source code
 func New(input string) *Lexer {
-	l := &Lexer{input: input}
+	l := &Lexer{input: input, line: 1, lineStart: 0}
 	l.readRune()
 	return l
 }
@@ -29,7 +40,9 @@ func New(input string) *Lexer {
 func (l *Lexer) NextToken() token.Token {
 	var tok token.Token
 
-	l.skipWhiteSpace()
+	l.skipTrivia()
+
+	start := l.currentPos()
 
 	switch l.ch {
 	case '=':
@@ -86,6 +99,13 @@ func (l *Lexer) NextToken() token.Token {
 		tok = newToken(token.SEMICOLON, l.ch)
 	case 0:
 		tok = newToken(token.EOF, l.ch)
+		// EOF is a zero-width marker at the current position. Do not
+		// advance beyond the end of input. Preserve the legacy Literal
+		// value (produced by newToken from l.ch == 0) for back-compat
+		// with existing lexer tests that assert on it.
+		tok.Start = start
+		tok.End = start
+		return tok
 	case '"':
 		tok.Type = token.STRING
 		tok.Literal = l.readString()
@@ -93,6 +113,8 @@ func (l *Lexer) NextToken() token.Token {
 		if unicode.IsLetter(l.ch) {
 			tok.Literal = l.readIdentifier()
 			tok.Type = token.LookupIdent(tok.Literal)
+			tok.Start = start
+			tok.End = l.currentPos()
 			return tok
 		} else if unicode.IsNumber(l.ch) {
 			val, isFloat := l.readNumber()
@@ -102,6 +124,8 @@ func (l *Lexer) NextToken() token.Token {
 			} else {
 				tok.Type = token.INT
 			}
+			tok.Start = start
+			tok.End = l.currentPos()
 			return tok
 		}
 		tok = newToken(token.ILLEGAL, l.ch)
@@ -109,7 +133,22 @@ func (l *Lexer) NextToken() token.Token {
 
 	l.readRune()
 
+	tok.Start = start
+	tok.End = l.currentPos()
 	return tok
+}
+
+// currentPos returns the position of the lexer's current cursor (l.ch).
+// Line and Column are 1-based; Offset is the 0-based byte offset of l.ch
+// within the source input. When the cursor sits past end-of-input, Offset
+// equals len(input) and Column points one past the final column of that
+// line, giving a valid exclusive-end position for the last token.
+func (l *Lexer) currentPos() token.Position {
+	return token.Position{
+		Line:   l.line,
+		Column: l.position - l.lineStart + 1,
+		Offset: l.position,
+	}
 }
 
 func (l *Lexer) prevRune() rune {
@@ -122,6 +161,16 @@ func (l *Lexer) prevRune() rune {
 	return prev
 }
 func (l *Lexer) readRune() {
+	// If the currently-active character is a newline, this call moves the
+	// cursor onto the first character of the next line, so the line/column
+	// counters advance now (before we load the new rune). '\r\n' is handled
+	// implicitly: the bump happens when the cursor steps off the '\n'.
+	// A lone '\r' is treated as whitespace by skipWhiteSpace without a bump.
+	if l.ch == '\n' {
+		l.line++
+		l.lineStart = l.readPosition
+	}
+
 	if l.readPosition >= len(l.input) {
 		l.ch = 0
 	} else {
@@ -189,6 +238,23 @@ func (l *Lexer) readNumber() (string, bool) {
 
 func (l *Lexer) skipWhiteSpace() {
 	for unicode.IsSpace(l.ch) {
+		l.readRune()
+	}
+}
+
+func (l *Lexer) skipTrivia() {
+	for {
+		l.skipWhiteSpace()
+		if l.ch == '/' && l.peekRune() == '/' {
+			l.skipLineComment()
+			continue
+		}
+		return
+	}
+}
+
+func (l *Lexer) skipLineComment() {
+	for l.ch != '\n' && l.ch != 0 {
 		l.readRune()
 	}
 }

@@ -1,0 +1,25 @@
+putln("=== Policy Engine Builtins ===");
+
+let policy = {
+    "module": "package access\n\ndefault allow = false\n\nallow {\n  startswith(input.path, \"/safe\")\n  input.user != \"guest\"\n}\n\ndecision = {\"path\": input.path, \"user\": input.user, \"allow\": allow}\n\nrules = [\n  {\"id\": \"allow_safe_path\", \"description\": \"path must start with /safe\"},\n  {\"id\": \"deny_guest_user\", \"description\": \"guest user denied\"}\n]",
+    "eval_query": "data.access.decision",
+    "allow_query": "data.access.allow",
+    "rules_query": "data.access.rules"
+};
+
+let loaded, err = policy_load("access_policy", policy);
+putln("policy_load:", loaded, "err:", err);
+
+let facts = {"path": "/safe/bin", "user": "analyst"};
+
+let eval_result, err = policy_eval("access_policy", facts);
+putln("policy_eval:", eval_result, "err:", err);
+
+let allowed, err = policy_allow("access_policy", facts);
+putln("policy_allow:", allowed, "err:", err);
+
+let rules, err = policy_rules("access_policy");
+putln("policy_rules:", rules, "err:", err);
+
+let trace, err = policy_trace("access_policy", facts);
+putln("policy_trace:", trace, "err:", err);

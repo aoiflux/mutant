@@ -5,25 +5,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	CommandExecEnabledEnv      = "MUTANT_ENABLE_COMMAND_EXEC"
-	CommandExecAllowedShells   = "MUTANT_COMMAND_EXEC_ALLOWED_SHELLS"
-	CommandExecTimeoutMsEnv    = "MUTANT_COMMAND_EXEC_TIMEOUT_MS"
-	CommandExecMaxOutputBytes  = "MUTANT_COMMAND_EXEC_MAX_OUTPUT_BYTES"
-	defaultCommandExecTimeout  = 3000
-	defaultCommandMaxOutput    = 8192
-	minimumCommandExecTimeout  = 100
-	maximumCommandExecTimeout  = 60000
-	minimumCommandMaxOutput    = 256
-	maximumCommandMaxOutput    = 1048576
-	defaultAllowedShellsConfig = "powershell,cmd"
+	defaultCommandExecTimeout = 3000
+	defaultCommandMaxOutput   = 8192
+
+	policyBlockedEmpty    = "blocked_empty"
+	policyBlockedDisabled = "blocked_disabled"
+	policyBlockedShell    = "blocked_shell"
+	policyAllowed         = "allowed"
+
+	errorCommandEmpty     = "command is empty"
+	errorCommandDisabled  = "command execution disabled"
+	errorCommandTimedOut  = "command timed out"
+	truncatedOutputSuffix = "\n...[truncated]"
+
+	defaultShellName = "powershell"
+	shellPowerShell  = "powershell"
+	shellPwsh        = "pwsh"
+	shellCmd         = "cmd"
+	shellBatch       = "batch"
+
+	powershellExecutable = "powershell.exe"
+	cmdExecutable        = "cmd.exe"
+	cmdFlagExec          = "/C"
+
+	pwshFlagNoLogo         = "-NoLogo"
+	pwshFlagNoProfile      = "-NoProfile"
+	pwshFlagNonInteractive = "-NonInteractive"
+	pwshFlagCommand        = "-Command"
 )
 
 type CommandResult struct {
@@ -44,17 +58,17 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 		RecordCommandBlocked(stage)
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_empty",
-			ErrorMessage:   "command is empty",
+			PolicyDecision: policyBlockedEmpty,
+			ErrorMessage:   errorCommandEmpty,
 		}
 	}
 
-	if strings.TrimSpace(os.Getenv(CommandExecEnabledEnv)) != "1" {
+	if true {
 		RecordCommandBlocked(stage)
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_disabled",
-			ErrorMessage:   "command execution disabled",
+			PolicyDecision: policyBlockedDisabled,
+			ErrorMessage:   errorCommandDisabled,
 		}
 	}
 
@@ -65,7 +79,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 
 		return CommandResult{
 			Allowed:        false,
-			PolicyDecision: "blocked_shell",
+			PolicyDecision: policyBlockedShell,
 			ErrorMessage:   err.Error(),
 		}
 	}
@@ -83,7 +97,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 	runErr := cmd.Run()
 	result := CommandResult{
 		Allowed:        true,
-		PolicyDecision: "allowed",
+		PolicyDecision: policyAllowed,
 
 		ExitCode: 0,
 		Stdout:   truncateOutput(stdout.String(), resolveCommandExecMaxOutput()),
@@ -92,7 +106,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.TimedOut = true
-		result.ErrorMessage = "command timed out"
+		result.ErrorMessage = errorCommandTimedOut
 		result.ExitCode = -1
 		RecordCommandFailed(stage)
 		return result
@@ -118,63 +132,33 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 func normalizeShell(shell string) string {
 	normalized := strings.ToLower(strings.TrimSpace(shell))
 	if normalized == "" {
-		return "powershell"
+		return defaultShellName
 	}
 	return normalized
 }
 
 func buildShellCommand(shell, command string) (string, []string, error) {
 	switch shell {
-	case "powershell", "pwsh":
-		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command}, nil
-	case "cmd", "batch":
-		return "cmd.exe", []string{"/C", command}, nil
+	case shellPowerShell, shellPwsh:
+		return powershellExecutable, []string{pwshFlagNoLogo, pwshFlagNoProfile, pwshFlagNonInteractive, pwshFlagCommand, command}, nil
+	case shellCmd, shellBatch:
+		return cmdExecutable, []string{cmdFlagExec, command}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported shell %q", shell)
 	}
 }
 
 func resolveCommandExecTimeout() time.Duration {
-	raw := strings.TrimSpace(os.Getenv(CommandExecTimeoutMsEnv))
-	if raw == "" {
-		return time.Duration(defaultCommandExecTimeout) * time.Millisecond
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return time.Duration(defaultCommandExecTimeout) * time.Millisecond
-	}
-	if parsed < minimumCommandExecTimeout {
-		parsed = minimumCommandExecTimeout
-	}
-	if parsed > maximumCommandExecTimeout {
-		parsed = maximumCommandExecTimeout
-	}
-	return time.Duration(parsed) * time.Millisecond
+	return time.Duration(defaultCommandExecTimeout) * time.Millisecond
 }
 
 func resolveCommandExecMaxOutput() int {
-	raw := strings.TrimSpace(os.Getenv(CommandExecMaxOutputBytes))
-	if raw == "" {
-		return defaultCommandMaxOutput
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return defaultCommandMaxOutput
-	}
-	if parsed < minimumCommandMaxOutput {
-		parsed = minimumCommandMaxOutput
-	}
-	if parsed > maximumCommandMaxOutput {
-		parsed = maximumCommandMaxOutput
-	}
-	return parsed
+	return defaultCommandMaxOutput
 }
 
 func truncateOutput(value string, limit int) string {
 	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	return value[:limit] + "\n...[truncated]"
+	return value[:limit] + truncatedOutputSuffix
 }

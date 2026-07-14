@@ -33,9 +33,14 @@ func TestHttpRequestAcceptsStructHeaders(t *testing.T) {
 		headers,
 	)
 
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	status := hashFieldInt(t, hash, "status")
@@ -75,9 +80,14 @@ func TestHttpPostAcceptsStructBodyAsJSON(t *testing.T) {
 		&object.String{Value: "application/json"},
 	)
 
-	hash, ok := result.(*object.Hash)
+	payload, errObj := unwrapPair(t, result)
+	if errObj != nil {
+		t.Fatalf("unexpected error: %s", errObj.Inspect())
+	}
+
+	hash, ok := payload.(*object.Hash)
 	if !ok {
-		t.Fatalf("expected HASH result, got=%T", result)
+		t.Fatalf("expected HASH result, got=%T", payload)
 	}
 
 	status := hashFieldInt(t, hash, "status")

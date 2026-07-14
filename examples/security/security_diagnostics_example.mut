@@ -1,0 +1,59 @@
+putln("=== Security Diagnostics Example ===");
+putln("Tip: run with --dev --security-log-level=debug (or --log-level=debug) to see detailed stderr logs.");
+putln("");
+
+let diagnostics, err = security_diagnostics();
+let debugger_status = diagnostics["debugger"];
+let sandbox_status = diagnostics["sandbox"];
+
+let print_list_items = fn(items, index) {
+    let item_count = len(items);
+    let reached_end = index == item_count;
+    if (reached_end) {
+        return 0;
+    }
+    putf("  - ", items[index]);
+    putln("");
+    return print_list_items(items, index + 1);
+};
+
+putln("[Debugger]");
+putf("detected: ", debugger_status["detected"]);
+putln("");
+putf("event_count: ", debugger_status["event_count"]);
+putln("");
+let method_count = len(debugger_status["methods"]);
+putf("method_count: ", method_count);
+putln("");
+if (method_count == 0) {
+    putln("  - none");
+} else {
+    print_list_items(debugger_status["methods"], 0);
+};
+
+putln("");
+putln("[Sandbox]");
+putf("detected: ", sandbox_status["detected"]);
+putln("");
+putf("type: ", sandbox_status["type"]);
+putln("");
+putf("confidence: ", sandbox_status["confidence"]);
+putln("");
+putf("event_count: ", sandbox_status["event_count"]);
+putln("");
+let indicator_count = len(sandbox_status["indicators"]);
+putf("indicator_count: ", indicator_count);
+putln("");
+if (indicator_count == 0) {
+    putln("  - none");
+} else {
+    print_list_items(sandbox_status["indicators"], 0);
+};
+
+if (sandbox_status["error"] != "") {
+    putf("error: ", sandbox_status["error"]);
+    putln("");
+};
+
+putln("");
+putln("Run this same script in Windows Terminal and PowerShell to compare outputs.");

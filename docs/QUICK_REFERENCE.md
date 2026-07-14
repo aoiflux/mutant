@@ -9,7 +9,9 @@ artifact, runtime, and risky builtins.
 
 1. Signed artifact verification
 
-- Secure mode pins signer identity with `MUTANT_TRUSTED_PUBLIC_KEY_HEX`.
+- Signer pinning is enforced in secure mode when `--signer-auth` is enabled.
+- Trusted signer key source is `MUTANT_TRUSTED_PUBLIC_KEY_HEX` (or local
+  bootstrap fallback if unset).
 - Compatibility mode verifies embedded signature validity only.
 
 2. Payload confidentiality
@@ -37,6 +39,11 @@ artifact, runtime, and risky builtins.
 - Standalone release artifacts use a V3 trailer.
 - Trailer fields include payload checksum, canary, build profile code, and
   provenance hash.
+
+7. Remote process scan policy gate
+
+- Optional remote scan manager can run in `off|observe|enforce` mode.
+- Enforce mode blocks only on critical verdicts.
 
 ## Protection profiles
 
@@ -70,7 +77,10 @@ Explicit environment variables still win:
 - `MUTANT_BUILTIN_CAPABILITIES`
 - `MUTANT_SECURITY_AUDIT`
 - `MUTANT_SECURITY_TELEMETRY_FILE`
-- `MUTANT_ENABLE_COMMAND_EXEC`
+- `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`
+- `MUTANT_REMOTE_SCAN_MODE`
+- `MUTANT_REMOTE_SCAN_MAX_PROCESSES`
+- `MUTANT_REMOTE_SCAN_ALLOWLIST`
 
 ## Artifact format
 

@@ -204,4 +204,84 @@ integration depth:
 
 ---
 
+## 10. Probe and Process-Protection Traceability
+
+### 10.1 Control Additions
+
+1. Master anti-tamper probe gate: `MUTANT_ENABLE_ANTITAMPER_PROBE=1`
+2. Runner process-protection gate: `MUTANT_ENABLE_PROCESS_PROTECTION`
+3. Runner enforcement threshold: any probe signal with `detected=true` and
+   `confidence >= 80`
+
+### 10.2 Implementation Anchors
+
+1. Probe gate and engine: `security/antitamper_probe.go`
+2. Probe routing: `security/antitamper_routing.go`
+3. Probe implementations:
+   - `security/antitamper_detectors.go`
+   - `security/antitamper_windows.go`
+4. Runner enforcement path: `runner/runner.go`
+5. Builtin diagnostics probe use: `builtin/security_status.go`
+
+### 10.3 Operational Notes
+
+1. Runner enforcement probe scope is intentionally narrower than builtin
+   diagnostic scope.
+2. If master probe gate is disabled, runner process-protection enforcement will
+   not execute probe logic even when process-protection gate is enabled.
+
+---
+
+## 11. 2026-07 Code Sync Addendum
+
+This addendum captures code-accurate deltas that must be read together with the
+matrix above.
+
+### 11.1 Signer-Auth Runtime Semantics
+
+Current implementation:
+
+1. Secure mode selection and signer-auth are independent runtime switches.
+2. Trusted signer verification path runs only when `--signer-auth` is present.
+3. `--no-signer-auth` keeps secure-mode runtime gates but skips signature
+   verification path in runner.
+
+Anchors:
+
+1. [main.go](main.go#L578)
+2. [runner/runner.go](runner/runner.go#L44)
+3. [runner/runner_test.go](runner/runner_test.go#L189)
+
+### 11.2 Remote Process Scan Control Surface
+
+Current implementation:
+
+1. Remote scan manager is gated by `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`.
+2. Mode is controlled by `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce`.
+3. Runner blocks only on enforce-mode critical verdicts.
+4. Scan errors are non-blocking and telemetry-visible.
+
+Anchors:
+
+1. [security/processscan_config.go](security/processscan_config.go#L9)
+2. [security/processscan_manager.go](security/processscan_manager.go#L7)
+3. [runner/runner.go](runner/runner.go#L161)
+4. [runner/runner_test.go](runner/runner_test.go#L404)
+
+### 11.3 Remote Scan Runtime Depth
+
+Current implementation status:
+
+1. Types/config/correlator/manager/telemetry and runner integration are
+   implemented.
+2. Windows scanner implementation currently returns empty verdicts (`nil, nil`),
+   so enforcement path is wired but detector depth is still scaffolding-first.
+
+Anchors:
+
+1. [security/processscan_windows.go](security/processscan_windows.go#L5)
+2. [security/processscan_manager_test.go](security/processscan_manager_test.go#L36)
+
+---
+
 End of document.

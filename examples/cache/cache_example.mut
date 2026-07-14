@@ -1,0 +1,37 @@
+putln("=== Cache Builtins ===");
+
+let opened, err = cache_open("ioc_cache");
+putf("cache_open: ", opened, " | err: ", err);
+putln("");
+
+let ok, err = cache_put("ioc_cache", "ioc:1", "10.10.10.10");
+putf("cache_put: ", ok, " | err: ", err);
+putln("");
+
+let ok, err = cache_put("ioc_cache", "ioc:2", "malicious-domain.test", 30);
+putf("cache_put(ttl): ", ok, " | err: ", err);
+putln("");
+
+let entry, err = cache_get("ioc_cache", "ioc:1");
+putf("cache_get: ", entry, " | err: ", err);
+putln("");
+
+let keys, err = cache_keys("ioc_cache");
+putf("cache_keys: ", keys, " | err: ", err);
+putln("");
+
+let stats, err = cache_stats("ioc_cache");
+putf("cache_stats: ", stats, " | err: ", err);
+putln("");
+
+let deleted, err = cache_delete("ioc_cache", "ioc:1");
+putf("cache_delete: ", deleted, " | err: ", err);
+putln("");
+
+let removed, err = cache_clear("ioc_cache");
+putf("cache_clear: ", removed, " | err: ", err);
+putln("");
+
+let closed, err = cache_close("ioc_cache");
+putf("cache_close: ", closed, " | err: ", err);
+putln("");

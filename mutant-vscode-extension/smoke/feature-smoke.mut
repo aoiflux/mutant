@@ -1,0 +1,13 @@
+// Lint: duplicate top-level declaration warning expected on second `answer`.
+let answer = 1;
+let answer = 2;
+
+struct Point { x; y; }
+enum Color { Red, Blue }
+
+let p = Point { x: 1, y: 2 };
+let c = Color.Red;
+
+// Formatting: trailing spaces and final newline should be normalized.
+p.x;
+c;

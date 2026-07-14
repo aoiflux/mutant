@@ -21,6 +21,7 @@ type VM struct {
 	stack           []object.Object
 	stackPointer    int // top of stack is stack[stackPointer-1]
 	globals         []object.Object
+	secureGlobals   map[int]*object.SecureGlobal
 	frames          []*Frame
 	frameIndex      int
 	inslen          int
@@ -35,6 +36,7 @@ type VM struct {
 	secureMode      bool
 	structDefs      map[string]any // Struct definitions (field names)
 	enumDefs        map[string]any // Enum definitions (tag names)
+	memoryMode      string
 
 	enforceSecurityCheckOpcodes bool
 }
@@ -54,7 +56,14 @@ const (
 	integritySweepBase     = uint64(251)
 	integritySweepSpread   = uint64(83)
 	integrityProbeSpread   = uint64(31)
+
+	vMMemoryModeRuntime = "runtime"
+	vMMemoryModeWrapper = "wrapper"
 )
+
+func resolveVMGlobalMemoryMode() string {
+	return vMMemoryModeRuntime
+}
 
 func deriveIntegritySeed(instructions []byte) uint64 {
 	h := sha256.Sum256(instructions)
@@ -116,6 +125,7 @@ func New(bc *compiler.ByteCode) *VM {
 		stack:           make([]object.Object, initialStackCapacity),
 		stackPointer:    0,
 		globals:         make([]object.Object, initialGlobalsCapacity),
+		secureGlobals:   make(map[int]*object.SecureGlobal),
 		frames:          frames,
 		frameIndex:      1,
 		inslen:          len(bc.Instructions),
@@ -127,6 +137,7 @@ func New(bc *compiler.ByteCode) *VM {
 		secureMode:      true,
 		structDefs:      convertStructDefs(bc.StructDefs),
 		enumDefs:        convertEnumDefs(bc.EnumDefs),
+		memoryMode:      resolveVMGlobalMemoryMode(),
 
 		enforceSecurityCheckOpcodes: false,
 	}
@@ -249,6 +260,42 @@ func (vm *VM) clearObjectSensitiveData(obj object.Object) {
 	}
 }
 
+func (vm *VM) useWrapperGlobals() bool {
+	return vm.memoryMode == vMMemoryModeWrapper
+}
+
+func (vm *VM) setGlobal(index int, obj object.Object) {
+	if vm.useWrapperGlobals() {
+		if wrapped, err := object.NewSecureGlobal(obj, int64(vm.inslen)); err == nil {
+			if previous, ok := vm.secureGlobals[index]; ok {
+				previous.Clear()
+			}
+			vm.secureGlobals[index] = wrapped
+			vm.globals[index] = nil
+			return
+		}
+	}
+
+	if previous, ok := vm.secureGlobals[index]; ok {
+		previous.Clear()
+		delete(vm.secureGlobals, index)
+	}
+	vm.globals[index] = vm.encryptForStorage(obj)
+}
+
+func (vm *VM) getGlobal(index int) object.Object {
+	if wrapped, ok := vm.secureGlobals[index]; ok {
+		obj, err := wrapped.Get()
+		if err == nil {
+			return obj
+		}
+		wrapped.Clear()
+		delete(vm.secureGlobals, index)
+	}
+
+	return vm.decryptForUse(vm.globals[index])
+}
+
 // CleanupRuntimeSensitiveData clears encrypted runtime data buffers after execution.
 // clearGlobals controls whether globals are wiped; clearConstants controls whether constants are wiped.
 func (vm *VM) CleanupRuntimeSensitiveData(clearGlobals bool, clearConstants bool) {
@@ -259,6 +306,12 @@ func (vm *VM) CleanupRuntimeSensitiveData(clearGlobals bool, clearConstants bool
 	vm.stackPointer = 0
 
 	if clearGlobals {
+		for index, wrapped := range vm.secureGlobals {
+			if wrapped != nil {
+				wrapped.Clear()
+			}
+			delete(vm.secureGlobals, index)
+		}
 		for i := range vm.globals {
 			vm.clearObjectSensitiveData(vm.globals[i])
 			vm.globals[i] = nil
@@ -470,7 +523,7 @@ func (vm *VM) Run() error {
 		return err
 	}
 
-	for vm.currentFrame().ip < len(vm.currentFrame().Instructions())-1 {
+	for vm.frameIndex > 0 && vm.currentFrame().ip < len(vm.currentFrame().Instructions())-1 {
 		if err := vm.runIntegrityProbes(); err != nil {
 			return err
 		}
@@ -483,7 +536,7 @@ func (vm *VM) Run() error {
 
 		opcodeByte, err := security.SecureXOROneAt(ins[ip], int64(vm.inslen), vm.password, int64(ip))
 		if err != nil {
-			return err
+			return vm.runtimeErrorAt(ip, op, err)
 		}
 		op = code.Opcode(opcodeByte)
 
@@ -508,28 +561,28 @@ func (vm *VM) Run() error {
 			}
 		case code.OpConstant:
 			if ip+2 >= len(ins) {
-				return fmt.Errorf("OpConstant: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
 			constIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
 			if err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 			vm.currentFrame().ip += 2
 
 			if err := vm.push(vm.constants[constIndex]); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpBang:
 			if err := vm.execBangOperation(); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpMinus:
 			if err := vm.execMinusOperation(); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv:
 			if err := vm.execBinaryOperation(op); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpTrue:
 			if err := vm.push(global.True); err != nil {
@@ -541,39 +594,39 @@ func (vm *VM) Run() error {
 			}
 		case code.OpArray:
 			if ip+2 >= len(ins) {
-				return fmt.Errorf("OpArray: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
 			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
 			if err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
 			if err := vm.push(array); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpHash:
 			if ip+2 >= len(ins) {
-				return fmt.Errorf("OpHash: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
 			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
 			if err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
 			hash, err := vm.buildHash(vm.stackPointer-numElements, vm.stackPointer)
 			if err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 			vm.stackPointer = vm.stackPointer - numElements
 			if err := vm.push(hash); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpEqual, code.OpUnEqual, code.OpGreater:
 			if err := vm.execComparison(op); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpJump:
 			if ip+2 >= len(ins) {
@@ -609,7 +662,7 @@ func (vm *VM) Run() error {
 			}
 			vm.currentFrame().ip += 2
 			vm.ensureGlobalCapacity(int(globalIndex))
-			vm.globals[globalIndex] = vm.encryptForStorage(vm.pop())
+			vm.setGlobal(int(globalIndex), vm.pop())
 		case code.OpGetGlobal:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -620,7 +673,7 @@ func (vm *VM) Run() error {
 			}
 			vm.currentFrame().ip += 2
 			vm.ensureGlobalCapacity(int(globalIndex))
-			if err := vm.push(vm.decryptForUse(vm.globals[globalIndex])); err != nil {
+			if err := vm.push(vm.getGlobal(int(globalIndex))); err != nil {
 				return err
 			}
 		case code.OpSetLocal:
@@ -706,27 +759,53 @@ func (vm *VM) Run() error {
 			}
 		case code.OpCall:
 			if ip+1 >= len(ins) {
-				return fmt.Errorf("OpCall: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
 			numArgs, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
 			if err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 			vm.currentFrame().ip++
 			if err := vm.execCall(int(numArgs)); err != nil {
-				return err
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpReturnValue:
 			returnValue := vm.pop()
 			frame := vm.popFrame()
 			vm.stackPointer = frame.bp - 1
+			if vm.stackPointer < 0 {
+				vm.stackPointer = 0
+			}
 			if err := vm.push(returnValue); err != nil {
 				return err
 			}
 		case code.OpReturn:
 			frame := vm.popFrame()
 			vm.stackPointer = frame.bp - 1
+			if vm.stackPointer < 0 {
+				vm.stackPointer = 0
+			}
 			if err := vm.push(global.Null); err != nil {
+				return err
+			}
+		case code.OpMultiValue:
+			if ip+2 >= len(ins) {
+				return fmt.Errorf("OpMultiValue: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip += 2
+
+			start := vm.stackPointer - int(count)
+			if start < 0 {
+				return fmt.Errorf("OpMultiValue: stack underflow for count=%d", count)
+			}
+
+			multiValue := vm.buildMultiValue(start, vm.stackPointer)
+			vm.stackPointer -= int(count)
+			if err := vm.push(multiValue); err != nil {
 				return err
 			}
 		case code.OpNull:
@@ -735,6 +814,30 @@ func (vm *VM) Run() error {
 			}
 		case code.OpPop:
 			vm.pop()
+		case code.OpDup:
+			if vm.stackPointer <= 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow")
+			}
+			if err := vm.push(vm.decryptForUse(vm.stack[vm.stackPointer-1])); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+		case code.OpDestructure:
+			if ip+2 >= len(ins) {
+				return fmt.Errorf("OpDestructure: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip += 2
+
+			source := vm.pop()
+			values := vm.destructureValues(source, int(count))
+			for _, value := range values {
+				if err := vm.push(value); err != nil {
+					return err
+				}
+			}
 		case code.OpBreak:
 			// Push break sentinel value
 			if err := vm.push(&object.Break{}); err != nil {
@@ -904,8 +1007,29 @@ func (vm *VM) Run() error {
 	return nil
 }
 
+func runtimeOpcodeName(op code.Opcode) string {
+	if def, err := code.Lookup(byte(op)); err == nil {
+		return def.Name
+	}
+	return fmt.Sprintf("opcode_%d", op)
+}
+
+func (vm *VM) runtimeErrorAt(ip int, op code.Opcode, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("vm_runtime_error ip=%d op=%s: %w", ip, runtimeOpcodeName(op), err)
+}
+
+func (vm *VM) runtimeErrorfAt(ip int, op code.Opcode, format string, args ...interface{}) error {
+	return vm.runtimeErrorAt(ip, op, fmt.Errorf(format, args...))
+}
+
 func (vm *VM) validateSecurityCheckOpcodes(stage string) error {
 	if !vm.enforceSecurityCheckOpcodes {
+		return nil
+	}
+	if vm.frameIndex == 0 {
 		return nil
 	}
 
@@ -925,12 +1049,14 @@ func (vm *VM) scanSecurityCheckOpcodes() (bool, bool, error) {
 	foundDbg := false
 	foundSnd := false
 
-	mainFoundDbg, mainFoundSnd, err := vm.scanInstructionsForSecurityCheckOpcodes(vm.currentFrame().Instructions())
-	if err != nil {
-		return false, false, err
+	if vm.frameIndex > 0 {
+		mainFoundDbg, mainFoundSnd, err := vm.scanInstructionsForSecurityCheckOpcodes(vm.currentFrame().Instructions())
+		if err != nil {
+			return false, false, err
+		}
+		foundDbg = foundDbg || mainFoundDbg
+		foundSnd = foundSnd || mainFoundSnd
 	}
-	foundDbg = foundDbg || mainFoundDbg
-	foundSnd = foundSnd || mainFoundSnd
 
 	for _, constant := range vm.constants {
 		compiledFn, ok := constant.(*object.CompiledFunction)
@@ -1082,7 +1208,15 @@ func (vm *VM) execBinaryOperation(op code.Opcode) error {
 		return vm.execBinaryFloatOperation(op, left, right)
 	}
 
-	return fmt.Errorf("Unsupported types for binary operation: %s, %s", ltype, rtype)
+	opName := fmt.Sprintf("opcode_%d", op)
+	if def, err := code.Lookup(byte(op)); err == nil {
+		opName = def.Name
+	}
+	ip := -1
+	if frame := vm.currentFrame(); frame != nil {
+		ip = frame.ip
+	}
+	return fmt.Errorf("%s at ip=%d: unsupported types for binary operation: %s, %s", opName, ip, ltype, rtype)
 }
 
 func (vm *VM) execBinaryIntegerOperation(op code.Opcode, left, right object.Object) error {
@@ -1151,6 +1285,8 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 	switch {
 	case left.Type() == object.ARRAY_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execArrayIndex(left, index)
+	case left.Type() == object.MULTI_VALUE_OBJ && index.Type() == object.INTEGER_OBJ:
+		return vm.execMultiValueIndex(left, index)
 	case left.Type() == object.STRING_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execStringIndex(left, index)
 	case left.Type() == object.HASH_OBJ:
@@ -1158,6 +1294,16 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 	default:
 		return fmt.Errorf("index operator not supported: %s", left.Type())
 	}
+}
+
+func (vm *VM) execMultiValueIndex(multiValue, index object.Object) error {
+	multi := multiValue.(*object.MultiValue)
+	i := index.(*object.Integer).Value
+	max := int64(len(multi.Values) - 1)
+	if i > max || i < 0 {
+		return vm.push(global.Null)
+	}
+	return vm.push(multi.Values[i])
 }
 
 func (vm *VM) execStringIndex(str, index object.Object) error {
@@ -1299,6 +1445,42 @@ func (vm *VM) buildArray(startIndex, endIndex int) object.Object {
 	return &object.Array{Elements: elements}
 }
 
+func (vm *VM) buildMultiValue(startIndex, endIndex int) object.Object {
+	values := make([]object.Object, endIndex-startIndex)
+	for i := startIndex; i < endIndex; i++ {
+		values[i-startIndex] = vm.decryptForUse(vm.stack[i])
+	}
+	return &object.MultiValue{Values: values}
+}
+
+func (vm *VM) destructureValues(source object.Object, arity int) []object.Object {
+	values := make([]object.Object, arity)
+	for i := range values {
+		values[i] = global.Null
+	}
+
+	switch obj := source.(type) {
+	case *object.MultiValue:
+		for i := 0; i < arity && i < len(obj.Values); i++ {
+			if obj.Values[i] != nil {
+				values[i] = obj.Values[i]
+			}
+		}
+	case *object.Array:
+		for i := 0; i < arity && i < len(obj.Elements); i++ {
+			if obj.Elements[i] != nil {
+				values[i] = obj.Elements[i]
+			}
+		}
+	default:
+		if arity > 0 && source != nil {
+			values[0] = source
+		}
+	}
+
+	return values
+}
+
 func (vm *VM) buildHash(startIndex, endIndex int) (object.Object, error) {
 	hashedPairs := make(map[object.HashKey]object.HashPair)
 	for i := startIndex; i < endIndex; i += 2 {
@@ -1410,7 +1592,7 @@ func (vm *VM) verifyFrameIntegrity(frame *Frame, stage string) error {
 	actual := sha256.Sum256(fn.Instructions)
 	if !security.SecureCompare(expected[:], actual[:]) {
 		security.RecordIntegrityFailure(stage)
-		return security.ApplyTamperResponse("integrity_failed", stage, true, fmt.Errorf("runtime integrity check failed"))
+		return security.ApplyTamperResponse("integrity_failed", stage, vm.secureMode, fmt.Errorf("runtime integrity check failed"))
 	}
 
 	return nil
@@ -1422,15 +1604,15 @@ func (vm *VM) callBuiltin(builtin *builtin.BuiltIn, numArgs int) error {
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	result := builtin.Fn(args...)
+	rawResult := builtin.Fn(args...)
+	result := rawResult
+	if result == nil {
+		result = global.Null
+	}
 
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 
-	if result != nil {
-		vm.push(result)
-	} else {
-		vm.push(global.Null)
-	}
+	vm.push(result)
 
 	return nil
 }

@@ -38,7 +38,7 @@ func TestExecutePatchesRunsEncryptedPatch(t *testing.T) {
 func TestExecutePatchesRejectsUnsafeGlobals(t *testing.T) {
 	password := "lua-sandbox-test"
 	inslen := 123
-	plaintext := []byte("return os.getenv('HOME')")
+	plaintext := []byte("return io.open('/tmp/x', 'r')")
 
 	encrypted, err := security.SecureXOR(plaintext, int64(inslen), password)
 	if err != nil {

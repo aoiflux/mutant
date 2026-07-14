@@ -1,0 +1,10 @@
+putln("=== Network Triage DNS + TLS ===");
+
+let dns, err = net_dns_query("example.com", "A");
+putln("dns:", dns, "err:", err);
+
+let tls, err = net_tls_fingerprint("example.com", 443);
+putln("tls_fingerprint:", tls, "err:", err);
+
+let banner, err = net_banner("example.com", 80, "GET / HTTP/1.0\\r\\n\\r\\n", 1500);
+putln("banner:", banner, "err:", err);

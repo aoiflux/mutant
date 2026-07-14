@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type releaseTarget struct {
@@ -44,12 +46,17 @@ func GenerateReleaseAssets(outputPath string) error {
 			return err
 		}
 
+		compressedBinaryData, err := compressReleaseRuntimeBinary(binaryData)
+		if err != nil {
+			return err
+		}
+
 		key := fmt.Sprintf("%s/%s", target.goos, target.goarch)
 		fileName := fmt.Sprintf("%s_%s.bin", target.goos, target.goarch)
 		relPath := filepath.ToSlash(filepath.Join("data", fileName))
 		absPath := filepath.Join(dataDir, fileName)
 
-		if err := os.WriteFile(absPath, binaryData, 0644); err != nil {
+		if err := os.WriteFile(absPath, compressedBinaryData, 0644); err != nil {
 			return err
 		}
 		entries[key] = relPath
@@ -97,7 +104,19 @@ func buildReleaseRuntimeBinary(goos, goarch string) ([]byte, error) {
 	}
 	outPath := filepath.Join(tmpDir, outName)
 
-	cmd := exec.Command("go", "build", "-tags", "releaseassetsgen", "-o", outPath, ".")
+	cmd := exec.Command(
+		"go",
+		"build",
+		"-trimpath",
+		"-buildvcs=false",
+		"-ldflags",
+		"-s -w -buildid=",
+		"-tags",
+		"releaseassetsgen",
+		"-o",
+		outPath,
+		".",
+	)
 	cmd.Env = append(os.Environ(),
 		"GOOS="+goos,
 		"GOARCH="+goarch,
@@ -117,6 +136,25 @@ func buildReleaseRuntimeBinary(goos, goarch string) ([]byte, error) {
 	}
 
 	return binaryData, nil
+}
+
+func compressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := encoder.Write(binaryData); err != nil {
+		_ = encoder.Close()
+		return nil, err
+	}
+
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func renderReleaseAssetsIndex(entries map[string]string) []byte {

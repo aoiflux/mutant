@@ -1,0 +1,175 @@
+{
+    "name": "mutant-language-tools",
+    "displayName": "Mutant Language Tools",
+    "description": "Language support for Mutant with LSP-powered navigation, diagnostics, and rename.",
+    "version": "0.0.1",
+    "publisher": "mutant",
+    "icon": "images/icon-128.png",
+    "license": "AGPL-3.0-only",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/aoiflux/mutant.git"
+    },
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "mutant",
+                "aliases": [
+                    "Mutant",
+                    "mutant"
+                ],
+                "extensions": [
+                    ".mut"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "mutant",
+                "scopeName": "source.mutant",
+                "path": "./syntaxes/mutant.tmLanguage.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "mutant.openSmokeFile",
+                "title": "Mutant: Open Smoke File",
+                "category": "Mutant"
+            },
+            {
+                "command": "mutant.runSmokeChecks",
+                "title": "Mutant: Run LSP Smoke Checks",
+                "category": "Mutant"
+            },
+            {
+                "command": "mutant.showLspStatus",
+                "title": "Mutant: Show LSP Status",
+                "category": "Mutant"
+            },
+            {
+                "command": "mutant.showLspLogs",
+                "title": "Mutant: Show LSP Logs",
+                "category": "Mutant"
+            },
+            {
+                "command": "mutant.restartLsp",
+                "title": "Mutant: Restart LSP",
+                "category": "Mutant"
+            },
+            {
+                "command": "mutant.copyLspLogs",
+                "title": "Mutant: Copy LSP Logs",
+                "category": "Mutant"
+            }
+        ],
+        "configuration": {
+            "title": "Mutant",
+            "properties": {
+                "mutant.languageServer.path": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path or command name for the Mutant language server executable. Leave empty to auto-detect packaged platform binary first, then workspace/PATH."
+                },
+                "mutant.languageServer.args": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Additional command line arguments passed to the Mutant language server.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "mutant.format.onType.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable on-type formatting for Mutant files. Off by default to avoid intrusive edits while typing."
+                },
+                "mutant.lint.rules.duplicateTopLevelDeclaration.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for duplicate top-level declaration lint diagnostics. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.unusedDeclaration.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unused top-level declaration lint diagnostics. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.undefinedDeclaration.severity": {
+                    "type": "string",
+                    "default": "error",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for undefined identifier lint diagnostics. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.nestingComplexity.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for deep nesting diagnostics in function bodies. Set to 'off' to suppress the rule."
+                }
+            }
+        },
+        "configurationDefaults": {
+            "[mutant]": {
+                "editor.formatOnSave": true,
+                "editor.formatOnType": false
+            }
+        }
+    },
+    "scripts": {
+        "prepare:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs",
+        "vscode:prepublish": "npm run prepare:lsp-bins && npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "lint": "eslint src --ext ts",
+        "pretest": "npm run compile && npm run lint",
+        "test": "node ./out/test/runTest.js"
+    },
+    "devDependencies": {
+        "@types/mocha": "^10.0.10",
+        "@types/node": "^20.14.2",
+        "@types/vscode": "^1.90.0",
+        "@typescript-eslint/eslint-plugin": "^8.2.0",
+        "@typescript-eslint/parser": "^8.2.0",
+        "eslint": "^9.8.0",
+        "glob": "^11.0.3",
+        "mocha": "^11.7.4",
+        "@vscode/test-electron": "^2.5.2",
+        "typescript": "^5.5.4"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    }
+}

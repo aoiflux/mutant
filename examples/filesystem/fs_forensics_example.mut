@@ -1,0 +1,25 @@
+putln("=== Filesystem Forensics Builtins ===");
+
+let hash_info, err = fs_hash("README.md", "sha256");
+putln("fs_hash:", hash_info, "err:", err);
+
+let walk_entries, err = fs_walk(".", 1);
+putln("fs_walk:", walk_entries, "err:", err);
+
+let metadata, err = fs_metadata("README.md");
+putln("fs_metadata:", metadata, "err:", err);
+
+let magic, err = fs_magic("README.md");
+putln("fs_magic:", magic, "err:", err);
+
+let strings_found, err = fs_extract_strings("README.md", 6);
+putln("fs_extract_strings:", strings_found, "err:", err);
+
+let diff_result, err = fs_diff("README.md", "LICENSE");
+putln("fs_diff:", diff_result, "err:", err);
+
+let carve_hits, err = fs_carve("README.md", "pdf");
+putln("fs_carve:", carve_hits, "err:", err);
+
+let entropy_info, err = fs_entropy("README.md");
+putln("fs_entropy:", entropy_info, "err:", err);

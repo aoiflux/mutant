@@ -1,0 +1,27 @@
+putln("=== System Forensics Builtins ===");
+
+let procs, err = process_list();
+putln("process_list:", procs, "err:", err);
+
+let tree, err = process_tree();
+putln("process_tree:", tree, "err:", err);
+
+let env, err = process_env();
+putln("process_env:", env, "err:", err);
+
+let phash, err = process_hash();
+putln("process_hash:", phash, "err:", err);
+
+let open_files, err = process_open_files();
+putln("process_open_files:", open_files, "err:", err);
+
+let threads, err = process_threads();
+putln("process_threads:", threads, "err:", err);
+
+let modules, err = process_modules();
+putln("process_modules:", modules, "err:", err);
+
+let scan, err = process_memory_scan(phash["pid"], "malware");
+putln("process_memory_scan:", scan, "err:", err);
+
+putln("process_kill is available but intentionally not called in this example.");

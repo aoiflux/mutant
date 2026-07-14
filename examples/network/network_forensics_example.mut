@@ -1,0 +1,29 @@
+putln("=== Network Forensics Builtins ===");
+
+let dns_a, err = net_dns_query("localhost", "A");
+putln("net_dns_query A localhost:", dns_a, "err:", err);
+
+let dns_mx, err = net_dns_query("example.com", "MX");
+putln("net_dns_query MX example.com:", dns_mx, "err:", err);
+
+let scan, err = net_syn_scan("127.0.0.1", 22, 25, 100);
+putln("net_syn_scan 22-25:", scan, "err:", err);
+
+let banner, err = net_banner("127.0.0.1:22", 200);
+putln("net_banner 127.0.0.1:22:", banner, "err:", err);
+
+let tlsfp, err = net_tls_fingerprint("example.com:443", 1000);
+putln("net_tls_fingerprint example.com:443:", tlsfp, "err:", err);
+
+let packets = [
+    {"src": "10.0.0.2", "dst": "10.0.0.5", "sport": 51500, "dport": 443, "proto": "tcp", "bytes": 120},
+    {"src": "10.0.0.5", "dst": "10.0.0.2", "sport": 443, "dport": 51500, "proto": "tcp", "bytes": 80}
+];
+let flows, err = net_flow_reconstruct(packets);
+putln("net_flow_reconstruct:", flows, "err:", err);
+
+let capture, err = net_capture_raw();
+putln("net_capture_raw:", capture, "err:", err);
+
+let osfp, err = net_os_fingerprint("192.0.2.1", 500);
+putln("net_os_fingerprint:", osfp, "err:", err);

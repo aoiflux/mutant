@@ -17,7 +17,7 @@ func TestGenerateOpcodeMapping(t *testing.T) {
 		code.OpJumpFalse, code.OpJump, code.OpNull, code.OpGetGlobal,
 		code.OpSetGlobal, code.OpGetLocal, code.OpSetLocal, code.OpArray,
 		code.OpHash, code.OpIndex, code.OpCall, code.OpReturnValue,
-		code.OpReturn, code.OpGetBuiltin, code.OpClosure, code.OpGetFree,
+		code.OpReturn, code.OpMultiValue, code.OpDup, code.OpDestructure, code.OpGetBuiltin, code.OpClosure, code.OpGetFree,
 		code.OpCurrentClosure, code.OpChkDbg, code.OpChkSnd, code.OpBreak,
 		code.OpContinue, code.OpMakeStruct, code.OpGetField, code.OpSetField,
 		code.OpEnumValue,

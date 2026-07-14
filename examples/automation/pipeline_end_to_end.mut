@@ -1,0 +1,32 @@
+putln("=== End-to-End Triage Pipeline ===");
+
+let policy_module = "package e2e\n\ndefault allow = false\n\nallow {\n  input.score < 80\n}\n\ndecision = {\n  \"allow\": allow,\n  \"score\": input.score,\n}\n\nrules = [{\"id\":\"score_lt_80\"}]";
+let loaded, err = policy_load("e2e", {
+  "module": policy_module,
+  "eval_query": "data.e2e.decision",
+  "allow_query": "data.e2e.allow",
+  "rules_query": "data.e2e.rules"
+});
+putln("policy_load:", loaded, "err:", err);
+
+let copen, err = cache_open("e2e_cache");
+putln("cache_open:", copen, "err:", err);
+
+let indicator = "powershell -enc aGVsbG8=";
+let has_enc = regex_match(indicator, "-enc")[0];
+let score = 25;
+if (has_enc) { score = score + 60; }
+
+let decision, err = policy_eval("e2e", {"score": score});
+putln("policy_eval:", decision, "err:", err);
+
+let _, err = cache_put("e2e_cache", "last_score", score);
+let entry, err = cache_get("e2e_cache", "last_score");
+putln("cache_get(last_score):", entry, "err:", err);
+
+let det, err = detect_network_beacon([
+  {"dst": "c2.evil.test"},
+  {"dst": "c2.evil.test"},
+  {"dst": "c2.evil.test"}
+]);
+putln("detect_network_beacon:", det, "err:", err);

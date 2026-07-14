@@ -14,6 +14,11 @@ It is implementation-accurate to the current codebase and intended for:
 This LLD focuses on anti-tamper and anti-piracy controls under an offline-first
 threat model.
 
+Companion deep dives:
+
+1. [BINARY_ARTIFACT_SECURITY_DEEP_DIVE](BINARY_ARTIFACT_SECURITY_DEEP_DIVE.md)
+2. [REMOTE_PROCESS_SCAN_DEEP_DIVE](REMOTE_PROCESS_SCAN_DEEP_DIVE.md)
+
 ---
 
 ## 2. Security Objectives
@@ -60,10 +65,11 @@ Mutant currently has three practical launch postures:
 
 1. Secure mode (`--secure`, default):
 
-- Signature verification requires trusted signer pinning.
+- Runtime posture defaults to secure execution gates.
+- Trusted signer pinning is enforced only when `--signer-auth` is enabled.
 - Default tamper response is `terminate`.
 - If trusted key env is not set, runtime bootstraps a local persistent keypair
-  and uses the local public key as trusted key.
+  and uses the local public key as trusted key for signer-auth verification.
 
 2. Compatibility mode (`--compat`):
 
@@ -98,7 +104,8 @@ Supported values:
 3. `paranoid`
 
 - Favors maximum tamper resistance.
-- Defaults tamper policy to `terminate` regardless of secure or compat posture.
+- Defaults tamper policy to `terminate` when this profile is selected.
+- Explicit `MUTANT_TAMPER_RESPONSE` still has higher precedence.
 
 Profile precedence:
 
@@ -149,9 +156,9 @@ flowchart LR
 
     H --> I[runner.Run]
     I --> J[Signature Verify]
-    I --> K[Anti-Debug pre-decode]
+    I --> K[Anti-Debug + Process Protection pre-decode]
     I --> L[AESDecrypt + SecureXORDecrypt + gob decode]
-    I --> M[Anti-Debug pre-execution]
+    I --> M[Anti-Debug + Process Protection pre-execution]
     I --> N[vm.Run]
 
     N --> O[Opcode/operand stream decrypt at offsets]
@@ -416,12 +423,14 @@ sequenceDiagram
     U->>R: Run(path, password, secureMode)
     R->>R: Read .mu bytes
 
-    alt secureMode
+    alt secureMode && signerAuth
         R->>S: VerifyCodeWithTrustedPublicKey
         S-->>R: ok / error
-    else compat/dev
+    else !secureMode
         R->>S: VerifyCode
         S-->>R: ok / error
+    else secureMode && !signerAuth
+      R->>R: Skip signature verification path
     end
 
     alt signature error
@@ -441,12 +450,24 @@ sequenceDiagram
         R->>S: ApplyTamperResponse(debugger_detected,...)
     end
 
+    R->>S: RunAntiTamperProbe(process protection set, runner:pre-decode)
+    alt high-confidence process protection signal
+      R->>S: RecordProcessProtectionDetected
+      R->>S: ApplyTamperResponse(process_protection_detected,...)
+    end
+
     R->>R: AESDecrypt + SecureXORDecrypt + gob.Decode
 
     R->>S: IsDebuggerPresent (pre-execution)
     alt debugger true
         R->>S: RecordDebuggerDetected
         R->>S: ApplyTamperResponse(debugger_detected,...)
+    end
+
+    R->>S: RunAntiTamperProbe(process protection set, runner:pre-execution)
+    alt high-confidence process protection signal
+      R->>S: RecordProcessProtectionDetected
+      R->>S: ApplyTamperResponse(process_protection_detected,...)
     end
 
     R->>V: machine.Run()
@@ -484,6 +505,55 @@ Failure handling:
 - canary mismatch -> reject payload
 - provenance mismatch -> reject payload
 - unsupported trailer version -> reject payload
+
+### 9.3 Process-Protection Probe Enforcement
+
+At both `pre-decode` and `pre-execution` stages, runner evaluates process
+protection probes (`process_injection`, `trampoline`, `iat_got`,
+`module_integrity`, `memory_page_anomaly`) when
+`MUTANT_ENABLE_ANTITAMPER_PROBE=1`.
+
+Rollout gate:
+
+- `MUTANT_ENABLE_PROCESS_PROTECTION` controls whether runner executes
+  process-protection enforcement.
+- default is enabled when unset.
+- disable values: `0`, `false`, `off`, `no`.
+
+Enforcement threshold:
+
+- Any signal with `detected=true` and `confidence >= 80` is treated as a process
+  protection event.
+
+Response path:
+
+- Telemetry event: `process_protection_detected`
+- Policy dispatch: `ApplyTamperResponse(process_protection_detected, ...)`
+- Default result: terminate in secure mode, warn in compatibility/dev mode.
+
+### 9.4 Remote Process Scan Enforcement
+
+Runner executes `RunRemoteProcessScan` at both `pre-decode` and `pre-execution`
+stages.
+
+Gates and modes:
+
+1. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN=1` enables scan execution.
+2. `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce` controls decision behavior.
+3. Scanner errors are telemetry-visible and non-blocking.
+
+Current enforcement behavior:
+
+1. `observe`: records telemetry only, never blocks execution.
+2. `enforce`: blocks only when a verdict reaches the configured critical score.
+3. High-risk but non-critical verdicts remain advisory.
+
+Current implementation status:
+
+1. Configuration, correlator, telemetry, and runner policy integration are
+   implemented.
+2. `ScanRemoteProcessesWindows` currently returns no verdicts (safe no-op), so
+   remote verdict generation is scaffolding-ready but not yet signal-rich.
 
 ---
 
@@ -581,7 +651,7 @@ stateDiagram-v2
 
 ### 11.2 Secure Wrappers (`object/secure_memory.go`)
 
-Provided primitives:
+Available primitives:
 
 1. `SecureGlobal`
 
@@ -594,6 +664,27 @@ Provided primitives:
 3. `SecureConstantPool`
 
 - encrypted constants with cache.
+
+Current wiring note:
+
+- VM runtime protection path primarily uses `mutil.EncryptObject` and
+  `mutil.DecryptObject` in stack/global/constant handling.
+- `object/secure_memory.go` provides additional wrappers and utilities that can
+  be used by integrations, but they are not the primary VM storage path today.
+
+Current policy gate:
+
+- `MUTANT_VM_GLOBAL_MEMORY_MODE=runtime|wrapper`
+- default is `runtime` for performance-safe operation
+- `wrapper` enables optional global wrapper usage where object types are
+  supported
+
+Current helper-scope decision:
+
+- no additional secure-memory helper types are required for this release beyond
+  `SecureGlobal`, `SecureStack`, and `SecureConstantPool`
+- revisit helper expansion only if threat-model requirements exceed current
+  runtime encryption + optional wrapper mode coverage
 
 ### 11.3 Stream Offset Convention for Object Types
 
@@ -679,6 +770,18 @@ Atomic counters:
 1. `debugger_detected`
 2. `integrity_failed`
 3. `signature_failed`
+4. `sandbox_detected`
+5. `process_protection_detected`
+6. `anti_tamper_probe_invoked`
+7. `anti_tamper_probe_error`
+8. `remote_process_scan_invoked`
+9. `remote_process_scan_error`
+10. `remote_process_suspicious`
+11. `remote_process_critical`
+12. `command_attempt`
+13. `command_blocked`
+14. `command_succeeded`
+15. `command_failed`
 
 ### 13.2 APIs
 
@@ -719,7 +822,19 @@ If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
 1. `MUTANT_TAMPER_RESPONSE` = `warn|delay|terminate`
 2. `MUTANT_TAMPER_DELAY_MS` = integer ms in `[0..5000]`
 
-### 14.3 Observability
+### 14.3 Probe and Process-Scan Gates
+
+1. `MUTANT_ENABLE_ANTITAMPER_PROBE` = `1` enables anti-tamper probe execution.
+2. `MUTANT_ENABLE_PROCESS_PROTECTION` gates runner enforcement of the focused
+   5-probe process-protection set.
+3. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN` = `1` enables remote process scan
+   manager.
+4. `MUTANT_REMOTE_SCAN_MODE` = `off|observe|enforce`.
+5. `MUTANT_REMOTE_SCAN_MAX_PROCESSES` = positive integer, default `32`.
+6. `MUTANT_REMOTE_SCAN_INTERVAL_MS` = positive integer, default `1000`.
+7. `MUTANT_REMOTE_SCAN_ALLOWLIST` = comma-separated process names.
+
+### 14.4 Observability
 
 1. `MUTANT_SECURITY_AUDIT` = `1` to enable stderr audit lines
 2. `MUTANT_SECURITY_TELEMETRY_FILE` = output path for telemetry JSON
@@ -734,7 +849,9 @@ If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
 2. `ErrPasswordRequired`
 3. `ErrInvalidMetadata`
 4. `ErrDebuggerDetected`
-5. `ErrUntrustedSigner`
+5. `ErrSandboxDetected`
+6. `ErrProcessProtectionDetected`
+7. `ErrUntrustedSigner`
 
 ### 15.2 Policy-Dependent Behavior
 
@@ -769,12 +886,12 @@ flowchart TD
     J -->|Secure| K[Trusted key pin + signature verify]
     J -->|Compat/Dev| L[Embedded key signature verify]
 
-    K --> M[pre-decode anti-debug]
+    K --> M[pre-decode anti-debug + process protection]
     L --> M
     M --> N[AESDecrypt metadata]
     N --> O[SecureXORDecrypt]
     O --> P[gob decode ByteCode]
-    P --> Q[pre-execution anti-debug]
+    P --> Q[pre-execution anti-debug + process protection]
     Q --> R[VM loop]
     R --> S[Offset decode + integrity probes]
     S --> T[Policy action + telemetry]
@@ -795,11 +912,14 @@ flowchart TD
 - policy defaults and response behavior
 - compatibility mixed artifact behavior
 - anti-debug weighting logic
+- anti-tamper probe routing and process-protection signal set
 
 2. `runner/runner_test.go`
 
 - secure mode malformed/tampered payload rejection
 - compatibility mode continue-on-signature-failure behavior
+- secure-mode termination on high-confidence process-protection signal
+- advisory behavior for sub-threshold process-protection signal
 
 3. `vm/vm_security_policy_test.go`
 
@@ -817,9 +937,10 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ## 18. Security Invariants (Must Hold)
 
-1. In secure mode, trusted public key must be configured or execution fails.
-2. In secure mode, signature mismatch/untrusted signer must fail unless policy
-   explicitly downgraded by env.
+1. When `--signer-auth` is enabled in secure mode, trusted signer verification
+   must be enforced (trusted env key or local bootstrap trusted key).
+2. In signer-auth path, signature mismatch/untrusted signer must fail unless
+   policy is explicitly downgraded by env.
 3. Integrity mismatch must always record telemetry before policy action.
 4. Metadata parser must reject malformed Argon2 parameters.
 5. Opcode/operand decode must stay offset-aware.

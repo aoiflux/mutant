@@ -1,0 +1,16 @@
+putln("=== Text Matching Builtins ===");
+
+let contains, err = text_contains("malware-analysis", "analysis");
+putln("text_contains:", contains, "err:", err);
+
+let index, err = text_index("threat-hunting", "hunt");
+putln("text_index:", index, "err:", err);
+
+let count, err = text_count("ioc,ioc,ioc", "ioc");
+putln("text_count:", count, "err:", err);
+
+let parts, err = text_split("cmd.exe|powershell.exe|rundll32.exe", "|");
+putln("text_split:", parts, "err:", err);
+
+let replaced, err = text_replace("alert alert alert", "alert", "signal", 2);
+putln("text_replace:", replaced, "err:", err);

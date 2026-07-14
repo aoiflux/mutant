@@ -26,3 +26,17 @@ func TestString(t *testing.T) {
 		t.Errorf("program.String() wrong. got=%q", program.String())
 	}
 }
+
+func TestCallExpressionStringNilSafe(t *testing.T) {
+	call := &CallExpression{
+		Token: token.Token{Type: token.LPAREN, Literal: "("},
+		Arguments: []Expression{
+			nil,
+			&Identifier{Token: token.Token{Type: token.IDENT, Literal: "x"}, Value: "x"},
+		},
+	}
+
+	if got := call.String(); got != "(x)" {
+		t.Fatalf("CallExpression.String() = %q, want %q", got, "(x)")
+	}
+}

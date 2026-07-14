@@ -15,60 +15,60 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 func HttpGet(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	url, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument to `http_get` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `http_get` must be STRING, got %s", args[0].Type()))
 	}
 	resp, err := httpClient.Get(url.Value)
-	return httpResponseOrError(resp, err)
+	return httpResponseOrError2(resp, err, "http_get")
 }
 
 func HttpPost(args ...object.Object) object.Object {
 	if len(args) != 3 {
-		return newError("wrong number of arguments. got=%d, want=3", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 	url, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument 1 to `http_post` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `http_post` must be STRING, got %s", args[0].Type()))
 	}
 	body, errObj := httpBodyString(args[1])
 	if errObj != nil {
-		return errObj
+		return resultAndError(nil, errObj)
 	}
 	contentType, ok := args[2].(*object.String)
 	if !ok {
-		return newError("argument 3 to `http_post` must be STRING, got %s", args[2].Type())
+		return resultAndError(nil, newError("argument 3 to `http_post` must be STRING, got %s", args[2].Type()))
 	}
 	resp, err := httpClient.Post(url.Value, contentType.Value, strings.NewReader(body))
-	return httpResponseOrError(resp, err)
+	return httpResponseOrError2(resp, err, "http_post")
 }
 
 func HttpRequest(args ...object.Object) object.Object {
 	if len(args) != 4 {
-		return newError("wrong number of arguments. got=%d, want=4", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
 	method, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument 1 to `http_request` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `http_request` must be STRING, got %s", args[0].Type()))
 	}
 	url, ok := args[1].(*object.String)
 	if !ok {
-		return newError("argument 2 to `http_request` must be STRING, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument 2 to `http_request` must be STRING, got %s", args[1].Type()))
 	}
 	body, errObj := httpBodyString(args[2])
 	if errObj != nil {
-		return errObj
+		return resultAndError(nil, errObj)
 	}
 	headers, errObj := httpHeaderMap(args[3])
 	if errObj != nil {
-		return errObj
+		return resultAndError(nil, errObj)
 	}
 
 	req, err := http.NewRequest(strings.ToUpper(method.Value), url.Value, strings.NewReader(body))
 	if err != nil {
-		return httpErrorResult(err)
+		return resultAndError(nil, newError("http_request: %s", err.Error()))
 	}
 
 	for k, v := range headers {
@@ -76,7 +76,7 @@ func HttpRequest(args ...object.Object) object.Object {
 	}
 
 	resp, err := httpClient.Do(req)
-	return httpResponseOrError(resp, err)
+	return httpResponseOrError2(resp, err, "http_request")
 }
 
 func httpHeaderMap(obj object.Object) (map[string]string, *object.Error) {
@@ -213,4 +213,36 @@ func httpErrorResult(err error) object.Object {
 		"headers": makeHashObject(map[string]object.Object{}),
 		"error":   stringObj(err.Error()),
 	})
+}
+
+func httpResponseOrError2(resp *http.Response, err error, opName string) object.Object {
+	if err != nil {
+		return resultAndError(httpErrorResult(err), newError("%s: %s", opName, err.Error()))
+	}
+
+	result := httpResponseOrError(resp, nil)
+	hash, ok := result.(*object.Hash)
+	if !ok {
+		return resultAndError(result, nil)
+	}
+
+	errValueObj, ok := hashValueByStringKey(hash, "error")
+	if !ok {
+		return resultAndError(hash, nil)
+	}
+	errStr, ok := errValueObj.(*object.String)
+	if !ok || errStr.Value == "" {
+		return resultAndError(hash, nil)
+	}
+
+	return resultAndError(hash, newError("%s: %s", opName, errStr.Value))
+}
+
+func hashValueByStringKey(hash *object.Hash, key string) (object.Object, bool) {
+	keyObj := &object.String{Value: key}
+	pair, ok := hash.Pairs[keyObj.HashKey()]
+	if !ok {
+		return nil, false
+	}
+	return pair.Value, true
 }

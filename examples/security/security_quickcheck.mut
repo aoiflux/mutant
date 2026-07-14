@@ -1,0 +1,10 @@
+putln("=== Security Quickcheck ===");
+
+let dbg, err = debug_status();
+putln("debug_status:", dbg, "err:", err);
+
+let sbox, err = sandbox_status();
+putln("sandbox_status:", sbox, "err:", err);
+
+let diag, err = security_diagnostics();
+putln("security_diagnostics:", diag, "err:", err);

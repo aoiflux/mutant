@@ -1,0 +1,11 @@
+putln("=== lua_run_string example ===");
+
+let result, err = lua_run_string("return 'hello-from-lua-string' .. ':' .. mutant.version()");
+
+if (err) {
+    putln("lua_run_string failed: ", err);
+} else {
+    putln("lua_run_string ok");
+    putf("result: ", result);
+    putln();
+};

@@ -1,92 +1,116 @@
 # Anti-Tamper Probe Integration
 
-This document describes the current anti-tamper probe integration used by Mutant
-security builtins.
+This document explains how anti-tamper probes work today in Mutant, including
+the exact enablement gates and how runner enforcement differs from builtin
+diagnostic calls.
 
-## Architecture
+## 1. Architecture
 
-- Probe engine location: `security/antitamper_probe.go`
-- Runtime consumers:
-  - `builtin/security_status.go`
-  - `security` telemetry counters (`anti_tamper_probe_invoked`,
-    `anti_tamper_probe_error`)
-- Runtime gate env var: `MUTANT_ENABLE_ANTITAMPER_PROBE=1`
+Core files:
 
-## Probe Coverage (Current)
+1. `security/antitamper_probe.go` (engine + enablement gate)
+2. `security/antitamper_routing.go` (probe dispatch)
+3. `security/antitamper_detectors.go` (cross-platform heuristics)
+4. `security/antitamper_windows.go` (windows process-protection heuristics)
+5. `runner/runner.go` (enforcement)
+6. `builtin/security_status.go` (diagnostic exposure)
 
-The probe engine returns structured signals with:
+Telemetry events used by this subsystem:
 
-- `name`
-- `detected`
-- `confidence`
-- `detail`
+1. `anti_tamper_probe_invoked`
+2. `anti_tamper_probe_error`
+3. `process_protection_detected`
 
-Implemented probes currently include:
+## 2. Enablement Model (Important)
 
-- `hardware_breakpoint`
-- `timing`
-- `syscall`
-- `frida_ptrace`
-- `ld_preload`
-- `cpuid_hypervisor`
-- `rdtsc_drift`
-- `acpi_pci`
-- `gpu_feature` (placeholder)
-- `iat_got` (placeholder)
-- `syscall_table` (placeholder)
-- `trampoline` (placeholder)
+Anti-tamper probing has two gates:
 
-## Platform Notes
+1. Master probe gate: `MUTANT_ENABLE_ANTITAMPER_PROBE=1`
+2. Runner process-protection gate: `MUTANT_ENABLE_PROCESS_PROTECTION`
 
-### Windows
+Behavior:
 
-- `syscall` and `hardware_breakpoint` signals are derived from existing
-  debugger-detection methods in `security/antidebug_windows.go`.
-- `frida_ptrace` includes FRIDA env marker checks and `tasklist` marker checks.
-- `ld_preload` maps to Windows injection-style environment markers:
-  - `COR_ENABLE_PROFILING`
-  - `COR_PROFILER`
-  - `COR_PROFILER_PATH`
-  - `__COMPAT_LAYER`
+1. If gate #1 is not `1`, `RunAntiTamperProbe` returns `enabled=false` and no
+   probes run.
+2. Gate #2 only matters when gate #1 is enabled and runner enforcement is being
+   evaluated.
+3. Gate #2 defaults to enabled when unset; disable values are `0`, `false`,
+   `off`, `no`.
 
-### Linux
+## 3. Probe Output Shape
 
-- `frida_ptrace` checks FRIDA env markers and `/proc/self/status` tracer PID.
-- `ld_preload` reads `LD_PRELOAD`.
+Each probe returns one `AntiTamperSignal` with:
 
-### macOS / Other
+1. `name`
+2. `detected`
+3. `confidence`
+4. `detail`
 
-- Unsupported heuristics return `detected=false` with detail text.
+Interpretation:
 
-## Expected Output Shape
+1. `detected` is evidence for that probe only.
+2. `confidence` is a per-probe confidence score, not a global verdict.
+3. policy action is decided by caller logic (runner or builtin consumer).
 
-Example response fields in builtin output:
+## 4. Implemented Probes (Current)
 
-```json
-{
-  "probe_enabled": true,
-  "probe_error": "",
-  "probe_signals": [
-    {
-      "name": "syscall",
-      "detected": false,
-      "confidence": 0,
-      "detail": "no debugger API signal detected"
-    }
-  ]
-}
-```
+1. `hardware_breakpoint`
+2. `timing`
+3. `syscall`
+4. `frida_ptrace`
+5. `ld_preload`
+6. `cpuid_hypervisor`
+7. `rdtsc_drift`
+8. `acpi_pci`
+9. `gpu_feature` (placeholder)
+10. `iat_got`
+11. `syscall_table`
+12. `trampoline`
+13. `process_injection`
+14. `module_integrity`
+15. `memory_page_anomaly`
 
-Interpretation guidelines:
+## 5. Runner Enforcement vs Builtin Diagnostics
 
-- Treat `detected` as per-signal evidence, not final policy action.
-- Use `confidence` to rank severity and combine with other signals.
-- Use `detail` for operator diagnostics and triage.
+Runner enforcement probe set (hardcoded in `runner/runner.go`):
 
-## Build and Release
+1. `process_injection`
+2. `trampoline`
+3. `iat_got`
+4. `module_integrity`
+5. `memory_page_anomaly`
 
-No external toolchain or cgo linkage is required for anti-tamper probe
-execution.
+Runner threshold:
 
-Release asset generation continues to build Go-only runtime binaries with
-`CGO_ENABLED=0`.
+1. any signal with `detected=true` and `confidence >= 80` triggers
+   `process_protection_detected` policy flow.
+
+Builtin diagnostics (`builtin/security_status.go`) use broader probe sets for
+visibility and troubleshooting. This is expected and independent of runner
+enforcement scope.
+
+## 6. Platform Notes
+
+Windows:
+
+1. `process_injection` uses environment and tasklist marker heuristics.
+2. `trampoline` checks selected API prologues for common hook patterns.
+3. `iat_got` checks sensitive export memory ownership against expected module.
+4. `module_integrity` checks suspicious loaded module markers.
+5. `memory_page_anomaly` checks for RWX pages on sensitive API addresses.
+
+Linux:
+
+1. `frida_ptrace` checks FRIDA env markers and `/proc/self/status` tracer PID.
+2. `ld_preload` reports active `LD_PRELOAD` markers.
+
+macOS/unsupported paths:
+
+1. unsupported probes return neutral signals with explanatory detail.
+
+## 7. Student Notes
+
+1. Probe enablement and enforcement are not the same thing.
+2. Builtin probe output is diagnostic; runner probe output can become policy
+   action.
+3. Always read `detail` before acting on a single signal.

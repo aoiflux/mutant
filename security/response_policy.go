@@ -4,25 +4,30 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
 const (
+	// Deprecated compatibility constants: env overrides are no longer used.
 	TamperResponseEnv = "MUTANT_TAMPER_RESPONSE"
 	TamperDelayMsEnv  = "MUTANT_TAMPER_DELAY_MS"
 
 	TamperResponseWarn      = "warn"
 	TamperResponseDelay     = "delay"
 	TamperResponseTerminate = "terminate"
+
+	DefaultTamperDelayMs = 250
+	MinTamperDelayMs     = 0
+	MaxTamperDelayMs     = 5000
 )
 
 func ResolveTamperResponse(secureMode bool) string {
-	configured := strings.ToLower(strings.TrimSpace(os.Getenv(TamperResponseEnv)))
-	switch configured {
-	case TamperResponseWarn, TamperResponseDelay, TamperResponseTerminate:
-		return configured
+	if securityDevModeEnabled() {
+		return TamperResponseWarn
+	}
+
+	if !secureMode {
+		return TamperResponseWarn
 	}
 
 	return defaultTamperResponseForProfile(secureMode)
@@ -48,16 +53,5 @@ func ApplyTamperResponse(event, stage string, secureMode bool, baseErr error) er
 }
 
 func resolveTamperDelay() time.Duration {
-	const defaultDelayMs = 250
-	raw := strings.TrimSpace(os.Getenv(TamperDelayMsEnv))
-	if raw == "" {
-		return defaultDelayMs * time.Millisecond
-	}
-
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 0 || parsed > 5000 {
-		return defaultDelayMs * time.Millisecond
-	}
-
-	return time.Duration(parsed) * time.Millisecond
+	return DefaultTamperDelayMs * time.Millisecond
 }

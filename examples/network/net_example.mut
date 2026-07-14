@@ -1,0 +1,23 @@
+putln("=== DNS Resolution ===");
+let addrs, err = net_resolve("example.com");
+putln("example.com resolves to:");
+let printAddrs = fn(arr, idx) {
+    let total = len(arr);
+    let reached_end = idx == total;
+    if (reached_end) {
+        return 0;
+    }
+    putln("  ", arr[idx]);
+    return printAddrs(arr, idx + 1);
+};
+printAddrs(addrs, 0);
+
+putln("");
+putln("=== TCP Dial ===");
+let result, err = net_dial("example.com", 1000);
+if (err) {
+    putln("could not connect (expected if nothing is listening): ", err);
+    putln("latency measured: ", result["latency_ms"], "ms");
+} else {
+    putln("connected to example.com in ", result["latency_ms"], "ms");
+};

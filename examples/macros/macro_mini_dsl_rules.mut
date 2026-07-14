@@ -1,0 +1,27 @@
+putln("== macro mini-DSL for simple rules ==");
+
+let rule = macro(name, condition) {
+    quote({
+        "name": unquote(name),
+        "matched": unquote(condition)
+    });
+};
+
+let event = {
+    "severity": "high",
+    "source": "endpoint-17",
+    "user": "admin"
+};
+
+let r1 = rule("high-severity", event["severity"] == "high");
+let r2 = rule("admin-user", event["user"] == "admin");
+let r3 = rule("workstation-source", event["source"] == "workstation-01");
+
+putln("rule outputs:");
+putln(r1);
+putln(r2);
+putln(r3);
+
+if (r1["matched"] == true) {
+    putln("trigger: high-severity rule matched");
+}

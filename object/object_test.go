@@ -19,3 +19,11 @@ func TestStringHashKey(t *testing.T) {
 		t.Errorf("strings with different content have same hash keys")
 	}
 }
+
+func TestMultiValueInspectOmitsTrailingNullForSingleResult(t *testing.T) {
+	mv := &MultiValue{Values: []Object{&Integer{Value: 4}, &Null{}}}
+
+	if got := mv.Inspect(); got != "4" {
+		t.Fatalf("unexpected inspect output: got=%q want=%q", got, "4")
+	}
+}

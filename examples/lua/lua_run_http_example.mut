@@ -1,0 +1,13 @@
+putln("=== lua_run_http example ===");
+putln("requires capability: network");
+putln("set URL to an endpoint that returns plain Lua source code");
+
+let url = "http://127.0.0.1:8080/lua_patch.lua";
+let result, err = lua_run_http(url);
+
+if (err) {
+    putln("lua_run_http failed: ", err);
+} else {
+    putln("lua_run_http ok");
+    putln("result: ", result);
+};

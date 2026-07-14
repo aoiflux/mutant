@@ -1,0 +1,54 @@
+let volume_path = "./disk.xfs";
+let opened, open_err = xfs_open(volume_path);
+if (open_err) {
+    putf("xfs_open failed: " + open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putf("XFS opened: " + opened["path"] + " (handle=" + handle + ")");
+
+let items, list_err = xfs_list_files(handle, "/");
+if (list_err) {
+    putf("xfs_list_files failed: " + list_err);
+    return;
+}
+
+putf("Root entries:");
+for (let i = 0; i < len(items); i = i + 1) {
+    let e = items[i];
+    putf("- ", e["path"], " (dir=", e["is_dir"], ", inode=", e["inode"], ")");
+}
+
+let target = "/etc/hosts";
+let content, read_err = xfs_read_file(handle, target);
+if (!read_err) {
+    putf("File content from " + target + ":");
+    putf(content);
+}
+
+let meta, meta_err = xfs_metadata(handle, target);
+if (meta_err) {
+    putf("xfs_metadata failed: " + meta_err);
+    return;
+}
+
+putf("Metadata:");
+putf("  path=" + meta["path"]);
+putf("  name=" + meta["name"]);
+putf("  inode=" + meta["inode"]);
+putf("  format_version=" + meta["format_version"]);
+putf("  block_size=" + meta["block_size"]);
+putf("  inode_size=" + meta["inode_size"]);
+putf("  volume_blocks=" + meta["volume_blocks"]);
+putf("  root_inode=" + meta["root_inode"]);
+putf("  is_dir=", meta["is_dir"]);
+putf("  size=" + meta["size"]);
+
+let closed, close_err = xfs_close(handle);
+if (close_err) {
+    putf("xfs_close failed: " + close_err);
+    return;
+}
+
+putf("Handle closed: " + closed["closed"]);

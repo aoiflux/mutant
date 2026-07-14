@@ -9,9 +9,15 @@ import (
 	"strings"
 )
 
+var localKeyStoreDirOverride = ""
+
+func SetLocalKeyStoreDirForTesting(dir string) {
+	localKeyStoreDirOverride = strings.TrimSpace(dir)
+}
+
 func ResolveLocalKeyStoreDir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv(LocalKeyStoreDirEnv)); dir != "" {
-		return dir, nil
+	if localKeyStoreDirOverride != "" {
+		return localKeyStoreDirOverride, nil
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -64,11 +70,6 @@ func EnsureLocalSigningKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, bool, s
 }
 
 func ResolveTrustedPublicKeyHex() (string, bool, string, error) {
-	trusted := strings.TrimSpace(os.Getenv(TrustedPublicKeyEnv))
-	if trusted != "" {
-		return trusted, false, "", nil
-	}
-
 	_, publicKey, created, baseDir, err := EnsureLocalSigningKeyPair()
 	if err != nil {
 		return "", false, "", err

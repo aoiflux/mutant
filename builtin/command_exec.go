@@ -9,83 +9,83 @@ import (
 
 func ExecString(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
-		return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 
 	commandArg, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument to `exec_string` at position=1 must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `exec_string` at position=1 must be STRING, got %s", args[0].Type()))
 	}
 
 	shell := "powershell"
 	if len(args) == 2 {
 		shellArg, isString := args[1].(*object.String)
 		if !isString {
-			return newError("argument to `exec_string` at position=2 must be STRING, got %s", args[1].Type())
+			return resultAndError(nil, newError("argument to `exec_string` at position=2 must be STRING, got %s", args[1].Type()))
 		}
 		shell = shellArg.Value
 	}
 
 	result := security.ExecuteCommand(shell, commandArg.Value, "builtin:exec_string")
-	return commandResultHash(result)
+	return resultAndError(commandResultHash(result), nil)
 }
 
 func CmdBuilder(args ...object.Object) object.Object {
 	if len(args) > 1 {
-		return newError("wrong number of arguments. got=%d, want=0 or 1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 
 	shell := "powershell"
 	if len(args) == 1 {
 		shellArg, ok := args[0].(*object.String)
 		if !ok {
-			return newError("argument to `cmd_builder` at position=1 must be STRING, got %s", args[0].Type())
+			return resultAndError(nil, newError("argument to `cmd_builder` at position=1 must be STRING, got %s", args[0].Type()))
 		}
 		shell = shellArg.Value
 	}
 
-	return makeHashObject(map[string]object.Object{
+	return resultAndError(makeHashObject(map[string]object.Object{
 		"shell": stringObj(shell),
 		"lines": &object.Array{Elements: []object.Object{}},
-	})
+	}), nil)
 }
 
 func CmdAdd(args ...object.Object) object.Object {
 	if len(args) != 2 {
-		return newError("wrong number of arguments. got=%d, want=2", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
 	builder, errObj := decodeBuilder(args[0])
 	if errObj != nil {
-		return errObj
+		return resultAndError(nil, errObj)
 	}
 
 	lineArg, ok := args[1].(*object.String)
 	if !ok {
-		return newError("argument to `cmd_add` at position=2 must be STRING, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument to `cmd_add` at position=2 must be STRING, got %s", args[1].Type()))
 	}
 
 	builder.lines = append(builder.lines, lineArg.Value)
-	return encodeBuilder(builder)
+	return resultAndError(encodeBuilder(builder), nil)
 }
 
 func CmdRun(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
 	builder, errObj := decodeBuilder(args[0])
 	if errObj != nil {
-		return errObj
+		return resultAndError(nil, errObj)
 	}
 
 	if len(builder.lines) == 0 {
-		return newError("argument to `cmd_run` has no lines to execute")
+		return resultAndError(nil, newError("argument to `cmd_run` has no lines to execute"))
 	}
 
 	command := strings.Join(builder.lines, "\n")
 	result := security.ExecuteCommand(builder.shell, command, "builtin:cmd_run")
-	return commandResultHash(result)
+	return resultAndError(commandResultHash(result), nil)
 }
 
 type commandBuilder struct {

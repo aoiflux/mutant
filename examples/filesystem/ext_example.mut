@@ -1,0 +1,30 @@
+let volume_path = "N:\dev\dataset\img6_ext4.dd";
+let opened, open_err = ext_open(volume_path);
+if (open_err) {
+    putln("ext_open failed:", open_err);
+    return;
+}
+
+let handle = opened["handle"];
+putln("EXT opened:", opened["path"], "(handle=", handle, ")");
+
+let items, list_err = ext_list_files(handle, "/");
+if (list_err) {
+    putln("ext_list_files failed:", list_err);
+    return;
+}
+
+putln("Root entries:");
+let itemLen = len(items);
+for (let i = 0; i < itemLen; i = i + 1) {
+    let e = items[i];
+    putln("  -", e["path"], "(dir=", e["is_dir"], ", inode=", e["inode"], ")");
+}
+
+let closed, close_err = ext_close(handle);
+if (close_err) {
+    putln("ext_close failed:", close_err);
+    return;
+}
+
+putln("Handle closed:", closed["closed"]);

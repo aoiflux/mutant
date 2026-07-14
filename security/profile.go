@@ -2,49 +2,46 @@ package security
 
 import (
 	"crypto/sha256"
-	"os"
-	"strings"
 )
 
-const ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
-
 const (
+	// Deprecated compatibility constant: env-driven profile selection removed.
+	ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
+
 	ProtectionProfileMinimal  = "minimal"
 	ProtectionProfileStandard = "standard"
 	ProtectionProfileParanoid = "paranoid"
 	defaultProtectionProfile  = ProtectionProfileStandard
+
+	ProtectionProfileMinimalCode  byte = 1
+	ProtectionProfileStandardCode byte = 2
+	ProtectionProfileParanoidCode byte = 3
 )
 
 func ResolveProtectionProfile() string {
-	configured := strings.ToLower(strings.TrimSpace(os.Getenv(ProtectionProfileEnv)))
-	switch configured {
-	case ProtectionProfileMinimal, ProtectionProfileStandard, ProtectionProfileParanoid:
-		return configured
-	default:
-		return defaultProtectionProfile
-	}
+	return defaultProtectionProfile
 }
 
 func ResolveProtectionProfileCode() byte {
 	switch ResolveProtectionProfile() {
 	case ProtectionProfileMinimal:
-		return 1
+		return ProtectionProfileMinimalCode
 	case ProtectionProfileStandard:
-		return 2
+		return ProtectionProfileStandardCode
 	case ProtectionProfileParanoid:
-		return 3
+		return ProtectionProfileParanoidCode
 	default:
-		return 2
+		return ProtectionProfileStandardCode
 	}
 }
 
 func ProtectionProfileFromCode(code byte) (string, bool) {
 	switch code {
-	case 1:
+	case ProtectionProfileMinimalCode:
 		return ProtectionProfileMinimal, true
-	case 2:
+	case ProtectionProfileStandardCode:
 		return ProtectionProfileStandard, true
-	case 3:
+	case ProtectionProfileParanoidCode:
 		return ProtectionProfileParanoid, true
 	default:
 		return "", false
@@ -52,6 +49,10 @@ func ProtectionProfileFromCode(code byte) (string, bool) {
 }
 
 func defaultTamperResponseForProfile(secureMode bool) string {
+	if securityDevModeEnabled() {
+		return TamperResponseWarn
+	}
+
 	switch ResolveProtectionProfile() {
 	case ProtectionProfileMinimal:
 		return TamperResponseWarn
@@ -66,7 +67,11 @@ func defaultTamperResponseForProfile(secureMode bool) string {
 }
 
 func DefaultBuiltinCapabilityPolicy() map[string]struct{} {
-	return map[string]struct{}{"all": {}}
+	if ResolveProtectionProfile() == ProtectionProfileMinimal {
+		return map[string]struct{}{"all": {}}
+	}
+
+	return map[string]struct{}{}
 }
 
 func DeriveStandaloneProvenance(payload []byte, checksum []byte, profileCode byte) [32]byte {

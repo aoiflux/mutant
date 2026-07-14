@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,65 +83,68 @@ func dbGet(handle int64) (*graphene.Graph, bool) {
 
 func DbOpen(args ...object.Object) object.Object {
 	if len(args) != 0 {
-		return newError("wrong number of arguments. got=%d, want=0", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
 	}
 	g := graphene.NewInMemory()
 	handle := atomic.AddInt64(&dbHandleCounter, 1)
 	dbHandles.Store(handle, g)
-	return intObj(handle)
+	return resultAndError(intObj(handle), nil)
 }
 
 func DbOpenDisk(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	path, ok := args[0].(*object.String)
 	if !ok {
-		return newError("argument to `db_open_disk` must be STRING, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `db_open_disk` must be STRING, got %s", args[0].Type()))
 	}
 	g, err := graphene.Open(path.Value)
 	if err != nil {
-		return newError("db_open_disk: %s", err.Error())
+		return resultAndError(nil, newError("db_open_disk: %s", err.Error()))
 	}
 	handle := atomic.AddInt64(&dbHandleCounter, 1)
 	dbHandles.Store(handle, g)
-	return intObj(handle)
+	return resultAndError(intObj(handle), nil)
 }
 
 func DbClose(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument to `db_close` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `db_close` must be INTEGER, got %s", args[0].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return fsOkOrError(fmt.Errorf("db_close: invalid handle %d", h.Value))
+		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
 	}
 	dbHandles.Delete(h.Value)
-	return fsOkOrError(g.Close())
+	if err := g.Close(); err != nil {
+		return resultAndError(nil, newError("db_close: %s", err.Error()))
+	}
+	return resultAndError(boolObj(true), nil)
 }
 
 func DbAddNode(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
-		return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_add_node` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_add_node` must be INTEGER, got %s", args[0].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_add_node: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_add_node: invalid handle %d", h.Value))
 	}
 
 	nodeType := store.CustomNodeType(uint8(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
-			return newError("argument 2 to `db_add_node`: %s", errObj.Inspect())
+			return resultAndError(nil, newError("argument 2 to `db_add_node`: %s", errObj.Inspect()))
 		}
 		nodeType = parsedType
 	}
@@ -151,37 +153,37 @@ func DbAddNode(args ...object.Object) object.Object {
 		Labels: []store.NodeType{nodeType},
 	})
 	if err != nil {
-		return newError("db_add_node: %s", err.Error())
+		return resultAndError(nil, newError("db_add_node: %s", err.Error()))
 	}
-	return intObj(int64(nodeID))
+	return resultAndError(intObj(int64(nodeID)), nil)
 }
 
 func DbAddEdge(args ...object.Object) object.Object {
 	if len(args) != 3 && len(args) != 4 {
-		return newError("wrong number of arguments. got=%d, want=3 or 4", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3 or 4", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_add_edge` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_add_edge` must be INTEGER, got %s", args[0].Type()))
 	}
 	src, ok := args[1].(*object.Integer)
 	if !ok {
-		return newError("argument 2 to `db_add_edge` must be INTEGER, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument 2 to `db_add_edge` must be INTEGER, got %s", args[1].Type()))
 	}
 	dst, ok := args[2].(*object.Integer)
 	if !ok {
-		return newError("argument 3 to `db_add_edge` must be INTEGER, got %s", args[2].Type())
+		return resultAndError(nil, newError("argument 3 to `db_add_edge` must be INTEGER, got %s", args[2].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_add_edge: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_add_edge: invalid handle %d", h.Value))
 	}
 
 	edgeType := store.CustomEdgeType(uint8(DATA))
 	if len(args) == 4 {
 		parsedType, errObj := dbEdgeTypeFromObject(args[3])
 		if errObj != nil {
-			return newError("argument 4 to `db_add_edge`: %s", errObj.Inspect())
+			return resultAndError(nil, newError("argument 4 to `db_add_edge`: %s", errObj.Inspect()))
 		}
 		edgeType = parsedType
 	}
@@ -192,57 +194,60 @@ func DbAddEdge(args ...object.Object) object.Object {
 		Labels: []store.EdgeType{edgeType},
 	})
 	if err != nil {
-		return newError("db_add_edge: %s", err.Error())
+		return resultAndError(nil, newError("db_add_edge: %s", err.Error()))
 	}
-	return intObj(int64(edgeID))
+	return resultAndError(intObj(int64(edgeID)), nil)
 }
 
 func DbIndexProp(args ...object.Object) object.Object {
 	if len(args) != 4 {
-		return newError("wrong number of arguments. got=%d, want=4", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_index_prop` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_index_prop` must be INTEGER, got %s", args[0].Type()))
 	}
 	nodeID, ok := args[1].(*object.Integer)
 	if !ok {
-		return newError("argument 2 to `db_index_prop` must be INTEGER, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument 2 to `db_index_prop` must be INTEGER, got %s", args[1].Type()))
 	}
 	key, ok := args[2].(*object.String)
 	if !ok {
-		return newError("argument 3 to `db_index_prop` must be STRING, got %s", args[2].Type())
+		return resultAndError(nil, newError("argument 3 to `db_index_prop` must be STRING, got %s", args[2].Type()))
 	}
 	val, ok := args[3].(*object.String)
 	if !ok {
-		return newError("argument 4 to `db_index_prop` must be STRING, got %s", args[3].Type())
+		return resultAndError(nil, newError("argument 4 to `db_index_prop` must be STRING, got %s", args[3].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return fsOkOrError(fmt.Errorf("db_index_prop: invalid handle %d", h.Value))
+		return resultAndError(nil, newError("db_index_prop: invalid handle %d", h.Value))
 	}
 	err := g.IndexNodeProperty(store.NodeID(nodeID.Value), key.Value, []byte(val.Value))
-	return fsOkOrError(err)
+	if err != nil {
+		return resultAndError(nil, newError("db_index_prop: %s", err.Error()))
+	}
+	return resultAndError(boolObj(true), nil)
 }
 
 func DbQueryNodes(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
-		return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_query_nodes` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_query_nodes` must be INTEGER, got %s", args[0].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_query_nodes: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_query_nodes: invalid handle %d", h.Value))
 	}
 
 	nodeType := store.CustomNodeType(uint8(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
-			return newError("argument 2 to `db_query_nodes`: %s", errObj.Inspect())
+			return resultAndError(nil, newError("argument 2 to `db_query_nodes`: %s", errObj.Inspect()))
 		}
 		nodeType = parsedType
 	}
@@ -251,45 +256,45 @@ func DbQueryNodes(args ...object.Object) object.Object {
 		Types: []store.NodeType{nodeType},
 	})
 	if err != nil {
-		return newError("db_query_nodes: %s", err.Error())
+		return resultAndError(nil, newError("db_query_nodes: %s", err.Error()))
 	}
 	elements := make([]object.Object, 0, len(ids))
 	for _, id := range ids {
 		elements = append(elements, intObj(int64(id)))
 	}
-	return &object.Array{Elements: elements}
+	return resultAndError(&object.Array{Elements: elements}, nil)
 }
 
 func DbBFS(args ...object.Object) object.Object {
 	if len(args) != 4 {
-		return newError("wrong number of arguments. got=%d, want=4", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_bfs` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_bfs` must be INTEGER, got %s", args[0].Type()))
 	}
 	originID, ok := args[1].(*object.Integer)
 	if !ok {
-		return newError("argument 2 to `db_bfs` must be INTEGER, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument 2 to `db_bfs` must be INTEGER, got %s", args[1].Type()))
 	}
 	depth, ok := args[2].(*object.Integer)
 	if !ok {
-		return newError("argument 3 to `db_bfs` must be INTEGER, got %s", args[2].Type())
+		return resultAndError(nil, newError("argument 3 to `db_bfs` must be INTEGER, got %s", args[2].Type()))
 	}
 	dirStr, ok := args[3].(*object.String)
 	if !ok {
-		return newError("argument 4 to `db_bfs` must be STRING, got %s", args[3].Type())
+		return resultAndError(nil, newError("argument 4 to `db_bfs` must be STRING, got %s", args[3].Type()))
 	}
 
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_bfs: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_bfs: invalid handle %d", h.Value))
 	}
 
 	dir := dbParseDirection(dirStr.Value)
 	result, err := g.BFS(store.NodeID(originID.Value), int(depth.Value), dir, nil)
 	if err != nil {
-		return newError("db_bfs: %s", err.Error())
+		return resultAndError(nil, newError("db_bfs: %s", err.Error()))
 	}
 
 	nodeElems := make([]object.Object, 0, len(result.Nodes))
@@ -301,66 +306,66 @@ func DbBFS(args ...object.Object) object.Object {
 		edgeElems = append(edgeElems, intObj(int64(e.ID)))
 	}
 
-	return makeHashObject(map[string]object.Object{
+	return resultAndError(makeHashObject(map[string]object.Object{
 		"nodes": &object.Array{Elements: nodeElems},
 		"edges": &object.Array{Elements: edgeElems},
-	})
+	}), nil)
 }
 
 func DbShortestPath(args ...object.Object) object.Object {
 	if len(args) != 3 {
-		return newError("wrong number of arguments. got=%d, want=3", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument 1 to `db_shortest_path` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument 1 to `db_shortest_path` must be INTEGER, got %s", args[0].Type()))
 	}
 	srcID, ok := args[1].(*object.Integer)
 	if !ok {
-		return newError("argument 2 to `db_shortest_path` must be INTEGER, got %s", args[1].Type())
+		return resultAndError(nil, newError("argument 2 to `db_shortest_path` must be INTEGER, got %s", args[1].Type()))
 	}
 	dstID, ok := args[2].(*object.Integer)
 	if !ok {
-		return newError("argument 3 to `db_shortest_path` must be INTEGER, got %s", args[2].Type())
+		return resultAndError(nil, newError("argument 3 to `db_shortest_path` must be INTEGER, got %s", args[2].Type()))
 	}
 
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_shortest_path: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_shortest_path: invalid handle %d", h.Value))
 	}
 
 	path, err := g.ShortestPath(store.NodeID(srcID.Value), store.NodeID(dstID.Value), nil)
 	if err != nil {
-		return newError("db_shortest_path: %s", err.Error())
+		return resultAndError(nil, newError("db_shortest_path: %s", err.Error()))
 	}
 
 	elements := make([]object.Object, 0, len(path.Nodes))
 	for _, n := range path.Nodes {
 		elements = append(elements, intObj(int64(n.ID)))
 	}
-	return &object.Array{Elements: elements}
+	return resultAndError(&object.Array{Elements: elements}, nil)
 }
 
 func DbStats(args ...object.Object) object.Object {
 	if len(args) != 1 {
-		return newError("wrong number of arguments. got=%d, want=1", len(args))
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	h, ok := args[0].(*object.Integer)
 	if !ok {
-		return newError("argument to `db_stats` must be INTEGER, got %s", args[0].Type())
+		return resultAndError(nil, newError("argument to `db_stats` must be INTEGER, got %s", args[0].Type()))
 	}
 	g, found := dbGet(h.Value)
 	if !found {
-		return newError("db_stats: invalid handle %d", h.Value)
+		return resultAndError(nil, newError("db_stats: invalid handle %d", h.Value))
 	}
 	stats, err := g.Stats()
 	if err != nil {
-		return newError("db_stats: %s", err.Error())
+		return resultAndError(nil, newError("db_stats: %s", err.Error()))
 	}
-	return makeHashObject(map[string]object.Object{
+	return resultAndError(makeHashObject(map[string]object.Object{
 		"nodes": intObj(int64(stats.NodeCount)),
 		"edges": intObj(int64(stats.EdgeCount)),
-	})
+	}), nil)
 }
 
 func dbParseDirection(s string) store.Direction {

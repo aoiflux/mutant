@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+const (
+	signingAlgorithmEd25519   = "Ed25519"
+	signatureEncodedPartCount = 5
+)
+
 // CodeSignature represents a digital signature for bytecode
 type CodeSignature struct {
 	PublicKey []byte
@@ -56,7 +61,7 @@ func SignBytecode(bytecode []byte, privateKey ed25519.PrivateKey, version string
 	return &CodeSignature{
 		PublicKey: publicKey,
 		Signature: signature,
-		Algorithm: "Ed25519",
+		Algorithm: signingAlgorithmEd25519,
 		Timestamp: time.Now().Unix(),
 		Version:   version,
 	}, nil
@@ -64,7 +69,7 @@ func SignBytecode(bytecode []byte, privateKey ed25519.PrivateKey, version string
 
 // VerifyBytecode verifies a bytecode signature
 func VerifyBytecode(bytecode []byte, sig *CodeSignature) error {
-	if sig.Algorithm != "Ed25519" {
+	if sig.Algorithm != signingAlgorithmEd25519 {
 		return errors.New("unsupported signature algorithm")
 	}
 
@@ -101,7 +106,7 @@ func (cs *CodeSignature) Encode() string {
 // DecodeSignature deserializes a code signature
 func DecodeSignature(encoded string) (*CodeSignature, error) {
 	parts := strings.Split(encoded, SEPERATOR)
-	if len(parts) != 5 {
+	if len(parts) != signatureEncodedPartCount {
 		return nil, errors.New("invalid signature format")
 	}
 

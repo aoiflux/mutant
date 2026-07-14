@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"mutant/ast"
+	"mutant/builtin"
 	"mutant/code"
 	"mutant/lexer"
 	"mutant/object"
@@ -41,6 +42,17 @@ func parse(input string) ast.Node {
 	l := lexer.New(input)
 	p := parser.New(l)
 	return p.ParseProgram()
+}
+
+func builtinIndex(t *testing.T, name string) int {
+	t.Helper()
+	for i, b := range builtin.Builtins {
+		if b.Name == name {
+			return i
+		}
+	}
+	t.Fatalf("builtin %q not found", name)
+	return -1
 }
 
 func testInstructions(expected []code.Instructions, actual code.Instructions) error {
@@ -188,6 +200,30 @@ func TestIntegerArithmatic(t *testing.T) {
 			expectedInstructions: []code.Instructions{
 				code.Make(code.OpConstant, 0),
 				code.Make(code.OpMinus),
+				code.Make(code.OpPop),
+			},
+		},
+	}
+
+	runCompilerTests(t, tests)
+}
+
+func TestCompilerSupportsMultiValueReturn(t *testing.T) {
+	tests := []compilerTestCase{
+		{
+			input: "fn() { return 1, 2; }",
+			expectedConstants: []interface{}{
+				1,
+				2,
+				[]code.Instructions{
+					code.Make(code.OpConstant, 0),
+					code.Make(code.OpConstant, 1),
+					code.Make(code.OpMultiValue, 2),
+					code.Make(code.OpReturnValue),
+				},
+			},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpClosure, 2, 0),
 				code.Make(code.OpPop),
 			},
 		},
@@ -797,16 +833,21 @@ func TestSecurityOpcodeInjection(t *testing.T) {
 }
 
 func TestBuiltins(t *testing.T) {
+	lenIdx := builtinIndex(t, "len")
+	pushIdx := builtinIndex(t, "push")
+	debugIdx := builtinIndex(t, "debug_status")
+	sandboxIdx := builtinIndex(t, "sandbox_status")
+
 	tests := []compilerTestCase{
 		{
 			input:             "len([]); push([], 1);",
 			expectedConstants: []interface{}{1},
 			expectedInstructions: []code.Instructions{
-				code.Make(code.OpGetBuiltin, 0),
+				code.Make(code.OpGetBuiltin, lenIdx),
 				code.Make(code.OpArray, 0),
 				code.Make(code.OpCall, 1),
 				code.Make(code.OpPop),
-				code.Make(code.OpGetBuiltin, 7),
+				code.Make(code.OpGetBuiltin, pushIdx),
 				code.Make(code.OpArray, 0),
 				code.Make(code.OpConstant, 0),
 				code.Make(code.OpCall, 2),
@@ -817,7 +858,7 @@ func TestBuiltins(t *testing.T) {
 			input: `fn() { len([]) }`,
 			expectedConstants: []interface{}{
 				[]code.Instructions{
-					code.Make(code.OpGetBuiltin, 0),
+					code.Make(code.OpGetBuiltin, lenIdx),
 					code.Make(code.OpArray, 0),
 					code.Make(code.OpCall, 1),
 					code.Make(code.OpReturnValue),
@@ -833,10 +874,10 @@ func TestBuiltins(t *testing.T) {
 			input:             "debug_status(); sandbox_status();",
 			expectedConstants: []interface{}{},
 			expectedInstructions: []code.Instructions{
-				code.Make(code.OpGetBuiltin, 9),
+				code.Make(code.OpGetBuiltin, debugIdx),
 				code.Make(code.OpCall, 0),
 				code.Make(code.OpPop),
-				code.Make(code.OpGetBuiltin, 10),
+				code.Make(code.OpGetBuiltin, sandboxIdx),
 				code.Make(code.OpCall, 0),
 				code.Make(code.OpPop),
 			},

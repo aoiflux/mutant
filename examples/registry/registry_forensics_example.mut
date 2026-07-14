@@ -1,0 +1,24 @@
+putln("=== Registry Forensics Builtins ===");
+
+let hive, err = reg_open("examples/data/offline_hive.json");
+putln("reg_open:", hive, "err:", err);
+
+let handle = hive["handle"];
+
+let keys, err = reg_enum_keys(handle, "HKLM\\Software");
+putln("reg_enum_keys HKLM\\Software:", keys, "err:", err);
+
+let values, err = reg_enum_values(handle, "HKLM\\Software\\Mutant");
+putln("reg_enum_values HKLM\\Software\\Mutant:", values, "err:", err);
+
+let install_path, err = reg_get_value(handle, "HKLM\\Software\\Mutant", "InstallPath");
+putln("reg_get_value InstallPath:", install_path, "err:", err);
+
+let deleted, err = reg_deleted_keys(handle);
+putln("reg_deleted_keys:", deleted, "err:", err);
+
+let timeline, err = reg_timeline(handle);
+putln("reg_timeline:", timeline, "err:", err);
+
+let closed, err = reg_close(handle);
+putln("reg_close:", closed, "err:", err);

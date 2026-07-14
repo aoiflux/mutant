@@ -1,0 +1,19 @@
+putln("=== Filesystem Integrity Baseline ===");
+
+let base = "examples/data";
+let list, err = fs_list(base);
+putln("fs_list:", list, "err:", err);
+
+let walk, err = fs_walk(base);
+putln("fs_walk count:", len(walk), "err:", err);
+
+let i = 0;
+for (; i < len(walk); i = i + 1) {
+  let path = walk[i]["path"];
+  let hash, herr = fs_hash(path, "sha256");
+  if (herr) {
+    putln("hash error:", path, herr);
+  } else {
+    putln("sha256:", path, hash["hash"]);
+  }
+}

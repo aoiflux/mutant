@@ -29,8 +29,21 @@ func Modify(node Node, modifier ModifierFunc) Node {
 			node.Statements[i], _ = Modify(node.Statements[i], modifier).(Statement)
 		}
 	case *ReturnStatement:
-		node.ReturnValue, _ = Modify(node.ReturnValue, modifier).(Expression)
+		if len(node.ReturnValues) > 0 {
+			for i := range node.ReturnValues {
+				node.ReturnValues[i], _ = Modify(node.ReturnValues[i], modifier).(Expression)
+			}
+			node.ReturnValue = node.ReturnValues[0]
+		} else {
+			node.ReturnValue, _ = Modify(node.ReturnValue, modifier).(Expression)
+		}
 	case *LetStatement:
+		for i := range node.Names {
+			node.Names[i], _ = Modify(node.Names[i], modifier).(*Identifier)
+		}
+		if len(node.Names) > 0 {
+			node.Name = node.Names[0]
+		}
 		node.Value, _ = Modify(node.Value, modifier).(Expression)
 	case *FunctionLiteral:
 		for i := range node.Parameters {

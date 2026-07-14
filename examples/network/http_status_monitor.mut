@@ -1,0 +1,157 @@
+let check = fn(pair, op) {
+    let result, err = pair;
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+    return result;
+};
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error] ", op, ": ", err);
+    };
+};
+putln("=== http_status_monitor ===");
+putln("Mode: single-shot snapshot. Schedule periodic runs externally (Task Scheduler/cron).");
+
+let output_directory = "example_output/http_status_monitor";
+let input_file_path = output_directory + "/endpoints.json";
+let graph_path = output_directory + "/status_graph";
+let report_path = output_directory + "/report.json";
+
+let mkdir_result, err = fs_mkdir(output_directory);
+if (mkdir_result == false) {
+    putln("failed to create output directory");
+};
+
+let input_file_exists, err = fs_exists(input_file_path);
+check_err(err, "fs_exists");
+if (input_file_exists == false) {
+    let seed = {
+        "endpoints": [
+            "https://example.com",
+            "https://httpbin.org/status/200",
+            "https://httpbin.org/status/503"
+        ]
+    };
+    let seed_json, err = json_stringify(seed);
+    check_err(err, "json_stringify seed");
+    let seed_write, err = fs_write(input_file_path, seed_json);
+    check_err(err, "fs_write seed");
+    if (seed_write) {
+        putln("seeded test dataset: ", input_file_path);
+    } else {
+        putln("failed to seed dataset");
+    };
+};
+
+let source_json, err = fs_read(input_file_path);
+check_err(err, "fs_read input");
+let parsed, err = json_parse(source_json);
+check_err(err, "json_parse input");
+let endpoints = parsed["endpoints"];
+
+let NODE_ENDPOINT = 1;
+let NODE_CHECK = 2;
+let EDGE_HAS_CHECK = 1;
+
+let db, err = db_open_disk(graph_path);
+check_err(err, "db_open_disk");
+let checks = [];
+let up_count = 0;
+let down_count = 0;
+
+let endpoint_count = len(endpoints);
+for (let i = 0; i < endpoint_count; i = i + 1) {
+    let endpoint = endpoints[i];
+    let resp, err = http_get(endpoint);
+    check_err(err, "http_get");
+
+    let status_class = "unknown";
+    if (resp["status"] > 499) {
+        status_class = "5xx";
+    } else {
+        if (resp["status"] > 399) {
+            status_class = "4xx";
+        } else {
+            if (resp["status"] > 299) {
+                status_class = "3xx";
+            } else {
+                if (resp["status"] > 199) {
+                    status_class = "2xx";
+                } else {
+                    status_class = "network_error";
+                };
+            };
+        };
+    };
+
+    let is_up = false;
+    if (resp["status"] > 199) {
+        if (resp["status"] < 400) {
+            is_up = true;
+        };
+    };
+
+    if (is_up) {
+        up_count = up_count + 1;
+    } else {
+        down_count = down_count + 1;
+    };
+
+    let endpoint_node, err = db_add_node(db, NODE_ENDPOINT);
+    check_err(err, "db_add_node endpoint");
+    check(db_index_prop(db, endpoint_node, "url", endpoint), "db_index_prop");
+
+    let check_node, err = db_add_node(db, NODE_CHECK);
+    check_err(err, "db_add_node check");
+    let status_json, err = json_stringify(resp["status"]);
+    check_err(err, "json_stringify status");
+    check(db_index_prop(db, check_node, "status", status_json), "db_index_prop");
+    check(db_index_prop(db, check_node, "class", status_class), "db_index_prop");
+    let is_up_json, err = json_stringify(is_up);
+    check_err(err, "json_stringify is_up");
+    check(db_index_prop(db, check_node, "is_up", is_up_json), "db_index_prop");
+    check(db_add_edge(db, endpoint_node, check_node, EDGE_HAS_CHECK), "db_add_edge");
+
+    let updated_checks, err = push(checks, {
+        "endpoint": endpoint,
+        "status": resp["status"],
+        "class": status_class,
+        "is_up": is_up,
+        "error": resp["error"]
+});
+    check_err(err, "push checks");
+    checks = updated_checks;
+}
+
+let stats, err = db_stats(db);
+check_err(err, "db_stats");
+let closed, err = db_close(db);
+check_err(err, "db_close");
+if (closed == false) {
+    putln("db close error");
+};
+
+let checks_total = len(checks);
+let report = {
+    "profile": "http_status_monitor",
+    "mode": "single_shot",
+    "input_file": input_file_path,
+    "checks_total": checks_total,
+    "up_count": up_count,
+    "down_count": down_count,
+    "graph_path": graph_path,
+    "graph_stats": stats,
+    "checks": checks
+};
+
+let report_json, err = json_stringify(report);
+check_err(err, "json_stringify report");
+let write_report, err = fs_write(report_path, report_json);
+check_err(err, "fs_write report");
+if (write_report) {
+    putln("wrote report: ", report_path);
+} else {
+    putln("failed to write report");
+};
