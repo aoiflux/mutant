@@ -891,6 +891,9 @@ func TestDidChangeConfigurationSuppressesLintRuleWhenOff(t *testing.T) {
 	if len(diag.Diagnostics) != 0 {
 		t.Fatalf("diagnostic count = %d, want 0 when rule is off", len(diag.Diagnostics))
 	}
+	if diag.Diagnostics == nil {
+		t.Fatal("expected explicit empty diagnostics slice when lint rule is off")
+	}
 }
 
 func TestDidChangeConfigurationSuppressesUndefinedRuleWhenOff(t *testing.T) {
@@ -1110,10 +1113,102 @@ func TestDidChangeIncrementalUpdateRefreshesDiagnostics(t *testing.T) {
 	if len(diag.Diagnostics) != 0 {
 		t.Fatalf("expected diagnostics to clear after valid incremental edit, got %d", len(diag.Diagnostics))
 	}
+	if diag.Diagnostics == nil {
+		t.Fatal("expected explicit empty diagnostics slice after incremental fix")
+	}
 
 	doc, ok := s.documents.Snapshot("file:///change.mut")
 	if !ok {
 		t.Fatal("document missing from workspace store after didChange")
+	}
+	if doc.Text != "let x = 5;\nx;\n" {
+		t.Fatalf("document text = %q, want %q", doc.Text, "let x = 5;\\nx;\\n")
+	}
+}
+
+func TestDidChangeOutOfOrderVersionIsIgnored(t *testing.T) {
+	s := New(false)
+	initializeServer(t, s)
+
+	_, _, _, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidOpen),
+		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        "file:///change-order.mut",
+				LanguageID: "mutant",
+				Version:    1,
+				Text:       "let x = ;\nx;\n",
+			},
+		}),
+		Notify: func(string, any) {},
+	})
+	if err != nil {
+		t.Fatalf("didOpen returned error: %v", err)
+	}
+
+	newerNotifications := make([]capturedNotification, 0, 1)
+	_, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidChange),
+		Params: mustJSON(t, lsp.DidChangeTextDocumentParams{
+			TextDocument: lsp.VersionedTextDocumentIdentifier{
+				TextDocumentIdentifier: lsp.TextDocumentIdentifier{URI: "file:///change-order.mut"},
+				Version:                3,
+			},
+			ContentChanges: []any{
+				lsp.TextDocumentContentChangeEvent{Text: "let x = 5;\nx;\n"},
+			},
+		}),
+		Notify: func(method string, params any) {
+			newerNotifications = append(newerNotifications, capturedNotification{method: method, params: params})
+		},
+	})
+	if err != nil {
+		t.Fatalf("didChange newer version returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("didChange newer validity flags = method:%t params:%t", validMethod, validParams)
+	}
+
+	newerDiag := onlyDiagnosticsNotification(t, newerNotifications)
+	if newerDiag.Version == nil || *newerDiag.Version != 3 {
+		t.Fatalf("newer diagnostic version = %#v, want 3", newerDiag.Version)
+	}
+	if len(newerDiag.Diagnostics) != 0 {
+		t.Fatalf("expected diagnostics cleared at newer version, got %d", len(newerDiag.Diagnostics))
+	}
+
+	staleNotifications := make([]capturedNotification, 0, 1)
+	_, validMethod, validParams, err = s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidChange),
+		Params: mustJSON(t, lsp.DidChangeTextDocumentParams{
+			TextDocument: lsp.VersionedTextDocumentIdentifier{
+				TextDocumentIdentifier: lsp.TextDocumentIdentifier{URI: "file:///change-order.mut"},
+				Version:                2,
+			},
+			ContentChanges: []any{
+				lsp.TextDocumentContentChangeEvent{Text: "let x = ;\nx;\n"},
+			},
+		}),
+		Notify: func(method string, params any) {
+			staleNotifications = append(staleNotifications, capturedNotification{method: method, params: params})
+		},
+	})
+	if err != nil {
+		t.Fatalf("didChange stale version returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("didChange stale validity flags = method:%t params:%t", validMethod, validParams)
+	}
+	if len(staleNotifications) != 0 {
+		t.Fatalf("expected stale didChange to publish nothing, notifications=%d", len(staleNotifications))
+	}
+
+	doc, ok := s.documents.Snapshot("file:///change-order.mut")
+	if !ok {
+		t.Fatal("document missing from workspace store after out-of-order didChange")
+	}
+	if doc.Version != 3 {
+		t.Fatalf("document version = %d, want 3", doc.Version)
 	}
 	if doc.Text != "let x = 5;\nx;\n" {
 		t.Fatalf("document text = %q, want %q", doc.Text, "let x = 5;\\nx;\\n")

@@ -1,11 +1,14 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
+
+var ErrStaleDocumentVersion = errors.New("stale document version")
 
 type Store struct {
 	mu   sync.RWMutex
@@ -43,6 +46,10 @@ func (s *Store) Update(uri lsp.DocumentUri, version lsp.UInteger, changes []any)
 	doc, ok := s.docs[uri]
 	if !ok {
 		return nil, fmt.Errorf("document not open: %s", uri)
+	}
+
+	if version <= doc.Version {
+		return cloneDocument(doc), ErrStaleDocumentVersion
 	}
 
 	text := doc.Text

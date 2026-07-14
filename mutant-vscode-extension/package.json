@@ -2,7 +2,7 @@
     "name": "mutant-language-tools",
     "displayName": "Mutant Language Tools",
     "description": "Language support for Mutant with LSP-powered navigation, diagnostics, and rename.",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "publisher": "aoiflux",
     "icon": "images/icon-128.png",
     "license": "AGPL-3.0-only",
