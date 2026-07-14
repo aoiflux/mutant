@@ -391,7 +391,11 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 	}
 
 	for {
-		fmt.Fprintf(out, "\n\n%s", styledPrompt())
+		if lineReader == nil {
+			fmt.Fprintf(out, "\n\n%s", styledPrompt())
+		} else {
+			fmt.Fprint(out, "\n\n")
+		}
 		line, scanned, interrupted := scanLine(scanner, lineReader, out, replSignals)
 		if interrupted {
 			gracefulExit()
@@ -401,6 +405,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		}
 
 		if vanity(line, out, enableMacros, env) {
+			if lineReader != nil {
+				lineReader.AddHistory(line, false)
+			}
 			continue
 		}
 
@@ -408,6 +415,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		p := parser.New(l)
 		program := p.ParseProgram()
 		if len(p.Errors()) != 0 {
+			if lineReader != nil {
+				lineReader.AddHistory(line, true)
+			}
 			errrs.PrintParseErrors(out, p.Errors())
 			continue
 		}
@@ -417,7 +427,14 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 			expanded := evaluator.ExpandMacros(program, macroEnv)
 			evaluated := evaluator.Eval(expanded, env)
 			if evaluated == nil {
+				if lineReader != nil {
+					lineReader.AddHistory(line, false)
+				}
 				continue
+			}
+			if lineReader != nil {
+				failed := evaluated.Type() == object.ERROR_OBJ
+				lineReader.AddHistory(line, failed)
 			}
 			io.WriteString(out, evaluated.Inspect())
 			io.WriteString(out, "\n")
@@ -438,6 +455,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 
 		comp := compiler.NewWithState(symbolTable, constants)
 		if err := comp.Compile(program); err != nil {
+			if lineReader != nil {
+				lineReader.AddHistory(line, true)
+			}
 			errrs.PrintCompilerError(out, err.Error())
 			continue
 		}
@@ -448,6 +468,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 
 		machine := vm.NewWithGlobalStoreAndPassword(byteCode, globals, replPassword)
 		if err := machine.Run(); err != nil {
+			if lineReader != nil {
+				lineReader.AddHistory(line, true)
+			}
 			globals = machine.GlobalStore()
 			machine.CleanupRuntimeSensitiveData(false, false)
 			errrs.PrintMachineError(out, err.Error())
@@ -455,6 +478,13 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		}
 
 		last := machine.LastPoppedStackElement()
+		if lineReader != nil {
+			failed := false
+			if last != nil {
+				failed = last.Type() == object.ERROR_OBJ
+			}
+			lineReader.AddHistory(line, failed)
+		}
 		if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
 			// No-op result; keep the REPL quiet.
 		} else if last != nil {
@@ -479,7 +509,15 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 }
 
 type interactiveLineReader struct {
-	rl *readline.Instance
+	rl              *readline.Instance
+	history         []historyEntry
+	historyCursor   int
+	browsingHistory bool
+}
+
+type historyEntry struct {
+	line   string
+	failed bool
 }
 
 func (r *interactiveLineReader) Readline() (string, error) {
@@ -496,6 +534,19 @@ func (r *interactiveLineReader) Close() error {
 	return r.rl.Close()
 }
 
+func (r *interactiveLineReader) AddHistory(line string, failed bool) {
+	if r == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+	r.history = append(r.history, historyEntry{line: line, failed: failed})
+	r.historyCursor = len(r.history)
+	r.browsingHistory = false
+}
+
 func newInteractiveLineReader(in io.Reader, out io.Writer, env *object.Environment) *interactiveLineReader {
 	stdinFile, inOK := in.(*os.File)
 	stdoutFile, outOK := out.(*os.File)
@@ -503,24 +554,93 @@ func newInteractiveLineReader(in io.Reader, out io.Writer, env *object.Environme
 		return nil
 	}
 
+	reader := &interactiveLineReader{history: make([]historyEntry, 0, 256)}
+
 	completer := readline.NewPrefixCompleter(
 		readline.PcItemDynamic(func(line string) []string {
 			return builtin.ReplCompletionCandidatesForLine(line, builtin.ReplHelpOptions{Symbols: env.Keys()})
 		}),
 	)
 
-	rl, err := readline.NewEx(&readline.Config{
-		Prompt:                 "",
+	config := &readline.Config{
+		Prompt:                 styledPrompt(),
 		AutoComplete:           completer,
 		InterruptPrompt:        "",
 		EOFPrompt:              "",
 		DisableAutoSaveHistory: true,
+	}
+	config.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) {
+		if key == readline.CharPrev {
+			return reader.historyUp(line)
+		}
+		if key == readline.CharNext {
+			return reader.historyDown(line)
+		}
+		reader.browsingHistory = false
+		reader.historyCursor = len(reader.history)
+		return nil, 0, false
 	})
+
+	rl, err := readline.NewEx(config)
 	if err != nil {
 		return nil
 	}
 
-	return &interactiveLineReader{rl: rl}
+	reader.rl = rl
+	reader.historyCursor = len(reader.history)
+	return reader
+}
+
+func (r *interactiveLineReader) historyUp(_ []rune) ([]rune, int, bool) {
+	if len(r.history) == 0 {
+		return nil, 0, false
+	}
+	if !r.browsingHistory {
+		r.browsingHistory = true
+		r.historyCursor = len(r.history)
+	}
+	if r.historyCursor <= 0 {
+		return nil, 0, false
+	}
+
+	r.historyCursor--
+	entry := r.history[r.historyCursor]
+	r.renderHistoryColor(entry.failed)
+	newLine := []rune(entry.line)
+	return newLine, len(newLine), true
+}
+
+func (r *interactiveLineReader) historyDown(_ []rune) ([]rune, int, bool) {
+	if len(r.history) == 0 || !r.browsingHistory {
+		return nil, 0, false
+	}
+	if r.historyCursor >= len(r.history)-1 {
+		r.historyCursor = len(r.history)
+		r.browsingHistory = false
+		r.renderHistoryColor(false)
+		return []rune{}, 0, true
+	}
+
+	r.historyCursor++
+	entry := r.history[r.historyCursor]
+	r.renderHistoryColor(entry.failed)
+	newLine := []rune(entry.line)
+	return newLine, len(newLine), true
+}
+
+func (r *interactiveLineReader) renderHistoryColor(failed bool) {
+	if r == nil || r.rl == nil {
+		return
+	}
+	if !replColorEnabled {
+		r.rl.SetPrompt(styledPrompt())
+		return
+	}
+	if failed {
+		r.rl.SetPrompt(colorize(PROMPT, ansiBoldRed))
+		return
+	}
+	r.rl.SetPrompt(styledPrompt())
 }
 
 func welcome(out io.Writer, version string, enableMacros bool) {
@@ -617,6 +737,14 @@ func trimCommandLine(line string) string {
 
 func handleMetaHelpCommand(trimmed string, out io.Writer, env *object.Environment) bool {
 	lower := strings.ToLower(trimmed)
+	if lower == "help" {
+		helpText := builtin.RenderReplHelp("", builtin.ReplHelpOptions{})
+		io.WriteString(out, helpText)
+		io.WriteString(out, "\n")
+		_ = env
+		return true
+	}
+
 	if !strings.HasPrefix(lower, ":help") {
 		return false
 	}

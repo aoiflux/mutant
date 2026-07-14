@@ -95,6 +95,18 @@ func TestHandleMetaHelpCommand(t *testing.T) {
 	}
 }
 
+func TestHandleMetaHelpCommandPlainHelpAlias(t *testing.T) {
+	var out bytes.Buffer
+	handled := handleMetaHelpCommand("help", &out, object.NewEnvironment())
+	if !handled {
+		t.Fatal("expected plain help command to be handled")
+	}
+
+	if !strings.Contains(out.String(), "Mutant REPL help") {
+		t.Fatalf("plain help output missing overview: %q", out.String())
+	}
+}
+
 func TestCompletionPrefix(t *testing.T) {
 	tests := []struct {
 		name string
@@ -115,5 +127,26 @@ func TestCompletionPrefix(t *testing.T) {
 				t.Fatalf("completionPrefix(%q) = %q, want %q", tt.line, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInteractiveLineReaderAddHistory(t *testing.T) {
+	reader := &interactiveLineReader{history: make([]historyEntry, 0, 8)}
+	reader.AddHistory("", false)
+	reader.AddHistory("   ", true)
+	if len(reader.history) != 0 {
+		t.Fatalf("expected empty history for blank lines, got %d", len(reader.history))
+	}
+
+	reader.AddHistory("let x = 1", false)
+	reader.AddHistory("help", true)
+	if len(reader.history) != 2 {
+		t.Fatalf("expected 2 history entries, got %d", len(reader.history))
+	}
+	if reader.history[0].line != "let x = 1" || reader.history[0].failed {
+		t.Fatalf("unexpected first history entry: %+v", reader.history[0])
+	}
+	if reader.history[1].line != "help" || !reader.history[1].failed {
+		t.Fatalf("unexpected second history entry: %+v", reader.history[1])
 	}
 }
