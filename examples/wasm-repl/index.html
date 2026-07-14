@@ -232,18 +232,20 @@
       <div class="panel">
         <h2>Try code</h2>
         <p class="hint">The sample uses only the browser-safe subset exposed by the wasm REPL.</p>
-        <textarea id="source" class="editor" spellcheck="false">let names = ["mutant", "wasm", "repl"];
-let banner = text_replace("hello browser", "browser", "wasm repl");
+        <textarea id="source" class="editor" spellcheck="false">putln("Mutant wasm REPL demo");
+let header = bytes_slice("MZPEdemo", 0, 4);
+let parts = regex_find_all("[A-Z][a-z]+", "Mutant Browser Repl");
+let score = text_similarity("mutant", "mutants");
 {
-  "banner": banner,
-  "count": len(names),
-  "first": first(names),
-  "rest": rest(names),
-  "has_repl": text_contains(last(names), "repl")
+  "header": header,
+  "parts": parts,
+  "score": score,
+  "json": json_stringify({"ok": true, "count": len(parts)})
 }</textarea>
 
         <div class="controls">
           <button id="run" type="button">Run</button>
+          <button id="load-bytes-demo" class="secondary" type="button">Load Bytes Cursor Demo</button>
           <button id="complete-line" class="secondary" type="button">Complete Current Line</button>
           <button id="complete-prefix" class="secondary" type="button">Complete Prefix</button>
           <label>
@@ -289,6 +291,19 @@ let banner = text_replace("hello browser", "browser", "wasm repl");
     const builtinsEl = document.getElementById("builtins");
     const sourceEl = document.getElementById("source");
     const modeEl = document.getElementById("mode");
+    const bytesDemoSnippet = `putln("Bytes cursor demo");
+let sample = "ABCDEFGH";
+let patched = bytes_write_u16_le(sample, 0, 16961);
+let cursor = bytes_cursor_new(patched);
+let first = bytes_cursor_read_u8(cursor);
+let second = bytes_cursor_read_u8(first["cursor"]);
+{
+  "patched": patched,
+  "first_byte": first["value"],
+  "second_byte": second["value"],
+  "second_offset": second["cursor"]["offset"],
+  "u16_le": bytes_read_u16_le(patched, 0)
+}`;
 
     function setStatus(text, ready) {
       statusEl.textContent = text;
@@ -309,6 +324,29 @@ let banner = text_replace("hello browser", "browser", "wasm repl");
       }
     }
 
+    async function instantiateWasm(go) {
+      const wasmUrl = new URL("./mutant_repl.wasm", window.location.href);
+
+      if (window.location.protocol === "file:") {
+        throw new Error("Open this page through a local HTTP server. Browsers block fetch/WebAssembly loading from file:// URLs.");
+      }
+
+      const response = await fetch(wasmUrl);
+      if (!response.ok) {
+        throw new Error(`unable to load wasm: ${response.status} ${response.statusText}`);
+      }
+
+      const contentType = (response.headers.get("content-type") || "").toLowerCase();
+      if (contentType.includes("application/wasm")) {
+        const result = await WebAssembly.instantiateStreaming(response, go.importObject);
+        return result.instance;
+      }
+
+      const bytes = await response.arrayBuffer();
+      const result = await WebAssembly.instantiate(bytes, go.importObject);
+      return result.instance;
+    }
+
     async function boot() {
       if (typeof Go !== "function") {
         setStatus("Go wasm runtime loader is missing.", false);
@@ -317,12 +355,7 @@ let banner = text_replace("hello browser", "browser", "wasm repl");
       }
 
       const go = new Go();
-      const response = await fetch("./mutant_repl.wasm");
-      if (!response.ok) {
-        throw new Error(`unable to load wasm: ${response.status} ${response.statusText}`);
-      }
-
-      const { instance } = await WebAssembly.instantiateStreaming(response, go.importObject);
+      const instance = await instantiateWasm(go);
       go.run(instance);
 
       if (!window.mutantReplReady) {
@@ -365,7 +398,18 @@ let banner = text_replace("hello browser", "browser", "wasm repl");
       renderCandidates(result.candidates);
     }
 
+    function loadBytesDemo() {
+      sourceEl.value = bytesDemoSnippet;
+      sourceEl.focus();
+      try {
+        runSnippet();
+      } catch (error) {
+        outputEl.textContent = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     document.getElementById("run").addEventListener("click", runSnippet);
+    document.getElementById("load-bytes-demo").addEventListener("click", loadBytesDemo);
     document.getElementById("complete-prefix").addEventListener("click", completePrefix);
     document.getElementById("complete-line").addEventListener("click", completeLine);
 
@@ -374,6 +418,7 @@ let banner = text_replace("hello browser", "browser", "wasm repl");
       outputEl.textContent = error instanceof Error ? error.message : String(error);
       supportedEl.textContent = "Unavailable";
       builtinsEl.textContent = "Unavailable";
+      candidatesEl.textContent = "Unavailable";
     });
   </script>
 </body>

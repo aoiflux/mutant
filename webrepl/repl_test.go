@@ -52,6 +52,7 @@ func TestEvalCollectionBuiltins(t *testing.T) {
 		{name: "last", input: "last([7, 8, 9])", expected: "9"},
 		{name: "rest", input: "rest([7, 8, 9])", expected: "[8, 9]"},
 		{name: "push", input: "push([7, 8], 9)", expected: "[7, 8, 9]"},
+		{name: "pop", input: "pop([7, 8, 9])", expected: "[7, 8]"},
 	}
 
 	for _, tt := range tests {
@@ -62,6 +63,31 @@ func TestEvalCollectionBuiltins(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEvalPrintBuiltins(t *testing.T) {
+	repl := New()
+
+	t.Run("putln returns buffered output", func(t *testing.T) {
+		got := evalInput(t, repl, `putln("hello", "world")`)
+		if got != "hello world" {
+			t.Fatalf("Eval(putln) = %q, want %q", got, "hello world")
+		}
+	})
+
+	t.Run("putf and expression share output", func(t *testing.T) {
+		got := evalInput(t, repl, `putf("count="); len([1, 2, 3])`)
+		if got != "count=3" {
+			t.Fatalf("Eval(putf...) = %q, want %q", got, "count=3")
+		}
+	})
+
+	t.Run("multiple putln calls preserve lines", func(t *testing.T) {
+		got := evalInput(t, repl, `putln("one"); putln("two")`)
+		if got != "one\ntwo" {
+			t.Fatalf("Eval(multiple putln) = %q, want %q", got, "one\ntwo")
+		}
+	})
 }
 
 func TestEvalTextBuiltins(t *testing.T) {
@@ -87,6 +113,108 @@ func TestEvalTextBuiltins(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEvalExtendedDataBuiltins(t *testing.T) {
+	repl := New()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "json stringify", input: `json_stringify({"name": "mutant", "count": 3})`, expected: `{"count":3,"name":"mutant"}`},
+		{name: "regex match", input: `regex_match("foo.+", "foobar")`, expected: `true`},
+		{name: "regex find all", input: `regex_find_all("a.", "abacad")`, expected: `[ab, ac, ad]`},
+		{name: "regex capture groups", input: `regex_capture_groups("(foo)(bar)", "xxfoobarxx")`, expected: `[foobar, foo, bar]`},
+		{name: "text levenshtein", input: `text_levenshtein("kitten", "sitting")`, expected: `3`},
+		{name: "text similarity", input: `text_similarity("mutant", "mutants")`, expected: `0.857143`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := evalInput(t, repl, tt.input)
+			if got != tt.expected {
+				t.Fatalf("Eval(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+
+	t.Run("json parse fields", func(t *testing.T) {
+		got := evalInput(t, repl, `json_parse(json_stringify({"ok": true, "items": [1, 2]}))["ok"]`)
+		if got != "true" {
+			t.Fatalf("json_parse field lookup = %q, want %q", got, "true")
+		}
+
+		got = evalInput(t, repl, `json_parse(json_stringify({"ok": true, "items": [1, 2]}))["items"][1]`)
+		if got != "2" {
+			t.Fatalf("json_parse nested array lookup = %q, want %q", got, "2")
+		}
+	})
+
+	t.Run("text fuzzy find fields", func(t *testing.T) {
+		got := evalInput(t, repl, `text_fuzzy_find("mutnt", ["alpha", "mutant", "beta"])["found"]`)
+		if got != "true" {
+			t.Fatalf("text_fuzzy_find found = %q, want %q", got, "true")
+		}
+
+		got = evalInput(t, repl, `text_fuzzy_find("mutnt", ["alpha", "mutant", "beta"])["match"]`)
+		if got != "mutant" {
+			t.Fatalf("text_fuzzy_find match = %q, want %q", got, "mutant")
+		}
+	})
+
+	t.Run("bytes helpers", func(t *testing.T) {
+		got := evalInput(t, repl, `bytes_len("MZ")`)
+		if got != "2" {
+			t.Fatalf("bytes_len = %q, want %q", got, "2")
+		}
+
+		got = evalInput(t, repl, `bytes_get("MZ", 1)`)
+		if got != "90" {
+			t.Fatalf("bytes_get = %q, want %q", got, "90")
+		}
+
+		got = evalInput(t, repl, `bytes_slice("MZPE", 2, 2)`)
+		if got != "PE" {
+			t.Fatalf("bytes_slice = %q, want %q", got, "PE")
+		}
+
+		got = evalInput(t, repl, `bytes_read_u16_le("ABCD", 0)`)
+		if got != "16961" {
+			t.Fatalf("bytes_read_u16_le = %q, want %q", got, "16961")
+		}
+
+		got = evalInput(t, repl, `bytes_hex(255, 4)`)
+		if got != "0x00FF" {
+			t.Fatalf("bytes_hex = %q, want %q", got, "0x00FF")
+		}
+
+		got = evalInput(t, repl, `bytes_int_from_char("A")`)
+		if got != "65" {
+			t.Fatalf("bytes_int_from_char = %q, want %q", got, "65")
+		}
+
+		got = evalInput(t, repl, `bytes_write_u16_le("ABCD", 0, 16961)`)
+		if got != "ABCD" {
+			t.Fatalf("bytes_write_u16_le = %q, want %q", got, "ABCD")
+		}
+
+		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_tell(c)`)
+		if got != "0" {
+			t.Fatalf("bytes_cursor_tell = %q, want %q", got, "0")
+		}
+
+		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_read_u8(c)["value"]`)
+		if got != "65" {
+			t.Fatalf("bytes_cursor_read_u8 value = %q, want %q", got, "65")
+		}
+
+		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_read_u8(c)["cursor"]["offset"]`)
+		if got != "1" {
+			t.Fatalf("bytes_cursor_read_u8 next cursor offset = %q, want %q", got, "1")
+		}
+	})
 }
 
 func TestEvalCallErrors(t *testing.T) {
@@ -115,7 +243,7 @@ func TestSupportedSyntaxSummaryIncludesExpandedFeatures(t *testing.T) {
 	for _, want := range []string{
 		"arrays, hashes, indexing",
 		"function calls for browser-safe builtins",
-		"builtins: len, first, last, rest, push, text_* core set",
+		"builtins: len, first, last, rest, push, pop, putf, putln, bytes_* core (read/write + cursor), json_*, regex_*, text_* core set",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary %q missing %q", summary, want)

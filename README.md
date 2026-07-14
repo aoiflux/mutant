@@ -169,6 +169,27 @@ files to exist side-by-side:
 - `examples/wasm-repl/mutant_repl.wasm`
 - `examples/wasm-repl/wasm_exec.js`
 
+There is also a dedicated local server command in this repository, so you do not
+need a separate static server:
+
+```bash
+go run ./cmd/wasmreplserve
+```
+
+```powershell
+go run ./cmd/wasmreplserve
+```
+
+Optional flags:
+
+- `-addr 127.0.0.1:8123`
+- `-dir examples/wasm-repl`
+
+The server maps `/` to `index.html` and serves `.wasm` with `application/wasm`.
+It also refreshes `examples/wasm-repl/wasm_exec.js` from your current Go
+toolchain and rebuilds `mutant_repl.wasm` automatically if the artifact is
+missing or is not a real wasm binary.
+
 The browser bridge currently exposes:
 
 - `mutantReplReady` (boolean)
@@ -207,9 +228,25 @@ Current wasm REPL support intentionally focuses on a lightweight subset:
 - integers, booleans, strings
 - arrays, hashes, indexing
 - `let` bindings and identifiers
-- browser-safe builtins: `len`, `first`, `last`, `rest`, `push`
-- text builtins: `text_contains`, `text_index`, `text_count`, `text_split`,
-  `text_replace`
+- browser-safe collection/print builtins: `len`, `first`, `last`, `rest`,
+  `push`, `pop`, `putf`, `putln`
+- browser-safe bytes builtins: `bytes_len`, `bytes_get`, `bytes_slice`,
+  `bytes_read_u16_le`, `bytes_read_u16_be`, `bytes_read_u32_le`,
+  `bytes_read_u32_be`, `bytes_read_u64_le`, `bytes_read_u64_be`,
+  `bytes_write_u16_le`, `bytes_write_u16_be`, `bytes_write_u32_le`,
+  `bytes_write_u32_be`, `bytes_write_u64_le`, `bytes_write_u64_be`,
+  `bytes_cstr_at`, `bytes_hex`, `bytes_char_from_int`, `bytes_int_from_char`,
+  `bytes_cursor_new`, `bytes_cursor_tell`, `bytes_cursor_seek`,
+  `bytes_cursor_eof`, `bytes_cursor_read_u8`, `bytes_cursor_read_u16_le`,
+  `bytes_cursor_read_u16_be`, `bytes_cursor_read_u32_le`,
+  `bytes_cursor_read_u32_be`, `bytes_cursor_read_u64_le`,
+  `bytes_cursor_read_u64_be`
+- browser-safe text builtins: `text_contains`, `text_index`, `text_count`,
+  `text_split`, `text_replace`, `text_levenshtein`, `text_similarity`,
+  `text_fuzzy_find`, `text_jaro_winkler`
+- browser-safe JSON builtins: `json_parse`, `json_stringify`
+- browser-safe regex builtins: `regex_match`, `regex_find`, `regex_find_all`,
+  `regex_replace`, `regex_capture_groups`
 - `if/else`
 - prefix `!` and unary `-`
 - infix `+ - * / < > == !=`
