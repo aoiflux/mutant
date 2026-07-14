@@ -42,7 +42,18 @@ Setting a lint rule severity to `off` suppresses that rule.
 
 1. `npm install`
 2. `npm run compile`
-3. Press `F5` in VS Code to launch the extension development host
+3. Build the language server binary when needed:
+
+```powershell
+../lsp/build.ps1 -HostOnly
+```
+
+```bash
+./lsp/build.sh --host-only
+```
+
+This produces `mlsp` artifacts in `lsp/dist/` for local extension use. 4. Press
+`F5` in VS Code to launch the extension development host
 
 Debug configuration is included in `.vscode/launch.json` and build tasks are in
 `.vscode/tasks.json`.

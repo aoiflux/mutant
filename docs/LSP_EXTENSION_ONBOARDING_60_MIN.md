@@ -44,6 +44,14 @@ Run these from repository root unless noted.
 ### 4.1 Go language tooling tests
 
 ```bash
+./lsp/build.sh --host-only
+go test ./lsp/internal/analyzer -v
+go test ./lsp/internal/server -v
+go test ./...
+```
+
+```powershell
+./lsp/build.ps1 -HostOnly
 go test ./lsp/internal/analyzer -v
 go test ./lsp/internal/server -v
 go test ./...
