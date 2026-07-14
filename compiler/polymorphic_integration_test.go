@@ -16,6 +16,8 @@ import (
 )
 
 func TestPolymorphicSemanticEquivalenceSafeConstantStage(t *testing.T) {
+	t.Setenv("MUTANT_DEV_MODE", "1")
+
 	programText := "let a = 2; let b = 3; let c = 5; (a + b) * c"
 
 	baselineObj := compileAndRun(t, programText, 0, 0)
@@ -33,6 +35,8 @@ func TestPolymorphicSemanticEquivalenceSafeConstantStage(t *testing.T) {
 }
 
 func TestPolymorphicReproducibilityBySeedForSafeStage(t *testing.T) {
+	t.Setenv("MUTANT_DEV_MODE", "1")
+
 	programText := "let x = 10; let y = 20; let z = 30; x + y + z"
 	seed := int64(20260712)
 	level := 7
@@ -46,6 +50,8 @@ func TestPolymorphicReproducibilityBySeedForSafeStage(t *testing.T) {
 }
 
 func TestPolymorphicSafeStagesRollbackPath(t *testing.T) {
+	t.Setenv("MUTANT_DEV_MODE", "1")
+
 	t.Setenv("MUTANT_POLYMORPHIC_SAFE_STAGES", "0")
 
 	programText := "let a = 1; let b = 2; let c = 3; a + b + c"

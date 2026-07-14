@@ -56,6 +56,10 @@ func ProtectionProfileFromCode(code byte) (string, bool) {
 }
 
 func defaultTamperResponseForProfile(secureMode bool) string {
+	if securityDevModeEnabled() {
+		return TamperResponseWarn
+	}
+
 	switch ResolveProtectionProfile() {
 	case ProtectionProfileMinimal:
 		return TamperResponseWarn

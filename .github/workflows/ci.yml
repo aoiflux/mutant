@@ -23,6 +23,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Run Go test suite
+        # Some polymorphic/security integration tests run under MUTANT_DEV_MODE=1
+        # in test code so sandboxed CI runners follow dev posture (warn/continue)
+        # instead of terminating on anti-sandbox detections.
         run: go test ./... -count=1
 
       - name: Setup Node.js
