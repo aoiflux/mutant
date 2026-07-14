@@ -3,6 +3,7 @@ package webrepl
 import (
 	"errors"
 	"fmt"
+	"math"
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/lexer"
@@ -27,6 +28,12 @@ type REPL struct {
 }
 
 type webBuiltin func(repl *REPL, args ...object.Object) object.Object
+
+func webBuiltinPair(fn builtin.BuiltinFunction) webBuiltin {
+	return func(_ *REPL, args ...object.Object) object.Object {
+		return unwrapBuiltinPair(fn(args...))
+	}
+}
 
 var webSupportedBuiltinNames = []string{
 	"help",
@@ -84,6 +91,32 @@ var webSupportedBuiltinNames = []string{
 	"text_similarity",
 	"text_fuzzy_find",
 	"text_jaro_winkler",
+	"policy_eval",
+	"policy_allow",
+	"policy_rules",
+	"policy_trace",
+	"policy_load",
+	"cache_open",
+	"cache_put",
+	"cache_get",
+	"cache_delete",
+	"cache_keys",
+	"cache_stats",
+	"cache_clear",
+	"cache_close",
+	"db_open",
+	"db_close",
+	"db_add_node",
+	"db_add_edge",
+	"db_add_artifact",
+	"db_add_relation",
+	"db_index_prop",
+	"db_query_nodes",
+	"db_query",
+	"db_bfs",
+	"db_shortest_path",
+	"db_timeline",
+	"db_stats",
 }
 
 var webBuiltins = map[string]webBuiltin{
@@ -142,6 +175,32 @@ var webBuiltins = map[string]webBuiltin{
 	"text_similarity":          webTextSimilarity,
 	"text_fuzzy_find":          webTextFuzzyFind,
 	"text_jaro_winkler":        webTextJaroWinkler,
+	"policy_eval":              webBuiltinPair(builtin.PolicyEval),
+	"policy_allow":             webBuiltinPair(builtin.PolicyAllow),
+	"policy_rules":             webBuiltinPair(builtin.PolicyRules),
+	"policy_trace":             webBuiltinPair(builtin.PolicyTrace),
+	"policy_load":              webBuiltinPair(builtin.PolicyLoad),
+	"cache_open":               webBuiltinPair(builtin.CacheOpen),
+	"cache_put":                webBuiltinPair(builtin.CachePut),
+	"cache_get":                webBuiltinPair(builtin.CacheGet),
+	"cache_delete":             webBuiltinPair(builtin.CacheDelete),
+	"cache_keys":               webBuiltinPair(builtin.CacheKeys),
+	"cache_stats":              webBuiltinPair(builtin.CacheStats),
+	"cache_clear":              webBuiltinPair(builtin.CacheClear),
+	"cache_close":              webBuiltinPair(builtin.CacheClose),
+	"db_open":                  webBuiltinPair(builtin.DbOpen),
+	"db_close":                 webBuiltinPair(builtin.DbClose),
+	"db_add_node":              webBuiltinPair(builtin.DbAddNode),
+	"db_add_edge":              webBuiltinPair(builtin.DbAddEdge),
+	"db_add_artifact":          webBuiltinPair(builtin.DbAddArtifact),
+	"db_add_relation":          webBuiltinPair(builtin.DbAddRelation),
+	"db_index_prop":            webBuiltinPair(builtin.DbIndexProp),
+	"db_query_nodes":           webBuiltinPair(builtin.DbQueryNodes),
+	"db_query":                 webBuiltinPair(builtin.DbQuery),
+	"db_bfs":                   webBuiltinPair(builtin.DbBFS),
+	"db_shortest_path":         webBuiltinPair(builtin.DbShortestPath),
+	"db_timeline":              webBuiltinPair(builtin.DbTimeline),
+	"db_stats":                 webBuiltinPair(builtin.DbStats),
 }
 
 func New() *REPL {
@@ -248,7 +307,11 @@ func evalNode(repl *REPL, node ast.Node, env *object.Environment) object.Object 
 		return nullObj
 	case *ast.ReturnStatement:
 		if n.ReturnValue != nil {
-			return evalNode(repl, n.ReturnValue, env)
+			value := evalNode(repl, n.ReturnValue, env)
+			if isError(value) {
+				return value
+			}
+			return &object.ReturnValue{Value: value}
 		}
 		if len(n.ReturnValues) > 0 {
 			vals := make([]object.Object, 0, len(n.ReturnValues))
@@ -263,11 +326,17 @@ func evalNode(repl *REPL, node ast.Node, env *object.Environment) object.Object 
 				return nullObj
 			}
 			if len(vals) == 1 {
-				return vals[0]
+				return &object.ReturnValue{Value: vals[0]}
 			}
-			return &object.MultiValue{Values: vals}
+			return &object.ReturnValue{Value: &object.MultiValue{Values: vals}}
 		}
-		return nullObj
+		return &object.ReturnValue{Value: nullObj}
+	case *ast.ForStatement:
+		return evalForStatement(repl, n, env)
+	case *ast.BreakStatement:
+		return &object.Break{}
+	case *ast.ContinueStatement:
+		return &object.Continue{}
 	case *ast.BlockStatement:
 		return evalBlock(repl, n, env)
 	case *ast.IntegerLiteral:
@@ -276,6 +345,10 @@ func evalNode(repl *REPL, node ast.Node, env *object.Environment) object.Object 
 		return nativeBool(n.Value)
 	case *ast.StringLiteral:
 		return &object.String{Value: n.Value}
+	case *ast.FloatLiteral:
+		return &object.Float{Value: n.Value}
+	case *ast.FunctionLiteral:
+		return &object.Function{Parameters: n.Parameters, Env: env, Body: n.Body}
 	case *ast.ArrayLiteral:
 		elements := evalExpressions(repl, n.Elements, env)
 		if len(elements) == 1 && isError(elements[0]) {
@@ -322,6 +395,16 @@ func evalNode(repl *REPL, node ast.Node, env *object.Environment) object.Object 
 		return evalInfix(n.Operator, left, right)
 	case *ast.IfExpression:
 		return evalIf(repl, n, env)
+	case *ast.AssignExpression:
+		return evalAssignExpression(repl, n, env)
+	case *ast.StructStatement:
+		return evalStructStatement(repl, n, env)
+	case *ast.EnumStatement:
+		return evalEnumStatement(repl, n, env)
+	case *ast.FieldExpression:
+		return evalFieldExpression(repl, n, env)
+	case *ast.StructLiteral:
+		return evalStructLiteral(repl, n, env)
 	default:
 		return newError("unsupported syntax in browser REPL: %T", node)
 	}
@@ -331,6 +414,9 @@ func evalProgram(repl *REPL, program *ast.Program, env *object.Environment) obje
 	var result object.Object = nullObj
 	for _, stmt := range program.Statements {
 		result = evalNode(repl, stmt, env)
+		if returnValue, ok := result.(*object.ReturnValue); ok {
+			return returnValue.Value
+		}
 		if isError(result) {
 			return result
 		}
@@ -345,8 +431,167 @@ func evalBlock(repl *REPL, block *ast.BlockStatement, env *object.Environment) o
 		if isError(result) {
 			return result
 		}
+		if result != nil {
+			switch result.Type() {
+			case object.RETURN_VALUE_OBJ, object.BREAK_OBJ, object.CONTINUE_OBJ:
+				return result
+			case object.ERROR_OBJ:
+				return result
+			}
+		}
 	}
 	return result
+}
+
+func evalForStatement(repl *REPL, node *ast.ForStatement, env *object.Environment) object.Object {
+	loopEnv := object.NewEnclosedEnvironement(env)
+
+	if node.Init != nil {
+		initResult := evalNode(repl, node.Init, loopEnv)
+		if isError(initResult) {
+			return initResult
+		}
+	}
+
+	for {
+		if node.Condition != nil {
+			condition := evalNode(repl, node.Condition, loopEnv)
+			if isError(condition) {
+				return condition
+			}
+			if !isTruthy(condition) {
+				break
+			}
+		}
+
+		bodyResult := evalNode(repl, node.Body, loopEnv)
+		if isError(bodyResult) {
+			return bodyResult
+		}
+		if bodyResult != nil {
+			switch bodyResult.Type() {
+			case object.BREAK_OBJ:
+				return nullObj
+			case object.CONTINUE_OBJ:
+				// Continue still executes post expression, mirroring core evaluator semantics.
+			case object.RETURN_VALUE_OBJ:
+				return bodyResult
+			}
+		}
+
+		if node.Post != nil {
+			postResult := evalNode(repl, node.Post, loopEnv)
+			if isError(postResult) {
+				return postResult
+			}
+		}
+	}
+
+	return nullObj
+}
+
+func evalAssignExpression(repl *REPL, node *ast.AssignExpression, env *object.Environment) object.Object {
+	value := evalNode(repl, node.Value, env)
+	if isError(value) {
+		return value
+	}
+
+	ident, ok := node.Left.(*ast.Identifier)
+	if ok {
+		if _, updated := env.Update(ident.Value, value); !updated {
+			env.Set(ident.Value, value)
+		}
+		return value
+	}
+
+	fieldExpr, ok := node.Left.(*ast.FieldExpression)
+	if !ok {
+		return newError("invalid assignment target")
+	}
+
+	left := evalNode(repl, fieldExpr.Left, env)
+	if isError(left) {
+		return left
+	}
+
+	structObj, ok := left.(*object.Struct)
+	if !ok {
+		return newError("cannot assign field on non-struct: %s", left.Type())
+	}
+
+	structObj.Fields[fieldExpr.Field.Value] = value
+	return value
+}
+
+func evalStructStatement(_ *REPL, node *ast.StructStatement, env *object.Environment) object.Object {
+	structDefKey := "__struct_" + node.Name.Value
+	defMarker := &object.String{Value: "struct:" + node.Name.Value}
+	env.Set(structDefKey, defMarker)
+
+	for i, field := range node.Fields {
+		fieldKey := fmt.Sprintf("%s_field_%d", structDefKey, i)
+		env.Set(fieldKey, &object.String{Value: field.Value})
+	}
+
+	return nullObj
+}
+
+func evalEnumStatement(_ *REPL, node *ast.EnumStatement, env *object.Environment) object.Object {
+	enumDefKey := "__enum_" + node.Name.Value
+	defMarker := &object.String{Value: "enum:" + node.Name.Value}
+	env.Set(enumDefKey, defMarker)
+
+	for i, variant := range node.Variants {
+		variantKey := fmt.Sprintf("%s_variant_%d", enumDefKey, i)
+		env.Set(variantKey, &object.String{Value: variant.Value})
+
+		enumValKey := node.Name.Value + "." + variant.Value
+		env.Set(enumValKey, &object.EnumValue{
+			TypeName: node.Name.Value,
+			Tag:      variant.Value,
+			Value:    &object.Integer{Value: int64(i)},
+		})
+	}
+
+	return nullObj
+}
+
+func evalFieldExpression(repl *REPL, node *ast.FieldExpression, env *object.Environment) object.Object {
+	if ident, ok := node.Left.(*ast.Identifier); ok {
+		enumValKey := ident.Value + "." + node.Field.Value
+		if val, ok := env.Get(enumValKey); ok {
+			return val
+		}
+	}
+
+	left := evalNode(repl, node.Left, env)
+	if isError(left) {
+		return left
+	}
+
+	structObj, ok := left.(*object.Struct)
+	if !ok {
+		return newError("cannot access field %s on type %s", node.Field.Value, left.Type())
+	}
+
+	if val, ok := structObj.Fields[node.Field.Value]; ok {
+		return val
+	}
+
+	return nullObj
+}
+
+func evalStructLiteral(repl *REPL, node *ast.StructLiteral, env *object.Environment) object.Object {
+	fields := make(map[string]object.Object, len(node.Fields))
+	for _, fieldVal := range node.Fields {
+		val := evalNode(repl, fieldVal.Value, env)
+		if isError(val) {
+			return val
+		}
+		fields[fieldVal.Name.Value] = val
+	}
+
+	return &object.Struct{TypeName: node.Name.Value, Fields: fields}
 }
 
 func evalIf(repl *REPL, exp *ast.IfExpression, env *object.Environment) object.Object {
@@ -368,11 +613,14 @@ func evalPrefix(op string, right object.Object) object.Object {
 	case "!":
 		return nativeBool(!isTruthy(right))
 	case "-":
-		intObj, ok := right.(*object.Integer)
-		if !ok {
+		switch value := right.(type) {
+		case *object.Integer:
+			return &object.Integer{Value: -value.Value}
+		case *object.Float:
+			return &object.Float{Value: -value.Value}
+		default:
 			return newError("unknown operator: -%s", right.Type())
 		}
-		return &object.Integer{Value: -intObj.Value}
 	default:
 		return newError("unknown operator: %s%s", op, right.Type())
 	}
@@ -382,6 +630,8 @@ func evalInfix(op string, left, right object.Object) object.Object {
 	switch {
 	case left.Type() == object.INTEGER_OBJ && right.Type() == object.INTEGER_OBJ:
 		return evalIntInfix(op, left.(*object.Integer).Value, right.(*object.Integer).Value)
+	case isNumberObject(left) && isNumberObject(right):
+		return evalNumericInfix(op, numberValue(left), numberValue(right))
 	case left.Type() == object.STRING_OBJ && right.Type() == object.STRING_OBJ:
 		if op == "+" {
 			return &object.String{Value: left.(*object.String).Value + right.(*object.String).Value}
@@ -428,6 +678,57 @@ func evalIntInfix(op string, left, right int64) object.Object {
 	default:
 		return newError("unknown operator: INTEGER %s INTEGER", op)
 	}
+}
+
+func isNumberObject(obj object.Object) bool {
+	if obj == nil {
+		return false
+	}
+	return obj.Type() == object.INTEGER_OBJ || obj.Type() == object.FLOAT_OBJ
+}
+
+func numberValue(obj object.Object) float64 {
+	switch value := obj.(type) {
+	case *object.Integer:
+		return float64(value.Value)
+	case *object.Float:
+		return value.Value
+	default:
+		return 0
+	}
+}
+
+func evalNumericInfix(op string, left, right float64) object.Object {
+	switch op {
+	case "+":
+		return numericResult(left + right)
+	case "-":
+		return numericResult(left - right)
+	case "*":
+		return numericResult(left * right)
+	case "/":
+		if right == 0 {
+			return newError("division by zero")
+		}
+		return numericResult(left / right)
+	case "<":
+		return nativeBool(left < right)
+	case ">":
+		return nativeBool(left > right)
+	case "==":
+		return nativeBool(left == right)
+	case "!=":
+		return nativeBool(left != right)
+	default:
+		return newError("unknown operator: NUMBER %s NUMBER", op)
+	}
+}
+
+func numericResult(value float64) object.Object {
+	if math.Mod(value, 1.0) == 0 {
+		return &object.Integer{Value: int64(value)}
+	}
+	return &object.Float{Value: value}
 }
 
 func evalExpressions(repl *REPL, expressions []ast.Expression, env *object.Environment) []object.Object {
@@ -489,28 +790,52 @@ func evalIndex(left, index object.Object) object.Object {
 }
 
 func evalCall(repl *REPL, call *ast.CallExpression, env *object.Environment) object.Object {
-	ident, ok := call.Function.(*ast.Identifier)
-	if !ok {
-		return newError("unsupported call target in browser REPL")
-	}
-
-	if ident.Value == "help" {
-		args := evalExpressions(repl, call.Arguments, env)
-		if len(args) == 1 && isError(args[0]) {
-			return args[0]
-		}
-		return webHelp(repl, args...)
-	}
-
-	builtinFn, ok := webBuiltins[ident.Value]
-	if !ok {
-		return newError("unknown function: %s", ident.Value)
-	}
 	args := evalExpressions(repl, call.Arguments, env)
 	if len(args) == 1 && isError(args[0]) {
 		return args[0]
 	}
-	return builtinFn(repl, args...)
+
+	if ident, ok := call.Function.(*ast.Identifier); ok {
+		if ident.Value == "help" {
+			return webHelp(repl, args...)
+		}
+		if builtinFn, ok := webBuiltins[ident.Value]; ok {
+			return builtinFn(repl, args...)
+		}
+	}
+
+	function := evalNode(repl, call.Function, env)
+	if isError(function) {
+		return function
+	}
+
+	return applyWebFunction(repl, function, args)
+}
+
+func applyWebFunction(repl *REPL, fn object.Object, args []object.Object) object.Object {
+	fun, ok := fn.(*object.Function)
+	if !ok {
+		return newError("not a function: %s", fn.Type())
+	}
+
+	if len(args) != len(fun.Parameters) {
+		return newError("wrong number of arguments: want=%d, got=%d", len(fun.Parameters), len(args))
+	}
+
+	extendedEnv := object.NewEnclosedEnvironement(fun.Env)
+	for i, param := range fun.Parameters {
+		extendedEnv.Set(param.Value, args[i])
+	}
+
+	result := evalNode(repl, fun.Body, extendedEnv)
+	if isError(result) {
+		return result
+	}
+	if returnValue, ok := result.(*object.ReturnValue); ok {
+		return returnValue.Value
+	}
+
+	return result
 }
 
 func webLen(_ *REPL, args ...object.Object) object.Object {
@@ -1034,8 +1359,14 @@ func SupportedBuiltinNames() []string {
 func SupportedSyntaxSummary() string {
 	return strings.Join([]string{
 		"integers, booleans, strings",
+		"float literals and numeric expressions",
 		"arrays, hashes, indexing",
 		"let bindings and identifiers",
+		"function literals and user-defined function calls",
+		"struct/enum declarations, struct literals, and field access",
+		"for loops with init/condition/post",
+		"assignment expressions",
+		"break and continue in loops",
 		"function calls for browser-safe builtins",
 		"if/else expressions",
 		"prefix ! and -",
