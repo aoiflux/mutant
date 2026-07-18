@@ -252,6 +252,32 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameBytesCursorReadU32Be, &BuiltIn{BytesCursorReadU32BE}},
 	{BuiltinNameBytesCursorReadU64Le, &BuiltIn{BytesCursorReadU64LE}},
 	{BuiltinNameBytesCursorReadU64Be, &BuiltIn{BytesCursorReadU64BE}},
+	// secure networking: sockets, TLS, listeners (dev-sec)
+	// NOTE: builtins are resolved by slice index, so new entries MUST be
+	// appended here at the end to keep previously compiled bytecode valid.
+	{BuiltinNameNetConnect, &BuiltIn{NetConnect}},
+	{BuiltinNameNetTlsConnect, &BuiltIn{NetTLSConnect}},
+	{BuiltinNameNetConnWrite, &BuiltIn{NetConnWrite}},
+	{BuiltinNameNetConnRead, &BuiltIn{NetConnRead}},
+	{BuiltinNameNetConnClose, &BuiltIn{NetConnClose}},
+	{BuiltinNameNetConnInfo, &BuiltIn{NetConnInfo}},
+	{BuiltinNameNetListen, &BuiltIn{NetListen}},
+	{BuiltinNameNetTlsListen, &BuiltIn{NetTLSListen}},
+	{BuiltinNameNetAccept, &BuiltIn{NetAccept}},
+	{BuiltinNameNetListenClose, &BuiltIn{NetListenClose}},
+	{BuiltinNameNetTlsUpgradeServer, &BuiltIn{NetTLSUpgradeServer}},
+	{BuiltinNameNetTlsUpgradeClient, &BuiltIn{NetTLSUpgradeClient}},
+	// x509 certificate authority + leaf issuance
+	{BuiltinNameTlsGenerateCa, &BuiltIn{TLSGenerateCA}},
+	{BuiltinNameTlsGenerateCert, &BuiltIn{TLSGenerateCert}},
+	{BuiltinNameTlsSignCert, &BuiltIn{TLSSignCert}},
+	// HTTP message inspection/interception
+	{BuiltinNameHttpParseRequest, &BuiltIn{HTTPParseRequest}},
+	{BuiltinNameHttpParseResponse, &BuiltIn{HTTPParseResponse}},
+	{BuiltinNameHttpBuildRequest, &BuiltIn{HTTPBuildRequest}},
+	{BuiltinNameHttpBuildResponse, &BuiltIn{HTTPBuildResponse}},
+	{BuiltinNameHttpConnReadRequest, &BuiltIn{HTTPConnReadRequest}},
+	{BuiltinNameHttpConnReadResponse, &BuiltIn{HTTPConnReadResponse}},
 }
 
 var builtinsByName = buildBuiltinLookup()
