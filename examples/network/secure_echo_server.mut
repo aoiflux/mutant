@@ -1,0 +1,52 @@
+// secure_echo_server.mut
+// A TLS-terminating echo server built entirely in Mutant. Generates a
+// self-signed certificate at startup, listens with net_tls_listen, and echoes
+// back whatever each client sends over the encrypted channel.
+//
+// Demonstrates: tls_generate_cert, net_tls_listen, net_accept, net_conn_read,
+// net_conn_write.
+//
+// Run:    mutant secure_echo_server.mut --dev
+// Test:   openssl s_client -connect 127.0.0.1:8443   (then type a line)
+
+let serve = fn(bind_addr) {
+    // Mint a self-signed server certificate valid for localhost + 127.0.0.1.
+    let names = ["localhost"];
+    let ips = ["127.0.0.1"];
+    let cert_opts = {"common_name": "localhost", "dns_names": names, "ip_addresses": ips};
+    let cert, err = tls_generate_cert(cert_opts);
+    if (err) {
+        putln("cert generation failed: ", err);
+        return false;
+    };
+
+    let cert_pem = cert["cert_pem"];
+    let key_pem = cert["key_pem"];
+    let listen_opts = {"min_version": "1.2"};
+    let ln, err = net_tls_listen(bind_addr, cert_pem, key_pem, listen_opts);
+    if (err) {
+        putln("listen failed: ", err);
+        return false;
+    };
+    putln("secure echo server listening on ", bind_addr);
+
+    // Accept forever. Each client is handled to completion before the next.
+    for (let i = 0; true; i = i + 1) {
+        let acc, err = net_accept(ln, 0);
+        if (acc["ok"]) {
+            let client = acc["handle"];
+            putln("client connected: ", acc["remote_addr"]);
+            let msg, err = net_conn_read(client, 4096, 15000);
+            if (err) {
+                putln("read error: ", err);
+            } else {
+                let reply = "echo: " + msg["data"];
+                net_conn_write(client, reply);
+            };
+            net_conn_close(client);
+        };
+    }
+    return true;
+};
+
+serve("127.0.0.1:8443");
