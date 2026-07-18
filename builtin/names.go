@@ -213,4 +213,28 @@ const (
 	BuiltinNameBytesCursorReadU32Be  = "bytes_cursor_read_u32_be"
 	BuiltinNameBytesCursorReadU64Le  = "bytes_cursor_read_u64_le"
 	BuiltinNameBytesCursorReadU64Be  = "bytes_cursor_read_u64_be"
+	// secure networking: sockets, TLS, listeners (dev-sec)
+	BuiltinNameNetConnect          = "net_connect"
+	BuiltinNameNetTlsConnect       = "net_tls_connect"
+	BuiltinNameNetConnWrite        = "net_conn_write"
+	BuiltinNameNetConnRead         = "net_conn_read"
+	BuiltinNameNetConnClose        = "net_conn_close"
+	BuiltinNameNetConnInfo         = "net_conn_info"
+	BuiltinNameNetListen           = "net_listen"
+	BuiltinNameNetTlsListen        = "net_tls_listen"
+	BuiltinNameNetAccept           = "net_accept"
+	BuiltinNameNetListenClose      = "net_listen_close"
+	BuiltinNameNetTlsUpgradeServer = "net_tls_upgrade_server"
+	BuiltinNameNetTlsUpgradeClient = "net_tls_upgrade_client"
+	// x509 certificate authority + leaf issuance (mitmproxy building blocks)
+	BuiltinNameTlsGenerateCa   = "tls_generate_ca"
+	BuiltinNameTlsGenerateCert = "tls_generate_cert"
+	BuiltinNameTlsSignCert     = "tls_sign_cert"
+	// HTTP message inspection/interception
+	BuiltinNameHttpParseRequest     = "http_parse_request"
+	BuiltinNameHttpParseResponse    = "http_parse_response"
+	BuiltinNameHttpBuildRequest     = "http_build_request"
+	BuiltinNameHttpBuildResponse    = "http_build_response"
+	BuiltinNameHttpConnReadRequest  = "http_conn_read_request"
+	BuiltinNameHttpConnReadResponse = "http_conn_read_response"
 )

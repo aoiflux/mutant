@@ -1,0 +1,166 @@
+// mitmproxy.mut
+// A man-in-the-middle HTTP/HTTPS interception proxy written in Mutant, in the
+// spirit of mitmproxy. It terminates TLS using per-host certificates minted on
+// the fly from a local CA, inspects/logs each request and response, and relays
+// them to the real upstream server.
+//
+// HOW IT WORKS
+//   1. Generate a CA at startup and print its certificate. Trust that CA in
+//      your browser / client for HTTPS interception to validate.
+//   2. Listen for proxy connections.
+//   3. Plain HTTP  (absolute-form request):  forward to the origin on :80.
+//      HTTPS CONNECT:  answer 200, mint a leaf cert for the host signed by the
+//      CA, TLS-handshake as that host, then decrypt, inspect, and relay.
+//
+// Builtins used: tls_generate_ca, tls_sign_cert, net_listen, net_accept,
+//   net_conn_write, net_tls_upgrade_server, net_connect, net_tls_upgrade_client,
+//   http_conn_read_request, http_build_request, http_conn_read_response,
+//   http_build_response, text_split.
+//
+// NOTE: single-threaded and one request per connection (sends Connection:
+// close) to stay readable. Configure your client to use 127.0.0.1:8080 as its
+// HTTP and HTTPS proxy.
+//
+// Run:  mutant mitmproxy.mut --dev
+
+let host_only = fn(host_port) {
+    // "example.com:443" -> "example.com"
+    let parts = text_split(host_port, ":");
+    return parts[0];
+};
+
+// Relay a decrypted request to its real upstream over TLS and return the
+// upstream response hash (or a synthetic 502 on failure).
+let relay_https = fn(host_port, host, request) {
+    let upstream, err = net_connect(host_port, 8000);
+    if (err) {
+        return {"status": 502, "body": "mutant-proxy: upstream connect failed", "headers": {}};
+    };
+    let up_opts = {"server_name": host};
+    let info, err = net_tls_upgrade_client(upstream, up_opts);
+    if (err) {
+        net_conn_close(upstream);
+        return {"status": 502, "body": "mutant-proxy: upstream TLS failed", "headers": {}};
+    };
+
+    let wire, err = http_build_request(request);
+    net_conn_write(upstream, wire);
+    let resp, err = http_conn_read_response(upstream, 15000);
+    net_conn_close(upstream);
+    if (err) {
+        return {"status": 502, "body": "mutant-proxy: upstream read failed", "headers": {}};
+    };
+    return resp;
+};
+
+// Handle a CONNECT tunnel: intercept and decrypt TLS with a minted leaf cert.
+let handle_connect = fn(client, ca, host_port) {
+    let host = host_only(host_port);
+    net_conn_write(client, "HTTP/1.1 200 Connection Established\r\n\r\n");
+
+    // Mint a per-host leaf certificate signed by our CA.
+    let names = [host];
+    let leaf_opts = {"common_name": host, "dns_names": names};
+    let ca_cert = ca["cert_pem"];
+    let ca_key = ca["key_pem"];
+    let leaf, err = tls_sign_cert(ca_cert, ca_key, leaf_opts);
+    if (err) {
+        putln("  [!] leaf issuance failed: ", err);
+        net_conn_close(client);
+        return false;
+    };
+
+    // Present that cert to the client and complete the handshake as the host.
+    let leaf_cert = leaf["cert_pem"];
+    let leaf_key = leaf["key_pem"];
+    let up, err = net_tls_upgrade_server(client, leaf_cert, leaf_key);
+    if (err) {
+        putln("  [!] client TLS handshake failed: ", err);
+        net_conn_close(client);
+        return false;
+    };
+
+    // Now read the real (decrypted) request the client intended to send.
+    let request, err = http_conn_read_request(client, 15000);
+    if (err) {
+        net_conn_close(client);
+        return false;
+    };
+    putln("  [intercept] ", request["method"], " https://", host, request["path"]);
+
+    let resp = relay_https(host_port, host, request);
+    putln("  [response ] ", resp["status"], " (", len(resp["body"]), " bytes)");
+
+    let back, err = http_build_response(resp);
+    net_conn_write(client, back);
+    net_conn_close(client);
+    return true;
+};
+
+// Handle a plain-HTTP proxy request (absolute-form URL, forward to :80).
+let handle_plain = fn(client, request) {
+    let host = request["host"];
+    let addr = host + ":80";
+    putln("  [plain    ] ", request["method"], " ", request["url"]);
+
+    let upstream, err = net_connect(addr, 8000);
+    if (err) {
+        net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        net_conn_close(client);
+        return false;
+    };
+    let wire, err = http_build_request(request);
+    net_conn_write(upstream, wire);
+    let resp, err = http_conn_read_response(upstream, 15000);
+    net_conn_close(upstream);
+    if (err) {
+        net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+    } else {
+        putln("  [response ] ", resp["status"]);
+        let back, err = http_build_response(resp);
+        net_conn_write(client, back);
+    };
+    net_conn_close(client);
+    return true;
+};
+
+let handle_client = fn(client, ca) {
+    let request, err = http_conn_read_request(client, 15000);
+    if (err) {
+        net_conn_close(client);
+        return false;
+    };
+    if (request["method"] == "CONNECT") {
+        return handle_connect(client, ca, request["host"]);
+    };
+    return handle_plain(client, request);
+};
+
+let run_proxy = fn(bind_addr) {
+    let ca_opts = {"common_name": "Mutant Intercept CA", "organization": "Mutant"};
+    let ca, err = tls_generate_ca(ca_opts);
+    if (err) {
+        putln("CA generation failed: ", err);
+        return false;
+    };
+    putln("=== Mutant intercepting proxy ===");
+    putln("Trust this CA certificate in your client to intercept HTTPS:");
+    putln(ca["cert_pem"]);
+
+    let ln, err = net_listen(bind_addr);
+    if (err) {
+        putln("listen failed: ", err);
+        return false;
+    };
+    putln("proxy listening on ", bind_addr, " (set as your HTTP+HTTPS proxy)");
+
+    for (let i = 0; true; i = i + 1) {
+        let acc, err = net_accept(ln, 0);
+        if (acc["ok"]) {
+            handle_client(acc["handle"], ca);
+        };
+    }
+    return true;
+};
+
+run_proxy("127.0.0.1:8080");
