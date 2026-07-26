@@ -38,7 +38,6 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
 	github.com/lestrrat-go/dsig v1.3.0 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
@@ -76,6 +75,7 @@ require (
 
 require (
 	github.com/aoiflux/graphene v0.1.3
+	github.com/google/uuid v1.6.0
 	golang.org/x/sys v0.47.0
 )
 
