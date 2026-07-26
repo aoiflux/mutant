@@ -1,0 +1,41 @@
+// ws_echo_handler.mut
+// Per-connection WebSocket handler for ws_echo_server.mut (via net_serve).
+//
+// WebSocket opcodes: 0x1 text, 0x2 binary, 0x8 close, 0x9 ping, 0xA pong.
+// Server->client frames are written unmasked (mask=false), per RFC 6455.
+
+let conn, cerr = serve_conn();
+
+// 1) Read the HTTP Upgrade request and complete the 101 handshake.
+let req, rerr = http_conn_read_request(conn, 10000);
+let key = req["headers"]["Sec-Websocket-Key"];
+let accept, aerr = ws_accept_key(key);
+let handshake = "HTTP/1.1 101 Switching Protocols\r\n" +
+                "Upgrade: websocket\r\n" +
+                "Connection: Upgrade\r\n" +
+                "Sec-WebSocket-Accept: " + accept + "\r\n\r\n";
+net_conn_write(conn, handshake);
+
+// 2) Echo text frames until close or error (bounded so a stuck peer can't spin).
+let i = 0;
+for (; i < 100000; i = i + 1) {
+    let frame, ferr = ws_read_frame(conn, 30000);
+    if (ferr) {
+        i = 100000;
+    } else {
+        let op = frame["opcode"];
+        if (op == 8) {
+            // close: echo a close back and stop.
+            let w1, w1e = ws_write_frame(conn, 8, "", false);
+            i = 100000;
+        } else {
+            if (op == 9) {
+                // ping -> pong.
+                let w2, w2e = ws_write_frame(conn, 10, frame["payload"], false);
+            } else {
+                let w3, w3e = ws_write_frame(conn, op, "echo:" + frame["payload"], false);
+            };
+        };
+    };
+}
+net_conn_close(conn);

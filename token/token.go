@@ -56,6 +56,8 @@ const (
 	DOT        = "."
 	LT         = "<"
 	GT         = ">"
+	LTE        = "<="
+	GTE        = ">="
 	BANG       = "!"
 	EQUALITY   = "=="
 	INEQUALITY = "!="

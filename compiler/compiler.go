@@ -141,14 +141,20 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
 	case *ast.InfixExpression:
-		if node.Operator == "<" {
+		// a < b  ==  b > a ;  a <= b  ==  b >= a. Compile with swapped operands
+		// so we need only the "greater" family of opcodes.
+		if node.Operator == "<" || node.Operator == "<=" {
 			if err := c.Compile(node.Right); err != nil {
 				return err
 			}
 			if err := c.Compile(node.Left); err != nil {
 				return err
 			}
-			c.emit(code.OpGreater)
+			if node.Operator == "<" {
+				c.emit(code.OpGreater)
+			} else {
+				c.emit(code.OpGreaterEqual)
+			}
 			return nil
 		}
 		if err := c.Compile(node.Left); err != nil {
@@ -166,8 +172,12 @@ func (c *Compiler) Compile(node ast.Node) error {
 			c.emit(code.OpMul)
 		case "/":
 			c.emit(code.OpDiv)
+		case "%":
+			c.emit(code.OpMod)
 		case ">":
 			c.emit(code.OpGreater)
+		case ">=":
+			c.emit(code.OpGreaterEqual)
 		case "==":
 			c.emit(code.OpEqual)
 		case "!=":
@@ -690,6 +700,38 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 				c.emit(code.OpGetLocal, symbol.Index)
 			}
 			c.emit(code.OpGetField, fieldNameIndex)
+		}
+		return nil
+	}
+
+	// Handle index assignment: a[i] = value / h[k] = value
+	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
+		if err := c.Compile(idxExpr.Left); err != nil {
+			return err
+		}
+		if err := c.Compile(idxExpr.Index); err != nil {
+			return err
+		}
+		if err := c.Compile(node.Value); err != nil {
+			return err
+		}
+		c.emit(code.OpSetIndex)
+
+		// If the container is a simple variable, persist the mutated container
+		// back into its slot (mirrors field assignment) and leave it as the
+		// expression's value.
+		if ident, ok := idxExpr.Left.(*ast.Identifier); ok {
+			symbol, resolved := c.symbolTable.Resolve(ident.Value)
+			if !resolved {
+				return fmt.Errorf("undefined variable: %s", ident.Value)
+			}
+			if symbol.Scope == GlobalScope {
+				c.emit(code.OpSetGlobal, symbol.Index)
+				c.emit(code.OpGetGlobal, symbol.Index)
+			} else {
+				c.emit(code.OpSetLocal, symbol.Index)
+				c.emit(code.OpGetLocal, symbol.Index)
+			}
 		}
 		return nil
 	}

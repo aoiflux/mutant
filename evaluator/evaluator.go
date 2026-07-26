@@ -288,13 +288,19 @@ func destructureValues(source object.Object, arity int) []object.Object {
 }
 
 func isTruthy(obj object.Object) bool {
-	switch obj {
-	case NULL:
+	// Conventional truthiness (dev-sec-platform-upgrades): false, null, empty
+	// string, 0 and 0.0 are falsy; everything else is truthy.
+	switch o := obj.(type) {
+	case *object.Boolean:
+		return o.Value
+	case *object.Null:
 		return false
-	case TRUE:
-		return true
-	case FALSE:
-		return false
+	case *object.String:
+		return len(o.Value) != 0
+	case *object.Integer:
+		return o.Value != 0
+	case *object.Float:
+		return o.Value != 0
 	default:
 		return true
 	}

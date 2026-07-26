@@ -10,6 +10,8 @@ import (
 	"mutant/mutil"
 	"mutant/runner"
 	"mutant/security"
+	_ "mutant/serve" // installs net_serve concurrency hooks at init
+
 	"os"
 	"path/filepath"
 	"runtime"

@@ -548,6 +548,100 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameSecurityDiagnostics: {signature: "security_diagnostics()", summary: "Returns security diagnostics for the current runtime."},
 	BuiltinNameSandboxStatus:       {signature: "sandbox_status()", summary: "Returns sandbox-detection status information."},
 	BuiltinNameDebugStatus:         {signature: "debug_status()", summary: "Returns runtime/debugger status information."},
+	// secure networking (dev-sec)
+	BuiltinNameNetConnect: {
+		signature: "net_connect(address, timeoutMs)",
+		summary:   "Opens a persistent TCP connection and returns a connection handle.",
+		params:    []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in milliseconds."}},
+	},
+	BuiltinNameNetTlsConnect: {
+		signature: "net_tls_connect(address, timeoutMs, options?)",
+		summary:   "Opens a TLS (secure) client connection and returns a connection handle.",
+		params: []builtinParamDoc{
+			{name: "address", doc: "host:port endpoint."},
+			{name: "timeoutMs", doc: "Dial timeout in milliseconds."},
+			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key."},
+		},
+	},
+	BuiltinNameNetConnWrite: {
+		signature: "net_conn_write(handle, data)",
+		summary:   "Writes bytes to a connection and returns the number written.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}},
+	},
+	BuiltinNameNetConnRead: {
+		signature: "net_conn_read(handle, maxBytes, timeoutMs)",
+		summary:   "Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "maxBytes", doc: "Maximum bytes to read (1..32 MiB)."}, {name: "timeoutMs", doc: "Read timeout in ms (0 = block)."}},
+	},
+	BuiltinNameNetConnClose: {signature: "net_conn_close(handle)", summary: "Closes a connection and releases its handle."},
+	BuiltinNameNetConnInfo:  {signature: "net_conn_info(handle)", summary: "Returns addressing and negotiated TLS session details for a connection."},
+	BuiltinNameNetListen:    {signature: "net_listen(address)", summary: "Opens a plain TCP listener and returns a listener handle."},
+	BuiltinNameNetTlsListen: {
+		signature: "net_tls_listen(address, certPem, keyPem, options?)",
+		summary:   "Opens a TLS-terminating listener from a PEM cert/key pair.",
+		params: []builtinParamDoc{
+			{name: "address", doc: "host:port to bind."},
+			{name: "certPem", doc: "Server certificate chain (PEM)."},
+			{name: "keyPem", doc: "Server private key (PEM)."},
+			{name: "options?", doc: "Hash: alpn, min_version, client_ca (mutual TLS)."},
+		},
+	},
+	BuiltinNameNetAccept:      {signature: "net_accept(listener, timeoutMs)", summary: "Accepts one connection; returns {ok, handle, remote_addr, timeout, error}."},
+	BuiltinNameNetListenClose: {signature: "net_listen_close(handle)", summary: "Closes a listener and releases its handle."},
+	BuiltinNameNetServe:       {signature: "net_serve(listener, handler_path, arg?)", summary: "Accept loop that dispatches each connection to a fresh VM running handler_path; handler reads its connection via serve_conn() and shared arg via serve_arg(). Concurrent."},
+	BuiltinNameNetSpawn:       {signature: "net_spawn(handler_path, arg?)", summary: "Runs handler_path on a new goroutine with no connection (serve_conn()->0) and arg via serve_arg(). For auxiliary workers, e.g. a WebSocket reverse pump."},
+	BuiltinNameServeConn:      {signature: "serve_conn()", summary: "Inside a net_serve handler, returns the connection handle (INTEGER); null otherwise."},
+	BuiltinNameServeArg:       {signature: "serve_arg()", summary: "Inside a net_serve handler, returns the shared arg passed to net_serve; null otherwise."},
+	BuiltinNameSleepMs:        {signature: "sleep_ms(ms)", summary: "Blocks the current handler for ms milliseconds."},
+	BuiltinNameTimeMs:         {signature: "time_ms()", summary: "Returns the current Unix time in milliseconds."},
+	BuiltinNameWsAcceptKey:    {signature: "ws_accept_key(client_key)", summary: "Computes the Sec-WebSocket-Accept value for an RFC 6455 101 handshake response."},
+	BuiltinNameWsReadFrame:    {signature: "ws_read_frame(handle, timeoutMs)", summary: "Reads one WebSocket frame (unmasked); returns {fin, opcode, payload, masked, length, is_control}."},
+	BuiltinNameWsWriteFrame:   {signature: "ws_write_frame(handle, opcode, payload, mask)", summary: "Writes one WebSocket frame; mask=true for client->server, false for server->client."},
+	BuiltinNameNetTlsUpgradeServer: {
+		signature: "net_tls_upgrade_server(handle, certPem, keyPem, options?)",
+		summary:   "Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept).",
+		params: []builtinParamDoc{
+			{name: "handle", doc: "Connection handle to upgrade."},
+			{name: "certPem", doc: "Leaf certificate (PEM), e.g. issued by tls_sign_cert."},
+			{name: "keyPem", doc: "Leaf private key (PEM)."},
+			{name: "options?", doc: "Hash: alpn, min_version, handshake_timeout_ms, client_ca."},
+		},
+	},
+	BuiltinNameNetTlsUpgradeClient: {
+		signature: "net_tls_upgrade_client(handle, options?)",
+		summary:   "Upgrades an open connection to client-side TLS (STARTTLS / upstream leg).",
+		params: []builtinParamDoc{
+			{name: "handle", doc: "Connection handle to upgrade."},
+			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key, handshake_timeout_ms."},
+		},
+	},
+	BuiltinNameTlsGenerateCa: {
+		signature: "tls_generate_ca(options?)",
+		summary:   "Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}.",
+		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, days."}},
+	},
+	BuiltinNameTlsGenerateCert: {
+		signature: "tls_generate_cert(options?)",
+		summary:   "Creates a self-signed leaf/server certificate and key.",
+		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, dns_names, ip_addresses, days."}},
+	},
+	BuiltinNameTlsSignCert: {
+		signature: "tls_sign_cert(caCertPem, caKeyPem, options?)",
+		summary:   "Issues a leaf certificate signed by a CA (per-host interception cert).",
+		params: []builtinParamDoc{
+			{name: "caCertPem", doc: "CA certificate (PEM)."},
+			{name: "caKeyPem", doc: "CA private key (PEM)."},
+			{name: "options?", doc: "Hash: common_name, dns_names, ip_addresses, days."},
+		},
+	},
+	BuiltinNameHttpParseRequest:         {signature: "http_parse_request(raw)", summary: "Parses a raw HTTP request into {method, url, path, host, proto, query, headers, body}."},
+	BuiltinNameHttpParseResponse:        {signature: "http_parse_response(raw)", summary: "Parses a raw HTTP response into {status, status_text, proto, headers, body}."},
+	BuiltinNameHttpBuildRequest:         {signature: "http_build_request(request)", summary: "Serialises a request hash into HTTP wire bytes."},
+	BuiltinNameHttpBuildResponse:        {signature: "http_build_response(response)", summary: "Serialises a response hash into HTTP wire bytes (adds Content-Length)."},
+	BuiltinNameHttpConnReadRequest:      {signature: "http_conn_read_request(handle, timeoutMs)", summary: "Reads exactly one HTTP request from a connection handle."},
+	BuiltinNameHttpConnReadResponse:     {signature: "http_conn_read_response(handle, timeoutMs)", summary: "Reads exactly one HTTP response from a connection handle."},
+	BuiltinNameHttpConnReadRequestHead:  {signature: "http_conn_read_request_head(handle, timeoutMs)", summary: "Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
+	BuiltinNameHttpConnReadResponseHead: {signature: "http_conn_read_response_head(handle, timeoutMs)", summary: "Reads a response's status line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
 }
 
 var builtinFamilyDocs = []builtinFamilyDoc{
@@ -556,6 +650,7 @@ var builtinFamilyDocs = []builtinFamilyDoc{
 	{prefix: "fs_", summary: "Filesystem helper for reading/writing/managing files and directories."},
 	{prefix: "http_", summary: "HTTP helper for network requests."},
 	{prefix: "net_", summary: "Network helper for address resolution, sockets, scanning, and capture analysis."},
+	{prefix: "tls_", summary: "TLS certificate authority helper for generating and signing X.509 certificates."},
 	{prefix: "cmd_", summary: "Command execution helper."},
 	{prefix: "exec_", summary: "Execution helper for running script/code strings in controlled contexts."},
 	{prefix: "json_", summary: "JSON serialization/parsing helper."},

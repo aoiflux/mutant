@@ -14,6 +14,12 @@ import (
 var (
 	dbHandleCounter int64
 	dbHandles       sync.Map // int64 → *graphene.Graph
+
+	// dbOpMu serializes all graph mutations/queries. The underlying graph is not
+	// guaranteed goroutine-safe, and net_serve runs many handlers concurrently
+	// against one shared graph (e.g. Splice's site-map). Graph ops are in-memory
+	// and fast, so a single lock is fine; network I/O dominates. (dev-sec-platform-upgrades)
+	dbOpMu sync.Mutex
 )
 
 const DATA = 0
@@ -149,9 +155,11 @@ func DbAddNode(args ...object.Object) object.Object {
 		nodeType = parsedType
 	}
 
+	dbOpMu.Lock()
 	nodeID, err := g.AddNode(&store.Node{
 		Labels: []store.NodeType{nodeType},
 	})
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_add_node: %s", err.Error()))
 	}
@@ -188,11 +196,13 @@ func DbAddEdge(args ...object.Object) object.Object {
 		edgeType = parsedType
 	}
 
+	dbOpMu.Lock()
 	edgeID, err := g.AddEdge(&store.Edge{
 		Src:    store.NodeID(src.Value),
 		Dst:    store.NodeID(dst.Value),
 		Labels: []store.EdgeType{edgeType},
 	})
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_add_edge: %s", err.Error()))
 	}
@@ -223,7 +233,9 @@ func DbIndexProp(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("db_index_prop: invalid handle %d", h.Value))
 	}
+	dbOpMu.Lock()
 	err := g.IndexNodeProperty(store.NodeID(nodeID.Value), key.Value, []byte(val.Value))
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_index_prop: %s", err.Error()))
 	}
@@ -252,9 +264,11 @@ func DbQueryNodes(args ...object.Object) object.Object {
 		nodeType = parsedType
 	}
 
+	dbOpMu.Lock()
 	ids, err := g.QueryNodeIDs(store.NodeQuery{
 		Types: []store.NodeType{nodeType},
 	})
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_query_nodes: %s", err.Error()))
 	}
@@ -292,7 +306,9 @@ func DbBFS(args ...object.Object) object.Object {
 	}
 
 	dir := dbParseDirection(dirStr.Value)
+	dbOpMu.Lock()
 	result, err := g.BFS(store.NodeID(originID.Value), int(depth.Value), dir, nil)
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_bfs: %s", err.Error()))
 	}
@@ -334,7 +350,9 @@ func DbShortestPath(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_shortest_path: invalid handle %d", h.Value))
 	}
 
+	dbOpMu.Lock()
 	path, err := g.ShortestPath(store.NodeID(srcID.Value), store.NodeID(dstID.Value), nil)
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_shortest_path: %s", err.Error()))
 	}
@@ -358,7 +376,9 @@ func DbStats(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("db_stats: invalid handle %d", h.Value))
 	}
+	dbOpMu.Lock()
 	stats, err := g.Stats()
+	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_stats: %s", err.Error()))
 	}

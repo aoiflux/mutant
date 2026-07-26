@@ -53,6 +53,9 @@ const (
 	OpGetField
 	OpSetField
 	OpEnumValue
+	// dev-sec-platform-upgrades — appended to keep existing opcode values stable.
+	OpGreaterEqual // >= (and <= via operand swap)
+	OpSetIndex     // a[i] = v / h[k] = v
 )
 
 type Definition struct {
@@ -102,6 +105,9 @@ var definitions = map[Opcode]*Definition{
 	OpGetField:       {"OpGetField", []int{2}},
 	OpSetField:       {"OpSetField", []int{2}},
 	OpEnumValue:      {"OpEnumValue", []int{2, 2}},
+	OpMod:            {"OpMod", []int{}},
+	OpGreaterEqual:   {"OpGreaterEqual", []int{}},
+	OpSetIndex:       {"OpSetIndex", []int{}},
 }
 
 func Lookup(op byte) (*Definition, error) {

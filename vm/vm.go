@@ -39,6 +39,10 @@ type VM struct {
 	memoryMode      string
 
 	enforceSecurityCheckOpcodes bool
+
+	// xorStream caches the opcode-decryption key/nonce (seed=inslen, password are
+	// constant per run) so per-opcode fetch avoids re-deriving them each time.
+	xorStream *security.XORStream
 }
 
 var (
@@ -519,6 +523,12 @@ func (vm *VM) Run() error {
 	var op code.Opcode
 	vm.ensureFrameBoundaries()
 
+	// Cache the opcode-decryption key/nonce once; seed (inslen) and password are
+	// constant for the whole run, so re-deriving per opcode byte was pure waste.
+	if vm.xorStream == nil {
+		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
+	}
+
 	if err := vm.validateSecurityCheckOpcodes("before-execution"); err != nil {
 		return err
 	}
@@ -534,7 +544,7 @@ func (vm *VM) Run() error {
 		ip = vm.currentFrame().ip
 		ins = vm.currentFrame().Instructions()
 
-		opcodeByte, err := security.SecureXOROneAt(ins[ip], int64(vm.inslen), vm.password, int64(ip))
+		opcodeByte, err := vm.xorStream.XOROneAt(ins[ip], int64(ip))
 		if err != nil {
 			return vm.runtimeErrorAt(ip, op, err)
 		}
@@ -580,7 +590,7 @@ func (vm *VM) Run() error {
 			if err := vm.execMinusOperation(); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
-		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv:
+		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod:
 			if err := vm.execBinaryOperation(op); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -624,7 +634,7 @@ func (vm *VM) Run() error {
 			if err := vm.push(hash); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
-		case code.OpEqual, code.OpUnEqual, code.OpGreater:
+		case code.OpEqual, code.OpUnEqual, code.OpGreater, code.OpGreaterEqual:
 			if err := vm.execComparison(op); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -735,6 +745,17 @@ func (vm *VM) Run() error {
 			left := vm.pop()
 			if err := vm.execIndexOperation(left, index); err != nil {
 				return err
+			}
+		case code.OpSetIndex:
+			value := vm.decryptForUse(vm.pop())
+			index := vm.decryptForUse(vm.pop())
+			container := vm.decryptForUse(vm.pop())
+			mutated, err := vm.execSetIndex(container, index, value)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			if err := vm.push(mutated); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpClosure:
 			if ip+3 >= len(ins) {
@@ -1232,7 +1253,15 @@ func (vm *VM) execBinaryIntegerOperation(op code.Opcode, left, right object.Obje
 	case code.OpMul:
 		result = lval * rval
 	case code.OpDiv:
+		if rval == 0 {
+			return fmt.Errorf("integer division by zero")
+		}
 		result = lval / rval
+	case code.OpMod:
+		if rval == 0 {
+			return fmt.Errorf("integer modulo by zero")
+		}
+		result = lval % rval
 	default:
 		return fmt.Errorf("Unknown integer operator: %d", op)
 	}
@@ -1279,6 +1308,35 @@ func (vm *VM) execBinaryStringOperation(op code.Opcode, left, right object.Objec
 	}
 
 	return vm.push(&object.String{Value: lval + rval})
+}
+
+// execSetIndex mutates a container in place for `container[index] = value` and
+// returns the (same) container so the caller can persist it to its variable slot.
+func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object, error) {
+	switch c := container.(type) {
+	case *object.Array:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return nil, fmt.Errorf("array index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Elements)) {
+			return nil, fmt.Errorf("array index out of bounds: %d (len %d)", idx.Value, len(c.Elements))
+		}
+		c.Elements[idx.Value] = value
+		return c, nil
+	case *object.Hash:
+		hashKey, ok := index.(object.Hashable)
+		if !ok {
+			return nil, fmt.Errorf("unusable as a hashkey: %s", index.Type())
+		}
+		if c.Pairs == nil {
+			c.Pairs = make(map[object.HashKey]object.HashPair)
+		}
+		c.Pairs[hashKey.HashKey()] = object.HashPair{Key: index, Value: value}
+		return c, nil
+	default:
+		return nil, fmt.Errorf("index assignment not supported on %s", container.Type())
+	}
 }
 
 func (vm *VM) execIndexOperation(left, index object.Object) error {
@@ -1418,6 +1476,8 @@ func (vm *VM) execFloatComparison(op code.Opcode, left, right object.Object) err
 		return vm.push(nativeBoolToBooleanObject(rightValue != leftValue))
 	case code.OpGreater:
 		return vm.push(nativeBoolToBooleanObject(leftValue > rightValue))
+	case code.OpGreaterEqual:
+		return vm.push(nativeBoolToBooleanObject(leftValue >= rightValue))
 	default:
 		return fmt.Errorf("unknown operator: %d", op)
 	}
@@ -1432,6 +1492,8 @@ func (vm *VM) execIntegerComparison(op code.Opcode, left, right object.Object) e
 		return vm.push(nativeBoolToBooleanObject(rightValue != leftValue))
 	case code.OpGreater:
 		return vm.push(nativeBoolToBooleanObject(leftValue > rightValue))
+	case code.OpGreaterEqual:
+		return vm.push(nativeBoolToBooleanObject(leftValue >= rightValue))
 	default:
 		return fmt.Errorf("unknown operator: %d", op)
 	}
@@ -1625,11 +1687,20 @@ func nativeBoolToBooleanObject(native bool) *object.Boolean {
 }
 
 func isTruthy(obj object.Object) bool {
-	switch obj := obj.(type) {
+	// Conventional truthiness (dev-sec-platform-upgrades): false, null, empty
+	// string, 0 and 0.0 are falsy; everything else is truthy. This matches the
+	// webrepl path and removes the "" -is-truthy footgun.
+	switch o := obj.(type) {
 	case *object.Boolean:
-		return obj.Value
+		return o.Value
 	case *object.Null:
 		return false
+	case *object.String:
+		return len(o.Value) != 0
+	case *object.Integer:
+		return o.Value != 0
+	case *object.Float:
+		return o.Value != 0
 	default:
 		return true
 	}

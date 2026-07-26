@@ -1,6 +1,8 @@
 package lexer
 
 import (
+	"strings"
+
 	"mutant/token"
 	"unicode"
 )
@@ -66,9 +68,21 @@ func (l *Lexer) NextToken() token.Token {
 	case '%':
 		tok = newToken(token.MODULO, l.ch)
 	case '<':
-		tok = newToken(token.LT, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.LTE, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.LT, l.ch)
+		}
 	case '>':
-		tok = newToken(token.GT, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.GTE, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.GT, l.ch)
+		}
 	case '!':
 		if l.peekRune() == '=' {
 			ch := string(l.ch)
@@ -110,7 +124,7 @@ func (l *Lexer) NextToken() token.Token {
 		tok.Type = token.STRING
 		tok.Literal = l.readString()
 	default:
-		if unicode.IsLetter(l.ch) {
+		if unicode.IsLetter(l.ch) || l.ch == '_' {
 			tok.Literal = l.readIdentifier()
 			tok.Type = token.LookupIdent(tok.Literal)
 			tok.Start = start
@@ -190,15 +204,47 @@ func (l *Lexer) nextRune() rune {
 	return next
 }
 
+// readString reads a double-quoted string literal, processing backslash escape
+// sequences: \n \r \t \" \\ \0. Unknown escapes are kept verbatim (backslash +
+// char). The lexer is byte-oriented, so bytes are accumulated directly to
+// preserve any multi-byte source content exactly. Leaves the cursor on the
+// closing quote (or EOF), matching the caller's trailing readRune().
 func (l *Lexer) readString() string {
-	position := l.position + 1
+	var sb strings.Builder
 	for {
 		l.readRune()
 		if l.ch == '"' || l.ch == 0 {
 			break
 		}
+		if l.ch == '\\' {
+			l.readRune()
+			switch l.ch {
+			case 'n':
+				sb.WriteByte('\n')
+			case 'r':
+				sb.WriteByte('\r')
+			case 't':
+				sb.WriteByte('\t')
+			case '"':
+				sb.WriteByte('"')
+			case '\\':
+				sb.WriteByte('\\')
+			case '0':
+				sb.WriteByte(0)
+			case 0:
+				// Trailing backslash at EOF: keep it literal and stop.
+				sb.WriteByte('\\')
+				return sb.String()
+			default:
+				// Unknown escape: preserve both characters.
+				sb.WriteByte('\\')
+				sb.WriteByte(byte(l.ch))
+			}
+			continue
+		}
+		sb.WriteByte(byte(l.ch))
 	}
-	return l.input[position:l.position]
+	return sb.String()
 }
 
 func newToken(tokenType token.TokenType, ch rune) token.Token {

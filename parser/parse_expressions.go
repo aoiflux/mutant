@@ -223,7 +223,7 @@ func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
 
 func (p *Parser) parseAssignExpression(left ast.Expression) ast.Expression {
 	switch left.(type) {
-	case *ast.Identifier, *ast.FieldExpression:
+	case *ast.Identifier, *ast.FieldExpression, *ast.IndexExpression:
 	default:
 		msg := fmt.Sprintf("invalid assignment target: %T", left)
 		p.appendError(p.curToken, msg)
