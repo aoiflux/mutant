@@ -87,16 +87,21 @@ func TestProcessOpenFilesThreadsModules(t *testing.T) {
 		t.Fatalf("process_threads tids must be an ARRAY")
 	}
 
-	// modules (self): a real module list on Linux; an honest error on platforms
-	// without a memory-maps backend (never a fake empty success).
+	// modules (self): a real module list on Linux (memory maps) and Windows
+	// (Toolhelp32); an honest error on platforms without a backend (never a fake
+	// empty success).
 	modPayload, errObj := unwrapPair(t, ProcessModules())
 	switch {
-	case runtime.GOOS == "linux":
+	case runtime.GOOS == "linux" || runtime.GOOS == "windows":
 		if errObj != nil {
-			t.Fatalf("process_modules error on linux: %s", errObj.Inspect())
+			t.Fatalf("process_modules error on %s: %s", runtime.GOOS, errObj.Inspect())
 		}
-		if _, ok := modPayload.(*object.Array); !ok {
+		modArr, ok := modPayload.(*object.Array)
+		if !ok {
 			t.Fatalf("process_modules payload type: %T", modPayload)
+		}
+		if len(modArr.Elements) == 0 {
+			t.Fatalf("process_modules returned no modules for self on %s", runtime.GOOS)
 		}
 	case errObj == nil:
 		if _, ok := modPayload.(*object.Array); !ok {

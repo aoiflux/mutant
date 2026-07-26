@@ -187,7 +187,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameProcessModules: {
 		signature: "process_modules(pid?)",
-		summary:   "Lists loaded module/library paths for a process (from memory maps on Linux; fails honestly where a backend is unavailable, e.g. Windows).",
+		summary:   "Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessHash: {

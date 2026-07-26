@@ -76,7 +76,7 @@ require (
 
 require (
 	github.com/aoiflux/graphene v0.1.3
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.47.0
 )
 
 replace github.com/go-ini/ini => github.com/go-ini/ini v1.67.0
