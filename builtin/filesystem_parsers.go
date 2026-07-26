@@ -183,6 +183,10 @@ type realXFATSession struct {
 	img   *os.File
 	fs    *libxfat.ExFAT
 	cache map[string]libxfat.Entry
+	// mu guards path resolution (the cache map + volume reads within it). XFAT
+	// handles can be shared across concurrent serve goroutines, and an
+	// unsynchronized map write is a fatal "concurrent map writes" crash.
+	mu sync.Mutex
 }
 
 type xfatHandleState struct {
@@ -2123,6 +2127,8 @@ func (s *realXFATSession) readDirAtPath(dirPath string) ([]libxfat.Entry, error)
 }
 
 func (s *realXFATSession) findEntryByPath(targetPath string) (libxfat.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cache == nil {
 		s.cache = map[string]libxfat.Entry{}
 	}

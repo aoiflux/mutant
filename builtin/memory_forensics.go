@@ -1,11 +1,9 @@
 package builtin
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/hex"
 	"os"
-	"regexp"
 	"strings"
 
 	"mutant/object"
@@ -33,12 +31,16 @@ func MemMap(args ...object.Object) object.Object {
 			end = len(data)
 		}
 		segmentData := data[off:end]
+		// A raw dump carries no page-protection metadata, so instead of fabricating
+		// readable/writable/executable flags we report measurable per-segment
+		// properties: Shannon entropy and the ratio of printable bytes. High
+		// entropy suggests packed/encrypted/code regions; a high printable ratio
+		// suggests text/strings.
 		segments = append(segments, makeHashObject(map[string]object.Object{
-			"offset":     intObj(int64(off)),
-			"size":       intObj(int64(len(segmentData))),
-			"readable":   boolObj(true),
-			"writable":   boolObj(false),
-			"executable": boolObj(likelyExecutableChunk(segmentData)),
+			"offset":          intObj(int64(off)),
+			"size":            intObj(int64(len(segmentData))),
+			"entropy":         &object.Float{Value: shannonEntropy(segmentData)},
+			"printable_ratio": &object.Float{Value: printableByteRatio(segmentData)},
 		}))
 	}
 
@@ -222,37 +224,17 @@ func MemFindShellcode(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: hits}, nil)
 }
 
-func likelyExecutableChunk(chunk []byte) bool {
-	if len(chunk) == 0 {
-		return false
+// printableByteRatio returns the fraction (0–1) of bytes that are printable
+// ASCII (including space, tab, CR, LF).
+func printableByteRatio(data []byte) float64 {
+	if len(data) == 0 {
+		return 0
 	}
-	if bytes.Contains(chunk, []byte{0x4d, 0x5a}) || bytes.Contains(chunk, []byte{0x7f, 0x45, 0x4c, 0x46}) {
-		return true
-	}
-	re := regexp.MustCompile(`[\x55\x8B\xE5\xE8\xE9\xC3]`)
-	return re.Match(chunk)
-}
-
-func MemMapLiveProcess(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-	_, ok := args[0].(*object.Integer)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `mem_map_live` must be INTEGER pid, got %s", args[0].Type()))
-	}
-	return resultAndError(nil, newError("mem_map_live unsupported: privileged live process memory access is not enabled"))
-}
-
-func memLines(data []byte) []string {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	lines := make([]string, 0)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	printable := 0
+	for _, b := range data {
+		if (b >= 0x20 && b <= 0x7e) || b == '\t' || b == '\n' || b == '\r' {
+			printable++
 		}
-		lines = append(lines, line)
 	}
-	return lines
+	return float64(printable) / float64(len(data))
 }

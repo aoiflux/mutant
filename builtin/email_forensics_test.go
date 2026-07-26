@@ -1,8 +1,17 @@
 package builtin
 
 import (
+	"bytes"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"net"
 	"strings"
 	"testing"
+
+	"github.com/emersion/go-msgauth/dkim"
 
 	"mutant/object"
 )
@@ -64,16 +73,31 @@ func TestEmailAttachments(t *testing.T) {
 func TestEmailSPFDKIMAndURLs(t *testing.T) {
 	raw := testRawSimpleEmail()
 
+	// Keep the test hermetic: no real DNS. The sample's DKIM-Signature is
+	// malformed so it fails before any key lookup; the DMARC lookup resolves to
+	// "not found" and degrades gracefully.
+	restore := dkimLookupTXT
+	dkimLookupTXT = func(name string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	defer func() { dkimLookupTXT = restore }()
+
 	spfPayload, errObj := unwrapPair(t, EmailSPFDKIM(stringObj(raw)))
 	if errObj != nil {
 		t.Fatalf("email_spf_dkim error: %s", errObj.Inspect())
 	}
 	spfHash := efMustHash(t, spfPayload)
 	if efMustHashString(t, spfHash, "spf") != "pass" {
-		t.Fatalf("expected SPF pass")
+		t.Fatalf("expected SPF pass (reported by receiving MTA)")
 	}
-	if efMustHashString(t, spfHash, "dkim") != "pass" {
-		t.Fatalf("expected DKIM pass")
+	// The sample message carries a malformed DKIM-Signature (no b=/bh=/h= tags).
+	// Real cryptographic verification MUST NOT report it as a pass, even though
+	// the receiving MTA's Authentication-Results claimed dkim=pass.
+	if got := efMustHashString(t, spfHash, "dkim"); got == "pass" {
+		t.Fatalf("malformed DKIM signature must not verify as pass, got=%q", got)
+	}
+	if efMustHashString(t, spfHash, "dkim_reported") != "pass" {
+		t.Fatalf("expected reported dkim=pass from Authentication-Results")
 	}
 
 	urlsPayload, errObj := unwrapPair(t, EmailURLs(stringObj(raw)))
@@ -86,6 +110,73 @@ func TestEmailSPFDKIMAndURLs(t *testing.T) {
 	}
 	if len(urls.Elements) < 2 {
 		t.Fatalf("expected at least two URLs, got=%d", len(urls.Elements))
+	}
+}
+
+func TestEmailDKIMRealVerification(t *testing.T) {
+	// Generate a signing key, sign a message, publish the matching public key
+	// through an injected offline resolver, and assert real verification passes.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %s", err)
+	}
+
+	unsigned := "From: sender@example.com\r\n" +
+		"To: analyst@example.com\r\n" +
+		"Subject: Signed message\r\n" +
+		"Date: Mon, 01 Jul 2026 10:00:00 +0000\r\n" +
+		"\r\n" +
+		"Body under signature.\r\n"
+
+	var signed bytes.Buffer
+	signOpts := &dkim.SignOptions{
+		Domain:                 "example.com",
+		Selector:               "mail",
+		Signer:                 key,
+		Hash:                   crypto.SHA256,
+		HeaderCanonicalization: dkim.CanonicalizationRelaxed,
+		BodyCanonicalization:   dkim.CanonicalizationRelaxed,
+		HeaderKeys:             []string{"From", "To", "Subject", "Date"},
+	}
+	if err := dkim.Sign(&signed, strings.NewReader(unsigned), signOpts); err != nil {
+		t.Fatalf("sign: %s", err)
+	}
+
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal pubkey: %s", err)
+	}
+	txtRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER)
+
+	restore := dkimLookupTXT
+	dkimLookupTXT = func(name string) ([]string, error) {
+		if name == "mail._domainkey.example.com" {
+			return []string{txtRecord}, nil
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	defer func() { dkimLookupTXT = restore }()
+
+	payload, errObj := unwrapPair(t, EmailSPFDKIM(stringObj(signed.String())))
+	if errObj != nil {
+		t.Fatalf("email_spf_dkim error: %s", errObj.Inspect())
+	}
+	hash := efMustHash(t, payload)
+	if got := efMustHashString(t, hash, "dkim"); got != "pass" {
+		t.Fatalf("expected real DKIM pass, got=%q", got)
+	}
+	if !efMustHashBool(t, hash, "dkim_aligned") {
+		t.Fatalf("expected DKIM signature aligned with From domain")
+	}
+
+	// Tampering with the signed body must break verification.
+	tampered := strings.Replace(signed.String(), "Body under signature.", "Body was modified.", 1)
+	payload2, errObj := unwrapPair(t, EmailSPFDKIM(stringObj(tampered)))
+	if errObj != nil {
+		t.Fatalf("email_spf_dkim error: %s", errObj.Inspect())
+	}
+	if got := efMustHashString(t, efMustHash(t, payload2), "dkim"); got == "pass" {
+		t.Fatalf("tampered body must not verify as pass, got=%q", got)
 	}
 }
 
@@ -162,6 +253,16 @@ func efMustHashString(t *testing.T, hash *object.Hash, key string) string {
 		t.Fatalf("key %s is not STRING: %T", key, obj)
 	}
 	return str.Value
+}
+
+func efMustHashBool(t *testing.T, hash *object.Hash, key string) bool {
+	t.Helper()
+	obj := efMustHashValue(t, hash, key)
+	b, ok := obj.(*object.Boolean)
+	if !ok {
+		t.Fatalf("key %s is not BOOLEAN: %T", key, obj)
+	}
+	return b.Value
 }
 
 func efMustHashValue(t *testing.T, hash *object.Hash, key string) object.Object {

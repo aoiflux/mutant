@@ -93,6 +93,15 @@ func prepare(handlerPath string) *object.Error {
 // run executes the prepared handler for one connection on a fresh VM, exposing
 // (connHandle, arg) via serve_conn()/serve_arg().
 func run(handlerPath string, connHandle int64, arg object.Object) {
+	// Isolate a per-connection panic (e.g. a nil deref inside a builtin the
+	// handler calls) so one malformed connection cannot crash the whole server
+	// process. This goroutine runs one connection; recovering here contains it.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "[net_serve] handler panic (conn %d): %v\n", connHandle, r)
+		}
+	}()
+
 	cacheMu.Lock()
 	pr := cache[handlerPath]
 	cacheMu.Unlock()

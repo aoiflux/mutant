@@ -26,8 +26,8 @@ func HttpGet(args ...object.Object) object.Object {
 }
 
 func HttpPost(args ...object.Object) object.Object {
-	if len(args) != 3 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
+	if len(args) != 2 && len(args) != 3 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
 	url, ok := args[0].(*object.String)
 	if !ok {
@@ -37,11 +37,15 @@ func HttpPost(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	contentType, ok := args[2].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 3 to `http_post` must be STRING, got %s", args[2].Type()))
+	contentType := "application/octet-stream"
+	if len(args) == 3 {
+		ctObj, ok := args[2].(*object.String)
+		if !ok {
+			return resultAndError(nil, newError("argument 3 to `http_post` must be STRING, got %s", args[2].Type()))
+		}
+		contentType = ctObj.Value
 	}
-	resp, err := httpClient.Post(url.Value, contentType.Value, strings.NewReader(body))
+	resp, err := httpClient.Post(url.Value, contentType, strings.NewReader(body))
 	return httpResponseOrError2(resp, err, "http_post")
 }
 

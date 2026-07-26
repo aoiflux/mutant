@@ -127,7 +127,12 @@ func DbClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
 	}
 	dbHandles.Delete(h.Value)
-	if err := g.Close(); err != nil {
+	// Hold dbOpMu so Close cannot race an in-flight mutation/query on the same
+	// graph (the underlying graph is not safe for concurrent close + use).
+	dbOpMu.Lock()
+	err := g.Close()
+	dbOpMu.Unlock()
+	if err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))
 	}
 	return resultAndError(boolObj(true), nil)

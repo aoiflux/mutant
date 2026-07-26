@@ -292,6 +292,18 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameHttpConnReadResponseHead, &BuiltIn{HTTPConnReadResponseHead}},
 }
 
+// registerHelpBuiltin appends `help` to the builtin set. It is done in init()
+// rather than in the Builtins literal to avoid an initialization cycle (Help
+// reads Builtins/builtinsByName to render topics). Appending keeps every existing
+// builtin's slice index stable, so previously compiled bytecode stays valid.
+func init() {
+	def := BuiltinDefinition{Name: BuiltinNameHelp, Builtin: &BuiltIn{Help}}
+	Builtins = append(Builtins, def)
+	if _, exists := builtinsByName[def.Name]; !exists {
+		builtinsByName[def.Name] = def.Builtin
+	}
+}
+
 var builtinsByName = buildBuiltinLookup()
 
 func buildBuiltinLookup() map[string]*BuiltIn {

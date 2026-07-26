@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -640,19 +641,243 @@ func NetFlowReconstruct(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: results}, nil)
 }
 
+// osFingerprint holds the passive TCP/IP fingerprint derived from a single SYN
+// (or SYN-ACK) packet, in the spirit of p0f.
+type osFingerprint struct {
+	ip          string
+	ipVersion   int
+	packetType  string // "SYN" or "SYN-ACK"
+	observedTTL int
+	initialTTL  int
+	hops        int
+	window      int
+	df          bool
+	mss         int
+	windowScale int // -1 when the option is absent
+	sackPerm    bool
+	timestamps  bool
+	optLayout   string
+	osGuess     string
+	confidence  string
+}
+
+func (fp *osFingerprint) signature() string {
+	df := 0
+	if fp.df {
+		df = 1
+	}
+	// initialTTL:hops:DF:window:mss:option-layout — a compact, p0f-like signature.
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%s", fp.initialTTL, fp.hops, df, fp.window, fp.mss, fp.optLayout)
+}
+
+// NetOSFingerprint performs passive OS fingerprinting from an offline pcap file.
+// It inspects TCP SYN / SYN-ACK packets and derives an OS family guess from the
+// IP TTL, the DF bit, the TCP window, and the TCP option layout. This is a
+// heuristic (like p0f) — it identifies an OS *family*, not a definitive OS — and
+// runs entirely offline in pure Go, so it needs no privileges or capture backend.
 func NetOSFingerprint(args ...object.Object) object.Object {
-	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	_, ok := args[0].(*object.String)
+	pathObj, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `net_os_fingerprint` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `net_os_fingerprint` must be STRING pcap path, got %s", args[0].Type()))
 	}
-	_, ok = args[1].(*object.Integer)
-	if !ok {
-		return resultAndError(nil, newError("argument 2 to `net_os_fingerprint` must be INTEGER, got %s", args[1].Type()))
+
+	file, err := os.Open(pathObj.Value)
+	if err != nil {
+		return resultAndError(nil, newError("net_os_fingerprint: %s", err.Error()))
 	}
-	return resultAndError(nil, newError("net_os_fingerprint unsupported: requires raw packet analysis capabilities"))
+	defer file.Close()
+
+	reader, err := pcapgo.NewReader(file)
+	if err != nil {
+		return resultAndError(nil, newError("net_os_fingerprint: %s", err.Error()))
+	}
+	linkType := reader.LinkType()
+
+	prints := map[string]*osFingerprint{}
+	keys := make([]string, 0)
+	synCount := int64(0)
+
+	for {
+		data, _, readErr := reader.ReadPacketData()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return resultAndError(nil, newError("net_os_fingerprint: %s", readErr.Error()))
+		}
+
+		packet := gopacket.NewPacket(data, linkType, gopacket.NoCopy)
+		tcpLayer := packet.Layer(layers.LayerTypeTCP)
+		if tcpLayer == nil {
+			continue
+		}
+		tcp, ok := tcpLayer.(*layers.TCP)
+		if !ok || !tcp.SYN {
+			continue
+		}
+
+		var srcIP string
+		var observedTTL, ipVersion int
+		df := false
+		if ip4Layer := packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
+			ip4 := ip4Layer.(*layers.IPv4)
+			srcIP = ip4.SrcIP.String()
+			observedTTL = int(ip4.TTL)
+			df = ip4.Flags&layers.IPv4DontFragment != 0
+			ipVersion = 4
+		} else if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
+			ip6 := ip6Layer.(*layers.IPv6)
+			srcIP = ip6.SrcIP.String()
+			observedTTL = int(ip6.HopLimit)
+			ipVersion = 6
+		} else {
+			continue
+		}
+
+		packetType := "SYN"
+		if tcp.ACK {
+			packetType = "SYN-ACK"
+		}
+
+		synCount++
+		key := srcIP + "/" + packetType
+		if _, exists := prints[key]; exists {
+			continue // first packet per host+type wins, keeping output deterministic
+		}
+
+		mss, wscale, sackPerm, timestamps, layout := parseTCPOptionLayout(tcp.Options)
+		initialTTL := guessInitialTTL(observedTTL)
+		osGuess, confidence := guessOSFamily(initialTTL, wscale, sackPerm, timestamps)
+
+		fp := &osFingerprint{
+			ip:          srcIP,
+			ipVersion:   ipVersion,
+			packetType:  packetType,
+			observedTTL: observedTTL,
+			initialTTL:  initialTTL,
+			hops:        initialTTL - observedTTL,
+			window:      int(tcp.Window),
+			df:          df,
+			mss:         mss,
+			windowScale: wscale,
+			sackPerm:    sackPerm,
+			timestamps:  timestamps,
+			optLayout:   layout,
+			osGuess:     osGuess,
+			confidence:  confidence,
+		}
+		prints[key] = fp
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+	hosts := make([]object.Object, 0, len(keys))
+	for _, key := range keys {
+		fp := prints[key]
+		hosts = append(hosts, makeHashObject(map[string]object.Object{
+			"ip":             stringObj(fp.ip),
+			"ip_version":     intObj(int64(fp.ipVersion)),
+			"packet_type":    stringObj(fp.packetType),
+			"os_guess":       stringObj(fp.osGuess),
+			"confidence":     stringObj(fp.confidence),
+			"observed_ttl":   intObj(int64(fp.observedTTL)),
+			"initial_ttl":    intObj(int64(fp.initialTTL)),
+			"hops":           intObj(int64(fp.hops)),
+			"window":         intObj(int64(fp.window)),
+			"df":             boolObj(fp.df),
+			"mss":            intObj(int64(fp.mss)),
+			"window_scale":   intObj(int64(fp.windowScale)),
+			"sack_permitted": boolObj(fp.sackPerm),
+			"timestamps":     boolObj(fp.timestamps),
+			"tcp_options":    stringObj(fp.optLayout),
+			"signature":      stringObj(fp.signature()),
+		}))
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"file":        stringObj(pathObj.Value),
+		"link_type":   stringObj(linkType.String()),
+		"syn_packets": intObj(synCount),
+		"hosts":       &object.Array{Elements: hosts},
+	}), nil)
+}
+
+// parseTCPOptionLayout extracts the MSS, window scale (-1 if absent), SACK-permitted
+// and timestamp flags, plus a compact option-order layout string (e.g. "M,N,W,N,N,S").
+func parseTCPOptionLayout(opts []layers.TCPOption) (mss int, wscale int, sackPerm bool, timestamps bool, layout string) {
+	wscale = -1
+	parts := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		switch opt.OptionType {
+		case layers.TCPOptionKindMSS:
+			if len(opt.OptionData) >= 2 {
+				mss = int(binary.BigEndian.Uint16(opt.OptionData))
+			}
+			parts = append(parts, "M")
+		case layers.TCPOptionKindWindowScale:
+			if len(opt.OptionData) >= 1 {
+				wscale = int(opt.OptionData[0])
+			}
+			parts = append(parts, "W")
+		case layers.TCPOptionKindSACKPermitted:
+			sackPerm = true
+			parts = append(parts, "S")
+		case layers.TCPOptionKindTimestamps:
+			timestamps = true
+			parts = append(parts, "T")
+		case layers.TCPOptionKindNop:
+			parts = append(parts, "N")
+		case layers.TCPOptionKindEndList:
+			parts = append(parts, "E")
+		default:
+			parts = append(parts, "?")
+		}
+	}
+	return mss, wscale, sackPerm, timestamps, strings.Join(parts, ",")
+}
+
+// guessInitialTTL rounds an observed TTL up to the nearest common initial TTL
+// ({32, 64, 128, 255}). The difference is the estimated hop count.
+func guessInitialTTL(observed int) int {
+	switch {
+	case observed <= 0:
+		return 0
+	case observed <= 32:
+		return 32
+	case observed <= 64:
+		return 64
+	case observed <= 128:
+		return 128
+	default:
+		return 255
+	}
+}
+
+// guessOSFamily maps an initial TTL plus TCP option signals to an OS family. It
+// is deliberately conservative: TTL is the strongest passive signal, and the
+// option presence only adjusts confidence, never fabricates a specific version.
+func guessOSFamily(initialTTL, wscale int, sackPerm, timestamps bool) (string, string) {
+	switch initialTTL {
+	case 32, 128:
+		confidence := "medium"
+		if wscale >= 0 && sackPerm {
+			confidence = "high"
+		}
+		return "Windows", confidence
+	case 64:
+		confidence := "medium"
+		if timestamps && sackPerm && wscale >= 0 {
+			confidence = "high"
+		}
+		return "Linux/Unix (incl. macOS, Android, BSD)", confidence
+	case 255:
+		return "Network device / Solaris / legacy Unix", "low"
+	default:
+		return "unknown", "low"
+	}
 }
 
 func validatePortRange(opName string, startPort int64, endPort int64) *object.Error {

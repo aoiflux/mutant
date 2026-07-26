@@ -33,26 +33,50 @@ func TestLuaRunStringSuccess(t *testing.T) {
 	}
 }
 
-func TestLuaRunStringHasIOLibrary(t *testing.T) {
-	result := LuaRunString(&object.String{Value: "return type(io)"})
-	payload, errObj := unwrapPair(t, result)
-	if errObj != nil {
-		t.Fatalf("unexpected error: %s", errObj.Inspect())
+// TestLuaSandboxBlocksHostAccess verifies the "safe" loader does not expose the
+// host: io must be absent and the dangerous os.* calls must be stripped, while
+// safe os time helpers remain available.
+func TestLuaSandboxBlocksHostAccess(t *testing.T) {
+	luaResult := func(t *testing.T, code string) string {
+		t.Helper()
+		payload, errObj := unwrapPair(t, LuaRunString(&object.String{Value: code}))
+		if errObj != nil {
+			t.Fatalf("unexpected error: %s", errObj.Inspect())
+		}
+		hash, ok := payload.(*object.Hash)
+		if !ok {
+			t.Fatalf("expected HASH result, got=%T", payload)
+		}
+		if okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean); okObj == nil || !okObj.Value {
+			t.Fatalf("expected ok=true for %q", code)
+		}
+		resObj, _ := hashValueByKey(hash, "result").(*object.String)
+		if resObj == nil {
+			t.Fatalf("expected string result for %q", code)
+		}
+		return resObj.Value
 	}
 
-	hash, ok := payload.(*object.Hash)
-	if !ok {
-		t.Fatalf("expected HASH result, got=%T", payload)
+	blocked := map[string]string{
+		"io library removed":  "return type(io)",
+		"os.execute stripped": "return type(os.execute)",
+		"os.exit stripped":    "return type(os.exit)",
+		"os.remove stripped":  "return type(os.remove)",
+		"os.getenv stripped":  "return type(os.getenv)",
+		"load removed":        "return type(load)",
+		"dofile removed":      "return type(dofile)",
+	}
+	for name, code := range blocked {
+		t.Run(name, func(t *testing.T) {
+			if got := luaResult(t, code); got != "nil" {
+				t.Fatalf("expected %q to be nil (blocked), got=%q", code, got)
+			}
+		})
 	}
 
-	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
-	if okObj == nil || !okObj.Value {
-		t.Fatalf("expected ok=true")
-	}
-
-	resObj, _ := hashValueByKey(hash, "result").(*object.String)
-	if resObj == nil || resObj.Value != "table" {
-		t.Fatalf("expected io to be table, got=%+v", resObj)
+	// Safe os time helpers must still work.
+	if got := luaResult(t, "return type(os.time)"); got != "function" {
+		t.Fatalf("expected os.time to remain a function, got=%q", got)
 	}
 }
 

@@ -29,6 +29,7 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Returns the length of a string, array, hash, or bytes value.",
 		params:    []builtinParamDoc{{name: "value", doc: "String, array, hash, or bytes value to measure."}},
 	},
+	BuiltinNameHelp:  {signature: "help(topic?, mode?)", summary: "Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name.", params: []builtinParamDoc{{name: "topic?", doc: "Optional topic or builtin name."}, {name: "mode?", doc: "Optional rendering mode."}}},
 	BuiltinNamePutln: {signature: "putln(value)", summary: "Prints a value followed by a newline."},
 	BuiltinNamePutf: {
 		signature: "putf(format, ...values)",
@@ -49,13 +50,13 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameFsAppend:      {signature: "fs_append(path, data)", summary: "Appends data to the end of a file.", params: []builtinParamDoc{{name: "path", doc: "Path to file."}, {name: "data", doc: "String/bytes payload."}}},
 	BuiltinNameFsExists:      {signature: "fs_exists(path)", summary: "Returns whether a file or directory exists.", params: []builtinParamDoc{{name: "path", doc: "Path to check."}}},
 	BuiltinNameHttpGet:       {signature: "http_get(url)", summary: "Performs an HTTP GET request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}}},
-	BuiltinNameHttpPost:      {signature: "http_post(url, body)", summary: "Performs an HTTP POST request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}}},
-	BuiltinNameHttpRequest:   {signature: "http_request(method, url, opts)", summary: "Performs a configurable HTTP request.", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "opts", doc: "Headers/body/timeout options."}}},
+	BuiltinNameHttpPost:      {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}, {name: "contentType?", doc: "Optional Content-Type header (default application/octet-stream)."}}},
+	BuiltinNameHttpRequest:   {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value (\"\" for none)."}, {name: "headers", doc: "Hash of request headers."}}},
 	BuiltinNameJsonParse:     {signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.", params: []builtinParamDoc{{name: "text", doc: "JSON string input."}}},
 	BuiltinNameJsonStringify: {signature: "json_stringify(value)", summary: "Serializes Mutant values into JSON text.", params: []builtinParamDoc{{name: "value", doc: "Value to serialize."}}},
 	BuiltinNameLuaRunString:  {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string."},
 	BuiltinNameLuaRunFile:    {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file."},
-	BuiltinNameLuaRunHttp:    {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint."},
+	BuiltinNameLuaRunHttp:    {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries)."},
 	BuiltinNameTextContains:  {signature: "text_contains(haystack, needle)", summary: "Returns whether a string contains a substring."},
 	BuiltinNameTextIndex:     {signature: "text_index(haystack, needle)", summary: "Returns the first index of substring occurrence, or -1."},
 	BuiltinNameTextCount:     {signature: "text_count(haystack, needle)", summary: "Counts non-overlapping substring occurrences."},
@@ -168,25 +169,25 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "cache_clear(name)",
 		summary:   "Clears all entries and resets relevant cache state.",
 	},
-	BuiltinNameProcessList: {signature: "process_list()", summary: "Lists visible processes with pid, ppid, and executable name."},
+	BuiltinNameProcessList: {signature: "process_list()", summary: "Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS."},
 	BuiltinNameProcessTree: {
 		signature: "process_tree(rootPid?)",
-		summary:   "Returns descendant processes for a root pid (default current process).",
+		summary:   "Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS.",
 		params:    []builtinParamDoc{{name: "rootPid?", doc: "Optional root process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessOpenFiles: {
 		signature: "process_open_files(pid?)",
-		summary:   "Lists open file paths for a process (platform dependent).",
+		summary:   "Lists open file paths for a process (cross-platform; may require privileges for other processes).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessThreads: {
 		signature: "process_threads(pid?)",
-		summary:   "Lists thread IDs for a process (platform dependent).",
+		summary:   "Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessModules: {
 		signature: "process_modules(pid?)",
-		summary:   "Lists loaded module/library paths for a process.",
+		summary:   "Lists loaded module/library paths for a process (from memory maps on Linux; fails honestly where a backend is unavailable, e.g. Windows).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessHash: {
@@ -204,7 +205,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameProcessEnv: {
 		signature: "process_env(pid?)",
-		summary:   "Returns environment variables for a process.",
+		summary:   "Returns environment variables for a process (cross-platform; other processes may require privileges).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessKill: {
@@ -267,11 +268,11 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameFsDiff: {
 		signature: "fs_diff(leftPath, rightPath)",
-		summary:   "Compares two files or directories and reports differences.",
+		summary:   "Compares two files (not directories) and reports differences.",
 	},
 	BuiltinNameFsCarve: {
 		signature: "fs_carve(path, type)",
-		summary:   "Carves matching binary artifacts from a file by known artifact type.",
+		summary:   "Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length.",
 		params: []builtinParamDoc{
 			{name: "path", doc: "Path to source file."},
 			{name: "type", doc: "Artifact type signature such as pe/elf/pdf/zip."},
@@ -314,9 +315,9 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 	},
-	BuiltinNameNetSynScan: {signature: "net_syn_scan(target, ports)", summary: "Performs TCP SYN scanning for target ports."},
-	BuiltinNameNetUdpScan: {signature: "net_udp_scan(target, ports)", summary: "Performs UDP scanning for target ports."},
-	BuiltinNameNetBanner:  {signature: "net_banner(address)", summary: "Collects service banner text from a network endpoint."},
+	BuiltinNameNetSynScan: {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host. NOTE: this is a full TCP connect scan, not a half-open SYN scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetUdpScan: {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port timeout in ms."}}},
+	BuiltinNameNetBanner:  {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Read timeout in ms."}}},
 	BuiltinNameNetTlsFingerprint: {
 		signature: "net_tls_fingerprint(address, timeoutMs)",
 		summary:   "Collects TLS certificate and handshake fingerprint metadata.",
@@ -347,11 +348,10 @@ var builtinDocs = map[string]builtinDoc{
 		params:    []builtinParamDoc{{name: "packets", doc: "Array of packet hashes with src/dst/ports/protocol/bytes fields."}},
 	},
 	BuiltinNameNetOsFingerprint: {
-		signature: "net_os_fingerprint(target, timeoutMs)",
-		summary:   "Infers probable remote OS fingerprint from network responses.",
+		signature: "net_os_fingerprint(pcap_path)",
+		summary:   "Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges.",
 		params: []builtinParamDoc{
-			{name: "target", doc: "Target host or address."},
-			{name: "timeoutMs", doc: "Probe timeout in milliseconds."},
+			{name: "pcap_path", doc: "Path to a pcap file to analyze."},
 		},
 	},
 	BuiltinNameRegOpen: {
@@ -386,11 +386,11 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameRegDeletedKeys: {
 		signature: "reg_deleted_keys(hiveHandle)",
-		summary:   "Lists deleted keys recovered from hive artifacts.",
+		summary:   "Lists the deleted-key entries supplied in the hive JSON's deleted_keys field. It returns caller-provided data; it does not carve unallocated cells from a binary hive.",
 	},
 	BuiltinNameRegTimeline: {
 		signature: "reg_timeline(hiveHandle)",
-		summary:   "Returns timeline events extracted from an opened registry hive.",
+		summary:   "Returns the timeline entries supplied in the hive JSON's timeline field. It returns caller-provided data; it does not derive a timeline from key LastWrite times.",
 		params:    []builtinParamDoc{{name: "hiveHandle", doc: "Handle returned by reg_open."}},
 	},
 	BuiltinNameEmailParse: {
@@ -410,7 +410,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameEmailSpfDkim: {
 		signature: "email_spf_dkim(raw)",
-		summary:   "Evaluates SPF/DKIM/DMARC signals from message headers.",
+		summary:   "Cryptographically verifies DKIM signatures (public key via DNS) and reports SPF/DMARC. SPF is reported as recorded by the receiving MTA; DMARC combines the reported result with DKIM alignment.",
 		params:    []builtinParamDoc{{name: "raw", doc: "RFC822-style raw email text."}},
 	},
 	BuiltinNameEmailUrls: {
@@ -420,7 +420,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameMemMap: {
 		signature: "mem_map(path)",
-		summary:   "Builds memory map segments from a memory dump file.",
+		summary:   "Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported.",
 	},
 	BuiltinNameMemRead: {
 		signature: "mem_read(path, offset, size)",
@@ -449,7 +449,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameMemFindPe: {
 		signature: "mem_find_pe(path)",
-		summary:   "Finds PE header offsets in memory image data.",
+		summary:   "Returns offsets of the MZ DOS-magic marker in a memory image (candidate PE headers). It does not validate the e_lfanew -> PE\\0\\0 linkage, so results are candidates, not confirmed PE files.",
 	},
 	BuiltinNameMemFindShellcode: {
 		signature: "mem_find_shellcode(path)",
@@ -463,13 +463,13 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameDetectInjection: {
 		signature: "detect_injection(facts)",
-		summary:   "Detects probable code injection signals from memory-derived evidence.",
+		summary:   "Scores probable code injection in a memory image using multiple PE headers plus weighted shellcode signatures (GetPC via fnstenv/call-pop, PEB walks, NOP sleds); returns score and matched_signatures.",
 		params:    []builtinParamDoc{{name: "facts", doc: "Hash containing evidence such as mem_path."}},
 	},
 	BuiltinNameDetectNetworkBeacon: {
 		signature: "detect_network_beacon(flows)",
-		summary:   "Detects beacon-like repeated outbound network destinations.",
-		params:    []builtinParamDoc{{name: "flows", doc: "Array of flow hashes that include destination endpoint data."}},
+		summary:   "Detects C2 beaconing by analyzing inter-arrival interval regularity (low coefficient of variation) and optional transfer-size consistency per destination; each flow may carry ts (epoch/RFC3339) and bytes. Returns per-dst score, interval_cv, and confidence.",
+		params:    []builtinParamDoc{{name: "flows", doc: "Array of flow hashes with a dst, and optional ts and bytes fields."}},
 	},
 	BuiltinNameDetectPrivEsc: {
 		signature: "detect_priv_esc(facts)",
@@ -478,29 +478,29 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameDetectSuspiciousFiles: {
 		signature: "detect_suspicious_files(paths)",
-		summary:   "Detects suspicious file artifacts using extension/path heuristics.",
+		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
 		params:    []builtinParamDoc{{name: "paths", doc: "Array of filesystem paths to inspect."}},
 	},
 	BuiltinNameNetResolve:        {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses."},
-	BuiltinNameNetDial:           {signature: "net_dial(address)", summary: "Opens a network connection."},
+	BuiltinNameNetDial:           {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in ms."}}},
 	BuiltinNameDbOpen:            {signature: "db_open()", summary: "Creates an in-memory graph database handle."},
 	BuiltinNameDbOpenDisk:        {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database.", params: []builtinParamDoc{{name: "path", doc: "Database file path."}}},
 	BuiltinNameDbClose:           {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameDbAddNode:         {signature: "db_add_node(db, label, props)", summary: "Adds a node to the graph database.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "label", doc: "Node label/category."}, {name: "props", doc: "Node properties hash."}}},
-	BuiltinNameDbAddEdge:         {signature: "db_add_edge(db, from, to, label, props)", summary: "Adds an edge between graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "label", doc: "Edge label/type."}, {name: "props", doc: "Edge properties hash."}}},
-	BuiltinNameDbAddArtifact:     {signature: "db_add_artifact(db, artifact)", summary: "Adds a forensic artifact entity to the graph.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "artifact", doc: "Artifact hash payload."}}},
-	BuiltinNameDbAddRelation:     {signature: "db_add_relation(db, from, to, relation, props?)", summary: "Adds a named relation edge between entities.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}, {name: "props?", doc: "Optional relation properties hash."}}},
-	BuiltinNameDbIndexProp:       {signature: "db_index_prop(db, key)", summary: "Builds or updates an index on a property key.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "key", doc: "Property key to index."}}},
-	BuiltinNameDbQueryNodes:      {signature: "db_query_nodes(db, filter)", summary: "Queries nodes by label/properties filter.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "filter", doc: "Filter hash or query object."}}},
-	BuiltinNameDbQuery:           {signature: "db_query(db, query)", summary: "Executes a graph query expression and returns results.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "query", doc: "Query expression string."}}},
-	BuiltinNameDbBfs:             {signature: "db_bfs(db, start, maxDepth?)", summary: "Performs breadth-first graph traversal from a start node.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "start", doc: "Start node ID."}, {name: "maxDepth?", doc: "Optional traversal depth limit."}}},
+	BuiltinNameDbAddNode:         {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127). Property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type (0–127)."}}},
+	BuiltinNameDbAddEdge:         {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "edgeType?", doc: "Optional integer/enum edge type."}}},
+	BuiltinNameDbAddArtifact:     {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "type", doc: "Artifact type string."}, {name: "attrs?", doc: "Optional attributes hash (indexed)."}}},
+	BuiltinNameDbAddRelation:     {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}}},
+	BuiltinNameDbIndexProp:       {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeID", doc: "Node ID to index."}, {name: "key", doc: "Property key."}, {name: "value", doc: "Property value."}}},
+	BuiltinNameDbQueryNodes:      {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type filter."}}},
+	BuiltinNameDbQuery:           {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbBfs:             {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first traversal from origin up to depth. direction is \"in\", \"out\", or \"both\". All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "origin", doc: "Origin node ID."}, {name: "depth", doc: "Maximum traversal depth."}, {name: "direction", doc: "Edge direction: \"in\", \"out\", or \"both\"."}}},
 	BuiltinNameDbShortestPath:    {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}}},
-	BuiltinNameDbTimeline:        {signature: "db_timeline(db, opts?)", summary: "Builds chronological timeline views from graph evidence.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "opts?", doc: "Optional timeline filtering options."}}},
+	BuiltinNameDbTimeline:        {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
 	BuiltinNameDbStats:           {signature: "db_stats(db)", summary: "Returns graph database statistics.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
 	BuiltinNameBytesLen:          {signature: "bytes_len(data)", summary: "Returns length of a bytes value."},
 	BuiltinNameBytesGet:          {signature: "bytes_get(data, index)", summary: "Reads one byte at index as integer."},
-	BuiltinNameBytesSlice:        {signature: "bytes_slice(data, start, end)", summary: "Returns byte sub-slice from start to end."},
-	BuiltinNameBytesHex:          {signature: "bytes_hex(data)", summary: "Returns uppercase hexadecimal representation of bytes."},
+	BuiltinNameBytesSlice:        {signature: "bytes_slice(data, start, length)", summary: "Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]).", params: []builtinParamDoc{{name: "data", doc: "Source byte string."}, {name: "start", doc: "Start offset."}, {name: "length", doc: "Number of bytes to take."}}},
+	BuiltinNameBytesHex:          {signature: "bytes_hex(value, width)", summary: "Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> \"0x00001234\"). This formats a number; it does not hex-encode a byte string.", params: []builtinParamDoc{{name: "value", doc: "Integer value to format."}, {name: "width", doc: "Minimum hex digit width (zero-padded)."}}},
 	BuiltinNameBytesCstrAt:       {signature: "bytes_cstr_at(data, offset)", summary: "Reads null-terminated string from bytes at offset."},
 	BuiltinNameBytesCharFromInt:  {signature: "bytes_char_from_int(value)", summary: "Converts an integer byte value to a single-character string."},
 	BuiltinNameBytesIntFromChar:  {signature: "bytes_int_from_char(char)", summary: "Converts a single-character string to its integer byte value."},

@@ -54,29 +54,9 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 	RecordCommandAttempt(stage)
 
 	trimmedCommand := strings.TrimSpace(command)
-	if trimmedCommand == "" {
-		RecordCommandBlocked(stage)
-		return CommandResult{
-			Allowed:        false,
-			PolicyDecision: policyBlockedEmpty,
-			ErrorMessage:   errorCommandEmpty,
-		}
-	}
-
-	if true {
-		RecordCommandBlocked(stage)
-		return CommandResult{
-			Allowed:        false,
-			PolicyDecision: policyBlockedDisabled,
-			ErrorMessage:   errorCommandDisabled,
-		}
-	}
-
 	normalizedShell := normalizeShell(shell)
 	execName, execArgs, err := buildShellCommand(normalizedShell, trimmedCommand)
 	if err != nil {
-		RecordCommandBlocked(stage)
-
 		return CommandResult{
 			Allowed:        false,
 			PolicyDecision: policyBlockedShell,

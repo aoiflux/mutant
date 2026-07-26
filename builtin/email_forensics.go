@@ -10,14 +10,22 @@ import (
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
+	"net"
 	"net/mail"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/emersion/go-msgauth/dkim"
+	"golang.org/x/net/publicsuffix"
+
 	"mutant/object"
 )
+
+// dkimLookupTXT resolves DNS TXT records for DKIM public-key and DMARC policy
+// lookups. It is a package variable so tests can inject an offline resolver.
+var dkimLookupTXT = net.LookupTXT
 
 func EmailParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
@@ -105,20 +113,36 @@ func EmailSPFDKIM(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("email_spf_dkim: %s", err.Error()))
 	}
 
-	spfHeader := parsed.Header.Get("Received-SPF")
+	receivedSPF := parsed.Header.Get("Received-SPF")
 	dkimHeader := parsed.Header.Get("DKIM-Signature")
 	authHeader := parsed.Header.Get("Authentication-Results")
+	fromDomain := emailFromDomain(parsed.Header.Get("From"))
 
-	spf := classifySPF(spfHeader + " " + authHeader)
-	dkim := classifyDKIM(dkimHeader + " " + authHeader)
-	dmarc := classifyDMARC(authHeader)
+	// DKIM is verified cryptographically: the body hash and the signature over
+	// the canonicalized signed headers are checked against the signer's public
+	// key (fetched via DNS). The top-level "dkim" field reflects that real
+	// result; "dkim_reported" separately surfaces what the receiving MTA claimed.
+	dkimVerdict, dkimSigs, dkimAligned := verifyDKIMSignatures(rawObj.Value, fromDomain)
+
+	// SPF cannot be recomputed from a stored message (it depends on the SMTP
+	// connecting IP and envelope sender, which are not in the message). We
+	// report the result recorded by the receiving infrastructure and its source.
+	spfResult, spfSource := reportedSPFResult(authHeader, receivedSPF)
+
+	dmarcResult, dmarcPolicy := evaluateDMARC(authHeader, fromDomain, dkimAligned)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"spf":                    stringObj(spf),
-		"dkim":                   stringObj(dkim),
-		"dmarc":                  stringObj(dmarc),
-		"received_spf":           stringObj(spfHeader),
+		"dkim":                   stringObj(dkimVerdict),
+		"dkim_signatures":        dkimSigs,
 		"dkim_signature_present": boolObj(strings.TrimSpace(dkimHeader) != ""),
+		"dkim_reported":          stringObj(authResultMethod(authHeader, "dkim")),
+		"dkim_aligned":           boolObj(dkimAligned),
+		"spf":                    stringObj(spfResult),
+		"spf_source":             stringObj(spfSource),
+		"dmarc":                  stringObj(dmarcResult),
+		"dmarc_policy":           stringObj(dmarcPolicy),
+		"from_domain":            stringObj(fromDomain),
+		"received_spf":           stringObj(receivedSPF),
 		"authentication_results": stringObj(authHeader),
 	}), nil)
 }
@@ -318,42 +342,158 @@ func collectURLs(header mail.Header, body string) []string {
 	return out
 }
 
-func classifySPF(input string) string {
-	lower := strings.ToLower(input)
-	switch {
-	case strings.Contains(lower, "spf=pass") || strings.Contains(lower, " pass "):
-		return "pass"
-	case strings.Contains(lower, "spf=fail") || strings.Contains(lower, " fail "):
-		return "fail"
-	case strings.Contains(lower, "spf=softfail"):
-		return "softfail"
-	default:
-		return "unknown"
+// verifyDKIMSignatures performs real DKIM verification of every DKIM-Signature
+// in the message. It returns an overall verdict, a per-signature detail array,
+// and whether at least one *valid* signature is DMARC-aligned with fromDomain.
+func verifyDKIMSignatures(raw, fromDomain string) (string, *object.Array, bool) {
+	verifs, verr := dkim.VerifyWithOptions(strings.NewReader(raw), &dkim.VerifyOptions{LookupTXT: dkimLookupTXT})
+
+	elems := make([]object.Object, 0, len(verifs))
+	var anyValid, anyFail, anyTemp, anyPerm, aligned bool
+	for _, v := range verifs {
+		valid := v.Err == nil
+		errStr := ""
+		if v.Err != nil {
+			errStr = v.Err.Error()
+			switch {
+			case dkim.IsTempFail(v.Err):
+				anyTemp = true
+			case dkim.IsPermFail(v.Err):
+				anyPerm = true
+			default:
+				anyFail = true
+			}
+		} else {
+			anyValid = true
+			if domainsAligned(fromDomain, v.Domain) {
+				aligned = true
+			}
+		}
+		elems = append(elems, makeHashObject(map[string]object.Object{
+			"domain":     stringObj(v.Domain),
+			"identifier": stringObj(v.Identifier),
+			"valid":      boolObj(valid),
+			"error":      stringObj(errStr),
+		}))
 	}
+
+	verdict := "none"
+	switch {
+	case anyValid:
+		verdict = "pass"
+	case len(verifs) == 0:
+		if verr != nil {
+			verdict = "permerror"
+		} else {
+			verdict = "none"
+		}
+	case anyFail:
+		verdict = "fail"
+	case anyTemp:
+		verdict = "temperror"
+	case anyPerm:
+		verdict = "permerror"
+	default:
+		verdict = "fail"
+	}
+
+	return verdict, &object.Array{Elements: elems}, aligned
 }
 
-func classifyDKIM(input string) string {
-	lower := strings.ToLower(input)
-	switch {
-	case strings.Contains(lower, "dkim=pass") || strings.Contains(lower, " dkim-signature"):
-		return "pass"
-	case strings.Contains(lower, "dkim=fail"):
-		return "fail"
-	default:
-		return "unknown"
+// reportedSPFResult returns the SPF result as recorded by the receiving
+// infrastructure (it cannot be recomputed offline), plus which header it came
+// from: "authentication_results", "received_spf", or "none".
+func reportedSPFResult(authHeader, receivedSPF string) (string, string) {
+	if result := authResultMethod(authHeader, "spf"); result != "" {
+		return result, "authentication_results"
 	}
+	if trimmed := strings.TrimSpace(receivedSPF); trimmed != "" {
+		fields := strings.Fields(trimmed)
+		if len(fields) > 0 {
+			return strings.ToLower(fields[0]), "received_spf"
+		}
+	}
+	return "none", "none"
 }
 
-func classifyDMARC(input string) string {
-	lower := strings.ToLower(input)
-	switch {
-	case strings.Contains(lower, "dmarc=pass"):
-		return "pass"
-	case strings.Contains(lower, "dmarc=fail"):
-		return "fail"
-	default:
-		return "unknown"
+// evaluateDMARC returns the DMARC verdict and the published policy for the From
+// domain. If the receiving MTA already recorded a dmarc= result we surface that;
+// otherwise we conservatively derive "pass" only from a valid, aligned DKIM
+// signature (SPF alignment cannot be evaluated offline).
+func evaluateDMARC(authHeader, fromDomain string, dkimAligned bool) (string, string) {
+	policy := lookupDMARCPolicy(fromDomain)
+
+	if reported := authResultMethod(authHeader, "dmarc"); reported != "" {
+		return reported, policy
 	}
+	if dkimAligned {
+		return "pass", policy
+	}
+	return "none", policy
+}
+
+// authResultMethod extracts a `method=result` token (e.g. spf=pass, dkim=fail,
+// dmarc=pass) from an Authentication-Results header value.
+func authResultMethod(authHeader, method string) string {
+	if strings.TrimSpace(authHeader) == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(method) + `\s*=\s*([a-z]+)`)
+	if m := re.FindStringSubmatch(authHeader); len(m) == 2 {
+		return strings.ToLower(m[1])
+	}
+	return ""
+}
+
+// lookupDMARCPolicy fetches and parses the p= tag of the _dmarc TXT record for
+// the domain. Returns "" when no policy is published or DNS is unavailable.
+func lookupDMARCPolicy(fromDomain string) string {
+	if fromDomain == "" {
+		return ""
+	}
+	records, err := dkimLookupTXT("_dmarc." + fromDomain)
+	if err != nil {
+		return ""
+	}
+	policyRe := regexp.MustCompile(`(?i)\bp\s*=\s*([a-z]+)`)
+	for _, record := range records {
+		if !strings.Contains(strings.ToLower(record), "v=dmarc1") {
+			continue
+		}
+		if m := policyRe.FindStringSubmatch(record); len(m) == 2 {
+			return strings.ToLower(m[1])
+		}
+	}
+	return ""
+}
+
+// domainsAligned reports DMARC relaxed alignment between two domains: an exact
+// match, or a shared organizational domain (eTLD+1).
+func domainsAligned(from, other string) bool {
+	from = strings.ToLower(strings.TrimSpace(from))
+	other = strings.ToLower(strings.TrimSpace(other))
+	if from == "" || other == "" {
+		return false
+	}
+	if from == other {
+		return true
+	}
+	fromOrg, err1 := publicsuffix.EffectiveTLDPlusOne(from)
+	otherOrg, err2 := publicsuffix.EffectiveTLDPlusOne(other)
+	return err1 == nil && err2 == nil && fromOrg == otherOrg
+}
+
+// emailFromDomain extracts the lowercased domain from a From header value.
+func emailFromDomain(fromHeader string) string {
+	if addr, err := mail.ParseAddress(fromHeader); err == nil {
+		if i := strings.LastIndex(addr.Address, "@"); i >= 0 {
+			return strings.ToLower(addr.Address[i+1:])
+		}
+	}
+	if i := strings.LastIndex(fromHeader, "@"); i >= 0 {
+		return strings.ToLower(strings.Trim(strings.TrimSpace(fromHeader[i+1:]), "<>"))
+	}
+	return ""
 }
 
 func sha256Hex(data []byte) string {

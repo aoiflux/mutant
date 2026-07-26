@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -171,12 +172,20 @@ func FsMagic(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `fs_magic` must be STRING, got %s", args[0].Type()))
 	}
 
-	data, err := os.ReadFile(pathObj.Value)
+	// detectMagic only inspects a short header, so read a small prefix instead of
+	// slurping the whole file (which could be gigabytes) to check a few bytes.
+	f, err := os.Open(pathObj.Value)
 	if err != nil {
 		return resultAndError(nil, newError("fs_magic: %s", err.Error()))
 	}
+	header := make([]byte, 64)
+	n, err := io.ReadFull(f, header)
+	f.Close()
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return resultAndError(nil, newError("fs_magic: %s", err.Error()))
+	}
 
-	sigType, mime, sigBytes := detectMagic(data)
+	sigType, mime, sigBytes := detectMagic(header[:n])
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"path":      stringObj(pathObj.Value),
 		"type":      stringObj(sigType),

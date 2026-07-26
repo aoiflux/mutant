@@ -160,6 +160,7 @@ func CacheGet(args ...object.Object) object.Object {
 		if strings.Contains(strings.ToLower(errObj.Message), "not found") {
 			runtimeCacheStores.Lock()
 			delete(store.entries, key)
+			store.stats.hits-- // undo the optimistic hit counted above; this call is a miss
 			store.stats.misses++
 			runtimeCacheStores.Unlock()
 			return resultAndError(makeHashObject(map[string]object.Object{
@@ -370,9 +371,14 @@ func cacheSetJSON(store *cacheStore, key string, value object.Object) *object.Er
 		return newError("cache backend encode: %s", err.Error())
 	}
 
+	db := cacheStoreDBSnapshot(store)
+	if db == nil {
+		return newError("cache backend set: cache is closed")
+	}
+
 	crankRuntime.Lock()
 	orig := crankserver.Db
-	crankserver.Db = store.db
+	crankserver.Db = db
 	_, callErr := crankRuntime.server.Set(context.Background(), &crankcql.DataPacket{
 		Key:      key,
 		DataType: crankcql.DataType_JSON,
@@ -387,10 +393,26 @@ func cacheSetJSON(store *cacheStore, key string, value object.Object) *object.Er
 	return nil
 }
 
+// cacheStoreDBSnapshot reads store.db under the same lock that CacheClear/
+// CacheClose use to write it, avoiding a data race and a nil-deref after close.
+// The returned pointer stays valid for the caller even if the store is closed
+// concurrently (the in-flight op completes on the pre-close database).
+func cacheStoreDBSnapshot(store *cacheStore) *crankserver.Database {
+	runtimeCacheStores.RLock()
+	db := store.db
+	runtimeCacheStores.RUnlock()
+	return db
+}
+
 func cacheGetJSON(store *cacheStore, key string) (object.Object, *object.Error) {
+	db := cacheStoreDBSnapshot(store)
+	if db == nil {
+		return nil, newError("cache backend get: cache is closed")
+	}
+
 	crankRuntime.Lock()
 	orig := crankserver.Db
-	crankserver.Db = store.db
+	crankserver.Db = db
 	packet, callErr := crankRuntime.server.Get(context.Background(), &crankcql.GetCommandRequest{Key: key})
 	crankserver.Db = orig
 	crankRuntime.Unlock()

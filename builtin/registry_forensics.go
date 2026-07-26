@@ -365,13 +365,30 @@ func normalizeRegistryPath(path string) string {
 }
 
 func registryTypeName(value any) string {
-	switch value.(type) {
+	const maxDWORD = 4294967295 // 0xFFFFFFFF
+	dwordOrQword := func(fitsDWORD bool) string {
+		if fitsDWORD {
+			return "REG_DWORD"
+		}
+		return "REG_QWORD"
+	}
+	switch v := value.(type) {
 	case string:
 		return "REG_SZ"
 	case bool:
-		return "REG_BOOL"
-	case json.Number, float64, int, int64:
+		// Windows has no boolean registry type; booleans are stored as REG_DWORD 0/1.
 		return "REG_DWORD"
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return dwordOrQword(i >= 0 && i <= maxDWORD)
+		}
+		return "REG_QWORD"
+	case float64:
+		return dwordOrQword(v >= 0 && v <= maxDWORD && v == float64(int64(v)))
+	case int:
+		return dwordOrQword(v >= 0 && int64(v) <= maxDWORD)
+	case int64:
+		return dwordOrQword(v >= 0 && v <= maxDWORD)
 	case []any:
 		return "REG_MULTI_SZ"
 	case map[string]any:

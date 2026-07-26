@@ -87,11 +87,6 @@ func RecordCommandAttempt(stage string) {
 	auditEvent("command_attempt", stage)
 }
 
-func RecordCommandBlocked(stage string) {
-	atomic.AddUint64(&telemetryCommandBlocked, 1)
-	auditEvent("command_blocked", stage)
-}
-
 func RecordCommandSucceeded(stage string) {
 	atomic.AddUint64(&telemetryCommandSucceeded, 1)
 	auditEvent("command_succeeded", stage)

@@ -2,17 +2,15 @@ package builtin
 
 import (
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
-	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/shirou/gopsutil/v3/process"
 
 	"mutant/object"
 )
@@ -97,22 +95,20 @@ func ProcessOpenFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	if runtime.GOOS != "linux" {
-		return resultAndError(nil, newError("process_open_files unsupported on %s", runtime.GOOS))
-	}
-
-	fdDir := filepath.Join("/proc", strconv.Itoa(pid), "fd")
-	entries, err := os.ReadDir(fdDir)
+	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return resultAndError(nil, newError("process_open_files: %s", err.Error()))
 	}
 
-	paths := make([]string, 0, len(entries))
-	for _, e := range entries {
-		linkPath := filepath.Join(fdDir, e.Name())
-		target, lerr := os.Readlink(linkPath)
-		if lerr == nil {
-			paths = append(paths, target)
+	files, err := proc.OpenFiles()
+	if err != nil {
+		return resultAndError(nil, newError("process_open_files: %s", err.Error()))
+	}
+
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.Path != "" {
+			paths = append(paths, f.Path)
 		}
 	}
 	sort.Strings(paths)
@@ -131,30 +127,40 @@ func ProcessThreads(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	if runtime.GOOS != "linux" {
-		return resultAndError(nil, newError("process_threads unsupported on %s", runtime.GOOS))
-	}
-
-	taskDir := filepath.Join("/proc", strconv.Itoa(pid), "task")
-	entries, err := os.ReadDir(taskDir)
+	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return resultAndError(nil, newError("process_threads: %s", err.Error()))
 	}
 
-	elements := make([]object.Object, 0, len(entries))
-	for _, e := range entries {
-		tid, perr := strconv.Atoi(e.Name())
-		if perr == nil {
-			elements = append(elements, intObj(int64(tid)))
-		}
+	// NumThreads (the count) is available on every supported OS; the per-thread
+	// IDs are only exposed on some (e.g. Linux). Surface the count always and the
+	// TIDs where the platform provides them, rather than hard-failing off Linux.
+	count, countErr := proc.NumThreads()
+	threads, threadsErr := proc.Threads()
+	if countErr != nil && threadsErr != nil {
+		return resultAndError(nil, newError("process_threads: %s", countErr.Error()))
 	}
-	sort.Slice(elements, func(i, j int) bool {
-		li := elements[i].(*object.Integer)
-		lj := elements[j].(*object.Integer)
-		return li.Value < lj.Value
-	})
 
-	return resultAndError(&object.Array{Elements: elements}, nil)
+	tids := make([]int64, 0, len(threads))
+	for tid := range threads {
+		tids = append(tids, int64(tid))
+	}
+	sort.Slice(tids, func(i, j int) bool { return tids[i] < tids[j] })
+	tidObjects := make([]object.Object, len(tids))
+	for i, tid := range tids {
+		tidObjects[i] = intObj(tid)
+	}
+
+	threadCount := int64(count)
+	if countErr != nil {
+		threadCount = int64(len(tids))
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"pid":   intObj(int64(pid)),
+		"count": intObj(threadCount),
+		"tids":  &object.Array{Elements: tidObjects},
+	}), nil)
 }
 
 func ProcessModules(args ...object.Object) object.Object {
@@ -163,28 +169,9 @@ func ProcessModules(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	if runtime.GOOS != "linux" {
-		return resultAndError(nil, newError("process_modules unsupported on %s", runtime.GOOS))
-	}
-
-	mapsPath := filepath.Join("/proc", strconv.Itoa(pid), "maps")
-	data, err := os.ReadFile(mapsPath)
+	mods, err := sfProcessModulePaths(pid)
 	if err != nil {
 		return resultAndError(nil, newError("process_modules: %s", err.Error()))
-	}
-
-	mods := make([]string, 0)
-	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) >= 6 {
-			path := parts[len(parts)-1]
-			if strings.HasPrefix(path, "/") {
-				mods = append(mods, path)
-			}
-		}
 	}
 	sort.Strings(mods)
 	mods = sfUniqueStrings(mods)
@@ -259,14 +246,15 @@ func ProcessEnv(args ...object.Object) object.Object {
 	var envLines []string
 	if pid == os.Getpid() {
 		envLines = os.Environ()
-	} else if runtime.GOOS == "linux" {
-		data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+	} else {
+		proc, err := process.NewProcess(int32(pid))
 		if err != nil {
 			return resultAndError(nil, newError("process_env: %s", err.Error()))
 		}
-		envLines = strings.Split(strings.TrimSuffix(string(data), "\x00"), "\x00")
-	} else {
-		return resultAndError(nil, newError("process_env for other pids unsupported on %s", runtime.GOOS))
+		envLines, err = proc.Environ()
+		if err != nil {
+			return resultAndError(nil, newError("process_env: %s", err.Error()))
+		}
 	}
 
 	pairs := make(map[string]object.Object, len(envLines))
@@ -350,107 +338,33 @@ func sfExecutableForPID(pid int) (string, error) {
 	if pid == os.Getpid() {
 		return os.Executable()
 	}
-	if runtime.GOOS == "linux" {
-		return os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("pid executable lookup unsupported on %s", runtime.GOOS)
+	return proc.Exe()
 }
 
+// sfListProcesses enumerates running processes natively across Windows, Linux,
+// and macOS via gopsutil (no external `tasklist`/`ps` shell-outs), including a
+// real parent PID on every platform.
 func sfListProcesses() ([]sfProcess, error) {
-	if runtime.GOOS == "linux" {
-		return sfListProcessesLinux()
-	}
-	if runtime.GOOS == "windows" {
-		return sfListProcessesWindows()
-	}
-	return sfListProcessesPS()
-}
-
-func sfListProcessesLinux() ([]sfProcess, error) {
-	entries, err := os.ReadDir("/proc")
+	procs, err := process.Processes()
 	if err != nil {
 		return nil, err
 	}
 
-	out := make([]sfProcess, 0)
-	for _, e := range entries {
-		pid, perr := strconv.Atoi(e.Name())
-		if perr != nil {
-			continue
-		}
-		comm, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "comm"))
-		statBytes, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
-		ppid := 0
-		if len(statBytes) > 0 {
-			parts := strings.Fields(string(statBytes))
-			if len(parts) > 3 {
-				if v, err := strconv.Atoi(parts[3]); err == nil {
-					ppid = v
-				}
-			}
-		}
-		name := strings.TrimSpace(string(comm))
+	out := make([]sfProcess, 0, len(procs))
+	for _, p := range procs {
+		ppid, _ := p.Ppid()
+		name, _ := p.Name()
 		if name == "" {
-			name = "pid-" + e.Name()
+			name = "pid-" + strconv.Itoa(int(p.Pid))
 		}
-		out = append(out, sfProcess{pid: pid, ppid: ppid, name: name})
+		out = append(out, sfProcess{pid: int(p.Pid), ppid: int(ppid), name: name})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].pid < out[j].pid })
 	return out, nil
-}
-
-func sfListProcessesWindows() ([]sfProcess, error) {
-	cmd := exec.Command("tasklist", "/FO", "CSV", "/NH")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := csv.NewReader(strings.NewReader(string(out))).ReadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	res := make([]sfProcess, 0, len(rows))
-	for _, row := range rows {
-		if len(row) < 2 {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(row[1]))
-		if err != nil {
-			continue
-		}
-		res = append(res, sfProcess{pid: pid, ppid: 0, name: strings.TrimSpace(row[0])})
-	}
-	sort.Slice(res, func(i, j int) bool { return res[i].pid < res[j].pid })
-	return res, nil
-}
-
-func sfListProcessesPS() ([]sfProcess, error) {
-	cmd := exec.Command("ps", "-axo", "pid,ppid,comm")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	res := make([]sfProcess, 0, len(lines))
-	for i, line := range lines {
-		if i == 0 || strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 3 {
-			continue
-		}
-		pid, e1 := strconv.Atoi(parts[0])
-		ppid, e2 := strconv.Atoi(parts[1])
-		if e1 != nil || e2 != nil {
-			continue
-		}
-		name := strings.Join(parts[2:], " ")
-		res = append(res, sfProcess{pid: pid, ppid: ppid, name: name})
-	}
-	sort.Slice(res, func(i, j int) bool { return res[i].pid < res[j].pid })
-	return res, nil
 }
 
 func sfUniqueStrings(values []string) []string {
