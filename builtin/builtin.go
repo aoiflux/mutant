@@ -372,6 +372,25 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTimeParse, &BuiltIn{TimeParse}},
 	{BuiltinNameTimeDiff, &BuiltIn{TimeDiff}},
 	{BuiltinNameTimeAdd, &BuiltIn{TimeAdd}},
+	// generic standard library: collections (append-only)
+	{BuiltinNameSort, &BuiltIn{Sort}},
+	{BuiltinNameReverseArray, &BuiltIn{ReverseArray}},
+	{BuiltinNameContains, &BuiltIn{Contains}},
+	{BuiltinNameIndexOf, &BuiltIn{IndexOf}},
+	{BuiltinNameSlice, &BuiltIn{Slice}},
+	{BuiltinNameConcat, &BuiltIn{Concat}},
+	{BuiltinNameFlatten, &BuiltIn{Flatten}},
+	{BuiltinNameUnique, &BuiltIn{Unique}},
+	{BuiltinNameRange, &BuiltIn{Range}},
+	{BuiltinNameZip, &BuiltIn{Zip}},
+	{BuiltinNameKeys, &BuiltIn{Keys}},
+	{BuiltinNameValues, &BuiltIn{Values}},
+	{BuiltinNameEntries, &BuiltIn{Entries}},
+	{BuiltinNameHasKey, &BuiltIn{HasKey}},
+	{BuiltinNameGet, &BuiltIn{Get}},
+	{BuiltinNameSet, &BuiltIn{Set}},
+	{BuiltinNameMerge, &BuiltIn{Merge}},
+	{BuiltinNameDelete, &BuiltIn{Delete}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
