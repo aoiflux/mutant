@@ -353,4 +353,27 @@ const (
 	BuiltinNameSet          = "set"
 	BuiltinNameMerge        = "merge"
 	BuiltinNameDelete       = "delete"
+	// security: Go binary analysis (GoReSym)
+	BuiltinNameGoBuildInfo = "go_buildinfo"
+	BuiltinNameGoBuildID   = "go_build_id"
+	BuiltinNameGoSymbols   = "go_symbols"
+	// security: IOC / network intelligence
+	BuiltinNameDefang        = "defang"
+	BuiltinNameRefang        = "refang"
+	BuiltinNameIPIsPrivate   = "ip_is_private"
+	BuiltinNameIPInCIDR      = "ip_in_cidr"
+	BuiltinNameCIDRHosts     = "cidr_hosts"
+	BuiltinNameIPVersion     = "ip_version"
+	BuiltinNameIPToInt       = "ip_to_int"
+	BuiltinNameIntToIP       = "int_to_ip"
+	BuiltinNameDomainExtract = "domain_extract"
+	BuiltinNameTLDExtract    = "tld_extract"
+	BuiltinNameIsValidDomain = "is_valid_domain"
+	BuiltinNameExtractIOCs   = "extract_iocs"
+	// security: crypto
+	BuiltinNameX509Parse  = "x509_parse"
+	BuiltinNameJWTDecode  = "jwt_decode"
+	BuiltinNameAESEncrypt = "aes_encrypt"
+	BuiltinNameAESDecrypt = "aes_decrypt"
+	BuiltinNamePEMDecode  = "pem_decode"
 )

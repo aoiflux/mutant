@@ -391,6 +391,29 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameSet, &BuiltIn{Set}},
 	{BuiltinNameMerge, &BuiltIn{Merge}},
 	{BuiltinNameDelete, &BuiltIn{Delete}},
+	// security: Go binary analysis via GoReSym (append-only)
+	{BuiltinNameGoBuildInfo, &BuiltIn{GoBuildInfo}},
+	{BuiltinNameGoBuildID, &BuiltIn{GoBuildID}},
+	{BuiltinNameGoSymbols, &BuiltIn{GoSymbols}},
+	// security: IOC / network intelligence (append-only)
+	{BuiltinNameDefang, &BuiltIn{Defang}},
+	{BuiltinNameRefang, &BuiltIn{Refang}},
+	{BuiltinNameIPIsPrivate, &BuiltIn{IPIsPrivate}},
+	{BuiltinNameIPInCIDR, &BuiltIn{IPInCIDR}},
+	{BuiltinNameCIDRHosts, &BuiltIn{CIDRHosts}},
+	{BuiltinNameIPVersion, &BuiltIn{IPVersion}},
+	{BuiltinNameIPToInt, &BuiltIn{IPToInt}},
+	{BuiltinNameIntToIP, &BuiltIn{IntToIP}},
+	{BuiltinNameDomainExtract, &BuiltIn{DomainExtract}},
+	{BuiltinNameTLDExtract, &BuiltIn{TLDExtract}},
+	{BuiltinNameIsValidDomain, &BuiltIn{IsValidDomain}},
+	{BuiltinNameExtractIOCs, &BuiltIn{ExtractIOCs}},
+	// security: crypto (append-only)
+	{BuiltinNameX509Parse, &BuiltIn{X509Parse}},
+	{BuiltinNameJWTDecode, &BuiltIn{JWTDecode}},
+	{BuiltinNameAESEncrypt, &BuiltIn{AESEncrypt}},
+	{BuiltinNameAESDecrypt, &BuiltIn{AESDecrypt}},
+	{BuiltinNamePEMDecode, &BuiltIn{PEMDecode}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

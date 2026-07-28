@@ -9,6 +9,10 @@ import (
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
+const (
+	noIndent = 0
+)
+
 type formatterConfig struct {
 	indentUnit string
 }
@@ -211,7 +215,7 @@ func formatExpression(expr mast.Expression, indent int, config formatterConfig) 
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
 	case *mast.IndexExpression:
-		return formatExpression(node.Left, indent, config) + "[" + formatExpression(node.Index, indent, config) + "]"
+		return formatExpression(node.Left, noIndent, config) + "[" + formatExpression(node.Index, indent, config) + "]"
 	case *mast.FieldExpression:
 		field := ""
 		if node.Field != nil {
