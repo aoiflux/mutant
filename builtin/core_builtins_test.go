@@ -30,6 +30,43 @@ func TestReadStdinLineReadsFullLine(t *testing.T) {
 	}
 }
 
+func TestFirstLastPush(t *testing.T) {
+	a := &object.Array{Elements: []object.Object{intObj(1), intObj(2), intObj(3)}}
+
+	if got := First(a); got.(*object.Integer).Value != 1 {
+		t.Fatalf("first = %s", got.Inspect())
+	}
+	if got := Last(a); got.(*object.Integer).Value != 3 {
+		t.Fatalf("last = %s", got.Inspect())
+	}
+	// first/last of an empty array return NULL (nil), not a panic.
+	empty := &object.Array{Elements: []object.Object{}}
+	if First(empty) != nil {
+		t.Fatal("first([]) should be nil/NULL")
+	}
+	if Last(empty) != nil {
+		t.Fatal("last([]) should be nil/NULL")
+	}
+
+	pushed := Push(a, intObj(4))
+	arr, ok := pushed.(*object.Array)
+	if !ok || len(arr.Elements) != 4 || arr.Elements[3].(*object.Integer).Value != 4 {
+		t.Fatalf("push = %s", pushed.Inspect())
+	}
+	// push must not mutate the original.
+	if len(a.Elements) != 3 {
+		t.Fatal("push mutated the original array")
+	}
+
+	// argument errors.
+	if _, ok := First(intObj(1)).(*object.Error); !ok {
+		t.Fatal("first of non-array should error")
+	}
+	if _, ok := Push(a).(*object.Error); !ok {
+		t.Fatal("push with wrong arg count should error")
+	}
+}
+
 func TestPopEmptyArrayDoesNotPanic(t *testing.T) {
 	// Previously make([]object.Object, length-1) with length==0 panicked.
 	res := Pop(&object.Array{Elements: []object.Object{}})
