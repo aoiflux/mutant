@@ -1,10 +1,34 @@
 package builtin
 
 import (
+	"bufio"
+	"strings"
 	"testing"
 
 	"mutant/object"
 )
+
+func TestReadStdinLineReadsFullLine(t *testing.T) {
+	// gets() must return a whole line (with spaces), not a single token.
+	r := bufio.NewReader(strings.NewReader("hello brave world\nsecond line\n"))
+	line, err := readStdinLine(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if line != "hello brave world" {
+		t.Fatalf("expected full line, got %q", line)
+	}
+	// A trailing line without a newline (EOF) is still returned.
+	r2 := bufio.NewReader(strings.NewReader("no newline"))
+	if line, err := readStdinLine(r2); err != nil || line != "no newline" {
+		t.Fatalf("EOF line: got %q err %v", line, err)
+	}
+	// CRLF is trimmed.
+	r3 := bufio.NewReader(strings.NewReader("windows\r\n"))
+	if line, _ := readStdinLine(r3); line != "windows" {
+		t.Fatalf("CRLF not trimmed: %q", line)
+	}
+}
 
 func TestPopEmptyArrayDoesNotPanic(t *testing.T) {
 	// Previously make([]object.Object, length-1) with length==0 panicked.

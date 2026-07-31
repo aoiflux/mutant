@@ -114,24 +114,45 @@ func TestProcessOpenFilesThreadsModules(t *testing.T) {
 	}
 }
 
-func TestProcessMemoryScanStub(t *testing.T) {
-	// process_memory_scan is still an advisory stub pending a real implementation.
-	payload, errObj := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj("needle")))
-	if runtime.GOOS == "linux" {
+func TestProcessMemoryScanReal(t *testing.T) {
+	// A distinctive pattern kept alive in this process's memory must be found by a
+	// real self-scan on supported platforms (Linux, Windows).
+	needle := []byte("mutant-memscan-marker-\x00\x01\x02-a7f3")
+	keepAlive := make([]byte, len(needle))
+	copy(keepAlive, needle)
+
+	payload, errObj := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj(string(needle))))
+
+	switch runtime.GOOS {
+	case "linux", "windows":
 		if errObj != nil {
-			t.Fatalf("process_memory_scan error: %s", errObj.Inspect())
+			t.Fatalf("process_memory_scan error on %s: %s", runtime.GOOS, errObj.Inspect())
 		}
-		scanHash, ok := payload.(*object.Hash)
+		h, ok := payload.(*object.Hash)
 		if !ok {
 			t.Fatalf("process_memory_scan payload type: %T", payload)
 		}
-		if sfMustHashString(t, scanHash, "status") != "not_implemented" {
-			t.Fatalf("unexpected process_memory_scan status")
+		if got := sfHashInt(t, h, "matched"); got < 1 {
+			t.Fatalf("expected the marker to be found in self memory, matched=%d", got)
 		}
-		return
+		addrs, ok := sfHashValue(t, h, "addresses").(*object.Array)
+		if !ok || len(addrs.Elements) < 1 {
+			t.Fatalf("expected at least one match address")
+		}
+	default:
+		if errObj == nil {
+			t.Fatalf("expected process_memory_scan unsupported error on %s", runtime.GOOS)
+		}
 	}
-	if errObj == nil {
-		t.Fatalf("expected process_memory_scan unsupported error on %s", runtime.GOOS)
+	runtime.KeepAlive(keepAlive)
+
+	// Non-self pid and empty pattern are rejected honestly.
+	otherPid := os.Getpid() + 1
+	if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(otherPid)}, stringObj("x"))); e == nil {
+		t.Fatal("scanning a non-self pid should error")
+	}
+	if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj(""))); e == nil {
+		t.Fatal("empty pattern should error")
 	}
 }
 

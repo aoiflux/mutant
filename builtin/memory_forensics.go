@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"os"
 	"strings"
@@ -181,12 +182,65 @@ func MemFindPE(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("mem_find_pe: %s", err.Error()))
 	}
 
-	offsets := carveOffsets(data, []byte{0x4d, 0x5a})
-	elements := make([]object.Object, len(offsets))
-	for i, off := range offsets {
-		elements[i] = intObj(int64(off))
+	// Each MZ marker is a candidate; a real PE is confirmed by following the DOS
+	// header's e_lfanew pointer (at +0x3C) to a "PE\0\0" signature.
+	mzOffsets := carveOffsets(data, []byte{0x4d, 0x5a})
+	headers := make([]object.Object, 0, len(mzOffsets))
+	confirmed := 0
+	for _, mz := range mzOffsets {
+		peOffset, machine, ok := validatePEAt(data, mz)
+		entry := map[string]object.Object{
+			"mz_offset": intObj(int64(mz)),
+			"confirmed": boolObj(ok),
+		}
+		if ok {
+			confirmed++
+			entry["pe_offset"] = intObj(int64(peOffset))
+			entry["machine"] = stringObj(peMachineName(machine))
+		}
+		headers = append(headers, makeHashObject(entry))
 	}
-	return resultAndError(&object.Array{Elements: elements}, nil)
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"candidates": intObj(int64(len(mzOffsets))),
+		"confirmed":  intObj(int64(confirmed)),
+		"headers":    &object.Array{Elements: headers},
+	}), nil)
+}
+
+// validatePEAt checks whether the MZ marker at mz is a real PE header by
+// following e_lfanew (DOS header +0x3C) to a "PE\0\0" signature, returning the
+// absolute PE-header offset and COFF machine type.
+func validatePEAt(data []byte, mz int) (peOffset int, machine uint16, ok bool) {
+	if mz+0x40 > len(data) {
+		return 0, 0, false
+	}
+	eLfanew := int(binary.LittleEndian.Uint32(data[mz+0x3C : mz+0x40]))
+	peAbs := mz + eLfanew
+	if eLfanew <= 0 || peAbs+6 > len(data) || peAbs < mz {
+		return 0, 0, false
+	}
+	if !(data[peAbs] == 'P' && data[peAbs+1] == 'E' && data[peAbs+2] == 0 && data[peAbs+3] == 0) {
+		return 0, 0, false
+	}
+	return peAbs, binary.LittleEndian.Uint16(data[peAbs+4 : peAbs+6]), true
+}
+
+func peMachineName(m uint16) string {
+	switch m {
+	case 0x014c:
+		return "i386"
+	case 0x8664:
+		return "amd64"
+	case 0x01c0:
+		return "arm"
+	case 0xaa64:
+		return "arm64"
+	case 0x0200:
+		return "ia64"
+	default:
+		return "unknown"
+	}
 }
 
 func MemFindShellcode(args ...object.Object) object.Object {

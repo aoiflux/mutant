@@ -497,9 +497,13 @@ func RAWMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("raw_metadata: %s", err.Error()))
 	}
 
+	// A raw disk image carries no stored sector-size metadata, so 512 is an
+	// assumption (the near-universal default), surfaced honestly as such rather
+	// than as a discovered value.
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"file_size":   intObj(metadata.FileSize),
-		"sector_size": intObj(int64(metadata.SectorSize)),
+		"file_size":           intObj(metadata.FileSize),
+		"assumed_sector_size": intObj(int64(metadata.SectorSize)),
+		"sector_size_assumed": boolObj(true),
 	}), nil)
 }
 

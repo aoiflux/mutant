@@ -195,13 +195,16 @@ func makeTablePartitionHash(part tablePartition) object.Object {
 		"start_lba":    intObj(int64(part.StartLBA)),
 		"length_lba":   intObj(int64(part.LengthLBA)),
 		"end_lba":      intObj(int64(part.EndLBA)),
-		"type_code":    intObj(int64(part.TypeCode)),
+		// type_code and attributes are uint64 bitfields whose high bit (e.g. the
+		// GPT "required partition" attribute, bit 63) overflows a signed integer,
+		// so they are surfaced as lossless hex strings.
+		"type_code":    stringObj(fmt.Sprintf("0x%016x", part.TypeCode)),
 		"type_name":    stringObj(part.TypeName),
 		"name":         stringObj(part.Name),
 		"flags":        intObj(int64(part.Flags)),
 		"table_number": intObj(int64(part.TableNumber)),
 		"slot_number":  intObj(int64(part.SlotNumber)),
-		"attributes":   intObj(int64(part.Attributes)),
+		"attributes":   stringObj(fmt.Sprintf("0x%016x", part.Attributes)),
 		"guid_type":    stringObj(part.GUIDType),
 		"guid_unique":  stringObj(part.GUIDUnique),
 	})

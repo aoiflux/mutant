@@ -3,6 +3,7 @@ package builtin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"runtime"
 	"sort"
@@ -221,19 +222,32 @@ func ProcessMemoryScan(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 2 to `process_memory_scan` must be STRING, got %s", args[1].Type()))
 	}
 
-	if runtime.GOOS != "linux" {
-		return resultAndError(nil, newError("process_memory_scan unsupported on %s", runtime.GOOS))
+	if patternObj.Value == "" {
+		return resultAndError(nil, newError("process_memory_scan: pattern must be non-empty"))
 	}
+	// Cross-process scanning needs elevated privileges and per-OS handle work;
+	// for now only the self process is supported (honest error otherwise).
 	if int(pidObj.Value) != os.Getpid() {
-		return resultAndError(nil, newError("process_memory_scan currently supports self process only"))
+		return resultAndError(nil, newError("process_memory_scan currently supports the self process only (pid %d, self is %d)", pidObj.Value, os.Getpid()))
+	}
+
+	const maxMatches = 10000
+	addresses, truncated, err := sfScanSelfMemory([]byte(patternObj.Value), maxMatches)
+	if err != nil {
+		return resultAndError(nil, newError("process_memory_scan: %s", err.Error()))
+	}
+
+	addrObjs := make([]object.Object, len(addresses))
+	for i, a := range addresses {
+		addrObjs[i] = stringObj(fmt.Sprintf("0x%x", a))
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"pid":      intObj(pidObj.Value),
-		"pattern":  stringObj(patternObj.Value),
-		"matched":  intObj(0),
-		"status":   stringObj("not_implemented"),
-		"advisory": boolObj(true),
+		"pid":       intObj(pidObj.Value),
+		"pattern":   stringObj(patternObj.Value),
+		"matched":   intObj(int64(len(addresses))),
+		"truncated": boolObj(truncated),
+		"addresses": &object.Array{Elements: addrObjs},
 	}), nil)
 }
 

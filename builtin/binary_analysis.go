@@ -168,9 +168,13 @@ func BinEntropy(args ...object.Object) object.Object {
 	}), nil)
 }
 
+// BinYaraScan is NOT a YARA engine (a real one requires cgo/libyara, which this
+// project forbids). It performs literal multi-string matching, reporting every
+// offset of each rule string. Matching is case-sensitive by default; pass a third
+// boolean argument to match case-insensitively.
 func BinYaraScan(args ...object.Object) object.Object {
-	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+	if len(args) != 2 && len(args) != 3 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
 
 	pathObj, ok := args[0].(*object.String)
@@ -181,39 +185,81 @@ func BinYaraScan(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 2 to `bin_yara_scan` must be ARRAY, got %s", args[1].Type()))
 	}
+	caseInsensitive := false
+	if len(args) == 3 {
+		ciObj, ok := args[2].(*object.Boolean)
+		if !ok {
+			return resultAndError(nil, newError("argument 3 to `bin_yara_scan` must be BOOLEAN, got %s", args[2].Type()))
+		}
+		caseInsensitive = ciObj.Value
+	}
 
 	data, err := os.ReadFile(pathObj.Value)
 	if err != nil {
 		return resultAndError(nil, newError("bin_yara_scan: %s", err.Error()))
 	}
-	lowerData := strings.ToLower(string(data))
+	haystack := string(data)
+	if caseInsensitive {
+		haystack = strings.ToLower(haystack)
+	}
 
 	hits := make([]object.Object, 0)
+	totalHits := 0
 	for i, ruleObj := range rulesObj.Elements {
 		ruleStr, ok := ruleObj.(*object.String)
 		if !ok {
 			return resultAndError(nil, newError("argument 2 to `bin_yara_scan` must contain STRING rules. element %d got %s", i, ruleObj.Type()))
 		}
-		pattern := strings.ToLower(ruleStr.Value)
+		pattern := ruleStr.Value
+		if caseInsensitive {
+			pattern = strings.ToLower(pattern)
+		}
 		if pattern == "" {
 			continue
 		}
-		offset := strings.Index(lowerData, pattern)
-		if offset >= 0 {
-			hits = append(hits, makeHashObject(map[string]object.Object{
-				"rule":   stringObj(ruleStr.Value),
-				"offset": intObj(int64(offset)),
-			}))
+		offsets := allSubstringOffsets(haystack, pattern)
+		if len(offsets) == 0 {
+			continue
 		}
+		totalHits += len(offsets)
+		offObjs := make([]object.Object, len(offsets))
+		for j, off := range offsets {
+			offObjs[j] = intObj(int64(off))
+		}
+		hits = append(hits, makeHashObject(map[string]object.Object{
+			"rule":    stringObj(ruleStr.Value),
+			"count":   intObj(int64(len(offsets))),
+			"offsets": &object.Array{Elements: offObjs},
+		}))
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"path":        stringObj(pathObj.Value),
-		"engine":      stringObj("yara-lite"),
-		"total_rules": intObj(int64(len(rulesObj.Elements))),
-		"matched":     intObj(int64(len(hits))),
-		"hits":        &object.Array{Elements: hits},
+		"path":             stringObj(pathObj.Value),
+		"engine":           stringObj("literal-substring"),
+		"case_insensitive": boolObj(caseInsensitive),
+		"total_rules":      intObj(int64(len(rulesObj.Elements))),
+		"matched":          intObj(int64(len(hits))),
+		"total_hits":       intObj(int64(totalHits)),
+		"hits":             &object.Array{Elements: hits},
 	}), nil)
+}
+
+// allSubstringOffsets returns every non-overlapping start offset of needle in
+// haystack.
+func allSubstringOffsets(haystack, needle string) []int {
+	if needle == "" {
+		return nil
+	}
+	out := make([]int, 0)
+	for start := 0; start <= len(haystack)-len(needle); {
+		idx := strings.Index(haystack[start:], needle)
+		if idx < 0 {
+			break
+		}
+		out = append(out, start+idx)
+		start += idx + len(needle)
+	}
+	return out
 }
 
 func BinImports(args ...object.Object) object.Object {

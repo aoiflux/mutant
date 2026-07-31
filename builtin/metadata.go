@@ -39,7 +39,7 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "...values", doc: "Values interpolated into format."},
 		},
 	},
-	BuiltinNameGets:          {signature: "gets()", summary: "Reads a line of input from stdin."},
+	BuiltinNameGets:          {signature: "gets()", summary: "Reads a full line of input from stdin and returns it as a STRING (newline trimmed). Use to_int/to_float/parse_int to convert."},
 	BuiltinNameFirst:         {signature: "first(array)", summary: "Returns the first element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
 	BuiltinNameLast:          {signature: "last(array)", summary: "Returns the last element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
 	BuiltinNameRest:          {signature: "rest(array)", summary: "Returns a new array without the first element.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
@@ -320,10 +320,10 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameProcessMemoryScan: {
 		signature: "process_memory_scan(pid, pattern)",
-		summary:   "Scans process memory for a string pattern (advisory/stub on some platforms).",
+		summary:   "Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS.",
 		params: []builtinParamDoc{
-			{name: "pid", doc: "Target process ID to scan."},
-			{name: "pattern", doc: "String pattern searched in process memory."},
+			{name: "pid", doc: "Target process ID (must be the current process for now)."},
+			{name: "pattern", doc: "Non-empty byte pattern to search for."},
 		},
 	},
 	BuiltinNameProcessEnv: {
@@ -427,8 +427,13 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Computes binary entropy signal.",
 	},
 	BuiltinNameBinYaraScan: {
-		signature: "bin_yara_scan(path, rules)",
-		summary:   "Runs YARA-like signature scanning on a binary.",
+		signature: "bin_yara_scan(path, rules, caseInsensitive?)",
+		summary:   "Literal multi-string scan of a file (NOT a real YARA engine — that needs cgo). Reports every offset of each rule string. Case-sensitive unless caseInsensitive is true. Returns {engine, matched, total_hits, hits:[{rule, count, offsets}]}.",
+		params: []builtinParamDoc{
+			{name: "path", doc: "Path to the file to scan."},
+			{name: "rules", doc: "Array of literal STRING patterns."},
+			{name: "caseInsensitive?", doc: "Optional BOOLEAN; default false (case-sensitive)."},
+		},
 	},
 	BuiltinNameBinImports: {
 		signature: "bin_imports(path)",
@@ -572,7 +577,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameMemFindPe: {
 		signature: "mem_find_pe(path)",
-		summary:   "Returns offsets of the MZ DOS-magic marker in a memory image (candidate PE headers). It does not validate the e_lfanew -> PE\\0\\0 linkage, so results are candidates, not confirmed PE files.",
+		summary:   "Finds PE headers in a memory image: carves each MZ marker and confirms real PEs by following e_lfanew to \"PE\\0\\0\". Returns {candidates, confirmed, headers:[{mz_offset, confirmed, pe_offset, machine}]}.",
 	},
 	BuiltinNameMemFindShellcode: {
 		signature: "mem_find_shellcode(path)",
@@ -765,6 +770,63 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameHttpConnReadResponse:     {signature: "http_conn_read_response(handle, timeoutMs)", summary: "Reads exactly one HTTP response from a connection handle."},
 	BuiltinNameHttpConnReadRequestHead:  {signature: "http_conn_read_request_head(handle, timeoutMs)", summary: "Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
 	BuiltinNameHttpConnReadResponseHead: {signature: "http_conn_read_response_head(handle, timeoutMs)", summary: "Reads a response's status line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
+
+	// filesystem parsers — each *_open(image) returns a handle used by the rest.
+	BuiltinNameNtfsOpen:      {signature: "ntfs_open(image)", summary: "Opens an NTFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an NTFS image/partition."}}},
+	BuiltinNameNtfsListFiles: {signature: "ntfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened NTFS image.", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "dir", doc: "Directory path within the image."}}},
+	BuiltinNameNtfsReadFile:  {signature: "ntfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened NTFS image.", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "path", doc: "File path within the image."}}},
+	BuiltinNameNtfsMetadata:  {signature: "ntfs_metadata(handle, path)", summary: "Returns metadata for a file/directory in an opened NTFS image.", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "path", doc: "Path within the image."}}},
+	BuiltinNameNtfsClose:     {signature: "ntfs_close(handle)", summary: "Closes an NTFS handle and releases its file."},
+	BuiltinNameFatOpen:       {signature: "fat_open(image)", summary: "Opens a FAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a FAT image/partition."}}},
+	BuiltinNameFatListFiles:  {signature: "fat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened FAT image."},
+	BuiltinNameFatReadFile:   {signature: "fat_read_file(handle, path)", summary: "Reads a file's bytes from an opened FAT image."},
+	BuiltinNameFatMetadata:   {signature: "fat_metadata(handle, path)", summary: "Returns metadata for a path in an opened FAT image."},
+	BuiltinNameFatClose:      {signature: "fat_close(handle)", summary: "Closes a FAT handle and releases its file."},
+	BuiltinNameXfatOpen:      {signature: "xfat_open(image)", summary: "Opens an exFAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an exFAT image/partition."}}},
+	BuiltinNameXfatListFiles: {signature: "xfat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened exFAT image."},
+	BuiltinNameXfatReadFile:  {signature: "xfat_read_file(handle, path)", summary: "Reads a file's bytes from an opened exFAT image."},
+	BuiltinNameXfatMetadata:  {signature: "xfat_metadata(handle, path)", summary: "Returns metadata for a path in an opened exFAT image."},
+	BuiltinNameXfatClose:     {signature: "xfat_close(handle)", summary: "Closes an exFAT handle and releases its file."},
+	BuiltinNameExtOpen:       {signature: "ext_open(image)", summary: "Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an ext image/partition."}}},
+	BuiltinNameExtListFiles:  {signature: "ext_list_files(handle, dir)", summary: "Lists entries under a directory in an opened ext image."},
+	BuiltinNameExtReadFile:   {signature: "ext_read_file(handle, path)", summary: "Reads a file's bytes from an opened ext image."},
+	BuiltinNameExtMetadata:   {signature: "ext_metadata(handle, path)", summary: "Returns metadata for a path in an opened ext image."},
+	BuiltinNameExtClose:      {signature: "ext_close(handle)", summary: "Closes an ext handle and releases its file."},
+	BuiltinNameHfsOpen:       {signature: "hfs_open(image)", summary: "Opens an HFS+ filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an HFS+ image/partition."}}},
+	BuiltinNameHfsListFiles:  {signature: "hfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened HFS+ image."},
+	BuiltinNameHfsReadFile:   {signature: "hfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened HFS+ image."},
+	BuiltinNameHfsMetadata:   {signature: "hfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened HFS+ image."},
+	BuiltinNameHfsClose:      {signature: "hfs_close(handle)", summary: "Closes an HFS+ handle and releases its file."},
+	BuiltinNameXfsOpen:       {signature: "xfs_open(image)", summary: "Opens an XFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an XFS image/partition."}}},
+	BuiltinNameXfsListFiles:  {signature: "xfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened XFS image."},
+	BuiltinNameXfsReadFile:   {signature: "xfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened XFS image."},
+	BuiltinNameXfsMetadata:   {signature: "xfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened XFS image."},
+	BuiltinNameXfsClose:      {signature: "xfs_close(handle)", summary: "Closes an XFS handle and releases its file."},
+
+	// disk-image parsers — *_read_at caps length at 32 MiB.
+	BuiltinNameVhdiOpen:      {signature: "vhdi_open(image)", summary: "Opens a VHD/VHDX disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a VHD/VHDX image."}}},
+	BuiltinNameVhdiMetadata:  {signature: "vhdi_metadata(handle)", summary: "Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers)."},
+	BuiltinNameVhdiReadAt:    {signature: "vhdi_read_at(handle, offset, length)", summary: "Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB)."},
+	BuiltinNameVhdiMapOffset: {signature: "vhdi_map_offset(handle, offset)", summary: "Maps a virtual offset to a backing file offset. Returns {virtual_offset, mapped, file_offset}."},
+	BuiltinNameVhdiClose:     {signature: "vhdi_close(handle)", summary: "Closes a VHD/VHDX handle."},
+	BuiltinNameEwfOpen:       {signature: "ewf_open(segments)", summary: "Opens an EWF/E01 image (a segment path or an array of segment paths). Returns (result, err).", params: []builtinParamDoc{{name: "segments", doc: "Segment file path or array of paths."}}},
+	BuiltinNameEwfMetadata:   {signature: "ewf_metadata(handle)", summary: "Returns EWF metadata (version, sectors/chunks, digests, media info)."},
+	BuiltinNameEwfReadAt:     {signature: "ewf_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from an EWF image (length capped at 32 MiB)."},
+	BuiltinNameEwfClose:      {signature: "ewf_close(handle)", summary: "Closes an EWF handle and its segment files."},
+	BuiltinNameRawOpen:       {signature: "raw_open(image)", summary: "Opens a raw disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a raw (dd) image."}}},
+	BuiltinNameRawMetadata:   {signature: "raw_metadata(handle)", summary: "Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata)."},
+	BuiltinNameRawReadAt:     {signature: "raw_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from a raw image (length capped at 32 MiB)."},
+	BuiltinNameRawClose:      {signature: "raw_close(handle)", summary: "Closes a raw image handle."},
+
+	// partition table parser
+	BuiltinNameTableOpen:           {signature: "table_open(image)", summary: "Opens a disk image and parses its partition table(s) (MBR/GPT). Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a disk image."}}},
+	BuiltinNameTableListPartitions: {signature: "table_list_partitions(handle)", summary: "Lists partitions with LBA ranges, type, name, flags, and hex type_code/attributes."},
+	BuiltinNameTablePartitionInfo:  {signature: "table_partition_info(handle, index)", summary: "Returns details for a single partition by index."},
+	BuiltinNameTableClose:          {signature: "table_close(handle)", summary: "Closes a partition-table handle."},
+
+	// close helpers that lacked docs
+	BuiltinNameCacheClose: {signature: "cache_close(name)", summary: "Closes a named cache and frees its entries and backend."},
+	BuiltinNameRegClose:   {signature: "reg_close(handle)", summary: "Closes a registry-hive handle opened with reg_open."},
 }
 
 var builtinFamilyDocs = []builtinFamilyDoc{
