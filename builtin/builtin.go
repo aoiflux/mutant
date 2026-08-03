@@ -416,6 +416,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTimestampNormalize, &BuiltIn{TimestampNormalize}},
 	{BuiltinNameTimelineSort, &BuiltIn{TimelineSort}},
 	{BuiltinNameTimelineMerge, &BuiltIn{TimelineMerge}},
+	{BuiltinNameBodyfileParse, &BuiltIn{BodyfileParse}},
+	{BuiltinNameMactime, &BuiltIn{Mactime}},
+	// forensic: Windows artifacts (append-only)
+	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
+	// forensic: macOS/iOS artifacts (append-only)
+	{BuiltinNamePlistParse, &BuiltIn{PlistParse}},
 	// security: fingerprinting (append-only)
 	{BuiltinNameImphash, &BuiltIn{Imphash}},
 	{BuiltinNameNTHash, &BuiltIn{NTHash}},

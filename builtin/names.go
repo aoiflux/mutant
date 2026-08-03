@@ -378,6 +378,12 @@ const (
 	BuiltinNameTimestampNormalize = "timestamp_normalize"
 	BuiltinNameTimelineSort       = "timeline_sort"
 	BuiltinNameTimelineMerge      = "timeline_merge"
+	BuiltinNameBodyfileParse      = "bodyfile_parse"
+	BuiltinNameMactime            = "mactime"
+	// forensic: Windows artifacts
+	BuiltinNameLnkParse = "lnk_parse"
+	// forensic: macOS/iOS artifacts
+	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting
 	BuiltinNameImphash = "imphash"
 	BuiltinNameNTHash  = "nt_hash"
