@@ -408,6 +408,18 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTLDExtract, &BuiltIn{TLDExtract}},
 	{BuiltinNameIsValidDomain, &BuiltIn{IsValidDomain}},
 	{BuiltinNameExtractIOCs, &BuiltIn{ExtractIOCs}},
+	// forensic: hash sets (append-only)
+	{BuiltinNameHashsetLoad, &BuiltIn{HashsetLoad}},
+	{BuiltinNameHashsetContains, &BuiltIn{HashsetContains}},
+	{BuiltinNameHashsetClose, &BuiltIn{HashsetClose}},
+	// forensic: timeline (append-only)
+	{BuiltinNameTimestampNormalize, &BuiltIn{TimestampNormalize}},
+	{BuiltinNameTimelineSort, &BuiltIn{TimelineSort}},
+	{BuiltinNameTimelineMerge, &BuiltIn{TimelineMerge}},
+	// security: fingerprinting (append-only)
+	{BuiltinNameImphash, &BuiltIn{Imphash}},
+	{BuiltinNameNTHash, &BuiltIn{NTHash}},
+	{BuiltinNameLMHash, &BuiltIn{LMHash}},
 	// security: crypto (append-only)
 	{BuiltinNameX509Parse, &BuiltIn{X509Parse}},
 	{BuiltinNameJWTDecode, &BuiltIn{JWTDecode}},

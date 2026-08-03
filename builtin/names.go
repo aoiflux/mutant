@@ -370,6 +370,18 @@ const (
 	BuiltinNameTLDExtract    = "tld_extract"
 	BuiltinNameIsValidDomain = "is_valid_domain"
 	BuiltinNameExtractIOCs   = "extract_iocs"
+	// forensic: hash sets (known-file filtering)
+	BuiltinNameHashsetLoad     = "hashset_load"
+	BuiltinNameHashsetContains = "hashset_contains"
+	BuiltinNameHashsetClose    = "hashset_close"
+	// forensic: timeline
+	BuiltinNameTimestampNormalize = "timestamp_normalize"
+	BuiltinNameTimelineSort       = "timeline_sort"
+	BuiltinNameTimelineMerge      = "timeline_merge"
+	// security: fingerprinting
+	BuiltinNameImphash = "imphash"
+	BuiltinNameNTHash  = "nt_hash"
+	BuiltinNameLMHash  = "lm_hash"
 	// security: crypto
 	BuiltinNameX509Parse  = "x509_parse"
 	BuiltinNameJWTDecode  = "jwt_decode"

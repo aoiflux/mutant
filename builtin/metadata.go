@@ -174,6 +174,18 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameTLDExtract:    {signature: "tld_extract(domain)", summary: "Returns {domain, etld1, suffix} using the public suffix list."},
 	BuiltinNameIsValidDomain: {signature: "is_valid_domain(s)", summary: "Returns whether s is a syntactically valid domain name."},
 	BuiltinNameExtractIOCs:   {signature: "extract_iocs(text)", summary: "Extracts IOCs from text (refanged first): {ipv4, urls, domains, emails, md5, sha1, sha256}, each unique and sorted."},
+	// forensic: hash sets (known-file filtering, NSRL-style)
+	BuiltinNameHashsetLoad:     {signature: "hashset_load(path)", summary: "Loads a file of hashes (one per line, or CSV/NSRL where the hash is the first field) into an in-memory set. Skips headers/comments/non-hex. Returns {handle, count}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a hash list (md5/sha1/sha256 hex)."}}},
+	BuiltinNameHashsetContains: {signature: "hashset_contains(handle, hash)", summary: "Returns whether a hash is in a loaded set (case-insensitive). Returns (bool, err).", params: []builtinParamDoc{{name: "handle", doc: "Handle from hashset_load."}, {name: "hash", doc: "Hex hash to look up."}}},
+	BuiltinNameHashsetClose:    {signature: "hashset_close(handle)", summary: "Frees a loaded hash set. Returns (bool, err)."},
+	// forensic: timeline
+	BuiltinNameTimestampNormalize: {signature: "timestamp_normalize(value, format?)", summary: "Normalizes a timestamp to {unix, unix_ms, iso, format}. Formats: unix (s/ms/us/ns), filetime (Windows), webkit/chrome, dos (packed 32-bit), iso (RFC3339 string). Default \"auto\" detects unix magnitude or parses an ISO string. Returns (result, err).", params: []builtinParamDoc{{name: "value", doc: "INTEGER epoch/packed value, or ISO STRING."}, {name: "format?", doc: "One of auto/unix/unix_ms/unix_us/unix_ns/filetime/webkit/dos/iso."}}},
+	BuiltinNameTimelineSort:       {signature: "timeline_sort(events, field?)", summary: "Returns events (array of hashes) sorted ascending by a numeric timestamp field (default \"ts\"); events missing the field sort last. Stable."},
+	BuiltinNameTimelineMerge:      {signature: "timeline_merge(sources, field?)", summary: "Flattens an array of event arrays into one supertimeline sorted by a numeric timestamp field (default \"ts\")."},
+	// security: fingerprinting
+	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{{name: "pe_path", doc: "Path to a PE (Windows) binary."}}},
+	BuiltinNameNTHash:  {signature: "nt_hash(password)", summary: "Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use."},
+	BuiltinNameLMHash:  {signature: "lm_hash(password)", summary: "Returns the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex. Empty password -> aad3b435b51404eeaad3b435b51404ee."},
 	// security: crypto
 	BuiltinNameX509Parse:  {signature: "x509_parse(pem_or_der)", summary: "Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err).", params: []builtinParamDoc{{name: "pem_or_der", doc: "Certificate bytes in PEM or DER form."}}},
 	BuiltinNameJWTDecode:  {signature: "jwt_decode(token)", summary: "Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err).", params: []builtinParamDoc{{name: "token", doc: "Compact JWT string (header.payload.signature)."}}},
@@ -850,6 +862,8 @@ var builtinFamilyDocs = []builtinFamilyDoc{
 	{prefix: "base32", summary: "Base32 encoding/decoding helper."},
 	{prefix: "go_", summary: "Go-compiled binary analysis helper (GoReSym): build info, build ID, and symbol recovery from stripped binaries."},
 	{prefix: "ip_", summary: "IP address helper (validation, CIDR membership, conversions)."},
+	{prefix: "timeline_", summary: "Forensic timeline helper (sort/merge events into a supertimeline)."},
+	{prefix: "hashset_", summary: "Known-file hash-set helper (NSRL-style load/lookup for filtering)."},
 	{prefix: "text_", summary: "Text analysis and fuzzy matching helper."},
 	{prefix: "regex_", summary: "Regular expression matching and extraction helper."},
 	{prefix: "policy_", summary: "Policy evaluation and trace helper."},
