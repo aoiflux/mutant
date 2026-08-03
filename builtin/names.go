@@ -382,6 +382,13 @@ const (
 	BuiltinNameMactime            = "mactime"
 	// forensic: Windows artifacts
 	BuiltinNameLnkParse = "lnk_parse"
+	// forensic: real registry hive parsing (regf binary format)
+	BuiltinNameHiveOpen       = "hive_open"
+	BuiltinNameHiveClose      = "hive_close"
+	BuiltinNameHiveKeyInfo    = "hive_key_info"
+	BuiltinNameHiveListKeys   = "hive_list_keys"
+	BuiltinNameHiveListValues = "hive_list_values"
+	BuiltinNameHiveGetValue   = "hive_get_value"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

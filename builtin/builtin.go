@@ -420,6 +420,13 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameMactime, &BuiltIn{Mactime}},
 	// forensic: Windows artifacts (append-only)
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
+	// forensic: real registry hive parsing (append-only)
+	{BuiltinNameHiveOpen, &BuiltIn{HiveOpen}},
+	{BuiltinNameHiveClose, &BuiltIn{HiveClose}},
+	{BuiltinNameHiveKeyInfo, &BuiltIn{HiveKeyInfo}},
+	{BuiltinNameHiveListKeys, &BuiltIn{HiveListKeys}},
+	{BuiltinNameHiveListValues, &BuiltIn{HiveListValues}},
+	{BuiltinNameHiveGetValue, &BuiltIn{HiveGetValue}},
 	// forensic: macOS/iOS artifacts (append-only)
 	{BuiltinNamePlistParse, &BuiltIn{PlistParse}},
 	// security: fingerprinting (append-only)
