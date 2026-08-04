@@ -389,6 +389,9 @@ const (
 	BuiltinNameHiveListKeys   = "hive_list_keys"
 	BuiltinNameHiveListValues = "hive_list_values"
 	BuiltinNameHiveGetValue   = "hive_get_value"
+	BuiltinNameAmcacheParse   = "amcache_parse"
+	BuiltinNameShimcacheParse = "shimcache_parse"
+	BuiltinNamePrefetchParse  = "prefetch_parse"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

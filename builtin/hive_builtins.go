@@ -181,6 +181,81 @@ func (h *regfHive) values(nk *nkKey) []*vkValue {
 	return out
 }
 
+// rawValueBytes returns the raw data bytes of a value, resolving inline data,
+// referenced cells, and big-data ("db") records.
+func (h *regfHive) rawValueBytes(vk *vkValue) []byte {
+	size := vk.dataSize & 0x7FFFFFFF
+	if vk.dataSize&0x80000000 != 0 { // inline
+		n := int(size)
+		if n > 4 {
+			n = 4
+		}
+		return vk.inlineRaw[:n]
+	}
+	c, err := h.cell(vk.dataOff)
+	if err != nil {
+		return nil
+	}
+	if len(c) >= 4 && string(c[0:2]) == "db" { // big data
+		return h.readBigData(c, int(size))
+	}
+	if int(size) <= len(c) {
+		return c[:size]
+	}
+	return c
+}
+
+// readBigData reassembles a value stored across multiple segments via a "db" record.
+func (h *regfHive) readBigData(dbCell []byte, size int) []byte {
+	if len(dbCell) < 8 {
+		return nil
+	}
+	numSegs := int(binary.LittleEndian.Uint16(dbCell[2:4]))
+	segList, err := h.cell(binary.LittleEndian.Uint32(dbCell[4:8]))
+	if err != nil {
+		return nil
+	}
+	out := make([]byte, 0, size)
+	for i := 0; i < numSegs && 4*i+4 <= len(segList); i++ {
+		seg, err := h.cell(binary.LittleEndian.Uint32(segList[4*i : 4*i+4]))
+		if err != nil {
+			break
+		}
+		take := len(seg)
+		if take > 16344 { // each big-data segment holds up to 16344 bytes
+			take = 16344
+		}
+		out = append(out, seg[:take]...)
+		if len(out) >= size {
+			break
+		}
+	}
+	if len(out) > size {
+		out = out[:size]
+	}
+	return out
+}
+
+func (h *regfHive) findValueRaw(nk *nkKey, name string) ([]byte, bool) {
+	for _, vk := range h.values(nk) {
+		if strings.EqualFold(vk.name, name) {
+			return h.rawValueBytes(vk), true
+		}
+	}
+	return nil, false
+}
+
+// valueMap returns a key's values as a lowercased-name -> data map (for
+// case-insensitive lookups by artifact parsers like amcache).
+func (h *regfHive) valueMap(nk *nkKey) map[string]object.Object {
+	m := map[string]object.Object{}
+	for _, vk := range h.values(nk) {
+		_, data := h.valueData(vk)
+		m[strings.ToLower(vk.name)] = data
+	}
+	return m
+}
+
 func (h *regfHive) parseVK(rel uint32) (*vkValue, error) {
 	c, err := h.cell(rel)
 	if err != nil {

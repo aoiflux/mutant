@@ -427,6 +427,8 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameHiveListKeys, &BuiltIn{HiveListKeys}},
 	{BuiltinNameHiveListValues, &BuiltIn{HiveListValues}},
 	{BuiltinNameHiveGetValue, &BuiltIn{HiveGetValue}},
+	{BuiltinNameAmcacheParse, &BuiltIn{AmcacheParse}},
+	{BuiltinNameShimcacheParse, &BuiltIn{ShimcacheParse}},
 	// forensic: macOS/iOS artifacts (append-only)
 	{BuiltinNamePlistParse, &BuiltIn{PlistParse}},
 	// security: fingerprinting (append-only)
@@ -439,6 +441,8 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameAESEncrypt, &BuiltIn{AESEncrypt}},
 	{BuiltinNameAESDecrypt, &BuiltIn{AESDecrypt}},
 	{BuiltinNamePEMDecode, &BuiltIn{PEMDecode}},
+	// forensic: Windows artifacts (append-only)
+	{BuiltinNamePrefetchParse, &BuiltIn{PrefetchParse}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
