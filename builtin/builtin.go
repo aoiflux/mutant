@@ -443,6 +443,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNamePEMDecode, &BuiltIn{PEMDecode}},
 	// forensic: Windows artifacts (append-only)
 	{BuiltinNamePrefetchParse, &BuiltIn{PrefetchParse}},
+	{BuiltinNameMftParse, &BuiltIn{MftParse}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

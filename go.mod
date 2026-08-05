@@ -7,7 +7,7 @@ require (
 	github.com/aoiflux/libext v0.1.0
 	github.com/aoiflux/libfat v0.1.0
 	github.com/aoiflux/libhfs v0.1.1
-	github.com/aoiflux/libntfs v0.1.4
+	github.com/aoiflux/libntfs v0.2.0
 	github.com/aoiflux/libtable v0.1.1
 	github.com/aoiflux/libvhdi v0.1.0
 	github.com/aoiflux/libxfat v1.0.6

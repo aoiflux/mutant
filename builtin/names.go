@@ -392,6 +392,7 @@ const (
 	BuiltinNameAmcacheParse   = "amcache_parse"
 	BuiltinNameShimcacheParse = "shimcache_parse"
 	BuiltinNamePrefetchParse  = "prefetch_parse"
+	BuiltinNameMftParse       = "mft_parse"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting
