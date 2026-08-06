@@ -25,6 +25,12 @@ type Lexer struct {
 	// lineStart is the byte offset in input at which the current line begins.
 	// Column of l.ch = l.position - l.lineStart + 1.
 	lineStart int
+
+	// comments accumulates comment trivia in source order as it is skipped.
+	// Comments are never emitted as tokens, so the parser is unaffected;
+	// tooling that needs them (the formatter) reads them after lexing via
+	// Comments().
+	comments []token.Comment
 }
 
 // New function initializes our lexer, takes input as a string
@@ -299,10 +305,48 @@ func (l *Lexer) skipTrivia() {
 	}
 }
 
+// skipLineComment consumes a `// ...` comment up to (but not including) the
+// terminating newline, recording it as trivia. The cursor is left on the
+// newline (or EOF) so the enclosing skipTrivia loop keeps line accounting
+// intact.
 func (l *Lexer) skipLineComment() {
+	start := l.currentPos()
 	for l.ch != '\n' && l.ch != 0 {
 		l.readRune()
 	}
+	end := l.currentPos()
+
+	text := l.input[start.Offset:end.Offset]
+
+	// On CRLF input the '\r' sits before the '\n' and would otherwise be
+	// captured as part of the comment body. Drop it from both the text and
+	// the recorded end position so they stay consistent.
+	if strings.HasSuffix(text, "\r") {
+		text = text[:len(text)-1]
+		end.Offset--
+		end.Column--
+	}
+
+	l.comments = append(l.comments, token.Comment{
+		Kind:  token.LineComment,
+		Text:  text,
+		Start: start,
+		End:   end,
+	})
+}
+
+// Comments returns the comment trivia lexed so far, in source order.
+//
+// Because lexing is lazy, the result is only complete once the input has
+// been consumed through EOF. Callers that need every comment (the parser,
+// which publishes them on ast.Program) should read this after parsing
+// finishes rather than mid-stream. The returned slice aliases the lexer's
+// storage and must not be mutated.
+func (l *Lexer) Comments() []token.Comment {
+	if l == nil {
+		return nil
+	}
+	return l.comments
 }
 
 func (l *Lexer) peekRune() rune {

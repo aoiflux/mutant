@@ -54,6 +54,14 @@ func isNilStatement(stmt ast.Statement) bool {
 
 func (p *Parser) parseStatement() ast.Statement {
 	switch p.curToken.Type {
+	case token.SEMICOLON:
+		// An empty statement: a `;` terminating nothing, as in `let x = 1;;`.
+		// Previously this fell through to expression parsing and produced a
+		// hard "no prefix parse function" error. Report it as recoverable and
+		// drop it instead, so the tree stays clean and the formatter can
+		// remove the stray token simply by not re-emitting it.
+		p.recordRedundantSemicolon(p.curToken)
+		return nil
 	case token.LET:
 		return p.parseLetStatement()
 	case token.RETURN:
@@ -76,9 +84,7 @@ func (p *Parser) parseStatement() ast.Statement {
 func (p *Parser) parseBreakStatement() *ast.BreakStatement {
 	start := p.startMark()
 	stmt := &ast.BreakStatement{Token: p.curToken}
-	if p.peekTokenIs(token.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementTerminator(stmt)
 	p.recordRange(stmt, start)
 	return stmt
 }
@@ -86,9 +92,7 @@ func (p *Parser) parseBreakStatement() *ast.BreakStatement {
 func (p *Parser) parseContinueStatement() *ast.ContinueStatement {
 	start := p.startMark()
 	stmt := &ast.ContinueStatement{Token: p.curToken}
-	if p.peekTokenIs(token.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementTerminator(stmt)
 	p.recordRange(stmt, start)
 	return stmt
 }
@@ -268,9 +272,7 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 		}
 	}
 
-	if p.peekTokenIs(token.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementTerminator(stmt)
 	p.recordRange(stmt, start)
 	return stmt
 }
@@ -313,9 +315,7 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 		fl.Name = stmt.Name.Value
 	}
 
-	if !p.curTokenIs(token.SEMICOLON) {
-		p.nextToken()
-	}
+	p.consumeStatementTerminator(stmt)
 
 	p.recordRange(stmt, start)
 	return stmt

@@ -48,6 +48,42 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "unusedDeclaration", &config.UnusedDeclaration)
 	applyRuleSeverity(rulesMap, "undefinedDeclaration", &config.UndefinedDeclaration)
 	applyRuleSeverity(rulesMap, "nestingComplexity", &config.NestingComplexity)
+	applyRuleSeverity(rulesMap, "semicolon", &config.Semicolon)
+}
+
+// parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.
+//
+// It is intentionally a single boolean. The setting decides *whether* the
+// server formats, never *how* — exposing style options would defeat the
+// purpose of a canonical formatter.
+func parseStrictFormatting(settings any) bool {
+	enabled := true
+	readStrictFormatting(&enabled, settings)
+	return enabled
+}
+
+func readStrictFormatting(enabled *bool, settings any) {
+	if enabled == nil || settings == nil {
+		return
+	}
+
+	root, ok := settings.(map[string]any)
+	if !ok {
+		return
+	}
+
+	if nested, ok := root["mutant"]; ok {
+		readStrictFormatting(enabled, nested)
+		return
+	}
+
+	raw, ok := root["strictFormatting"]
+	if !ok {
+		return
+	}
+	if value, ok := raw.(bool); ok {
+		*enabled = value
+	}
 }
 
 func applyRuleSeverity(rules map[string]any, ruleName string, target *analyzer.LintSeverity) {

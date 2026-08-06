@@ -21,11 +21,17 @@ const (
 	LintSeverityOff         LintSeverity = "off"
 )
 
+// DiagnosticSourceFormat tags diagnostics raised by the strict formatting
+// rules, as distinct from "mutant-parser" (hard syntax errors) and
+// "mutant-lint" (style and correctness rules). Quick fixes key off it.
+const DiagnosticSourceFormat = "mutant-format"
+
 type LintConfig struct {
 	DuplicateTopLevelDeclaration LintSeverity
 	UnusedDeclaration            LintSeverity
 	UndefinedDeclaration         LintSeverity
 	NestingComplexity            LintSeverity
+	Semicolon                    LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -34,6 +40,10 @@ func DefaultLintConfig() LintConfig {
 		UnusedDeclaration:            LintSeverityWarning,
 		UndefinedDeclaration:         LintSeverityError,
 		NestingComplexity:            LintSeverityWarning,
+		// Mutant mandates semicolons, but a missing one still parses into a
+		// usable tree and the formatter repairs it on save, so this is a
+		// warning rather than an error.
+		Semicolon: LintSeverityWarning,
 	}
 }
 
@@ -48,6 +58,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.UndefinedDeclaration
 	case "nestingComplexity":
 		severityName = c.NestingComplexity
+	case "semicolon":
+		severityName = c.Semicolon
 	default:
 		return nil, false
 	}
@@ -98,11 +110,67 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintUnusedDeclarations(snapshot, lintConfig, duplicateNamesFromDiagnostics(duplicateDiagnostics))...)
 	diagnostics = append(diagnostics, lintUndefinedDeclarations(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintNestingComplexity(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
 	}
 	return diagnostics
+}
+
+// lintSemicolons reports the parser's recoverable semicolon problems.
+//
+// These never appear in ParseErrors — the tree parsed fine — so without this
+// rule a missing `;` would be invisible until the formatter silently fixed
+// it on save. Surfacing them lets the editor show the problem and offer a
+// targeted quick fix.
+func lintSemicolons(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil {
+		return nil
+	}
+
+	problems := snapshot.SemicolonProblems()
+	if len(problems) == 0 {
+		return nil
+	}
+
+	severity, ok := lintConfig.severityForRule("semicolon")
+	if !ok {
+		return nil
+	}
+
+	source := DiagnosticSourceFormat
+	result := make([]lsp.Diagnostic, 0, len(problems))
+	for _, problem := range problems {
+		rng := localprotocol.ToLSPRange(problem.Range)
+		if !problem.Range.IsValid() {
+			continue
+		}
+		result = append(result, lsp.Diagnostic{
+			Range:    widenZeroWidthRange(rng),
+			Severity: severity,
+			Source:   &source,
+			Message:  problem.Msg,
+		})
+	}
+
+	return result
+}
+
+// widenZeroWidthRange makes an insertion point visible.
+//
+// A missing-semicolon problem is recorded as a zero-width range so it can be
+// used directly as an insertion point, but editors render a zero-width
+// diagnostic as little or nothing. Extending it one character to the left
+// underlines the statement's final token instead, while quick fixes keep
+// using the range's End as the true insertion point.
+func widenZeroWidthRange(rng lsp.Range) lsp.Range {
+	if rng.Start != rng.End || rng.Start.Character == 0 {
+		return rng
+	}
+	widened := rng
+	widened.Start.Character--
+	return widened
 }
 
 func lintDuplicateTopLevelDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {

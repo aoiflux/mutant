@@ -25,9 +25,10 @@ func (a *Analyzer) Analyze(src string) *Snapshot {
 	p := mutantparser.New(lexer.New(src))
 	program := p.ParseProgram()
 	return &Snapshot{
-		Source:      src,
-		Program:     program,
-		ParseErrors: p.TypedErrors(),
+		Source:       src,
+		Program:      program,
+		ParseErrors:  p.TypedErrors(),
+		Recoverables: p.Recoverables(),
 	}
 }
 
