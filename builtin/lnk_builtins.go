@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 	"time"
 	"unicode/utf16"
@@ -53,8 +54,19 @@ func LnkParse(args ...object.Object) (result object.Object) {
 	if err != nil {
 		return resultAndError(nil, newError("lnk_parse: %s", err.Error()))
 	}
+	m, perr := parseLnkBytes(data)
+	if perr != nil {
+		return resultAndError(nil, newError("lnk_parse: %s", perr.Error()))
+	}
+	return resultAndError(makeHashObject(m), nil)
+}
+
+// parseLnkBytes parses a shell-link (MS-SHLLINK) structure from a byte slice and
+// returns its fields. Shared by lnk_parse (whole file) and jumplist_parse (LNK
+// streams embedded in a jump list). Tolerates trailing bytes after the link.
+func parseLnkBytes(data []byte) (map[string]object.Object, error) {
 	if len(data) < 76 || binary.LittleEndian.Uint32(data[0:4]) != 0x0000004C {
-		return resultAndError(nil, newError("lnk_parse: not a shell link (bad header)"))
+		return nil, fmt.Errorf("not a shell link (bad header)")
 	}
 
 	flags := binary.LittleEndian.Uint32(data[20:24])
@@ -107,7 +119,7 @@ func LnkParse(args ...object.Object) (result object.Object) {
 		}
 	}
 
-	return resultAndError(makeHashObject(map[string]object.Object{
+	return map[string]object.Object{
 		"link_flags":         intObj(int64(flags)),
 		"link_flags_decoded": &object.Array{Elements: decoded},
 		"file_attributes":    intObj(int64(fileAttr)),
@@ -126,7 +138,7 @@ func LnkParse(args ...object.Object) (result object.Object) {
 		"working_dir":        stringObj(workDir),
 		"arguments":          stringObj(arguments),
 		"icon_location":      stringObj(iconLoc),
-	}), nil)
+	}, nil
 }
 
 func filetimeToUnix(ft uint64) int64 {

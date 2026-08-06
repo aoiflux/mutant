@@ -123,39 +123,6 @@ func TestEvtxValueToObject(t *testing.T) {
 	}
 }
 
-// TestEvtxParseFileFromEnv runs the full builtin against a real .evtx supplied
-// via MUTANT_EVTX_TEST_FILE. Opt-in so it stays hermetic in CI.
-func TestEvtxParseFileFromEnv(t *testing.T) {
-	path := os.Getenv("MUTANT_EVTX_TEST_FILE")
-	if path == "" {
-		t.Skip("set MUTANT_EVTX_TEST_FILE to run against a real .evtx")
-	}
-	payload, errObj := unwrapPair(t, EvtxParse(stringObj(path)))
-	if errObj != nil {
-		t.Fatalf("evtx_parse: %s", errObj.Inspect())
-	}
-	h := payload.(*object.Hash)
-	recs := hashValueByKey(h, "records").(*object.Array)
-	t.Logf("chunks=%d records=%d", hInt(t, h, "chunk_count"), len(recs.Elements))
-	if len(recs.Elements) == 0 {
-		t.Fatal("no records parsed")
-	}
-	withEventID := 0
-	for _, e := range recs.Elements {
-		r := e.(*object.Hash)
-		if _, ok := hashValueByKey(r, "event").(*object.Hash); !ok {
-			t.Fatal("event is not a hash")
-		}
-		if hInt(t, r, "event_id") > 0 {
-			withEventID++
-		}
-	}
-	t.Logf("records with a positive event_id: %d/%d", withEventID, len(recs.Elements))
-	if withEventID == 0 {
-		t.Error("no records had an extractable event_id")
-	}
-}
-
 func TestEvtxParseRejectsNonEvtx(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "notevtx.bin")

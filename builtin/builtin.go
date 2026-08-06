@@ -445,6 +445,10 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNamePrefetchParse, &BuiltIn{PrefetchParse}},
 	{BuiltinNameMftParse, &BuiltIn{MftParse}},
 	{BuiltinNameEvtxParse, &BuiltIn{EvtxParse}},
+	// binary analysis: Mach-O (append-only)
+	{BuiltinNameBinMachoParse, &BuiltIn{BinMachOParse}},
+	// forensic: Windows jump lists (append-only)
+	{BuiltinNameJumplistParse, &BuiltIn{JumplistParse}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

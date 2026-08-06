@@ -121,6 +121,7 @@ const (
 	BuiltinNameTableClose            = "table_close"
 	BuiltinNameBinPeParse            = "bin_pe_parse"
 	BuiltinNameBinElfParse           = "bin_elf_parse"
+	BuiltinNameBinMachoParse         = "bin_macho_parse"
 	BuiltinNameBinDwarfParse         = "bin_dwarf_parse"
 	BuiltinNameBinStrings            = "bin_strings"
 	BuiltinNameBinEntropy            = "bin_entropy"
@@ -394,6 +395,7 @@ const (
 	BuiltinNamePrefetchParse  = "prefetch_parse"
 	BuiltinNameMftParse       = "mft_parse"
 	BuiltinNameEvtxParse      = "evtx_parse"
+	BuiltinNameJumplistParse  = "jumplist_parse"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

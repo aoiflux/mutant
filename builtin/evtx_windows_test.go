@@ -14,9 +14,10 @@ import (
 // TestEvtxParseRealFile runs evtx_parse end-to-end against a real Windows Event
 // Log from this machine, validating the full BinXML pipeline (not just the
 // conversion layer). It picks the smallest readable .evtx and skips gracefully
-// if none are accessible (e.g. ACLs on a locked-down host or CI).
+// if none are accessible (e.g. ACLs on a locked-down host or CI). The log path
+// is the fixed Windows location (no environment variables, per project policy).
 func TestEvtxParseRealFile(t *testing.T) {
-	logDir := filepath.Join(os.Getenv("SystemRoot"), "System32", "winevt", "Logs")
+	logDir := filepath.Join(`C:\Windows`, "System32", "winevt", "Logs")
 	matches, _ := filepath.Glob(filepath.Join(logDir, "*.evtx"))
 	if len(matches) == 0 {
 		t.Skip("no .evtx files found")

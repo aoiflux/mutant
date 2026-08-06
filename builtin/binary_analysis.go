@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"debug/dwarf"
 	"debug/elf"
+	"debug/macho"
 	"debug/pe"
 	"os"
 	"sort"
@@ -71,6 +72,77 @@ func BinELFParse(args ...object.Object) object.Object {
 		"type":         stringObj(f.Type.String()),
 		"entry":        intObj(int64(f.Entry)),
 		"num_sections": intObj(int64(len(f.Sections))),
+	}), nil)
+}
+
+// BinMachOParse parses a Mach-O binary (macOS/iOS native executables), the gap
+// left by bin_pe_parse (PE) and bin_elf_parse (ELF). It handles both a thin
+// single-architecture image and a fat/universal binary (multiple slices).
+// Pure-Go via the stdlib debug/macho, panic-recovered for untrusted input.
+func BinMachOParse(args ...object.Object) (result object.Object) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = resultAndError(nil, newError("bin_macho_parse: panic during parse: %v", r))
+		}
+	}()
+
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+
+	pathObj, ok := args[0].(*object.String)
+	if !ok {
+		return resultAndError(nil, newError("argument 1 to `bin_macho_parse` must be STRING, got %s", args[0].Type()))
+	}
+
+	// Universal / fat binary: enumerate the per-architecture slices.
+	if fat, err := macho.OpenFat(pathObj.Value); err == nil {
+		defer fat.Close()
+		arches := make([]object.Object, len(fat.Arches))
+		for i := range fat.Arches {
+			a := &fat.Arches[i]
+			arches[i] = makeHashObject(map[string]object.Object{
+				"cpu":    stringObj(a.Cpu.String()),
+				"type":   stringObj(a.Type.String()),
+				"offset": intObj(int64(a.Offset)),
+				"size":   intObj(int64(a.Size)),
+				"align":  intObj(int64(a.Align)),
+			})
+		}
+		return resultAndError(makeHashObject(map[string]object.Object{
+			"path":          stringObj(pathObj.Value),
+			"format":        stringObj("macho"),
+			"fat":           boolObj(true),
+			"num_arches":    intObj(int64(len(fat.Arches))),
+			"architectures": &object.Array{Elements: arches},
+		}), nil)
+	} else if err != macho.ErrNotFat {
+		return resultAndError(nil, newError("bin_macho_parse: %s", err.Error()))
+	}
+
+	f, err := macho.Open(pathObj.Value)
+	if err != nil {
+		return resultAndError(nil, newError("bin_macho_parse: %s", err.Error()))
+	}
+	defer f.Close()
+
+	libs, _ := f.ImportedLibraries()
+	libObjs := make([]object.Object, len(libs))
+	for i, l := range libs {
+		libObjs[i] = stringObj(l)
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"path":               stringObj(pathObj.Value),
+		"format":             stringObj("macho"),
+		"fat":                boolObj(false),
+		"magic":              intObj(int64(f.Magic)),
+		"cpu":                stringObj(f.Cpu.String()),
+		"type":               stringObj(f.Type.String()),
+		"flags":              intObj(int64(f.Flags)),
+		"num_sections":       intObj(int64(len(f.Sections))),
+		"num_commands":       intObj(int64(f.Ncmd)),
+		"imported_libraries": &object.Array{Elements: libObjs},
 	}), nil)
 }
 
