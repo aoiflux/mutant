@@ -658,7 +658,7 @@ func needsSpace(prev, next string) bool {
 		return prev == "if" || prev == "for"
 	}
 
-	if next == "," || next == ";" || next == ")" || next == "]" || next == "}" || next == "." || next == ":" {
+	if next == "," || next == ";" || next == ")" || next == "]" || next == "}" || next == "." || next == ":" || next == "[" {
 		return false
 	}
 	if prev == "(" || prev == "[" || prev == "{" || prev == "." {

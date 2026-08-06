@@ -22,7 +22,6 @@ var (
 	telemetryRemoteSuspicious uint64
 	telemetryRemoteCritical   uint64
 	telemetryCommandAttempt   uint64
-	telemetryCommandBlocked   uint64
 	telemetryCommandSucceeded uint64
 	telemetryCommandFailed    uint64
 )
@@ -111,7 +110,6 @@ func SecurityTelemetrySnapshot() map[string]uint64 {
 		"remote_process_suspicious":   atomic.LoadUint64(&telemetryRemoteSuspicious),
 		"remote_process_critical":     atomic.LoadUint64(&telemetryRemoteCritical),
 		"command_attempt":             atomic.LoadUint64(&telemetryCommandAttempt),
-		"command_blocked":             atomic.LoadUint64(&telemetryCommandBlocked),
 		"command_succeeded":           atomic.LoadUint64(&telemetryCommandSucceeded),
 		"command_failed":              atomic.LoadUint64(&telemetryCommandFailed),
 	}
@@ -148,7 +146,6 @@ func ResetSecurityTelemetry() {
 	atomic.StoreUint64(&telemetryRemoteSuspicious, 0)
 	atomic.StoreUint64(&telemetryRemoteCritical, 0)
 	atomic.StoreUint64(&telemetryCommandAttempt, 0)
-	atomic.StoreUint64(&telemetryCommandBlocked, 0)
 	atomic.StoreUint64(&telemetryCommandSucceeded, 0)
 	atomic.StoreUint64(&telemetryCommandFailed, 0)
 }

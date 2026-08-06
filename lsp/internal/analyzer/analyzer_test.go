@@ -141,7 +141,7 @@ func TestBuiltinFamilyTeachingCoverageForLatestFamilies(t *testing.T) {
 		{name: "regex_replace", wantContains: []string{"Regular expression matching and extraction helper", "Replaces all regex matches"}},
 		{name: "policy_trace", wantContains: []string{"Policy evaluation and trace helper", "Runs policy evaluation with trace output"}},
 		{name: "bin_pe_parse", wantContains: []string{"Binary analysis helper", "Parses PE headers"}},
-		{name: "reg_timeline", wantContains: []string{"Registry forensics helper", "Returns timeline events extracted"}},
+		{name: "reg_timeline", wantContains: []string{"Registry forensics helper", "Returns timeline entries"}},
 		{name: "email_parse", wantContains: []string{"Email forensics helper", "Parses a raw email message"}},
 		{name: "mem_find_shellcode", wantContains: []string{"Memory forensics helper", "Scans a memory dump file"}},
 		{name: "detect_persistence", wantContains: []string{"Detection helper", "Detects persistence indicators"}},
@@ -222,11 +222,11 @@ func TestBuiltinRichTeachingCoverageExpansion(t *testing.T) {
 		{name: "fs_magic", wantSignature: "fs_magic(path)", wantSnippet: "file type/magic information"},
 		{name: "bin_sections", wantSignature: "bin_sections(path)", wantSnippet: "section table information"},
 		{name: "net_dns_query", wantSignature: "net_dns_query(name, qtype)", wantSnippet: "Queries DNS records"},
-		{name: "reg_open", wantSignature: "reg_open(path)", wantSnippet: "returns a handle"},
+		{name: "reg_open", wantSignature: "reg_open(source)", wantSnippet: "Opens a registry data source"},
 		{name: "email_urls", wantSignature: "email_urls(raw)", wantSnippet: "Extracts and normalizes URLs"},
 		{name: "mem_scan", wantSignature: "mem_scan(path, pattern)", wantSnippet: "Scans a memory image"},
-		{name: "detect_suspicious_files", wantSignature: "detect_suspicious_files(paths)", wantSnippet: "suspicious file artifacts"},
-		{name: "db_query", wantSignature: "db_query(db, query)", wantSnippet: "graph query expression"},
+		{name: "detect_suspicious_files", wantSignature: "detect_suspicious_files(paths)", wantSnippet: "suspicious files"},
+		{name: "db_query", wantSignature: "db_query(db)", wantSnippet: "DATA-type node IDs"},
 		{name: "bytes_cursor_read_u32_le", wantSignature: "bytes_cursor_read_u32_le(cursor)", wantSnippet: "32-bit little-endian"},
 		{name: "lua_run_http", wantSignature: "lua_run_http(url)", wantSnippet: "runs a Lua script from an HTTP endpoint"},
 	}
@@ -300,10 +300,10 @@ func TestBuiltinRichParameterDocsForNewerFamilies(t *testing.T) {
 		{name: "exec_string", wantBullets: []string{"- `command`:", "- `shell?`:"}},
 		{name: "cmd_add", wantBullets: []string{"- `builder`:", "- `arg`:"}},
 		{name: "net_dns_query", wantBullets: []string{"- `name`:", "- `qtype`:"}},
-		{name: "reg_get_value", wantBullets: []string{"- `hiveHandle`:", "- `keyPath`:", "- `valueName`:"}},
+		{name: "reg_get_value", wantBullets: []string{"- `handle`:", "- `keyPath`:", "- `valueName`:"}},
 		{name: "mem_read", wantBullets: []string{"- `path`:", "- `offset`:", "- `size`:"}},
 		{name: "detect_suspicious_files", wantBullets: []string{"- `paths`:"}},
-		{name: "db_add_relation", wantBullets: []string{"- `db`:", "- `from`:", "- `to`:", "- `relation`:", "- `props?`:"}},
+		{name: "db_add_relation", wantBullets: []string{"- `db`:", "- `from`:", "- `to`:", "- `relation`:"}},
 	}
 
 	for _, tc := range cases {

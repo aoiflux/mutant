@@ -3,14 +3,14 @@ module mutant
 go 1.26.2
 
 require (
-	github.com/aoiflux/libewf v0.1.1
+	github.com/aoiflux/libewf v0.2.0
 	github.com/aoiflux/libext v0.1.0
-	github.com/aoiflux/libfat v0.1.0
+	github.com/aoiflux/libfat v0.2.0
 	github.com/aoiflux/libhfs v0.1.1
 	github.com/aoiflux/libntfs v0.2.0
-	github.com/aoiflux/libtable v0.1.1
-	github.com/aoiflux/libvhdi v0.1.0
-	github.com/aoiflux/libxfat v1.0.6
+	github.com/aoiflux/libtable v0.2.0
+	github.com/aoiflux/libvhdi v0.2.0
+	github.com/aoiflux/libxfat v1.1.0
 	github.com/aoiflux/libxfs v0.1.0
 	github.com/chzyer/readline v1.5.1
 	github.com/emersion/go-msgauth v0.7.0
@@ -29,6 +29,7 @@ require (
 )
 
 require (
+	github.com/Velocidex/pkcs7 v0.0.0-20210524015001-8d1eee94a157 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/ayoubfaouzi/pkcs7 v0.2.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -39,6 +40,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
 	github.com/lestrrat-go/dsig v1.3.0 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
@@ -47,6 +49,7 @@ require (
 	github.com/lestrrat-go/jwx/v3 v3.1.1 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/common v0.70.0 // indirect
@@ -73,13 +76,17 @@ require (
 	google.golang.org/grpc v1.82.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
+	www.velocidex.com/golang/binparsergen v0.1.1-0.20201101234514-bbdb29f9ee31 // indirect
+	www.velocidex.com/golang/go-pe v0.1.1-0.20211006062218-8f6d1ad6b2d5 // indirect
 )
 
 require (
-	github.com/aoiflux/graphene v0.1.3
+	github.com/Velocidex/ordereddict v0.0.0-20210502082334-cf5d9045c0d1
+	github.com/aoiflux/graphene v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/mandiant/GoReSym v1.7.1
 	golang.org/x/sys v0.47.0
+	www.velocidex.com/golang/evtx v0.2.0
 )
 
 replace github.com/go-ini/ini => github.com/go-ini/ini v1.67.0

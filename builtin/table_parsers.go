@@ -29,8 +29,8 @@ type tablePartition struct {
 	TypeName    string
 	Name        string
 	Flags       uint8
-	TableNumber int8
-	SlotNumber  int8
+	TableNumber int32
+	SlotNumber  int32
 	Attributes  uint64
 	GUIDType    string
 	GUIDUnique  string

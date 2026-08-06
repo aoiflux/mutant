@@ -393,6 +393,7 @@ const (
 	BuiltinNameShimcacheParse = "shimcache_parse"
 	BuiltinNamePrefetchParse  = "prefetch_parse"
 	BuiltinNameMftParse       = "mft_parse"
+	BuiltinNameEvtxParse      = "evtx_parse"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

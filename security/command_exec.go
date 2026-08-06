@@ -14,11 +14,6 @@ const (
 	defaultCommandExecTimeout = 3000
 	defaultCommandMaxOutput   = 8192
 
-	policyBlockedEmpty    = "blocked_empty"
-	policyBlockedDisabled = "blocked_disabled"
-	policyBlockedShell    = "blocked_shell"
-	policyAllowed         = "allowed"
-
 	errorCommandEmpty     = "command is empty"
 	errorCommandDisabled  = "command execution disabled"
 	errorCommandTimedOut  = "command timed out"
@@ -41,13 +36,11 @@ const (
 )
 
 type CommandResult struct {
-	Allowed        bool
-	PolicyDecision string
-	ExitCode       int
-	Stdout         string
-	Stderr         string
-	TimedOut       bool
-	ErrorMessage   string
+	ExitCode     int
+	Stdout       string
+	Stderr       string
+	TimedOut     bool
+	ErrorMessage string
 }
 
 func ExecuteCommand(shell, command, stage string) CommandResult {
@@ -58,9 +51,7 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 	execName, execArgs, err := buildShellCommand(normalizedShell, trimmedCommand)
 	if err != nil {
 		return CommandResult{
-			Allowed:        false,
-			PolicyDecision: policyBlockedShell,
-			ErrorMessage:   err.Error(),
+			ErrorMessage: err.Error(),
 		}
 	}
 
@@ -76,9 +67,6 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 
 	runErr := cmd.Run()
 	result := CommandResult{
-		Allowed:        true,
-		PolicyDecision: policyAllowed,
-
 		ExitCode: 0,
 		Stdout:   truncateOutput(stdout.String(), resolveCommandExecMaxOutput()),
 		Stderr:   truncateOutput(stderr.String(), resolveCommandExecMaxOutput()),

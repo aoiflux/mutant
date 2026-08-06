@@ -152,14 +152,12 @@ func hashValueByKey(hash *object.Hash, key string) object.Object {
 
 func commandResultHash(result security.CommandResult) object.Object {
 	return makeHashObject(map[string]object.Object{
-		"ok":              boolObj(result.Allowed && result.ErrorMessage == "" && !result.TimedOut && result.ExitCode == 0),
-		"allowed":         boolObj(result.Allowed),
-		"policy_decision": stringObj(result.PolicyDecision),
-		"exit_code":       intObj(int64(result.ExitCode)),
-		"stdout":          stringObj(result.Stdout),
-		"stderr":          stringObj(result.Stderr),
-		"timed_out":       boolObj(result.TimedOut),
-		"error":           stringObj(result.ErrorMessage),
-		"schema_version":  intObj(1),
+		"ok":             boolObj(result.ErrorMessage == "" && !result.TimedOut && result.ExitCode == 0),
+		"exit_code":      intObj(int64(result.ExitCode)),
+		"stdout":         stringObj(result.Stdout),
+		"stderr":         stringObj(result.Stderr),
+		"timed_out":      boolObj(result.TimedOut),
+		"error":          stringObj(result.ErrorMessage),
+		"schema_version": intObj(1),
 	})
 }

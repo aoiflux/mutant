@@ -48,13 +48,13 @@ func dbNodeTypeFromObject(arg object.Object) (store.NodeType, object.Object) {
 		if value.Value < 1 || value.Value > 127 {
 			return 0, newError("node type must be in range 1..127, got %d", value.Value)
 		}
-		return store.CustomNodeType(uint8(value.Value)), nil
+		return store.CustomNodeType(uint16(value.Value)), nil
 	case *object.EnumValue:
 		enumType, errObj := dbTypeFromEnumValue(value, "node")
 		if errObj != nil {
 			return 0, errObj
 		}
-		return store.CustomNodeType(uint8(enumType)), nil
+		return store.CustomNodeType(uint16(enumType)), nil
 	default:
 		return 0, newError("node type must be INTEGER or ENUM_VALUE, got %s", arg.Type())
 	}
@@ -66,13 +66,13 @@ func dbEdgeTypeFromObject(arg object.Object) (store.EdgeType, object.Object) {
 		if value.Value < 1 || value.Value > 127 {
 			return 0, newError("edge type must be in range 1..127, got %d", value.Value)
 		}
-		return store.CustomEdgeType(uint8(value.Value)), nil
+		return store.CustomEdgeType(uint16(value.Value)), nil
 	case *object.EnumValue:
 		enumType, errObj := dbTypeFromEnumValue(value, "edge")
 		if errObj != nil {
 			return 0, errObj
 		}
-		return store.CustomEdgeType(uint8(enumType)), nil
+		return store.CustomEdgeType(uint16(enumType)), nil
 	default:
 		return 0, newError("edge type must be INTEGER or ENUM_VALUE, got %s", arg.Type())
 	}
@@ -151,7 +151,7 @@ func DbAddNode(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_add_node: invalid handle %d", h.Value))
 	}
 
-	nodeType := store.CustomNodeType(uint8(DATA))
+	nodeType := store.CustomNodeType(uint16(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
@@ -192,7 +192,7 @@ func DbAddEdge(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_add_edge: invalid handle %d", h.Value))
 	}
 
-	edgeType := store.CustomEdgeType(uint8(DATA))
+	edgeType := store.CustomEdgeType(uint16(DATA))
 	if len(args) == 4 {
 		parsedType, errObj := dbEdgeTypeFromObject(args[3])
 		if errObj != nil {
@@ -260,7 +260,7 @@ func DbQueryNodes(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_query_nodes: invalid handle %d", h.Value))
 	}
 
-	nodeType := store.CustomNodeType(uint8(DATA))
+	nodeType := store.CustomNodeType(uint16(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
