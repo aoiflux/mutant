@@ -403,6 +403,7 @@ const (
 	BuiltinNameBrowserHistory   = "browser_history"
 	BuiltinNameBrowserCookies   = "browser_cookies"
 	BuiltinNameBrowserDownloads = "browser_downloads"
+	BuiltinNameFsDeleted        = "fs_deleted"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

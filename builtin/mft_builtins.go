@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -37,44 +38,12 @@ func MftParse(args ...object.Object) (result object.Object) {
 		return resultAndError(nil, errObj)
 	}
 
-	f, err := os.Open(path)
+	var rows []mftRow
+	sourceType, recordSize, err := walkMFT(path, func(n uint64, e *libntfs.MFTEntry) {
+		rows = append(rows, mftRowFromEntry(e, n))
+	})
 	if err != nil {
 		return resultAndError(nil, newError("mft_parse: %s", err.Error()))
-	}
-	defer f.Close()
-
-	peek := make([]byte, 4)
-	if _, err := io.ReadFull(f, peek); err != nil {
-		return resultAndError(nil, newError("mft_parse: %s", err.Error()))
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return resultAndError(nil, newError("mft_parse: %s", err.Error()))
-	}
-
-	var rows []mftRow
-	var sourceType string
-	var recordSize int
-
-	if string(peek) == "FILE" {
-		sourceType, recordSize = "mft", libntfs.DefaultMFTRecordSize
-		data, rerr := io.ReadAll(f)
-		if rerr != nil {
-			return resultAndError(nil, newError("mft_parse: %s", rerr.Error()))
-		}
-		rows = parseStandaloneMFT(data, recordSize)
-	} else {
-		sourceType = "volume"
-		vol, verr := libntfs.Open(f)
-		if verr != nil {
-			return resultAndError(nil, newError("mft_parse: not a standalone $MFT (no FILE signature) and not a mountable NTFS volume: %s. For a full-disk image, locate the NTFS partition offset with table_* first.", verr.Error()))
-		}
-		if rs := vol.MFTRecordSize(); rs > 0 {
-			recordSize = int(rs)
-		}
-		_ = vol.EachMFTEntry(func(n uint64, e *libntfs.MFTEntry) error {
-			rows = append(rows, mftRowFromEntry(e, n))
-			return nil
-		})
 	}
 
 	paths := reconstructMFTPaths(rows)
@@ -91,21 +60,57 @@ func MftParse(args ...object.Object) (result object.Object) {
 	}), nil)
 }
 
-// parseStandaloneMFT streams fixed-size records out of a raw $MFT buffer,
-// skipping unallocated/bad/malformed records (which ParseMFTRecord reports as
-// errors). The buffer is modified in place by each record's fixup, which is safe
-// because every record is parsed exactly once.
-func parseStandaloneMFT(data []byte, recordSize int) []mftRow {
-	rows := make([]mftRow, 0, len(data)/recordSize)
-	for off := 0; off+recordSize <= len(data); off += recordSize {
-		entryNum := uint64(off / recordSize)
-		e, err := libntfs.ParseMFTRecord(data[off:off+recordSize], entryNum, uint32(recordSize))
-		if err != nil {
-			continue
-		}
-		rows = append(rows, mftRowFromEntry(e, entryNum))
+// walkMFT auto-detects the input (a standalone $MFT file whose records start with
+// the "FILE" signature vs a full NTFS volume image) and invokes fn for every
+// parsable MFT entry, returning the detected source type and record size. Shared
+// by mft_parse and fs_deleted.
+func walkMFT(path string, fn func(recordNum uint64, e *libntfs.MFTEntry)) (string, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
 	}
-	return rows
+	defer f.Close()
+
+	peek := make([]byte, 4)
+	if _, err := io.ReadFull(f, peek); err != nil {
+		return "", 0, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", 0, err
+	}
+
+	if string(peek) == "FILE" {
+		data, rerr := io.ReadAll(f)
+		if rerr != nil {
+			return "", 0, rerr
+		}
+		rs := libntfs.DefaultMFTRecordSize
+		// Each record's fixup modifies its slice in place, which is safe because
+		// every record is parsed exactly once.
+		for off := 0; off+rs <= len(data); off += rs {
+			entryNum := uint64(off / rs)
+			e, perr := libntfs.ParseMFTRecord(data[off:off+rs], entryNum, uint32(rs))
+			if perr != nil {
+				continue
+			}
+			fn(entryNum, e)
+		}
+		return "mft", rs, nil
+	}
+
+	vol, verr := libntfs.Open(f)
+	if verr != nil {
+		return "", 0, fmt.Errorf("not a standalone $MFT (no FILE signature) and not a mountable NTFS volume: %s. For a full-disk image, locate the NTFS partition offset with table_* first", verr.Error())
+	}
+	recordSize := 0
+	if rs := vol.MFTRecordSize(); rs > 0 {
+		recordSize = int(rs)
+	}
+	_ = vol.EachMFTEntry(func(n uint64, e *libntfs.MFTEntry) error {
+		fn(n, e)
+		return nil
+	})
+	return "volume", recordSize, nil
 }
 
 // mftRow is the extracted, Volume-independent view of one MFT record. It copies
