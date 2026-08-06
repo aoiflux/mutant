@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"os"
 	"strings"
 
 	"github.com/mandiant/GoReSym/buildid"
@@ -200,6 +201,151 @@ func GoSymbols(args ...object.Object) (result object.Object) {
 		"user_function_count": intObj(int64(userCount)),
 		"std_function_count":  intObj(int64(stdCount)),
 		"functions":           &object.Array{Elements: funcs},
+	}), nil)
+}
+
+// BinIsGo reports whether a binary was produced by the Go toolchain, a common
+// malware-triage question. It checks three independent signals: the embedded Go
+// build info blob, the Go build ID, and — the definitive one that survives
+// stripping — the presence of a parseable pclntab (the Go runtime's function
+// table). Returns {is_go, go_version, has_buildinfo, has_build_id, has_pclntab}.
+func BinIsGo(args ...object.Object) (result object.Object) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = resultAndError(nil, newError("bin_is_go: panic during analysis: %v", r))
+		}
+	}()
+
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+	path, errObj := requireStringArg("bin_is_go", args[0], 1)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if _, err := os.Stat(path); err != nil {
+		return resultAndError(nil, newError("bin_is_go: %s", err.Error()))
+	}
+
+	hasBuildInfo, goVersion := false, ""
+	if bi, err := buildinfo.ReadFile(path); err == nil {
+		hasBuildInfo = true
+		goVersion = bi.GoVersion
+	}
+
+	hasBuildID := false
+	if id, err := buildid.ReadFile(path); err == nil && id != "" {
+		hasBuildID = true
+	}
+
+	hasPclntab := false
+	if file, err := objfile.Open(path); err == nil {
+		if tabs, terr := file.PCLineTable(""); terr == nil {
+			for i := range tabs {
+				if tabs[i].ParsedPclntab != nil {
+					hasPclntab = true
+					break
+				}
+			}
+		}
+		file.Close()
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"is_go":         boolObj(hasBuildInfo || hasPclntab),
+		"go_version":    stringObj(normalizeGoVersion(goVersion)),
+		"has_buildinfo": boolObj(hasBuildInfo),
+		"has_build_id":  boolObj(hasBuildID),
+		"has_pclntab":   boolObj(hasPclntab),
+	}), nil)
+}
+
+// GoTypes recovers type and interface definitions from a Go binary via GoReSym's
+// typelink/itablink parsing — including reconstructed Go source for structs and
+// interfaces where GoReSym can rebuild it. Returns {go_version, type_count,
+// itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}.
+func GoTypes(args ...object.Object) (result object.Object) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = resultAndError(nil, newError("go_types: panic during analysis: %v", r))
+		}
+	}()
+
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+	path, errObj := requireStringArg("go_types", args[0], 1)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+
+	file, err := objfile.Open(path)
+	if err != nil {
+		return resultAndError(nil, newError("go_types: %s", err.Error()))
+	}
+	defer file.Close()
+
+	version := ""
+	if bi, biErr := buildinfo.ReadFile(path); biErr == nil {
+		version = bi.GoVersion
+	}
+	version = normalizeGoVersion(version)
+
+	tabs, err := file.PCLineTable("")
+	if err != nil {
+		return resultAndError(nil, newError("go_types: failed to read pclntab: %s", err.Error()))
+	}
+	if len(tabs) == 0 {
+		return resultAndError(nil, newError("go_types: no pclntab candidates found (not a Go binary?)"))
+	}
+
+	// Resolve the moduledata (type metadata lives behind it), mirroring go_symbols'
+	// candidate selection.
+	var md *objfile.ModuleData
+	var is64, littleEndian bool
+	for i := range tabs {
+		tab := &tabs[i]
+		if tab.ParsedPclntab == nil || tab.ParsedPclntab.Go12line == nil {
+			continue
+		}
+		line := tab.ParsedPclntab.Go12line
+		i64 := line.Ptrsize == 8
+		le := line.Binary.String() == "LittleEndian"
+		_, moduleData, mdErr := file.ModuleDataTable(tab.PclntabVA, version, line.Version.String(), i64, le)
+		if mdErr == nil && moduleData != nil {
+			md, is64, littleEndian = moduleData, i64, le
+			break
+		}
+	}
+	if md == nil {
+		return resultAndError(nil, newError("go_types: could not resolve moduledata (type metadata unavailable)"))
+	}
+
+	typesToObjs := func(ts []objfile.Type) []object.Object {
+		out := make([]object.Object, 0, len(ts))
+		for _, tp := range ts {
+			out = append(out, makeHashObject(map[string]object.Object{
+				"va":            intObj(int64(tp.VA)),
+				"name":          stringObj(tp.Str),
+				"kind":          stringObj(tp.Kind),
+				"reconstructed": stringObj(tp.Reconstructed),
+			}))
+		}
+		return out
+	}
+
+	typeLinks, tErr := file.ParseTypeLinks(version, md, is64, littleEndian)
+	itabLinks, iErr := file.ParseITabLinks(version, md, is64, littleEndian)
+	if tErr != nil && iErr != nil {
+		return resultAndError(nil, newError("go_types: type parsing failed: %s", tErr.Error()))
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"go_version": stringObj(version),
+		"type_count": intObj(int64(len(typeLinks))),
+		"itab_count": intObj(int64(len(itabLinks))),
+		"types":      &object.Array{Elements: typesToObjs(typeLinks)},
+		"itabs":      &object.Array{Elements: typesToObjs(itabLinks)},
 	}), nil)
 }
 

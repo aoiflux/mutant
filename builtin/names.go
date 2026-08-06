@@ -358,6 +358,8 @@ const (
 	BuiltinNameGoBuildInfo = "go_buildinfo"
 	BuiltinNameGoBuildID   = "go_build_id"
 	BuiltinNameGoSymbols   = "go_symbols"
+	BuiltinNameGoTypes     = "go_types"
+	BuiltinNameBinIsGo     = "bin_is_go"
 	// security: IOC / network intelligence
 	BuiltinNameDefang        = "defang"
 	BuiltinNameRefang        = "refang"
@@ -396,6 +398,11 @@ const (
 	BuiltinNameMftParse       = "mft_parse"
 	BuiltinNameEvtxParse      = "evtx_parse"
 	BuiltinNameJumplistParse  = "jumplist_parse"
+	BuiltinNameSyslogParse    = "syslog_parse"
+	BuiltinNameSqliteQuery    = "sqlite_query"
+	BuiltinNameBrowserHistory   = "browser_history"
+	BuiltinNameBrowserCookies   = "browser_cookies"
+	BuiltinNameBrowserDownloads = "browser_downloads"
 	// forensic: macOS/iOS artifacts
 	BuiltinNamePlistParse = "plist_parse"
 	// security: fingerprinting

@@ -449,6 +449,16 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameBinMachoParse, &BuiltIn{BinMachOParse}},
 	// forensic: Windows jump lists (append-only)
 	{BuiltinNameJumplistParse, &BuiltIn{JumplistParse}},
+	// forensic: Unix syslog (append-only)
+	{BuiltinNameSyslogParse, &BuiltIn{SyslogParse}},
+	// security: Go binary analysis (append-only)
+	{BuiltinNameGoTypes, &BuiltIn{GoTypes}},
+	{BuiltinNameBinIsGo, &BuiltIn{BinIsGo}},
+	// forensic: SQLite / browser artifacts (append-only)
+	{BuiltinNameSqliteQuery, &BuiltIn{SqliteQuery}},
+	{BuiltinNameBrowserHistory, &BuiltIn{BrowserHistory}},
+	{BuiltinNameBrowserCookies, &BuiltIn{BrowserCookies}},
+	{BuiltinNameBrowserDownloads, &BuiltIn{BrowserDownloads}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
