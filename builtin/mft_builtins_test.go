@@ -67,32 +67,47 @@ func mftFNValue(parentRef uint64, name string, realSize, ntfsTime uint64, isDir 
 }
 
 func buildMFTRecord(recordNum uint32, seq uint16, isDir bool, parentRef uint64, name string, realSize, ntfsTime uint64) []byte {
-	rec := make([]byte, 1024)
+	return buildMFTRecordSized(1024, recordNum, seq, isDir, parentRef, name, realSize, ntfsTime)
+}
+
+// buildMFTRecordSized crafts one MFT record of the given allocated size. NTFS
+// permits sizes other than the 1024-byte default, and the record header is the
+// only place that size is recorded in an extracted $MFT.
+func buildMFTRecordSized(recordSize int, recordNum uint32, seq uint16, isDir bool, parentRef uint64, name string, realSize, ntfsTime uint64) []byte {
+	rec := make([]byte, recordSize)
 	copy(rec[0:4], "FILE")
-	const usaOff, usaSize = 0x30, 3 // USN + 2 sector fixups (1024/512)
+	const usaOff = 0x30
+	usaSize := recordSize/512 + 1 // USN + one fixup per sector
 	binary.LittleEndian.PutUint16(rec[0x04:], usaOff)
-	binary.LittleEndian.PutUint16(rec[0x06:], usaSize)
+	binary.LittleEndian.PutUint16(rec[0x06:], uint16(usaSize))
 	binary.LittleEndian.PutUint16(rec[0x10:], seq)
 	binary.LittleEndian.PutUint16(rec[0x12:], 1) // hard link count
-	binary.LittleEndian.PutUint16(rec[0x14:], 0x38)
+
+	// Attributes must start past the update sequence array, 8-byte aligned.
+	attrOff := usaOff + 2*usaSize
+	if attrOff%8 != 0 {
+		attrOff += 8 - attrOff%8
+	}
+	binary.LittleEndian.PutUint16(rec[0x14:], uint16(attrOff))
 	flags := uint16(0x01)
 	if isDir {
 		flags |= 0x02
 	}
 	binary.LittleEndian.PutUint16(rec[0x16:], flags)
-	binary.LittleEndian.PutUint32(rec[0x1C:], 1024) // allocated size
+	binary.LittleEndian.PutUint32(rec[0x1C:], uint32(recordSize)) // allocated size
 	binary.LittleEndian.PutUint32(rec[0x2C:], recordNum)
 
-	// Update sequence array. Attributes live well before offset 510, so writing
-	// the USN at the sector ends doesn't touch them.
+	// Update sequence array: USA[0] is the USN, the rest are the pre-fixup
+	// bytes of each sector tail. Attributes live well before the first sector
+	// end, so stamping the USN there doesn't touch them.
 	const usn = 0x0001
-	binary.LittleEndian.PutUint16(rec[usaOff:], usn)   // USA[0] = USN
-	binary.LittleEndian.PutUint16(rec[usaOff+2:], 0)   // USA[1] = sector0 real bytes
-	binary.LittleEndian.PutUint16(rec[usaOff+4:], 0)   // USA[2] = sector1 real bytes
-	binary.LittleEndian.PutUint16(rec[510:], usn)      // sector0 end
-	binary.LittleEndian.PutUint16(rec[1022:], usn)     // sector1 end
+	binary.LittleEndian.PutUint16(rec[usaOff:], usn)
+	for sector := 0; sector < usaSize-1; sector++ {
+		binary.LittleEndian.PutUint16(rec[usaOff+2+sector*2:], 0)
+		binary.LittleEndian.PutUint16(rec[(sector+1)*512-2:], usn)
+	}
 
-	off := 0x38
+	off := attrOff
 	off = mftPutResidentAttr(rec, off, 0x10, mftSIValue(ntfsTime))
 	off = mftPutResidentAttr(rec, off, 0x30, mftFNValue(parentRef, name, realSize, ntfsTime, isDir))
 	binary.LittleEndian.PutUint32(rec[off:], 0xFFFFFFFF) // end marker
@@ -180,6 +195,46 @@ func TestMftParseStandalone(t *testing.T) {
 	}
 	if got := hInt(t, np, "fn_created"); got != wantUnix {
 		t.Errorf("fn_created = %d, want %d", got, wantUnix)
+	}
+}
+
+// TestMftParseDetectsNonDefaultRecordSize covers a $MFT formatted with 4096-byte
+// records. Striding such a table at the 1024-byte default lands three out of
+// every four reads inside a record body, so the parse used to drop ~75% of the
+// records and number the survivors as if they were 1024 bytes apart.
+func TestMftParseDetectsNonDefaultRecordSize(t *testing.T) {
+	const recordSize = 4096
+	ft := mftNTFSTime(1500000000)
+
+	mft := make([]byte, 2*recordSize)
+	copy(mft[0:], buildMFTRecordSized(recordSize, 0, 1, true, 5, "Windows", 0, ft))
+	copy(mft[recordSize:], buildMFTRecordSized(recordSize, 1, 1, false, 0, "notepad.exe", 12345, ft))
+
+	path := filepath.Join(t.TempDir(), "$MFT")
+	if err := os.WriteFile(path, mft, 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	payload, errObj := unwrapPair(t, MftParse(stringObj(path)))
+	if errObj != nil {
+		t.Fatalf("mft_parse error: %s", errObj.Inspect())
+	}
+	h := payload.(*object.Hash)
+
+	if got := hInt(t, h, "record_size"); got != recordSize {
+		t.Errorf("record_size = %d, want %d", got, recordSize)
+	}
+	if got := hInt(t, h, "count"); got != 2 {
+		t.Fatalf("count = %d, want 2", got)
+	}
+	if got := hInt(t, h, "skipped"); got != 0 {
+		t.Errorf("skipped = %d, want 0", got)
+	}
+
+	// Record numbers must come from the real stride, not off/1024.
+	np := mftEntryByName(t, hashValueByKey(h, "entries").(*object.Array), "notepad.exe")
+	if got := hInt(t, np, "record"); got != 1 {
+		t.Errorf("notepad.exe record = %d, want 1", got)
 	}
 }
 

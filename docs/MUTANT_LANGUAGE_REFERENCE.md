@@ -276,11 +276,11 @@ Total builtins currently registered: 211
 - `db_close(db)` - Closes a graph database handle and flushes pending state.
 - `db_index_prop(db, key)` - Builds or updates an index on a property key.
 - `db_open()` - Creates an in-memory graph database handle.
-- `db_open_disk(path)` - Opens or creates a disk-backed graph database.
+- `db_open_disk(path)` - Opens or creates a disk-backed graph database. Compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open.
 - `db_query(db, query)` - Executes a graph query expression and returns results.
 - `db_query_nodes(db, filter)` - Queries nodes by label/properties filter.
 - `db_shortest_path(db, from, to)` - Computes shortest path between two graph nodes.
-- `db_stats(db)` - Returns graph database statistics.
+- `db_stats(db)` - Returns graph database statistics: `{nodes, edges, has_storage}`, plus `delta_records`, `csr_records`, `deleted_nodes`, `deleted_edges`, `wal_bytes`, `commit_seq` and `last_compact` on disk-backed handles.
 - `db_timeline(db, opts?)` - Builds chronological timeline views from graph evidence.
 
 ### Bytes

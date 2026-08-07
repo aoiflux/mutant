@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"sync"
 	"testing"
 
 	"mutant/object"
@@ -63,6 +64,88 @@ func TestDbLifecycle(t *testing.T) {
 	}
 	if _, errObj := unwrapPair(t, DbStats(intObj(handle))); errObj == nil {
 		t.Fatal("db_stats on a closed handle should error")
+	}
+}
+
+// TestDbConcurrentOperations exercises the db_* builtins from many goroutines at
+// once. There is no lock in db.go any more — graphene documents both backends as
+// safe for concurrent use — so this is the check that the removal holds. Run it
+// under -race to get the real signal.
+func TestDbConcurrentOperations(t *testing.T) {
+	const goroutines, perGoroutine = 8, 25
+
+	// Two handles, so the test also covers unrelated graphs being used at once —
+	// the case the old process-wide mutex serialised for no reason.
+	handles := []int64{dbInt(t, DbOpen()), dbInt(t, DbOpen())}
+	defer func() {
+		for _, h := range handles {
+			DbClose(intObj(h))
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make(chan string, goroutines*perGoroutine)
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			handle := handles[g%len(handles)]
+			for i := 0; i < perGoroutine; i++ {
+				payload, errObj := unwrapPairNoFatal(DbAddNode(intObj(handle)))
+				if errObj != nil {
+					errs <- "db_add_node: " + errObj.Inspect()
+					return
+				}
+				if _, ok := payload.(*object.Integer); !ok {
+					errs <- "db_add_node did not return an INTEGER"
+					return
+				}
+				if _, errObj := unwrapPairNoFatal(DbQueryNodes(intObj(handle))); errObj != nil {
+					errs <- "db_query_nodes: " + errObj.Inspect()
+					return
+				}
+				if _, errObj := unwrapPairNoFatal(DbStats(intObj(handle))); errObj != nil {
+					errs <- "db_stats: " + errObj.Inspect()
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errs)
+	for msg := range errs {
+		t.Error(msg)
+	}
+
+	// Every node added must be visible.
+	for _, h := range handles {
+		payload, errObj := unwrapPair(t, DbStats(intObj(h)))
+		if errObj != nil {
+			t.Fatalf("db_stats: %s", errObj.Inspect())
+		}
+		want := int64(goroutines / len(handles) * perGoroutine)
+		if got := hInt(t, payload.(*object.Hash), "nodes"); got != want {
+			t.Errorf("handle %d: nodes = %d, want %d", h, got, want)
+		}
+	}
+}
+
+// TestDbNodeTypeZeroMatchesDefault pins the fix for db_add_node(h, 0) erroring
+// while db_add_node(h) succeeded — both mean the DATA type.
+func TestDbNodeTypeZeroMatchesDefault(t *testing.T) {
+	handle := dbInt(t, DbOpen())
+	defer DbClose(intObj(handle))
+
+	if _, errObj := unwrapPair(t, DbAddNode(intObj(handle), intObj(0))); errObj != nil {
+		t.Errorf("db_add_node with explicit type 0 should succeed: %s", errObj.Inspect())
+	}
+	if _, errObj := unwrapPair(t, DbAddNode(intObj(handle), intObj(128))); errObj == nil {
+		t.Error("db_add_node with type 128 should error (out of range)")
+	}
+	if _, errObj := unwrapPair(t, DbAddNode(intObj(handle), intObj(-1))); errObj == nil {
+		t.Error("db_add_node with type -1 should error (out of range)")
 	}
 }
 

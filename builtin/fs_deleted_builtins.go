@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"bytes"
 	"encoding/hex"
 
 	libntfs "github.com/aoiflux/libntfs"
@@ -14,8 +15,9 @@ import (
 // is fully recoverable and returned (hex-encoded); larger files store their data
 // in clusters that may be overwritten, so only the metadata is reported.
 //
-// Returns {source_type, deleted_count, entries:[{record, name, path, size,
-// is_directory, has_data, resident, recoverable, resident_data, si_*, fn_*}]}.
+// Returns {source_type, deleted_count, skipped, entries:[{record, name, path,
+// size, is_directory, has_data, resident, recoverable, resident_data, si_*,
+// fn_*}]}, where skipped counts records that would not parse.
 func FsDeleted(args ...object.Object) (result object.Object) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -35,7 +37,7 @@ func FsDeleted(args ...object.Object) (result object.Object) {
 	// parent directory may still be in use), plus recovered data for deleted ones.
 	var rows []mftRow
 	recovered := map[uint64]residentRecovery{}
-	sourceType, _, err := walkMFT(path, func(n uint64, e *libntfs.MFTEntry) {
+	walk, err := walkMFT(path, func(n uint64, e *libntfs.MFTEntry) {
 		rows = append(rows, mftRowFromEntry(e, n))
 		if !e.IsInUse() {
 			recovered[n] = recoverResidentData(e)
@@ -55,8 +57,9 @@ func FsDeleted(args ...object.Object) (result object.Object) {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"source_type":   stringObj(sourceType),
+		"source_type":   stringObj(walk.sourceType),
 		"deleted_count": intObj(int64(len(entries))),
+		"skipped":       intObj(int64(walk.skipped)),
 		"entries":       &object.Array{Elements: entries},
 	}), nil)
 }
@@ -75,7 +78,10 @@ func recoverResidentData(e *libntfs.MFTEntry) residentRecovery {
 		return residentRecovery{}
 	}
 	if attr.IsResident() && attr.Resident != nil {
-		return residentRecovery{hasData: true, resident: true, data: attr.Resident.Value}
+		// Resident.Value aliases the buffer walkMFT is iterating (ParseMFTRecord
+		// applies its fixups in place), so copy before retaining it — mftRow
+		// copies out for the same reason.
+		return residentRecovery{hasData: true, resident: true, data: bytes.Clone(attr.Resident.Value)}
 	}
 	return residentRecovery{hasData: true, resident: false}
 }

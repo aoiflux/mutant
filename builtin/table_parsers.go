@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	libtable "github.com/aoiflux/libtable"
+	"github.com/aoiflux/libtable/partition"
 
 	"mutant/object"
 )
@@ -18,6 +19,15 @@ type tableInfo struct {
 	Offset         uint64
 	IsBackup       bool
 	PartitionCount int
+	// Warnings carries libtable's "merely suspicious" findings — entries past
+	// the end of the device, overlapping extents, a truncated entry count, a
+	// hybrid MBR. The library reports these rather than failing so the evidence
+	// is surfaced; dropping them here would defeat that.
+	Warnings []string
+	// Candidates lists every scheme that parsed cleanly, in preference order.
+	// More than one entry means the media was ambiguous and the parse options
+	// picked a winner.
+	Candidates []string
 }
 
 type tablePartition struct {
@@ -34,6 +44,12 @@ type tablePartition struct {
 	Attributes  uint64
 	GUIDType    string
 	GUIDUnique  string
+	// StartByte and LengthByte are absolute byte offsets into the image.
+	// Partition LBAs are relative to the table's own offset, so a script that
+	// multiplies StartLBA by BlockSize mislocates every partition on a table
+	// parsed at a non-zero offset — a decoded container, or a nested table.
+	StartByte  uint64
+	LengthByte uint64
 }
 
 type tableSession interface {
@@ -105,6 +121,8 @@ func TableOpen(args ...object.Object) object.Object {
 		"table_offset":    intObj(int64(info.Offset)),
 		"is_backup":       boolObj(info.IsBackup),
 		"partition_count": intObj(int64(info.PartitionCount)),
+		"warnings":        stringArrayObj(info.Warnings),
+		"candidates":      stringArrayObj(info.Candidates),
 	}), nil)
 }
 
@@ -191,10 +209,14 @@ func TableClose(args ...object.Object) object.Object {
 
 func makeTablePartitionHash(part tablePartition) object.Object {
 	return makeHashObject(map[string]object.Object{
-		"index":        intObj(int64(part.Index)),
-		"start_lba":    intObj(int64(part.StartLBA)),
-		"length_lba":   intObj(int64(part.LengthLBA)),
-		"end_lba":      intObj(int64(part.EndLBA)),
+		"index":      intObj(int64(part.Index)),
+		"start_lba":  intObj(int64(part.StartLBA)),
+		"length_lba": intObj(int64(part.LengthLBA)),
+		"end_lba":    intObj(int64(part.EndLBA)),
+		// Absolute byte offsets into the image. Prefer these over start_lba *
+		// block_size, which is wrong for any table parsed at a non-zero offset.
+		"start_byte":  intObj(int64(part.StartByte)),
+		"length_byte": intObj(int64(part.LengthByte)),
 		// type_code and attributes are uint64 bitfields whose high bit (e.g. the
 		// GPT "required partition" attribute, bit 63) overflows a signed integer,
 		// so they are surfaced as lossless hex strings.
@@ -248,33 +270,49 @@ func (realTableBackend) Open(imagePath string) (tableSession, error) {
 }
 
 func (s *realTableSession) Info() tableInfo {
-	return tableInfo{
+	info := tableInfo{
 		TableType:      string(s.table.Type),
 		BlockSize:      s.table.BlockSize,
 		Offset:         s.table.Offset,
 		IsBackup:       s.table.IsBackup,
 		PartitionCount: len(s.table.Partitions),
 	}
+	for _, w := range s.table.Warnings {
+		info.Warnings = append(info.Warnings, w.String())
+	}
+	for _, c := range s.table.Candidates {
+		info.Candidates = append(info.Candidates, string(c))
+	}
+	return info
+}
+
+// tablePartitionFrom converts one library partition, taking the byte offsets
+// from the table rather than deriving them, since only the table knows its own
+// base offset.
+func (s *realTableSession) tablePartitionFrom(p partition.Partition) tablePartition {
+	return tablePartition{
+		Index:       p.Index,
+		StartLBA:    p.StartLBA,
+		LengthLBA:   p.LengthLBA,
+		EndLBA:      endLBA(p.StartLBA, p.LengthLBA),
+		TypeCode:    p.TypeCode,
+		TypeName:    p.TypeName,
+		Name:        p.Name,
+		Flags:       uint8(p.Flags),
+		TableNumber: p.TableNumber,
+		SlotNumber:  p.SlotNumber,
+		Attributes:  p.Attributes,
+		GUIDType:    p.GUIDType,
+		GUIDUnique:  p.GUIDUnique,
+		StartByte:   s.table.ByteOffset(p),
+		LengthByte:  s.table.ByteSize(p),
+	}
 }
 
 func (s *realTableSession) ListPartitions() ([]tablePartition, error) {
 	partitions := make([]tablePartition, 0, len(s.table.Partitions))
 	for _, p := range s.table.Partitions {
-		partitions = append(partitions, tablePartition{
-			Index:       p.Index,
-			StartLBA:    p.StartLBA,
-			LengthLBA:   p.LengthLBA,
-			EndLBA:      endLBA(p.StartLBA, p.LengthLBA),
-			TypeCode:    p.TypeCode,
-			TypeName:    p.TypeName,
-			Name:        p.Name,
-			Flags:       uint8(p.Flags),
-			TableNumber: p.TableNumber,
-			SlotNumber:  p.SlotNumber,
-			Attributes:  p.Attributes,
-			GUIDType:    p.GUIDType,
-			GUIDUnique:  p.GUIDUnique,
-		})
+		partitions = append(partitions, s.tablePartitionFrom(p))
 	}
 
 	sort.Slice(partitions, func(i, j int) bool {
@@ -285,13 +323,11 @@ func (s *realTableSession) ListPartitions() ([]tablePartition, error) {
 }
 
 func (s *realTableSession) PartitionInfo(index int) (tablePartition, error) {
-	parts, err := s.ListPartitions()
-	if err != nil {
-		return tablePartition{}, err
-	}
-	for _, part := range parts {
-		if part.Index == index {
-			return part, nil
+	// Scan the library's own slice: rebuilding and re-sorting the full listing
+	// per lookup made a loop over k partitions O(k·n log n).
+	for _, p := range s.table.Partitions {
+		if p.Index == index {
+			return s.tablePartitionFrom(p), nil
 		}
 	}
 	return tablePartition{}, fmt.Errorf("partition index %d not found", index)
@@ -304,6 +340,9 @@ func (s *realTableSession) Close() error {
 	return nil
 }
 
+// endLBA is the inclusive last LBA of a partition. A zero-length entry has no
+// last block, so it reports its start — which is indistinguishable from a
+// one-sector partition; use length_lba or length_byte to tell them apart.
 func endLBA(start uint64, length uint64) uint64 {
 	if length == 0 {
 		return start

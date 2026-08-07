@@ -13,13 +13,21 @@ import (
 
 var (
 	dbHandleCounter int64
-	dbHandles       sync.Map // int64 → *graphene.Graph
-
-	// dbOpMu serializes all graph mutations/queries. The underlying graph is not
-	// guaranteed goroutine-safe, and net_serve runs many handlers concurrently
-	// against one shared graph (e.g. Splice's site-map). Graph ops are in-memory
-	// and fast, so a single lock is fine; network I/O dominates. (dev-sec-platform-upgrades)
-	dbOpMu sync.Mutex
+	// dbHandles maps int64 → *graphene.Graph.
+	//
+	// There is deliberately no lock around graph operations. graphene documents
+	// both bundled backends as safe for concurrent use — the in-memory store is
+	// a thread-safe GraphStore, the disk store carries its own RWMutex — and
+	// every method takes the locks it needs internally. A single process-wide
+	// mutex here also serialised unrelated handles against each other, which
+	// matters under net_serve where many handlers run at once.
+	//
+	// What the library does *not* offer is snapshot isolation: a sequence of
+	// calls is not a transaction, and an ID returned by a query may already be
+	// gone by the time it is used. Each db_* builtin is a single store call, so
+	// that is not a concern here; a builtin that ever spans several calls would
+	// need graphene's own Begin/Commit rather than a lock.
+	dbHandles sync.Map
 )
 
 const DATA = 0
@@ -45,8 +53,12 @@ func dbTypeFromEnumValue(enumValue *object.EnumValue, kind string) (int64, objec
 func dbNodeTypeFromObject(arg object.Object) (store.NodeType, object.Object) {
 	switch value := arg.(type) {
 	case *object.Integer:
-		if value.Value < 1 || value.Value > 127 {
-			return 0, newError("node type must be in range 1..127, got %d", value.Value)
+		// 0 is accepted: it is the DATA type that db_add_node uses when no type
+		// is given, and the DATA enum tag produces it too. Rejecting it here
+		// while accepting it everywhere else meant db_add_node(h, 0) errored
+		// where db_add_node(h) succeeded with the very same type.
+		if value.Value < 0 || value.Value > 127 {
+			return 0, newError("node type must be in range 0..127, got %d", value.Value)
 		}
 		return store.CustomNodeType(uint16(value.Value)), nil
 	case *object.EnumValue:
@@ -63,8 +75,9 @@ func dbNodeTypeFromObject(arg object.Object) (store.NodeType, object.Object) {
 func dbEdgeTypeFromObject(arg object.Object) (store.EdgeType, object.Object) {
 	switch value := arg.(type) {
 	case *object.Integer:
-		if value.Value < 1 || value.Value > 127 {
-			return 0, newError("edge type must be in range 1..127, got %d", value.Value)
+		// 0 is accepted for the same reason as node types above.
+		if value.Value < 0 || value.Value > 127 {
+			return 0, newError("edge type must be in range 0..127, got %d", value.Value)
 		}
 		return store.CustomEdgeType(uint16(value.Value)), nil
 	case *object.EnumValue:
@@ -122,17 +135,17 @@ func DbClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument to `db_close` must be INTEGER, got %s", args[0].Type()))
 	}
-	g, found := dbGet(h.Value)
+	// LoadAndDelete claims the handle atomically, so two concurrent db_close
+	// calls cannot both reach Close on the same graph.
+	value, found := dbHandles.LoadAndDelete(h.Value)
 	if !found {
 		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
 	}
-	dbHandles.Delete(h.Value)
-	// Hold dbOpMu so Close cannot race an in-flight mutation/query on the same
-	// graph (the underlying graph is not safe for concurrent close + use).
-	dbOpMu.Lock()
-	err := g.Close()
-	dbOpMu.Unlock()
-	if err != nil {
+	g, ok := value.(*graphene.Graph)
+	if !ok {
+		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
+	}
+	if err := g.Close(); err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))
 	}
 	return resultAndError(boolObj(true), nil)
@@ -160,11 +173,9 @@ func DbAddNode(args ...object.Object) object.Object {
 		nodeType = parsedType
 	}
 
-	dbOpMu.Lock()
 	nodeID, err := g.AddNode(&store.Node{
 		Labels: []store.NodeType{nodeType},
 	})
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_add_node: %s", err.Error()))
 	}
@@ -201,13 +212,11 @@ func DbAddEdge(args ...object.Object) object.Object {
 		edgeType = parsedType
 	}
 
-	dbOpMu.Lock()
 	edgeID, err := g.AddEdge(&store.Edge{
 		Src:    store.NodeID(src.Value),
 		Dst:    store.NodeID(dst.Value),
 		Labels: []store.EdgeType{edgeType},
 	})
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_add_edge: %s", err.Error()))
 	}
@@ -238,9 +247,7 @@ func DbIndexProp(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("db_index_prop: invalid handle %d", h.Value))
 	}
-	dbOpMu.Lock()
 	err := g.IndexNodeProperty(store.NodeID(nodeID.Value), key.Value, []byte(val.Value))
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_index_prop: %s", err.Error()))
 	}
@@ -269,11 +276,9 @@ func DbQueryNodes(args ...object.Object) object.Object {
 		nodeType = parsedType
 	}
 
-	dbOpMu.Lock()
 	ids, err := g.QueryNodeIDs(store.NodeQuery{
 		Types: []store.NodeType{nodeType},
 	})
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_query_nodes: %s", err.Error()))
 	}
@@ -311,9 +316,7 @@ func DbBFS(args ...object.Object) object.Object {
 	}
 
 	dir := dbParseDirection(dirStr.Value)
-	dbOpMu.Lock()
 	result, err := g.BFS(store.NodeID(originID.Value), int(depth.Value), dir, nil)
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_bfs: %s", err.Error()))
 	}
@@ -355,9 +358,7 @@ func DbShortestPath(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_shortest_path: invalid handle %d", h.Value))
 	}
 
-	dbOpMu.Lock()
 	path, err := g.ShortestPath(store.NodeID(srcID.Value), store.NodeID(dstID.Value), nil)
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_shortest_path: %s", err.Error()))
 	}
@@ -381,16 +382,32 @@ func DbStats(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("db_stats: invalid handle %d", h.Value))
 	}
-	dbOpMu.Lock()
 	stats, err := g.Stats()
-	dbOpMu.Unlock()
 	if err != nil {
 		return resultAndError(nil, newError("db_stats: %s", err.Error()))
 	}
-	return resultAndError(makeHashObject(map[string]object.Object{
+	out := map[string]object.Object{
 		"nodes": intObj(int64(stats.NodeCount)),
 		"edges": intObj(int64(stats.EdgeCount)),
-	}), nil)
+		// has_storage is false on the in-memory backend, which has no delta,
+		// WAL or compaction to report on.
+		"has_storage": boolObj(stats.HasStorage),
+	}
+	if stats.HasStorage {
+		// Everything written since the last compaction stays in memory and is
+		// replayed at every open, so a store that is never compacted degrades
+		// in memory, open time and read speed with no error to signal it.
+		// These are the figures that make that visible.
+		out["delta_records"] = intObj(int64(stats.Storage.DeltaRecords()))
+		out["csr_records"] = intObj(int64(stats.Storage.CSRRecords()))
+		out["deleted_nodes"] = intObj(int64(stats.Storage.DeletedNodes))
+		out["deleted_edges"] = intObj(int64(stats.Storage.DeletedEdges))
+		out["wal_bytes"] = intObj(stats.Storage.WALBytes)
+		out["commit_seq"] = intObj(int64(stats.Storage.CommitSeq))
+		out["last_compact"] = stringObj(formatTime(stats.Storage.LastCompact))
+	}
+
+	return resultAndError(makeHashObject(out), nil)
 }
 
 func dbParseDirection(s string) store.Direction {

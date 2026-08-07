@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -21,8 +22,8 @@ const mftRootRecord = 5
 //
 // Each entry carries both the $STANDARD_INFORMATION and $FILE_NAME MAC times
 // (unix + ISO-8601), the reconstructed full path, size, sequence number, and
-// hard-link count. Returns {source_type, record_size, count, entries} paired
-// with an error.
+// hard-link count. Returns {source_type, record_size, count, skipped, entries}
+// paired with an error; skipped counts records that would not parse.
 func MftParse(args ...object.Object) (result object.Object) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -39,7 +40,7 @@ func MftParse(args ...object.Object) (result object.Object) {
 	}
 
 	var rows []mftRow
-	sourceType, recordSize, err := walkMFT(path, func(n uint64, e *libntfs.MFTEntry) {
+	walk, err := walkMFT(path, func(n uint64, e *libntfs.MFTEntry) {
 		rows = append(rows, mftRowFromEntry(e, n))
 	})
 	if err != nil {
@@ -53,82 +54,123 @@ func MftParse(args ...object.Object) (result object.Object) {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"source_type": stringObj(sourceType),
-		"record_size": intObj(int64(recordSize)),
+		"source_type": stringObj(walk.sourceType),
+		"record_size": intObj(int64(walk.recordSize)),
 		"count":       intObj(int64(len(rows))),
+		"skipped":     intObj(int64(walk.skipped)),
 		"entries":     &object.Array{Elements: entries},
 	}), nil)
 }
 
+// mftWalkResult describes what walkMFT found while iterating an MFT.
+type mftWalkResult struct {
+	// sourceType is "mft" for a standalone $MFT stream, "volume" for an image.
+	sourceType string
+	recordSize int
+	// skipped counts records that would not parse and were stepped over. Some
+	// unparsable records are normal in an extracted $MFT, but a count that
+	// dwarfs the entry count means the table is damaged, and a caller cannot
+	// tell that from the entries alone.
+	skipped int
+}
+
 // walkMFT auto-detects the input (a standalone $MFT file whose records start with
 // the "FILE" signature vs a full NTFS volume image) and invokes fn for every
-// parsable MFT entry, returning the detected source type and record size. Shared
-// by mft_parse and fs_deleted.
-func walkMFT(path string, fn func(recordNum uint64, e *libntfs.MFTEntry)) (string, int, error) {
+// parsable MFT entry. Shared by mft_parse and fs_deleted.
+func walkMFT(path string, fn func(recordNum uint64, e *libntfs.MFTEntry)) (mftWalkResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", 0, err
+		return mftWalkResult{}, err
 	}
 	defer f.Close()
 
 	peek := make([]byte, 4)
 	if _, err := io.ReadFull(f, peek); err != nil {
-		return "", 0, err
+		return mftWalkResult{}, err
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", 0, err
+		return mftWalkResult{}, err
 	}
 
 	if string(peek) == "FILE" {
 		data, rerr := io.ReadAll(f)
 		if rerr != nil {
-			return "", 0, rerr
+			return mftWalkResult{}, rerr
 		}
-		rs := libntfs.DefaultMFTRecordSize
+		rs := detectMFTRecordSize(data)
+		res := mftWalkResult{sourceType: "mft", recordSize: rs}
 		// Each record's fixup modifies its slice in place, which is safe because
 		// every record is parsed exactly once.
 		for off := 0; off+rs <= len(data); off += rs {
 			entryNum := uint64(off / rs)
 			e, perr := libntfs.ParseMFTRecord(data[off:off+rs], entryNum, uint32(rs))
 			if perr != nil {
+				// Unparsable records are expected in an extracted table; the
+				// library's own guidance is to skip them and continue.
+				res.skipped++
 				continue
 			}
 			fn(entryNum, e)
 		}
-		return "mft", rs, nil
+		return res, nil
 	}
 
 	vol, verr := libntfs.Open(f)
 	if verr != nil {
-		return "", 0, fmt.Errorf("not a standalone $MFT (no FILE signature) and not a mountable NTFS volume: %s. For a full-disk image, locate the NTFS partition offset with table_* first", verr.Error())
+		return mftWalkResult{}, fmt.Errorf("not a standalone $MFT (no FILE signature) and not a mountable NTFS volume: %s. For a full-disk image, locate the NTFS partition offset with table_* first", verr.Error())
 	}
-	recordSize := 0
+	defer vol.Close()
+
+	res := mftWalkResult{sourceType: "volume"}
 	if rs := vol.MFTRecordSize(); rs > 0 {
-		recordSize = int(rs)
+		res.recordSize = int(rs)
 	}
-	_ = vol.EachMFTEntry(func(n uint64, e *libntfs.MFTEntry) error {
+	// Returning nil from the callback keeps the walk going past a bad record,
+	// which is the library's documented idiom. A non-nil error here means the
+	// walk itself aborted, so the entry list is truncated and reporting success
+	// would misrepresent a damaged MFT as a complete one.
+	if werr := vol.EachMFTEntry(func(n uint64, e *libntfs.MFTEntry) error {
 		fn(n, e)
 		return nil
-	})
-	return "volume", recordSize, nil
+	}); werr != nil {
+		return res, werr
+	}
+	return res, nil
+}
+
+// detectMFTRecordSize reads the record size from the first record's own header
+// rather than assuming it. libntfs.DefaultMFTRecordSize is the size ParseMFTRecord
+// *assumes* when the caller passes 0; a volume formatted with 4096-byte records
+// is legal, and striding it at 1024 lands three out of every four reads inside a
+// record body and numbers the survivors wrongly.
+func detectMFTRecordSize(data []byte) int {
+	const allocatedSizeOffset = 0x1C // uint32 LE in the MFT record header
+	if len(data) >= allocatedSizeOffset+4 {
+		allocated := binary.LittleEndian.Uint32(data[allocatedSizeOffset:])
+		// Power of two, sector-aligned, and within the range NTFS can express.
+		if allocated >= 512 && allocated <= 65536 && allocated&(allocated-1) == 0 {
+			return int(allocated)
+		}
+	}
+	return libntfs.DefaultMFTRecordSize
 }
 
 // mftRow is the extracted, Volume-independent view of one MFT record. It copies
 // out everything needed for output so results survive ParseMFTRecordInto reuse
 // and volume-cache eviction.
 type mftRow struct {
-	record       uint64
-	parent       uint64
-	inUse        bool
-	isDir        bool
-	name         string
-	size         uint64
-	allocated    uint64
-	sequence     uint16
-	hardLinks    uint16
-	fileAttrs    uint32
-	si           *libntfs.StandardInformation
-	fn           *libntfs.FileName
+	record    uint64
+	parent    uint64
+	inUse     bool
+	isDir     bool
+	name      string
+	size      uint64
+	allocated uint64
+	sequence  uint16
+	hardLinks uint16
+	fileAttrs uint32
+	si        *libntfs.StandardInformation
+	fn        *libntfs.FileName
 }
 
 func mftRowFromEntry(e *libntfs.MFTEntry, recordNum uint64) mftRow {
@@ -156,16 +198,16 @@ func mftRowFromEntry(e *libntfs.MFTEntry, recordNum uint64) mftRow {
 
 func (r mftRow) toHash(fullPath string) object.Object {
 	m := map[string]object.Object{
-		"record":         intObj(int64(r.record)),
-		"parent_record":  intObj(int64(r.parent)),
-		"in_use":         boolObj(r.inUse),
-		"is_directory":   boolObj(r.isDir),
-		"name":           stringObj(r.name),
-		"path":           stringObj(fullPath),
-		"size":           intObj(int64(r.size)),
-		"allocated_size": intObj(int64(r.allocated)),
-		"sequence":       intObj(int64(r.sequence)),
-		"hard_links":     intObj(int64(r.hardLinks)),
+		"record":          intObj(int64(r.record)),
+		"parent_record":   intObj(int64(r.parent)),
+		"in_use":          boolObj(r.inUse),
+		"is_directory":    boolObj(r.isDir),
+		"name":            stringObj(r.name),
+		"path":            stringObj(fullPath),
+		"size":            intObj(int64(r.size)),
+		"allocated_size":  intObj(int64(r.allocated)),
+		"sequence":        intObj(int64(r.sequence)),
+		"hard_links":      intObj(int64(r.hardLinks)),
 		"file_attributes": intObj(int64(r.fileAttrs)),
 	}
 	addMFTTimes(m, "si", r.si != nil, siTimes(r.si))
