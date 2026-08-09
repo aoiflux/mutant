@@ -210,6 +210,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{{name: "pe_path", doc: "Path to a PE (Windows) binary."}}},
 	BuiltinNameNTHash:  {signature: "nt_hash(password)", summary: "Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use."},
 	BuiltinNameLMHash:  {signature: "lm_hash(password)", summary: "Returns the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex. Empty password -> aad3b435b51404eeaad3b435b51404ee."},
+	BuiltinNameJA3:     {signature: "ja3(client_hello)", summary: "Computes the JA3 TLS-client fingerprint from a ClientHello (raw bytes, with or without the TLS record layer). Hashes version,ciphers,extensions,curves,point_formats with GREASE (RFC 8701) removed. Returns {ja3, ja3_hash (md5), tls_version, ciphers[], extensions[], curves[], point_formats[]}. Returns (result, err).", params: []builtinParamDoc{{name: "client_hello", doc: "Raw bytes of a TLS ClientHello (optionally wrapped in its record layer)."}}},
 	// security: crypto
 	BuiltinNameX509Parse:  {signature: "x509_parse(pem_or_der)", summary: "Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err).", params: []builtinParamDoc{{name: "pem_or_der", doc: "Certificate bytes in PEM or DER form."}}},
 	BuiltinNameJWTDecode:  {signature: "jwt_decode(token)", summary: "Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err).", params: []builtinParamDoc{{name: "token", doc: "Compact JWT string (header.payload.signature)."}}},
@@ -415,7 +416,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameFsMagic: {
 		signature: "fs_magic(path)",
-		summary:   "Infers file type/magic information from file contents.",
+		summary:   "Infers file type/magic from a file's header against a ~40-signature database (executables PE/ELF/Mach-O, images, archives, documents, SQLite/registry/EVTX/pcap, media, and forensic artifacts like lnk/prefetch). Returns {path, type, mime, signature}.",
 	},
 	BuiltinNameFsExtractStrings: {
 		signature: "fs_extract_strings(path, minLen?)",
@@ -434,7 +435,7 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length.",
 		params: []builtinParamDoc{
 			{name: "path", doc: "Path to source file."},
-			{name: "type", doc: "Artifact type signature such as pe/elf/pdf/zip."},
+			{name: "type", doc: "Signature type name from the shared database (e.g. pe/elf/macho64/png/jpeg/gif/zip/gzip/7z/rar/pdf/ole/sqlite/regf/evtx/gzip/mp3/mp4); an unsupported name errors with the full list."},
 		},
 	},
 	BuiltinNameFsEntropy: {

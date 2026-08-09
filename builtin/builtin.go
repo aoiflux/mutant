@@ -461,6 +461,8 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameBrowserDownloads, &BuiltIn{BrowserDownloads}},
 	// forensic: filesystem recovery (append-only)
 	{BuiltinNameFsDeleted, &BuiltIn{FsDeleted}},
+	// security: TLS fingerprinting (append-only)
+	{BuiltinNameJA3, &BuiltIn{JA3}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

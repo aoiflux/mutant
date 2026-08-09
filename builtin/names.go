@@ -410,6 +410,7 @@ const (
 	BuiltinNameImphash = "imphash"
 	BuiltinNameNTHash  = "nt_hash"
 	BuiltinNameLMHash  = "lm_hash"
+	BuiltinNameJA3     = "ja3"
 	// security: crypto
 	BuiltinNameX509Parse  = "x509_parse"
 	BuiltinNameJWTDecode  = "jwt_decode"
