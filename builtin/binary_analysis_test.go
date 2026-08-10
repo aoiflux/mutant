@@ -126,18 +126,25 @@ func TestBinaryImportsSectionsAndDwarf(t *testing.T) {
 
 	importsPayload, errObj := unwrapPair(t, BinImports(stringObj(exe)))
 	if errObj != nil {
-		if runtime.GOOS == "darwin" && strings.Contains(errObj.Message, "unsupported") {
-			t.Skip("imports parser not implemented for this format")
+		// A statically linked binary — which is exactly what a CGO_ENABLED=0 Go
+		// build produces on Linux — has no dynamic symbol/import section, and macOS
+		// uses a different format. Both are legitimate "no imports" outcomes for
+		// this self-referential test, not failures; still assert sections + DWARF.
+		if strings.Contains(errObj.Message, "no symbol section") ||
+			(runtime.GOOS == "darwin" && strings.Contains(errObj.Message, "unsupported")) {
+			t.Logf("bin_imports: no import section to assert on this binary (%s)", errObj.Message)
+		} else {
+			t.Fatalf("bin_imports error: %s", errObj.Inspect())
 		}
-		t.Fatalf("bin_imports error: %s", errObj.Inspect())
-	}
-	importsHash, ok := importsPayload.(*object.Hash)
-	if !ok {
-		t.Fatalf("bin_imports payload invalid")
-	}
-	importsObj := mustHashValue(t, importsHash, "imports")
-	if _, ok := importsObj.(*object.Array); !ok {
-		t.Fatalf("imports field is not ARRAY")
+	} else {
+		importsHash, ok := importsPayload.(*object.Hash)
+		if !ok {
+			t.Fatalf("bin_imports payload invalid")
+		}
+		importsObj := mustHashValue(t, importsHash, "imports")
+		if _, ok := importsObj.(*object.Array); !ok {
+			t.Fatalf("imports field is not ARRAY")
+		}
 	}
 
 	sectionsPayload, errObj := unwrapPair(t, BinSections(stringObj(exe)))
