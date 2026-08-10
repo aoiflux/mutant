@@ -130,7 +130,8 @@ const (
 	BuiltinNameBinSections           = "bin_sections"
 	BuiltinNameNetResolve            = "net_resolve"
 	BuiltinNameNetDial               = "net_dial"
-	BuiltinNameNetSynScan            = "net_syn_scan"
+	BuiltinNameNetSynScan            = "net_syn_scan" // deprecated alias of net_connect_scan
+	BuiltinNameNetConnectScan        = "net_connect_scan"
 	BuiltinNameNetUdpScan            = "net_udp_scan"
 	BuiltinNameNetBanner             = "net_banner"
 	BuiltinNameNetTlsFingerprint     = "net_tls_fingerprint"

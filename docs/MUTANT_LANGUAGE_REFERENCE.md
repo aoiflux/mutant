@@ -210,7 +210,7 @@ Total builtins currently registered: 211
 - `net_os_fingerprint(target, timeoutMs)` - Infers probable remote OS fingerprint from network responses.
 - `net_pcap_analyze(path)` - Analyzes PCAP captures and returns flow/session signals.
 - `net_resolve(host)` - Resolves a host name to network addresses.
-- `net_syn_scan(target, ports)` - Performs TCP SYN scanning for target ports.
+- `net_connect_scan(host, startPort, endPort, timeoutMs)` - Scans a TCP port range using full connect() probes (not a half-open SYN scan). `net_syn_scan` is a deprecated alias.
 - `net_tls_fingerprint(address, timeoutMs)` - Collects TLS certificate and handshake fingerprint metadata.
 - `net_udp_scan(target, ports)` - Performs UDP scanning for target ports.
 

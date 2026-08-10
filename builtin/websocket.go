@@ -11,7 +11,7 @@ package builtin
 //
 //   ws_accept_key(client_key)              -> (accept STRING, err)   handshake helper
 //   ws_read_frame(handle, timeout_ms)      -> (HASH, err)            {fin,opcode,payload,masked,length,is_control}
-//   ws_write_frame(handle, opcode, payload, mask) -> (bytes INT, err)
+//   ws_write_frame(handle, opcode, payload, mask, timeout_ms?) -> (bytes INT, err)
 //
 // Opcodes: 0x0 continuation, 0x1 text, 0x2 binary, 0x8 close, 0x9 ping, 0xA pong.
 
@@ -112,10 +112,12 @@ func WSReadFrame(args ...object.Object) object.Object {
 
 // WSWriteFrame builds and writes a single WebSocket frame. Per RFC 6455, frames
 // a client sends to a server MUST be masked (mask=true); server->client frames
-// MUST NOT be (mask=false). FIN is always set (no fragmentation).
+// MUST NOT be (mask=false). FIN is always set (no fragmentation). A write
+// deadline (default 30s, or the optional timeout_ms; <=0 blocks forever) keeps a
+// stalled peer from hanging the write.
 func WSWriteFrame(args ...object.Object) object.Object {
-	if len(args) != 4 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
+	if len(args) != 4 && len(args) != 5 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4 or 5", len(args)))
 	}
 	handle, ok := args[0].(*object.Integer)
 	if !ok {
@@ -132,6 +134,14 @@ func WSWriteFrame(args ...object.Object) object.Object {
 	maskObj, ok := args[3].(*object.Boolean)
 	if !ok {
 		return resultAndError(nil, newError("argument 4 to `ws_write_frame` must be BOOLEAN, got %s", args[3].Type()))
+	}
+	timeoutMs := int64(defaultWriteTimeoutMs)
+	if len(args) == 5 {
+		t, ok := args[4].(*object.Integer)
+		if !ok {
+			return resultAndError(nil, newError("argument 5 to `ws_write_frame` must be INTEGER, got %s", args[4].Type()))
+		}
+		timeoutMs = t.Value
 	}
 
 	mc, ok := lookupConn(handle.Value)
@@ -180,6 +190,7 @@ func WSWriteFrame(args ...object.Object) object.Object {
 		b.Write(payload)
 	}
 
+	setWriteDeadline(mc.conn, timeoutMs)
 	n, err := mc.conn.Write(b.Bytes())
 	if err != nil {
 		return resultAndError(nil, newError("ws_write_frame: %s", err.Error()))

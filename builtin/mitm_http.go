@@ -167,7 +167,8 @@ func isChunked(te []string) bool {
 // HTTPBuildRequest serialises a request hash back into wire bytes.
 // http_build_request(request HASH) -> STRING
 // Fields: method (default GET), url or path (default "/"), host, proto
-// (default HTTP/1.1), headers (HASH), body (STRING).
+// (default HTTP/1.1), headers (HASH), body (STRING). A Content-Length header is
+// added when a body is present and the caller didn't supply one.
 func HTTPBuildRequest(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
@@ -207,9 +208,13 @@ func HTTPBuildRequest(args ...object.Object) object.Object {
 
 	headers := headersToOrdered(req)
 	hasHost := false
+	hasContentLength := false
 	for _, h := range headers {
 		if strings.EqualFold(h.key, "Host") {
 			hasHost = true
+		}
+		if strings.EqualFold(h.key, "Content-Length") {
+			hasContentLength = true
 		}
 	}
 	if !hasHost && host != "" {
@@ -218,6 +223,13 @@ func HTTPBuildRequest(args ...object.Object) object.Object {
 		b.WriteString("\r\n")
 	}
 	writeHeaderLines(&b, headers)
+	// A request carrying a body needs a Content-Length so the receiver knows
+	// where it ends; add one when the caller didn't (matches http_build_response).
+	if !hasContentLength && body != "" {
+		b.WriteString("Content-Length: ")
+		b.WriteString(strconv.Itoa(len(body)))
+		b.WriteString("\r\n")
+	}
 	b.WriteString("\r\n")
 	b.WriteString(body)
 

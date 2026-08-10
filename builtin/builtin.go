@@ -159,7 +159,7 @@ var Builtins = []BuiltinDefinition{
 	// network
 	{BuiltinNameNetResolve, &BuiltIn{NetResolve}},
 	{BuiltinNameNetDial, &BuiltIn{NetDial}},
-	{BuiltinNameNetSynScan, &BuiltIn{NetSynScan}},
+	{BuiltinNameNetSynScan, &BuiltIn{NetConnectScan}}, // deprecated alias; index kept stable
 	{BuiltinNameNetUdpScan, &BuiltIn{NetUDPScan}},
 	{BuiltinNameNetBanner, &BuiltIn{NetBanner}},
 	{BuiltinNameNetTlsFingerprint, &BuiltIn{NetTLSFingerprint}},
@@ -469,6 +469,9 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameReduce, reduceBuiltin},
 	{BuiltinNameEach, eachBuiltin},
 	{BuiltinNameSortBy, sortByBuiltin},
+
+	// net: truthful primary name for the connect-scan (net_syn_scan alias above)
+	{BuiltinNameNetConnectScan, &BuiltIn{NetConnectScan}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

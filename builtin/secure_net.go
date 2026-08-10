@@ -34,6 +34,23 @@ import (
 // allocation. It matches the HTTP body cap in mitm_http.go.
 const maxConnReadBytes = 32 << 20 // 32 MiB
 
+// defaultWriteTimeoutMs bounds a single socket write so a peer that has stopped
+// reading (a full receive window) cannot hang a Mutant script forever. It is the
+// write-side counterpart to net_conn_read's explicit read timeout. Callers may
+// override it with an explicit timeout argument; a timeout <= 0 blocks
+// indefinitely (the pre-deadline behavior) for callers that genuinely want it.
+const defaultWriteTimeoutMs = 30_000 // 30s
+
+// setWriteDeadline applies (or clears) a write deadline before a socket write.
+// timeoutMs <= 0 clears any deadline so the write blocks indefinitely.
+func setWriteDeadline(conn net.Conn, timeoutMs int64) {
+	if timeoutMs > 0 {
+		_ = conn.SetWriteDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
+	} else {
+		_ = conn.SetWriteDeadline(time.Time{})
+	}
+}
+
 // managedConn wraps a live connection. A single bufio.Reader is created lazily
 // and reused so byte-level reads (net_conn_read) and HTTP-framed reads
 // (http_conn_read_request/response) draw from the same buffered stream and
@@ -192,10 +209,12 @@ func NetTLSConnect(args ...object.Object) object.Object {
 }
 
 // NetConnWrite writes bytes to a connection. Returns the number written.
-// net_conn_write(handle INTEGER, data STRING) -> INTEGER
+// net_conn_write(handle INTEGER, data STRING, timeout_ms? INTEGER) -> INTEGER
+// A write deadline (default 30s, or timeout_ms if given; <=0 blocks forever)
+// prevents a peer that has stopped reading from hanging the write indefinitely.
 func NetConnWrite(args ...object.Object) object.Object {
-	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+	if len(args) != 2 && len(args) != 3 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
 	handle, ok := args[0].(*object.Integer)
 	if !ok {
@@ -205,10 +224,19 @@ func NetConnWrite(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 2 to `net_conn_write` must be STRING, got %s", args[1].Type()))
 	}
+	timeoutMs := int64(defaultWriteTimeoutMs)
+	if len(args) == 3 {
+		t, ok := args[2].(*object.Integer)
+		if !ok {
+			return resultAndError(nil, newError("argument 3 to `net_conn_write` must be INTEGER, got %s", args[2].Type()))
+		}
+		timeoutMs = t.Value
+	}
 	mc, ok := lookupConn(handle.Value)
 	if !ok {
 		return resultAndError(nil, newError("net_conn_write: unknown connection handle %d", handle.Value))
 	}
+	setWriteDeadline(mc.conn, timeoutMs)
 	n, err := mc.conn.Write([]byte(data.Value))
 	if err != nil {
 		return resultAndError(intObj(int64(n)), newError("net_conn_write: %s", err.Error()))

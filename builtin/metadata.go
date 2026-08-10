@@ -490,7 +490,8 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 	},
-	BuiltinNameNetSynScan: {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host. NOTE: this is a full TCP connect scan, not a half-open SYN scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetSynScan: {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetConnectScan: {signature: "net_connect_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges).", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
 	BuiltinNameNetUdpScan: {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port timeout in ms."}}},
 	BuiltinNameNetBanner:  {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Read timeout in ms."}}},
 	BuiltinNameNetTlsFingerprint: {
@@ -740,9 +741,9 @@ var builtinDocs = map[string]builtinDoc{
 		},
 	},
 	BuiltinNameNetConnWrite: {
-		signature: "net_conn_write(handle, data)",
-		summary:   "Writes bytes to a connection and returns the number written.",
-		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}},
+		signature: "net_conn_write(handle, data, timeout_ms?)",
+		summary:   "Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}, {name: "timeout_ms", doc: "Optional write timeout in ms (default 30000; <=0 = block indefinitely)."}},
 	},
 	BuiltinNameNetConnRead: {
 		signature: "net_conn_read(handle, maxBytes, timeoutMs)",
@@ -772,7 +773,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameTimeMs:         {signature: "time_ms()", summary: "Returns the current Unix time in milliseconds."},
 	BuiltinNameWsAcceptKey:    {signature: "ws_accept_key(client_key)", summary: "Computes the Sec-WebSocket-Accept value for an RFC 6455 101 handshake response."},
 	BuiltinNameWsReadFrame:    {signature: "ws_read_frame(handle, timeoutMs)", summary: "Reads one WebSocket frame (unmasked); returns {fin, opcode, payload, masked, length, is_control}."},
-	BuiltinNameWsWriteFrame:   {signature: "ws_write_frame(handle, opcode, payload, mask)", summary: "Writes one WebSocket frame; mask=true for client->server, false for server->client."},
+	BuiltinNameWsWriteFrame:   {signature: "ws_write_frame(handle, opcode, payload, mask, timeout_ms?)", summary: "Writes one WebSocket frame; mask=true for client->server, false for server->client. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write."},
 	BuiltinNameNetTlsUpgradeServer: {
 		signature: "net_tls_upgrade_server(handle, certPem, keyPem, options?)",
 		summary:   "Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept).",

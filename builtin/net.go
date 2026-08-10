@@ -82,28 +82,33 @@ func NetDial(args ...object.Object) object.Object {
 	}), nil)
 }
 
-func NetSynScan(args ...object.Object) object.Object {
+// NetConnectScan scans a TCP port range with full connect() probes (net.Dial).
+// It is deliberately NOT a half-open SYN scan: real SYN scanning needs raw
+// sockets and elevated privileges and is OS-restricted, which conflicts with the
+// pure-Go, unprivileged design. The name is truthful; `net_syn_scan` remains as a
+// deprecated alias for backward compatibility.
+func NetConnectScan(args ...object.Object) object.Object {
 	if len(args) != 4 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
 
 	host, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `net_syn_scan` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `net_connect_scan` must be STRING, got %s", args[0].Type()))
 	}
 	startPort, ok := args[1].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `net_syn_scan` must be INTEGER, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `net_connect_scan` must be INTEGER, got %s", args[1].Type()))
 	}
 	endPort, ok := args[2].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 3 to `net_syn_scan` must be INTEGER, got %s", args[2].Type()))
+		return resultAndError(nil, newError("argument 3 to `net_connect_scan` must be INTEGER, got %s", args[2].Type()))
 	}
 	timeoutMs, ok := args[3].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 4 to `net_syn_scan` must be INTEGER, got %s", args[3].Type()))
+		return resultAndError(nil, newError("argument 4 to `net_connect_scan` must be INTEGER, got %s", args[3].Type()))
 	}
-	if errObj := validatePortRange("net_syn_scan", startPort.Value, endPort.Value); errObj != nil {
+	if errObj := validatePortRange("net_connect_scan", startPort.Value, endPort.Value); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 

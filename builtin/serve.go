@@ -15,6 +15,11 @@ package builtin
 
 import "mutant/object"
 
+// maxServeHandlers bounds how many net_serve handler goroutines run at once.
+// Once reached, the accept loop blocks (backpressure) until a handler finishes,
+// so a connection flood cannot spawn unbounded goroutines / exhaust memory.
+const maxServeHandlers = 1024
+
 // NetServePrepareHook compiles+caches a handler .mut once. Returns an error
 // object on parse/compile failure. Installed by the `serve` package.
 var NetServePrepareHook func(handlerPath string) *object.Error
@@ -70,13 +75,25 @@ func NetServe(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
+	// Bound the number of concurrently running handler goroutines. The channel
+	// acts as a semaphore: Accept() blocks (backpressure) once maxServeHandlers
+	// connections are in flight, so a flood of connections cannot spawn unbounded
+	// goroutines. A slot is released when the handler returns. NOTE: this caps
+	// handler goroutines only — a handler may deliberately hand its connection to
+	// a net_spawn worker (e.g. a WebSocket reverse pump) that outlives it, so the
+	// connection FD itself stays caller-managed (closed via net_conn_close).
+	sem := make(chan struct{}, maxServeHandlers)
 	for {
 		conn, err := ml.ln.Accept()
 		if err != nil {
 			return resultAndError(nil, newError("net_serve: accept failed: %s", err.Error()))
 		}
 		id := registerConn(conn, ml.isTLS)
-		go NetServeRunHook(pathObj.Value, id, arg)
+		sem <- struct{}{}
+		go func(connID int64) {
+			defer func() { <-sem }()
+			NetServeRunHook(pathObj.Value, connID, arg)
+		}(id)
 	}
 }
 

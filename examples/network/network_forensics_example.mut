@@ -6,8 +6,8 @@ putln("net_dns_query A localhost:", dns_a, "err:", err);
 let dns_mx, err = net_dns_query("example.com", "MX");
 putln("net_dns_query MX example.com:", dns_mx, "err:", err);
 
-let scan, err = net_syn_scan("127.0.0.1", 22, 25, 100);
-putln("net_syn_scan 22-25:", scan, "err:", err);
+let scan, err = net_connect_scan("127.0.0.1", 22, 25, 100);
+putln("net_connect_scan 22-25:", scan, "err:", err);
 
 let banner, err = net_banner("127.0.0.1:22", 200);
 putln("net_banner 127.0.0.1:22:", banner, "err:", err);

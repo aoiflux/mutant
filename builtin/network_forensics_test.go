@@ -19,7 +19,7 @@ import (
 	"mutant/object"
 )
 
-func TestNetSynScanFindsOpenPort(t *testing.T) {
+func TestNetConnectScanFindsOpenPort(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start TCP listener: %v", err)
@@ -37,7 +37,7 @@ func TestNetSynScanFindsOpenPort(t *testing.T) {
 	}()
 
 	port := int64(ln.Addr().(*net.TCPAddr).Port)
-	result := NetSynScan(stringObj("127.0.0.1"), intObj(port), intObj(port), intObj(200))
+	result := NetConnectScan(stringObj("127.0.0.1"), intObj(port), intObj(port), intObj(200))
 	payload, errObj := unwrapPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
@@ -395,8 +395,8 @@ func TestNetForensicsArgumentValidation(t *testing.T) {
 		call func() object.Object
 	}{
 		{
-			name: "syn scan port range invalid",
-			call: func() object.Object { return NetSynScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100)) },
+			name: "connect scan port range invalid",
+			call: func() object.Object { return NetConnectScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100)) },
 		},
 		{
 			name: "udp scan bad host type",
