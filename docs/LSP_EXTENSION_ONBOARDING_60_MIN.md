@@ -81,7 +81,7 @@ npm test
 
 ```mermaid
 flowchart TD
-  E[Editor event\nhover/completion/rename] --> X[vscode-extension/src/extension.ts]
+  E[Editor event\nhover/completion/rename] --> X[mutant-vscode-extension/src/extension.ts]
   X --> Y[lsp/cmd/mlsp/main.go]
   Y --> Z[lsp/internal/server/server.go]
   Z --> A[lsp/internal/workspace/store.go]
@@ -92,7 +92,7 @@ flowchart TD
 
 Read these files in this order:
 
-1. [vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts)
+1. [mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts)
 2. [lsp/cmd/mlsp/main.go](../lsp/cmd/mlsp/main.go)
 3. [lsp/internal/server/server.go](../lsp/internal/server/server.go)
 4. [lsp/internal/analyzer/analyzer.go](../lsp/internal/analyzer/analyzer.go)
@@ -191,7 +191,7 @@ Edit:
 - [lsp/internal/analyzer/diagnostics.go](../lsp/internal/analyzer/diagnostics.go)
 - [lsp/internal/server/lint_config.go](../lsp/internal/server/lint_config.go)
 - extension setting schema in
-  [vscode-extension/package.json](../vscode-extension/package.json)
+  [mutant-vscode-extension/package.json](../mutant-vscode-extension/package.json)
 
 Validate:
 

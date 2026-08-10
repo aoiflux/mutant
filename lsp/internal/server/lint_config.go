@@ -49,6 +49,8 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "undefinedDeclaration", &config.UndefinedDeclaration)
 	applyRuleSeverity(rulesMap, "nestingComplexity", &config.NestingComplexity)
 	applyRuleSeverity(rulesMap, "semicolon", &config.Semicolon)
+	applyRuleSeverity(rulesMap, "unreachableCode", &config.UnreachableCode)
+	applyRuleSeverity(rulesMap, "platformSupport", &config.PlatformSupport)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

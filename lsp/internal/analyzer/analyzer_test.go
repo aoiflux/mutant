@@ -108,8 +108,8 @@ func TestBuiltinsHaveCompletionAndTeachingCoverage(t *testing.T) {
 		if !ok || !item.has {
 			t.Fatalf("builtin %q missing from completion items", entry.Name)
 		}
-		if item.detail != "builtin" {
-			t.Fatalf("builtin %q completion detail = %q, want %q", entry.Name, item.detail, "builtin")
+		if !strings.HasPrefix(item.detail, "builtin") {
+			t.Fatalf("builtin %q completion detail = %q, want a \"builtin\" prefix", entry.Name, item.detail)
 		}
 
 		hover, ok := builtinHoverText(entry.Name)

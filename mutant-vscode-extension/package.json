@@ -160,6 +160,30 @@
                         "off"
                     ],
                     "description": "Severity for deep nesting diagnostics in function bodies. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.unreachableCode.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unreachable-code diagnostics (statements after an unconditional return/break/continue). Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.platformSupport.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for platform-support diagnostics: warns when a program calls a builtin that is not supported on the operating system the language server is running on (for example a Windows/Linux-only builtin used on macOS). Set to 'off' to suppress the rule."
                 }
             }
         },

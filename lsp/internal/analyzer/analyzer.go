@@ -220,6 +220,9 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 	for _, b := range builtin.Builtins {
 		kind := lsp.CompletionItemKindFunction
 		detail := "builtin"
+		if category := builtin.CapabilityCategory(b.Name); category != "" {
+			detail = "builtin · " + category
+		}
 		completion := lsp.CompletionItem{Label: b.Name, Kind: &kind, Detail: &detail}
 		if doc, ok := builtinHoverText(b.Name); ok {
 			completion.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
@@ -287,7 +290,7 @@ func stableCompletionItems(items []lsp.CompletionItem) []lsp.CompletionItem {
 }
 
 func completionCategory(item lsp.CompletionItem) int {
-	if item.Detail != nil && *item.Detail == "builtin" {
+	if item.Detail != nil && strings.HasPrefix(*item.Detail, "builtin") {
 		return 1
 	}
 	if item.Kind != nil {

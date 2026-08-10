@@ -17,7 +17,7 @@ Scope:
 - Analyzer pipeline in [lsp/internal/analyzer](../lsp/internal/analyzer)
 - Workspace state/index in [lsp/internal/workspace](../lsp/internal/workspace)
 - VS Code extension host/client in
-  [vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts)
+  [mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts)
 
 ## 1. Architecture Overview
 
@@ -105,7 +105,11 @@ Important constructor behavior:
 - Snapshot contains:
 - raw source
 - parsed AST program (`Program`)
-- parse errors
+- parse errors (hard failures)
+- recoverables (`Recoverables`): non-fatal parser findings — most importantly the
+  missing/redundant semicolon channel — surfaced via `SemicolonProblems()`. The
+  tree still parses into a usable AST; these drive the `semicolon` diagnostic and
+  its quick fixes.
 
 Analyzer steps:
 
@@ -220,15 +224,29 @@ Core file:
 
 Diagnostics sources:
 
-- `mutant-parser`: parser errors from snapshot parse errors.
+- `mutant-parser`: parser errors from snapshot parse errors, plus the
+  string/comment-aware delimiter-balance checker.
 - `mutant-lint`: semantic lint rules.
+- `mutant-format`: strict-formatting rules (the semicolon rule) — distinct from
+  `mutant-lint` so quick fixes can key off it.
 
-Current lint rules:
+Current lint rules (rule id -> default severity):
 
-- duplicate top-level declaration
-- unused declaration (top-level and local)
-- undefined identifier
-- nesting complexity in function bodies (depth > 2)
+- `duplicateTopLevelDeclaration` -> warning (also nested duplicates)
+- `unusedDeclaration` -> warning (top-level and local; skips `_`)
+- `undefinedDeclaration` -> error (scope-aware; builtins + macro special forms
+  count as defined)
+- `nestingComplexity` -> warning (if/for nesting depth > 2 in function bodies)
+- `semicolon` -> warning (missing/redundant `;`, source `mutant-format`; both have
+  quick fixes and the formatter also repairs them on save)
+- `unreachableCode` -> warning (statements after an unconditional
+  `return`/`break`/`continue` in a statement list; literal control flow only)
+- `platformSupport` -> warning (**OS-aware**: warns when a program calls a builtin
+  that is not supported on the operating system the language server is running on,
+  e.g. a Windows/Linux-only builtin such as `process_modules` used on macOS). The
+  supported-platform set comes from `builtin.PlatformSupport` /
+  `builtin.UnsupportedOn` in [builtin/metadata.go](../builtin/metadata.go); the
+  host OS is `runtime.GOOS` (overridable in tests via the analyzer's `hostGOOS`).
 
 Config ingestion path:
 
@@ -248,18 +266,29 @@ Core file:
 
 Behavior model:
 
-- If parse errors exist (or snapshot invalid), formatter uses whitespace
-  normalization only.
-- If source contains comments or intentional blank lines, formatter preserves
-  structure by using normalization path.
-- Otherwise it applies AST-driven formatting for statements/expressions.
+- If hard parse errors exist (or the snapshot is invalid), the formatter degrades
+  to whitespace normalization only (CRLF -> LF, strip trailing whitespace, exactly
+  one trailing newline).
+- Otherwise it applies AST-driven formatting for statements/expressions. Comments
+  and blank lines are handled **through** the AST printer (re-attached from the
+  `program.Comments` side-table; runs of blank lines collapse to one), so the
+  presence of comments/blank lines no longer forces the normalization path.
+
+Strict semicolons (canonical):
+
+- Semicolons are emitted from the AST via `ast.Statement.RequiresSemicolon()`, not
+  copied from source. The formatter therefore **repairs** missing semicolons and
+  **removes** redundant ones on format. Recoverable semicolon issues do not trigger
+  the normalization fallback; only hard parse errors do. Struct fields are
+  `;`-terminated including the last.
 
 Canonical style policy:
 
+- Four-space indent (never tabs); client `tabSize`/`insertSpaces` are ignored. The
+  only user control is the master `mutant.strictFormatting` on/off toggle.
 - Opening braces stay on the same line for supported constructs (`if (...) {`,
-  `for (...) {`, `fn(...) {`, `else {`).
-- Source-layout mode still preserves authored comments/blank lines, but style-2
-  standalone opening braces are canonicalized to style-1.
+  `for (...) {`, `fn(...) {`, `else {`); operator expressions are fully
+  parenthesized and space-padded for a canonical form.
 
 On-type formatting behavior:
 
@@ -307,15 +336,27 @@ Builtin coverage model:
 - Generic fallback for any builtin registered in
   [builtin/builtin.go](../builtin/builtin.go).
 
+Capability categories and platform metadata (both surfaced without a custom token
+legend):
+
+- Hover appends a `_Category: <capability>_` line (from
+  `builtin.CapabilityCategory`, e.g. `filesystem`, `network`, `graph database`,
+  `runtime integration`, `forensics`) and, for platform-constrained builtins, a
+  **Platforms:** line plus any behavioral note (from `builtin.PlatformSupport`).
+- Completion `Detail` becomes `builtin · <capability>` so the completion list shows
+  the category inline. Sorting still groups all builtins together (the completion
+  category test now prefix-matches `builtin`).
+
 Result:
 
 - Newly added builtins are auto-discoverable in completion and still have
-  baseline hover/signature coverage.
+  baseline hover/signature coverage, with their capability category and platform
+  support shown automatically.
 
 ## 9. VS Code Extension Design
 
 Main file:
-[vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts)
+[mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts)
 
 Responsibilities:
 
@@ -362,9 +403,9 @@ Code path:
 
 ### 9.3 Commands exposed
 
-Declared in [vscode-extension/package.json](../vscode-extension/package.json),
+Declared in [mutant-vscode-extension/package.json](../mutant-vscode-extension/package.json),
 implemented in
-[vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts):
+[mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts):
 
 - Mutant: Open Smoke File
 - Mutant: Run LSP Smoke Checks
@@ -404,7 +445,7 @@ These rules reduce editor flicker and test flakiness.
 ### 11.3 Extension integration tests
 
 - File:
-  [vscode-extension/src/test/suite/extension.test.ts](../vscode-extension/src/test/suite/extension.test.ts)
+  [mutant-vscode-extension/src/test/suite/extension.test.ts](../mutant-vscode-extension/src/test/suite/extension.test.ts)
 - Covers activation, command registration, crash backoff, binary selection, and
   config override behavior.
 
@@ -421,10 +462,18 @@ These rules reduce editor flicker and test flakiness.
 
 ### 12.2 Add a new builtin function
 
-1. Register builtin in [builtin/builtin.go](../builtin/builtin.go).
-2. Optional but recommended: add rich doc entry in `builtinDocs` at
-   [lsp/internal/analyzer/language_teach.go](../lsp/internal/analyzer/language_teach.go).
-3. Run analyzer/server tests. Existing regression tests verify baseline
+1. Register builtin in [builtin/builtin.go](../builtin/builtin.go) (append-only;
+   see the 4 touch-points: `names.go` const, `builtin.go` slice, impl func,
+   `metadata.go` doc).
+2. Add a rich doc entry to the `builtinDocs` map in
+   [builtin/metadata.go](../builtin/metadata.go) (required — a meta-test enforces
+   per-function docs). The LSP reads hover/signature/completion docs from here.
+3. If the builtin is platform-constrained, set `platforms` (supported GOOS set)
+   and/or `platformNote` on its `builtinDoc`; the `platformSupport` diagnostic and
+   hover pick it up automatically. Its capability category is derived from the
+   name prefix in `CapabilityCategory` (extend `capabilityCategories` if it is a
+   new family).
+4. Run analyzer/server tests. Existing regression tests verify baseline
    completion/hover/signature coverage for all builtins.
 
 ### 12.3 Add a new lint rule
@@ -434,18 +483,18 @@ These rules reduce editor flicker and test flakiness.
 2. Add config field to `LintConfig` and severity parser in
    [lsp/internal/server/lint_config.go](../lsp/internal/server/lint_config.go).
 3. Expose setting in
-   [vscode-extension/package.json](../vscode-extension/package.json).
+   [mutant-vscode-extension/package.json](../mutant-vscode-extension/package.json).
 4. Add tests for default severity, override, and off behavior.
 
 ### 12.4 Add or change extension setting
 
 1. Add schema entry under `contributes.configuration.properties` in
-   [vscode-extension/package.json](../vscode-extension/package.json).
+   [mutant-vscode-extension/package.json](../mutant-vscode-extension/package.json).
 2. Read/consume in
-   [vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts).
+   [mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts).
 3. Add integration test in
-   [vscode-extension/src/test/suite/extension.test.ts](../vscode-extension/src/test/suite/extension.test.ts).
-4. Document in [vscode-extension/README.md](../vscode-extension/README.md) and
+   [mutant-vscode-extension/src/test/suite/extension.test.ts](../mutant-vscode-extension/src/test/suite/extension.test.ts).
+4. Document in [mutant-vscode-extension/README.md](../mutant-vscode-extension/README.md) and
    troubleshooting docs.
 
 ## 13. Build, Run, and Debug

@@ -16,6 +16,14 @@ type builtinDoc struct {
 	signature string
 	summary   string
 	params    []builtinParamDoc
+	// platforms lists the GOOS values on which the builtin actually works. An
+	// empty/nil slice means "all platforms" (the common case). The LSP reads this
+	// to warn when a program calls a builtin unsupported on the host OS.
+	platforms []string
+	// platformNote is a soft, human-readable caveat surfaced in hover (not a hard
+	// availability gate) — e.g. a builtin that works everywhere but whose behavior
+	// differs per OS, or one path of which is platform-specific.
+	platformNote string
 }
 
 type builtinParamDoc struct {
@@ -354,6 +362,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "process_modules(pid?)",
 		summary:   "Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
+		platforms: []string{"windows", "linux"},
 	},
 	BuiltinNameProcessHash: {
 		signature: "process_hash(pid?)",
@@ -367,6 +376,7 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "pid", doc: "Target process ID (must be the current process for now)."},
 			{name: "pattern", doc: "Non-empty byte pattern to search for."},
 		},
+		platforms: []string{"windows", "linux"},
 	},
 	BuiltinNameProcessEnv: {
 		signature: "process_env(pid?)",
@@ -380,6 +390,7 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "pid", doc: "Target process ID."},
 			{name: "signal?", doc: "Optional integer signal number."},
 		},
+		platformNote: "On Windows only SIGKILL semantics are honored; other signal numbers are ignored.",
 	},
 	BuiltinNameExecString: {
 		signature: "exec_string(command, shell?)",
@@ -535,6 +546,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "reg_open(source)",
 		summary:   "Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\\SOFTWARE\\...) -> live registry (Windows only). Returns (result, err).",
 		params:    []builtinParamDoc{{name: "source", doc: "regf hive file, hive-JSON file, or live registry key path (HKLM/HKCU/HKCR/HKU/HKCC)."}},
+		platformNote: "The live-registry path (HKLM\\..., HKCU\\..., etc.) is Windows-only; captured hive files and hive-JSON inputs are parsed on all platforms.",
 	},
 	BuiltinNameRegEnumKeys: {
 		signature: "reg_enum_keys(handle, keyPath?)",
@@ -953,4 +965,165 @@ func HasTeachingCoverage(name string) bool {
 	}
 	_, ok := TeachingFamilySummary(name)
 	return ok
+}
+
+// PlatformSupport reports the GOOS values a builtin actually works on and a soft
+// caveat note, if any. An empty platforms slice means the builtin works on all
+// platforms. The LSP uses this to warn when a program targets a builtin that is
+// unsupported on the host OS, and surfaces the note in hover.
+func PlatformSupport(name string) (platforms []string, note string) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return nil, ""
+	}
+	return doc.platforms, doc.platformNote
+}
+
+// UnsupportedOn reports whether the named builtin is known to NOT work on the
+// given GOOS. It returns false when the builtin has no platform restriction
+// (the common case) or when the builtin is unknown — callers should not warn on
+// something they cannot classify.
+func UnsupportedOn(name, goos string) bool {
+	doc, ok := builtinDocs[name]
+	if !ok || len(doc.platforms) == 0 {
+		return false
+	}
+	for _, p := range doc.platforms {
+		if p == goos {
+			return false
+		}
+	}
+	return true
+}
+
+// capabilityCategory maps a builtin-name prefix to a human-readable capability
+// category. It is a decorative label surfaced in LSP hover and completion detail
+// (e.g. "builtin · filesystem"). Order matters: more specific prefixes must come
+// before shorter ones they would otherwise shadow (e.g. random_hex before rand).
+type capabilityCategory struct {
+	prefix   string
+	category string
+}
+
+var capabilityCategories = []capabilityCategory{
+	// networking / http
+	{"http_", "http"},
+	{"ws_", "network"},
+	{"net_", "network"},
+	{"tls_", "network"},
+	{"ip_", "network intelligence"},
+	{"cidr_", "network intelligence"},
+	{"domain_", "network intelligence"},
+	{"tld_", "network intelligence"},
+	{"defang", "network intelligence"},
+	{"refang", "network intelligence"},
+	{"extract_iocs", "network intelligence"},
+	{"is_valid_domain", "network intelligence"},
+	// structured data / encoding
+	{"json_", "structured data"},
+	{"base64", "structured data"},
+	{"base32", "structured data"},
+	{"hex_", "structured data"},
+	{"url_", "structured data"},
+	{"gzip", "structured data"},
+	{"gunzip", "structured data"},
+	{"zlib_", "structured data"},
+	{"to_base", "structured data"},
+	{"from_base", "structured data"},
+	{"to_", "structured data"},
+	{"parse_", "structured data"},
+	{"plist_", "structured data"},
+	// graph database
+	{"db_", "graph database"},
+	// runtime integration
+	{"lua_", "runtime integration"},
+	// command execution
+	{"exec_", "command execution"},
+	{"cmd_", "command execution"},
+	// strings / text
+	{"str_", "strings"},
+	{"text_", "text analysis"},
+	{"regex_", "text analysis"},
+	// hashing / ids
+	{"hashset_", "hash-set forensics"},
+	{"hash_", "hashing"},
+	{"hmac", "hashing"},
+	{"uuid_", "hashing"},
+	{"nanoid", "hashing"},
+	{"random_hex", "hashing"},
+	{"crc32", "hashing"},
+	// math
+	{"math_", "math"},
+	{"rand", "math"},
+	// time / timeline
+	{"time_", "time"},
+	{"timestamp_", "forensic timeline"},
+	{"timeline_", "forensic timeline"},
+	{"bodyfile", "forensic timeline"},
+	{"mactime", "forensic timeline"},
+	// cryptography / fingerprinting
+	{"x509_", "cryptography"},
+	{"jwt_", "cryptography"},
+	{"aes_", "cryptography"},
+	{"pem_", "cryptography"},
+	{"imphash", "fingerprinting"},
+	{"nt_hash", "fingerprinting"},
+	{"lm_hash", "fingerprinting"},
+	{"ja3", "fingerprinting"},
+	// policy / cache
+	{"policy_", "policy"},
+	{"cache_", "cache"},
+	// system / process / memory forensics
+	{"process_", "process forensics"},
+	{"mem_", "memory forensics"},
+	// registry forensics
+	{"reg_", "registry forensics"},
+	{"hive_", "registry forensics"},
+	{"amcache_", "registry forensics"},
+	{"shimcache_", "registry forensics"},
+	// binary analysis
+	{"bin_", "binary analysis"},
+	{"go_", "binary analysis"},
+	// email
+	{"email_", "email forensics"},
+	// detection
+	{"detect_", "detection"},
+	// windows execution artifacts
+	{"prefetch_", "windows artifacts"},
+	{"evtx_", "windows artifacts"},
+	{"lnk_", "windows artifacts"},
+	{"jumplist_", "windows artifacts"},
+	{"syslog_", "unix artifacts"},
+	{"browser_", "browser artifacts"},
+	{"sqlite_", "browser artifacts"},
+	// filesystem
+	{"fs_", "filesystem"},
+	{"mft_", "filesystem forensics"},
+	{"ntfs_", "filesystem forensics"},
+	{"fat_", "filesystem forensics"},
+	{"xfat_", "filesystem forensics"},
+	{"ext_", "filesystem forensics"},
+	{"hfs_", "filesystem forensics"},
+	{"xfs_", "filesystem forensics"},
+	// disk images / partition tables
+	{"vhdi_", "disk image forensics"},
+	{"ewf_", "disk image forensics"},
+	{"raw_", "disk image forensics"},
+	{"table_", "disk image forensics"},
+	// bytes
+	{"bytes_", "bytes"},
+}
+
+// CapabilityCategory returns a human-readable capability category for a builtin
+// (e.g. "filesystem", "network", "graph database"), derived from its name. It is
+// used by the LSP to enrich hover and completion detail. Unclassified builtins
+// (core language primitives, functional collections, etc.) return
+// "standard library".
+func CapabilityCategory(name string) string {
+	for _, c := range capabilityCategories {
+		if strings.HasPrefix(name, c.prefix) {
+			return c.category
+		}
+	}
+	return "standard library"
 }

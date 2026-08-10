@@ -1,8 +1,9 @@
-# Secure Networking & Traffic Interception (dev-sec)
+# Secure Networking & Traffic Interception
 
-This branch adds a networking toolkit to the Mutant standard library so that
-tools such as TLS clients/servers and mitmproxy-style interception proxies can
-be written entirely in Mutant source.
+Mutant ships a networking toolkit in its standard library so that tools such as
+TLS clients/servers and mitmproxy-style interception proxies can be written
+entirely in Mutant source. See the [Capability Reference](CAPABILITY_REFERENCE.md#network-32)
+for the full network builtin table.
 
 The toolkit is split into three layers:
 
@@ -41,7 +42,7 @@ them with `net_conn_close` / `net_listen_close` when done.
 | --- | --- | --- |
 | `net_connect` | `(address, timeoutMs)` | connection handle |
 | `net_tls_connect` | `(address, timeoutMs, options?)` | connection handle |
-| `net_conn_write` | `(handle, data)` | bytes written |
+| `net_conn_write` | `(handle, data, timeout_ms?)` | bytes written (write deadline: default 30s, or `timeout_ms`; `<=0` blocks forever) |
 | `net_conn_read` | `(handle, maxBytes, timeoutMs)` | `{data, bytes, eof, error}` (`maxBytes` ≤ 32 MiB) |
 | `net_conn_info` | `(handle)` | addresses + negotiated TLS session |
 | `net_conn_close` | `(handle)` | bool |
@@ -110,8 +111,8 @@ let leaf, err = tls_sign_cert(ca_cert, ca_key, leaf_opts);
 | --- | --- | --- |
 | `http_parse_request` | `(raw)` | `{method, url, path, host, proto, query, headers, body}` |
 | `http_parse_response` | `(raw)` | `{status, status_text, proto, headers, body}` |
-| `http_build_request` | `(request)` | raw request string |
-| `http_build_response` | `(response)` | raw response string |
+| `http_build_request` | `(request)` | raw request string (adds `Content-Length` when a body is present and none was supplied) |
+| `http_build_response` | `(response)` | raw response string (adds `Content-Length`) |
 | `http_conn_read_request` | `(handle, timeoutMs)` | parsed request off a live socket |
 | `http_conn_read_response` | `(handle, timeoutMs)` | parsed response off a live socket |
 
@@ -147,8 +148,8 @@ CA certificate it prints at startup.
 
 ## Language gotchas (pre-existing, not specific to these builtins)
 
-Writing multi-step network programs surfaced three parser/VM quirks worth
-knowing. All predate this branch; the examples are written to avoid them:
+Writing multi-step network programs surfaces three parser/VM quirks worth
+knowing; the examples are written to avoid them:
 
 1. **No `;` after a `for (...) { }` block.** A trailing semicolon there is
    parsed as an empty statement and fails (`no prefix parse function for ;`).

@@ -1,0 +1,38 @@
+// main.mut — entry point for the portscan_service example project.
+//
+// This is a multi-file Mutant project: main.mut opens a TCP listener and hands
+// each accepted connection to a fresh VM running handler.mut (see that file).
+// net_serve is the concurrency primitive — it runs the accept loop and dispatches
+// connections, passing a shared arg through to every handler invocation.
+//
+// Run from the repository root so the handler path resolves:
+//   mutant run examples/project/portscan_service/main.mut -pwd <password>
+//   mutant examples/project/portscan_service/main.mu   -pwd <password>
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("portscan_service");
+
+    let address = "127.0.0.1:8085";
+    let listener, err = net_listen(address);
+    if (err) {
+        putln("[error] net_listen:", err);
+        return false;
+    };
+    putln("listening on", address, "- serving with handler.mut (Ctrl-C to stop)");
+
+    // net_serve blocks in the accept loop, spawning a fresh VM per connection that
+    // runs handler.mut. The third argument is shared with every handler via
+    // serve_arg(). Handlers reach their connection via serve_conn().
+    let banner = "mutant-portscan-service/1.0";
+    let served, serr = net_serve(listener, "examples/project/portscan_service/handler.mut", banner);
+    if (serr) {
+        putln("[error] net_serve:", serr);
+        return false;
+    };
+
+    return true;
+};
+
+run();

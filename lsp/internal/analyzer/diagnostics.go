@@ -2,6 +2,8 @@ package analyzer
 
 import (
 	"fmt"
+	"runtime"
+	"sort"
 	"strings"
 
 	mast "mutant/ast"
@@ -10,6 +12,13 @@ import (
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
+
+// hostGOOS is the operating system the language server is running on. Because the
+// server runs on the developer's machine, this is the platform their program will
+// actually execute against — so it is the correct target for the platform-support
+// diagnostic. It is a package variable (not a direct runtime.GOOS call) so tests
+// can simulate other platforms.
+var hostGOOS = runtime.GOOS
 
 type LintSeverity string
 
@@ -32,6 +41,8 @@ type LintConfig struct {
 	UndefinedDeclaration         LintSeverity
 	NestingComplexity            LintSeverity
 	Semicolon                    LintSeverity
+	UnreachableCode              LintSeverity
+	PlatformSupport              LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -44,6 +55,12 @@ func DefaultLintConfig() LintConfig {
 		// usable tree and the formatter repairs it on save, so this is a
 		// warning rather than an error.
 		Semicolon: LintSeverityWarning,
+		// Statements after an unconditional return/break/continue can never run.
+		UnreachableCode: LintSeverityWarning,
+		// A builtin that cannot work on the host OS is a warning (not an error):
+		// the program may be authored on one platform to run on another, and the
+		// call still parses/compiles — it just fails at runtime on this host.
+		PlatformSupport: LintSeverityWarning,
 	}
 }
 
@@ -60,6 +77,10 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.NestingComplexity
 	case "semicolon":
 		severityName = c.Semicolon
+	case "unreachableCode":
+		severityName = c.UnreachableCode
+	case "platformSupport":
+		severityName = c.PlatformSupport
 	default:
 		return nil, false
 	}
@@ -111,11 +132,148 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintUndefinedDeclarations(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintNestingComplexity(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUnreachableCode(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
 	}
 	return diagnostics
+}
+
+// lintPlatformSupport warns when a program calls a builtin that does not work on
+// the operating system the language server is running on. The builtin's supported
+// platforms come from builtin.PlatformSupport / builtin.UnsupportedOn (populated
+// in builtin/metadata.go). This is what makes the editor OS-aware: on macOS, for
+// example, a call to a Windows/Linux-only builtin such as process_modules is
+// flagged before the program is ever run.
+func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil || snapshot.Program == nil || snapshot.Program.NodePositions == nil {
+		return nil
+	}
+
+	severity, ok := lintConfig.severityForRule("platformSupport")
+	if !ok {
+		return nil
+	}
+
+	source := "mutant-lint"
+	result := make([]lsp.Diagnostic, 0, 2)
+	for node := range snapshot.Program.NodePositions {
+		call, ok := node.(*mast.CallExpression)
+		if !ok || call == nil {
+			continue
+		}
+		ident, ok := call.Function.(*mast.Identifier)
+		if !ok || ident == nil || ident.Value == "" {
+			continue
+		}
+		if !builtin.UnsupportedOn(ident.Value, hostGOOS) {
+			continue
+		}
+		rng, ok := snapshot.Program.RangeOf(ident)
+		if !ok {
+			continue
+		}
+		platforms, _ := builtin.PlatformSupport(ident.Value)
+		result = append(result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: severity,
+			Source:   &source,
+			Message: fmt.Sprintf("builtin `%s` is not supported on %s (supported: %s)",
+				ident.Value, hostGOOS, strings.Join(platforms, ", ")),
+		})
+	}
+
+	// NodePositions is a map, so sort for deterministic output.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Range.Start.Line != result[j].Range.Start.Line {
+			return result[i].Range.Start.Line < result[j].Range.Start.Line
+		}
+		return result[i].Range.Start.Character < result[j].Range.Start.Character
+	})
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// lintUnreachableCode flags the first statement that follows an unconditional
+// return/break/continue within a statement list (the top-level program and every
+// block body). Control-flow through if/for is not modeled; only a literal
+// terminating statement makes what follows unreachable.
+func lintUnreachableCode(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil || snapshot.Program == nil {
+		return nil
+	}
+
+	severity, ok := lintConfig.severityForRule("unreachableCode")
+	if !ok {
+		return nil
+	}
+
+	source := "mutant-lint"
+	result := make([]lsp.Diagnostic, 0, 2)
+
+	scan := func(statements []mast.Statement) {
+		for i, stmt := range statements {
+			kind, terminating := terminatingStatementKind(stmt)
+			if !terminating {
+				continue
+			}
+			if i+1 >= len(statements) {
+				return
+			}
+			next := statements[i+1]
+			rng, ok := snapshot.Program.RangeOf(next)
+			if !ok {
+				return
+			}
+			result = append(result, lsp.Diagnostic{
+				Range:    localprotocol.ToLSPRange(rng),
+				Severity: severity,
+				Source:   &source,
+				Message:  fmt.Sprintf("unreachable code after `%s`", kind),
+			})
+			return
+		}
+	}
+
+	scan(snapshot.Program.Statements)
+	for node := range snapshot.Program.NodePositions {
+		if block, ok := node.(*mast.BlockStatement); ok && block != nil {
+			scan(block.Statements)
+		}
+	}
+
+	// Deterministic order (NodePositions iteration is random).
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Range.Start.Line != result[j].Range.Start.Line {
+			return result[i].Range.Start.Line < result[j].Range.Start.Line
+		}
+		return result[i].Range.Start.Character < result[j].Range.Start.Character
+	})
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// terminatingStatementKind reports whether a statement unconditionally ends the
+// current statement list, and the keyword to name in the diagnostic.
+func terminatingStatementKind(stmt mast.Statement) (string, bool) {
+	switch stmt.(type) {
+	case *mast.ReturnStatement:
+		return "return", true
+	case *mast.BreakStatement:
+		return "break", true
+	case *mast.ContinueStatement:
+		return "continue", true
+	default:
+		return "", false
+	}
 }
 
 // lintSemicolons reports the parser's recoverable semicolon problems.

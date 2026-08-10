@@ -1,0 +1,60 @@
+// incident_graph.mut — model an intrusion as a graph, then traverse it.
+//
+// Builds a small investigation graph (process -> file, process -> network),
+// indexes a property, runs BFS and shortest-path, and prints statistics.
+// Uses the in-memory graph; nothing is written to disk.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("incident_graph");
+
+    let db, err = db_open();
+    if (err) {
+        putln("[error] db_open:", err);
+        return false;
+    };
+
+    // Artifact nodes carry indexed attributes (db_add_artifact returns a hash
+    // whose node_id we reference when linking).
+    let proc, e1 = db_add_artifact(db, "process", { "name": "powershell.exe", "pid": 4021 });
+    let file, e2 = db_add_artifact(db, "file", { "path": "C:/Users/Public/x.ps1" });
+    let net, e3 = db_add_artifact(db, "network", { "dst": "185.12.0.9", "port": 443 });
+
+    // Named relationships between the artifacts.
+    db_add_relation(db, proc["node_id"], file["node_id"], "wrote");
+    db_add_relation(db, proc["node_id"], net["node_id"], "connected_to");
+
+    // Index a property so it can be looked up later.
+    db_index_prop(db, proc["node_id"], "name", "powershell.exe");
+
+    // Traverse outward from the process (direction "out", up to depth 3).
+    let reached, berr = db_bfs(db, proc["node_id"], 3, "out");
+    if (berr) {
+        putln("[error] db_bfs:", berr);
+    } else {
+        putln("nodes reachable from the process:", len(reached));
+    };
+
+    // Shortest path from the process to the C2 endpoint. db_shortest_path returns
+    // an error (not an empty result) when no path exists.
+    let path, perr = db_shortest_path(db, proc["node_id"], net["node_id"]);
+    if (perr) {
+        putln("no path to network node:", perr);
+    } else {
+        putln("process -> network path length:", len(path));
+    };
+
+    // Statistics: node/edge counts (plus storage counters on disk-backed graphs).
+    let stats, serr = db_stats(db);
+    if (serr) {
+        putln("[error] db_stats:", serr);
+    } else {
+        putln("graph nodes:", stats["nodes"], " edges:", stats["edges"]);
+    };
+
+    db_close(db);
+    return true;
+};
+
+run();

@@ -1,0 +1,58 @@
+// http_api_client.mut — build, send, and parse HTTP messages.
+//
+// The build/parse builtins work entirely offline (no network), so most of this
+// runs deterministically; the live GET at the end fails honestly when the host
+// is unreachable.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("http_api_client");
+
+    // Build a request message from a hash. http_build_request adds a
+    // Content-Length header when a body is present and none was supplied.
+    let req = {
+        "method": "POST",
+        "url": "/api/scan",
+        "host": "api.internal",
+        "headers": { "Content-Type": "application/json" },
+        "body": "{\"target\":\"10.0.0.1\"}"
+    };
+    let wire, err = http_build_request(req);
+    if (err) {
+        putln("[error] http_build_request:", err);
+        return false;
+    };
+    putln("--- request bytes ---");
+    putln(wire);
+
+    // Parse a raw HTTP response and read a field from its JSON body.
+    let raw = "HTTP/1.1 200 OK\r\n" +
+        "Content-Type: application/json\r\n" +
+        "Content-Length: 15\r\n\r\n" +
+        "{\"status\":\"ok\"}";
+    let resp, perr = http_parse_response(raw);
+    if (perr) {
+        putln("[error] http_parse_response:", perr);
+    } else {
+        putln("status:", resp["status"]);
+        let body, jerr = json_parse(resp["body"]);
+        if (jerr) {
+            putln("[error] json_parse body:", jerr);
+        } else {
+            putln("body.status:", body["status"]);
+        };
+    };
+
+    // A live GET against an unreachable port — demonstrates honest failure.
+    let live, gerr = http_get("http://127.0.0.1:9/");
+    if (gerr) {
+        putln("live GET failed honestly:", gerr);
+    } else {
+        putln("live status:", live["status"]);
+    };
+
+    return true;
+};
+
+run();
