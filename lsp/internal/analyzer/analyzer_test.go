@@ -219,7 +219,7 @@ func TestBuiltinRichTeachingCoverageExpansion(t *testing.T) {
 		{name: "cache_clear", wantSignature: "cache_clear(name)", wantSnippet: "Clears all entries"},
 		{name: "process_tree", wantSignature: "process_tree(rootPid?)", wantSnippet: "descendant processes"},
 		{name: "cmd_builder", wantSignature: "cmd_builder(shell?)", wantSnippet: "command builder object"},
-		{name: "fs_magic", wantSignature: "fs_magic(path)", wantSnippet: "file type/magic information"},
+		{name: "fs_magic", wantSignature: "fs_magic(path)", wantSnippet: "Infers file type/magic"},
 		{name: "bin_sections", wantSignature: "bin_sections(path)", wantSnippet: "section table information"},
 		{name: "net_dns_query", wantSignature: "net_dns_query(name, qtype)", wantSnippet: "Queries DNS records"},
 		{name: "reg_open", wantSignature: "reg_open(source)", wantSnippet: "Opens a registry data source"},

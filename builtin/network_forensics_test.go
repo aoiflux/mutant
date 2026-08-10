@@ -257,13 +257,6 @@ func TestNetPCAPAnalyze(t *testing.T) {
 	}
 }
 
-func TestNetCaptureRawUnsupported(t *testing.T) {
-	_, errObj := unwrapPair(t, NetCaptureRaw())
-	if errObj == nil || !strings.Contains(errObj.Message, "unsupported") {
-		t.Fatalf("expected unsupported error from net_capture_raw")
-	}
-}
-
 func TestNetOSFingerprint(t *testing.T) {
 	path := writeFingerprintPCAPFixture(t)
 
@@ -353,6 +346,47 @@ func writeFingerprintPCAPFixture(t *testing.T) string {
 	}
 
 	return path
+}
+
+func TestNetCaptureRawOffline(t *testing.T) {
+	path := writeFingerprintPCAPFixture(t) // two TCP SYN packets
+
+	payload, errObj := unwrapPair(t, NetCaptureRaw(stringObj(path)))
+	if errObj != nil {
+		t.Fatalf("net_capture_raw error: %s", errObj.Inspect())
+	}
+	h := payload.(*object.Hash)
+	if got := hInt(t, h, "count"); got != 2 {
+		t.Fatalf("count = %d, want 2", got)
+	}
+	if hBoolAt(t, h, "truncated") {
+		t.Error("should not be truncated")
+	}
+	packets := hashValueByKey(h, "packets").(*object.Array)
+
+	p0 := packets.Elements[0].(*object.Hash)
+	if hStr(t, p0, "protocol") != "TCP" || hStr(t, p0, "src") != "10.0.0.1" || hStr(t, p0, "dst") != "10.0.0.9" {
+		t.Errorf("packet 0 = %s", p0.Inspect())
+	}
+	if hInt(t, p0, "sport") != 50000 || hInt(t, p0, "dport") != 443 {
+		t.Errorf("packet 0 ports = %d/%d, want 50000/443", hInt(t, p0, "sport"), hInt(t, p0, "dport"))
+	}
+	if hInt(t, p0, "index") != 0 || hInt(t, p0, "length") <= 0 {
+		t.Errorf("packet 0 index/length wrong: %s", p0.Inspect())
+	}
+
+	p1 := packets.Elements[1].(*object.Hash)
+	if hStr(t, p1, "src") != "10.0.0.2" || hInt(t, p1, "sport") != 51000 {
+		t.Errorf("packet 1 = %s", p1.Inspect())
+	}
+
+	// Errors: wrong arg count and a missing file.
+	if _, e := unwrapPair(t, NetCaptureRaw()); e == nil {
+		t.Error("expected arg-count error")
+	}
+	if _, e := unwrapPair(t, NetCaptureRaw(stringObj(filepath.Join(t.TempDir(), "nope.pcap")))); e == nil {
+		t.Error("expected missing-file error")
+	}
 }
 
 func TestNetForensicsArgumentValidation(t *testing.T) {

@@ -212,6 +212,12 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		evaluated := Eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
+		// Higher-order builtins (map/filter/reduce/each/sort_by) call user
+		// functions, which the builtin itself cannot; the evaluator handles them
+		// natively via applyFunction, mirroring the VM's native handling.
+		if kind := builtin.HigherOrderKind(fun); kind != "" {
+			return applyHigherOrder(kind, args)
+		}
 		result := fun.Fn(args...)
 		if result == nil {
 			return NULL

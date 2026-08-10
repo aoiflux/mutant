@@ -93,7 +93,7 @@ var definitions = map[Opcode]*Definition{
 	OpMultiValue:     {"OpMultiValue", []int{2}},
 	OpDup:            {"OpDup", []int{}},
 	OpDestructure:    {"OpDestructure", []int{2}},
-	OpGetBuiltin:     {"OpGetBuiltin", []int{1}},
+	OpGetBuiltin:     {"OpGetBuiltin", []int{2}},
 	OpClosure:        {"OpClosure", []int{2, 1}},
 	OpGetFree:        {"OpGetFree", []int{1}},
 	OpCurrentClosure: {"OpCurrentClosure", []int{}},

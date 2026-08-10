@@ -149,6 +149,11 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameUnique:       {signature: "unique(array)", summary: "Returns a new array with duplicate values removed (order preserved)."},
 	BuiltinNameRange:        {signature: "range(start, end, step?)", summary: "Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1."},
 	BuiltinNameZip:          {signature: "zip(a, b)", summary: "Returns an array of [a[i], b[i]] pairs up to the shorter length."},
+	BuiltinNameMap:          {signature: "map(array, fn)", summary: "Returns a new array of fn applied to each element. fn takes (element) or (element, index)."},
+	BuiltinNameFilter:       {signature: "filter(array, fn)", summary: "Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index)."},
+	BuiltinNameReduce:       {signature: "reduce(array, fn, initial)", summary: "Folds the array to a single value: fn(accumulator, element) starting from initial."},
+	BuiltinNameEach:         {signature: "each(array, fn)", summary: "Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index)."},
+	BuiltinNameSortBy:       {signature: "sort_by(array, fn)", summary: "Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys)."},
 	BuiltinNameKeys:         {signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism)."},
 	BuiltinNameValues:       {signature: "values(hash)", summary: "Returns the hash values as an array (ordered by sorted key)."},
 	BuiltinNameEntries:      {signature: "entries(hash)", summary: "Returns the hash as an array of [key, value] pairs (sorted by key)."},
@@ -509,8 +514,9 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Analyzes PCAP captures and returns flow/session signals.",
 	},
 	BuiltinNameNetCaptureRaw: {
-		signature: "net_capture_raw()",
-		summary:   "Captures raw packets from an interface for a time window.",
+		signature: "net_capture_raw(pcap_path)",
+		summary:   "Reads raw packets from an offline pcap file into a per-packet listing (live interface capture needs cgo/raw sockets and is unavailable; net_pcap_analyze gives the flow summary, this gives the packets). Returns {file, link_type, count, truncated, packets:[{index, ts, timestamp, length, src, dst, protocol, sport, dport}]}. Returns (result, err).",
+		params:    []builtinParamDoc{{name: "pcap_path", doc: "Path to an offline pcap capture file."}},
 	},
 	BuiltinNameNetFlowReconstruct: {
 		signature: "net_flow_reconstruct(packets)",

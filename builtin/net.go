@@ -381,11 +381,104 @@ func NetDNSQuery(args ...object.Object) object.Object {
 	}
 }
 
+// NetCaptureRaw reads raw packets from an offline pcap file and returns a
+// per-packet listing. (Live capture needs cgo/privileged raw sockets, which are
+// off the table; this is the honest offline counterpart — net_pcap_analyze gives
+// the flow summary, this gives the packets.) Capped at 1,000,000 packets.
 func NetCaptureRaw(args ...object.Object) object.Object {
-	if len(args) != 0 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	return resultAndError(nil, newError("net_capture_raw unsupported: requires elevated privileges and packet capture backend"))
+	pathObj, ok := args[0].(*object.String)
+	if !ok {
+		return resultAndError(nil, newError("argument 1 to `net_capture_raw` must be STRING, got %s", args[0].Type()))
+	}
+
+	file, err := os.Open(pathObj.Value)
+	if err != nil {
+		return resultAndError(nil, newError("net_capture_raw: %s", err.Error()))
+	}
+	defer file.Close()
+
+	reader, err := pcapgo.NewReader(file)
+	if err != nil {
+		return resultAndError(nil, newError("net_capture_raw: %s", err.Error()))
+	}
+	linkType := reader.LinkType()
+
+	const maxPackets = 1_000_000
+	packets := make([]object.Object, 0)
+	truncated := false
+	index := int64(0)
+	for {
+		data, ci, readErr := reader.ReadPacketData()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return resultAndError(nil, newError("net_capture_raw: %s", readErr.Error()))
+		}
+		if len(packets) >= maxPackets {
+			truncated = true
+			break
+		}
+
+		src, dst, proto, sport, dport := pcapPacketFields(gopacket.NewPacket(data, linkType, gopacket.NoCopy))
+		ts := int64(0)
+		iso := ""
+		if !ci.Timestamp.IsZero() {
+			ts = ci.Timestamp.Unix()
+			iso = ci.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		packets = append(packets, makeHashObject(map[string]object.Object{
+			"index":     intObj(index),
+			"ts":        intObj(ts),
+			"timestamp": stringObj(iso),
+			"length":    intObj(int64(len(data))),
+			"src":       stringObj(src),
+			"dst":       stringObj(dst),
+			"protocol":  stringObj(proto),
+			"sport":     intObj(sport),
+			"dport":     intObj(dport),
+		}))
+		index++
+	}
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"file":      stringObj(pathObj.Value),
+		"link_type": stringObj(linkType.String()),
+		"count":     intObj(int64(len(packets))),
+		"truncated": boolObj(truncated),
+		"packets":   &object.Array{Elements: packets},
+	}), nil)
+}
+
+// pcapPacketFields extracts the L3/L4 addressing from a decoded packet.
+func pcapPacketFields(packet gopacket.Packet) (src, dst, proto string, sport, dport int64) {
+	proto = "OTHER"
+	if l := packet.Layer(layers.LayerTypeIPv4); l != nil {
+		if ip, ok := l.(*layers.IPv4); ok {
+			src, dst = ip.SrcIP.String(), ip.DstIP.String()
+		}
+	} else if l := packet.Layer(layers.LayerTypeIPv6); l != nil {
+		if ip, ok := l.(*layers.IPv6); ok {
+			src, dst = ip.SrcIP.String(), ip.DstIP.String()
+		}
+	}
+	if l := packet.Layer(layers.LayerTypeTCP); l != nil {
+		proto = "TCP"
+		if t, ok := l.(*layers.TCP); ok {
+			sport, dport = int64(t.SrcPort), int64(t.DstPort)
+		}
+	} else if l := packet.Layer(layers.LayerTypeUDP); l != nil {
+		proto = "UDP"
+		if u, ok := l.(*layers.UDP); ok {
+			sport, dport = int64(u.SrcPort), int64(u.DstPort)
+		}
+	} else if packet.Layer(layers.LayerTypeICMPv4) != nil || packet.Layer(layers.LayerTypeICMPv6) != nil {
+		proto = "ICMP"
+	}
+	return
 }
 
 func NetPCAPAnalyze(args ...object.Object) object.Object {

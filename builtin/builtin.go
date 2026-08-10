@@ -463,6 +463,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameFsDeleted, &BuiltIn{FsDeleted}},
 	// security: TLS fingerprinting (append-only)
 	{BuiltinNameJA3, &BuiltIn{JA3}},
+	// collections: higher-order (executor-native; append-only)
+	{BuiltinNameMap, mapBuiltin},
+	{BuiltinNameFilter, filterBuiltin},
+	{BuiltinNameReduce, reduceBuiltin},
+	{BuiltinNameEach, eachBuiltin},
+	{BuiltinNameSortBy, sortByBuiltin},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

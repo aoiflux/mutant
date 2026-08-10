@@ -518,9 +518,6 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 }
 
 func (vm *VM) Run() error {
-	var ip int
-	var ins code.Instructions
-	var op code.Opcode
 	vm.ensureFrameBoundaries()
 
 	// Cache the opcode-decryption key/nonce once; seed (inslen) and password are
@@ -533,7 +530,27 @@ func (vm *VM) Run() error {
 		return err
 	}
 
-	for vm.frameIndex > 0 && vm.currentFrame().ip < len(vm.currentFrame().Instructions())-1 {
+	if err := vm.execLoop(0); err != nil {
+		return err
+	}
+
+	if err := vm.validateSecurityCheckOpcodes("after-execution"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// execLoop runs the fetch/decode/execute loop until the frame stack unwinds back
+// to baseFrameIndex. Run() drives the whole program via execLoop(0); the
+// closure-from-builtin bridge (CallClosureSync) re-enters with a higher base to
+// run exactly one closure to completion, then returns control to its caller.
+func (vm *VM) execLoop(baseFrameIndex int) error {
+	var ip int
+	var ins code.Instructions
+	var op code.Opcode
+
+	for vm.frameIndex > baseFrameIndex && vm.currentFrame().ip < len(vm.currentFrame().Instructions())-1 {
 		if err := vm.runIntegrityProbes(); err != nil {
 			return err
 		}
@@ -613,6 +630,7 @@ func (vm *VM) Run() error {
 			numElements := int(res)
 			vm.currentFrame().ip += 2
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
+			vm.stackPointer = vm.stackPointer - numElements // pop the elements (OpHash does this; OpArray had omitted it)
 			if err := vm.push(array); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -712,14 +730,16 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpGetBuiltin:
-			if ip+1 >= len(ins) {
+			// 2-byte operand: there are >255 builtins, so a single byte would alias
+			// high-index builtins to (index mod 256).
+			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetBuiltin: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			builtinIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			builtinIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
 			if err != nil {
 				return err
 			}
-			vm.currentFrame().ip++
+			vm.currentFrame().ip += 2
 			if int(builtinIndex) >= len(builtin.Builtins) {
 				return fmt.Errorf("OpGetBuiltin: invalid builtin index=%d, len=%d", builtinIndex, len(builtin.Builtins))
 			}
@@ -1019,10 +1039,6 @@ func (vm *VM) Run() error {
 				return err
 			}
 		}
-	}
-
-	if err := vm.validateSecurityCheckOpcodes("after-execution"); err != nil {
-		return err
 	}
 
 	return nil
@@ -1604,6 +1620,53 @@ func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
 	return nil
 }
 
+// CallClosureSync runs a Mutant closure to completion from Go and returns its
+// result. It is the closure-from-builtin bridge that powers the VM-native
+// higher-order operations (map/filter/reduce/each/sort_by). It lays out the call
+// on the stack exactly as OpCall does (callee then args), enters the closure
+// frame via the normal callClosure path (so frame-integrity registration and the
+// per-instruction security probes all apply), and re-runs the execution loop
+// bounded to that single frame. On any failure the frame and stack pointers are
+// restored to their pre-call state so the outer run is unaffected.
+//
+// It runs on the calling VM's own goroutine (a builtin invoked by execLoop runs
+// synchronously), so it needs no cross-goroutine routing and is safe under
+// concurrent VMs (e.g. net_serve handlers): each VM only ever re-enters itself.
+func (vm *VM) CallClosureSync(cl *object.Closure, args []object.Object) (result object.Object, err error) {
+	baseFrameIndex := vm.frameIndex
+	baseStackPointer := vm.stackPointer
+
+	defer func() {
+		if err != nil {
+			if vm.frameIndex > baseFrameIndex {
+				vm.frameIndex = baseFrameIndex
+			}
+			vm.stackPointer = baseStackPointer
+		}
+	}()
+
+	if err = vm.push(cl); err != nil { // callee slot (consumed on return)
+		return nil, err
+	}
+	for _, a := range args {
+		if err = vm.push(a); err != nil {
+			return nil, err
+		}
+	}
+	if err = vm.callClosure(cl, len(args)); err != nil {
+		return nil, err
+	}
+	if err = vm.execLoop(baseFrameIndex); err != nil {
+		return nil, err
+	}
+
+	// OpReturnValue left the result where the callee was, one slot above base.
+	if vm.stackPointer <= baseStackPointer {
+		return global.Null, nil
+	}
+	return vm.pop(), nil
+}
+
 func (vm *VM) registerFrameIntegrity(fn *object.CompiledFunction) {
 	if vm.frameIntegrity == nil {
 		vm.frameIntegrity = make(map[*object.CompiledFunction][32]byte)
@@ -1660,13 +1723,20 @@ func (vm *VM) verifyFrameIntegrity(frame *Frame, stage string) error {
 	return nil
 }
 
-func (vm *VM) callBuiltin(builtin *builtin.BuiltIn, numArgs int) error {
+func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
+	// Higher-order builtins (map/filter/reduce/each/sort_by) call user closures,
+	// which only the VM can do, so the VM handles them natively rather than
+	// invoking the placeholder Fn.
+	if kind := builtin.HigherOrderKind(bi); kind != "" {
+		return vm.callHigherOrder(kind, numArgs)
+	}
+
 	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
 	args := make([]object.Object, len(storedArgs))
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	rawResult := builtin.Fn(args...)
+	rawResult := bi.Fn(args...)
 	result := rawResult
 	if result == nil {
 		result = global.Null
@@ -1677,6 +1747,25 @@ func (vm *VM) callBuiltin(builtin *builtin.BuiltIn, numArgs int) error {
 	vm.push(result)
 
 	return nil
+}
+
+// callHigherOrder gathers the builtin's arguments and dispatches to the VM-native
+// higher-order implementation, which drives user closures via CallClosureSync.
+func (vm *VM) callHigherOrder(kind string, numArgs int) error {
+	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
+	args := make([]object.Object, len(storedArgs))
+	for i, arg := range storedArgs {
+		args[i] = vm.decryptForUse(arg)
+	}
+	result, err := vm.applyHigherOrder(kind, args)
+	if err != nil {
+		return err
+	}
+	if result == nil {
+		result = global.Null
+	}
+	vm.stackPointer = vm.stackPointer - numArgs - 1
+	return vm.push(result)
 }
 
 func nativeBoolToBooleanObject(native bool) *object.Boolean {
