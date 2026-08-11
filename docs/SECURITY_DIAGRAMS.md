@@ -1,5 +1,9 @@
 # Security Architecture Diagrams (Code-Synced)
 
+Visual reference for how Mutant's runtime security pipeline, policy
+decisions, and probe gates fit together, kept in sync with current code
+behavior.
+
 ## 1. End-to-End Runtime Security Flow
 
 ```mermaid
@@ -111,3 +115,25 @@ Note:
 1. Mutation controls and seed are wired through CLI.
 2. Advanced transform activation is intentionally constrained in current
    configuration.
+
+## 7. Remote Scan Gate Model
+
+```mermaid
+flowchart TD
+    A[RunRemoteProcessScan] --> B{MUTANT_ENABLE_REMOTE_PROCESS_SCAN == 1?}
+    B -->|No| C[Disabled, no scan]
+    B -->|Yes| D{MUTANT_REMOTE_SCAN_MODE}
+    D -->|off| C
+    D -->|observe| E[Telemetry only]
+    D -->|enforce| F{Any verdict >= critical?}
+    F -->|No| G[Continue]
+    F -->|Yes| H[Apply tamper policy]
+```
+
+## 8. Memory Hardening Snapshot
+
+```mermaid
+flowchart LR
+    A[VM runtime path] --> B[mutil object encrypt/decrypt flow]
+    C[Additional primitives] --> D[SecureGlobal/SecureStack/SecureConstantPool]
+```

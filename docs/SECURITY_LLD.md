@@ -1,3 +1,5 @@
+# Security Low-Level Design (LLD)
+
 ## 1. Document Purpose
 
 This document defines the low-level security design for Mutant's bytecode
@@ -83,6 +85,33 @@ Mutant currently has three practical launch postures:
   password fallback is used (`mutil.GetPwd()`).
 - Intended for local testing convenience, not production hardening.
 
+### 4.1 Mode Resolution Rules
+
+CLI precedence is "last matching mode flag wins" due to linear arg scanning.
+
+- Encounter `--compat` or `--dev` -> mode becomes compatibility.
+- Encounter `--secure` later -> mode becomes secure again.
+
+### 4.2 Tamper Response Policy
+
+Policy source: env variable `MUTANT_TAMPER_RESPONSE`.
+
+Valid values:
+
+- `warn`: log and continue
+- `delay`: sleep then continue
+- `terminate`: return error/fail
+
+Defaults:
+
+- secure mode: `terminate`
+- compatibility/dev mode: `warn`
+
+Delay tuning:
+
+- `MUTANT_TAMPER_DELAY_MS` in `[0..5000]`
+- fallback default: `250ms`
+
 ### 4.3 Protection Profiles
 
 Mutant also supports a protection profile layer via `MUTANT_PROTECTION_PROFILE`.
@@ -112,33 +141,6 @@ Profile precedence:
 - Explicit `MUTANT_TAMPER_RESPONSE` still wins when set.
 - Explicit `MUTANT_BUILTIN_CAPABILITIES` still wins when set.
 - Profile selection only controls defaults.
-
-### 4.1 Mode Resolution Rules
-
-CLI precedence is "last matching mode flag wins" due to linear arg scanning.
-
-- Encounter `--compat` or `--dev` -> mode becomes compatibility.
-- Encounter `--secure` later -> mode becomes secure again.
-
-### 4.2 Tamper Response Policy
-
-Policy source: env variable `MUTANT_TAMPER_RESPONSE`.
-
-Valid values:
-
-- `warn`: log and continue
-- `delay`: sleep then continue
-- `terminate`: return error/fail
-
-Defaults:
-
-- secure mode: `terminate`
-- compatibility/dev mode: `warn`
-
-Delay tuning:
-
-- `MUTANT_TAMPER_DELAY_MS` in `[0..5000]`
-- fallback default: `250ms`
 
 ---
 
@@ -355,7 +357,7 @@ Security implication:
 - Runtime behavior still honors explicit environment overrides for policy
   controls.
 
-### 7.3 Deterministic Local Password Fallback
+### 7.4 Deterministic Local Password Fallback
 
 `mutil.GetPwd()` uses HKDF-SHA512 over fixed context constants to produce a
 deterministic local key string.

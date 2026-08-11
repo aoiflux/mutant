@@ -79,9 +79,7 @@ suite green:
 | libxfs | v0.2.0 | v0.3.1 |
 
 (`libext`, `libfat`, `libhfs`, `libvhdi`, and `graphene` were already at their
-latest versions.) No call-site changes were required by these bumps. For the
-history of behavior changes across earlier aoiflux upgrades, see
-[AOIFLUX_UPGRADE_NOTES.md](AOIFLUX_UPGRADE_NOTES.md).
+latest versions.) No call-site changes were required by these bumps.
 
 ## Deprecations & compatibility
 

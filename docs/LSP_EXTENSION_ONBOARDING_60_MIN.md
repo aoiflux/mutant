@@ -8,8 +8,7 @@ run, debug, and safely modify Mutant language tooling.
 Use this guide together with:
 
 - [LSP + Extension LLD](LSP_EXTENSION_LLD.md)
-- [VS Code LSP Teaching Reference](VSCODE_LSP_TEACHING_REFERENCE.md)
-- [VS Code Extension Troubleshooting](VSCODE_EXTENSION_TROUBLESHOOTING.md)
+- [Language Reference](MUTANT_LANGUAGE_REFERENCE.md)
 
 ## 1. Outcomes
 
@@ -209,10 +208,10 @@ Use these commands in extension host when behavior seems wrong:
 
 If startup fails repeatedly:
 
-1. Check configured binary path setting.
-2. Confirm latest local mlsp binary selection behavior.
-3. Use troubleshooting steps in
-   [VSCODE_EXTENSION_TROUBLESHOOTING.md](VSCODE_EXTENSION_TROUBLESHOOTING.md).
+1. Check the configured binary path setting (`mutant.languageServer.path`).
+2. Confirm the latest local `mlsp` binary is being selected.
+3. Restart the language server (command: `Mutant: Restart LSP`) and review the
+   logs (`Mutant: Show LSP Logs`).
 
 ## 9. Common Pitfalls and How to Avoid Them
 
