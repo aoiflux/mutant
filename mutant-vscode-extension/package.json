@@ -1,7 +1,7 @@
 {
     "name": "mutant-language-tools",
     "displayName": "Mutant Language Tools",
-    "description": "Language support for Mutant with LSP-powered navigation, diagnostics, and rename.",
+    "description": "Language tools for Mutant, powered by a dedicated language server: strict canonical formatting, rich diagnostics (OS-aware platform warnings, unreachable code, unused/undefined/duplicate checks, semicolons), hover with capability categories, completion, semantic highlighting, go-to-definition, references, and rename.",
     "version": "0.0.5",
     "publisher": "aoiflux",
     "icon": "images/icon-128.png",
@@ -14,7 +14,20 @@
         "vscode": "^1.90.0"
     },
     "categories": [
-        "Programming Languages"
+        "Programming Languages",
+        "Linters",
+        "Formatters",
+        "Snippets"
+    ],
+    "keywords": [
+        "mutant",
+        "forensics",
+        "dfir",
+        "security",
+        "language server",
+        "lsp",
+        "formatter",
+        "linter"
     ],
     "main": "./out/extension.js",
     "contributes": {
