@@ -19,7 +19,7 @@ Mutant supports:
 - Primitive literals: integers, floats, booleans, strings
 - Compound literals: arrays, hashes, struct literals
 - Prefix operators: `!` and unary `-`
-- Infix operators: `+ - * / % < > == !=`
+- Infix operators: `+ - * / % < > <= >= == != && ||`
 - Indexing and field access
 - Conditionals: `if` / `else`
 - Loops: `for`, with `break` and `continue`
@@ -74,7 +74,20 @@ let sorted = sort_by(nums, fn(x) { return x; });
 
 `map`/`filter`/`each` callbacks may also take `(element, index)`.
 
-Notes:
+### Logical operators
+
+`&&` (and) and `||` (or) combine conditions and **short-circuit** — the right
+operand is only evaluated when the left doesn't already decide the result. They
+return a strict boolean (using the same truthiness rules as `if`). Precedence:
+comparisons bind tighter than `&&`, which binds tighter than `||`.
+
+```mutant
+// The right side is skipped when the left decides the outcome.
+let has_both = si_frac == 0 && fn_frac > 0;   // both conditions must hold
+let ready = configured || force;               // either is enough
+```
+
+### Notes
 - String literals are simple quoted strings; escape-sequence behavior is intentionally limited.
 - **Semicolons are required to terminate statements** — including statements whose value is a block, e.g. `let f = fn() { ... };` and `if (c) { ... };`. The language server's formatter enforces this canonically (it repairs missing semicolons and removes redundant ones on format), and the `semicolon` diagnostic flags them while you type.
 

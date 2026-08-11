@@ -741,7 +741,7 @@ func lexicalSemanticTokens(src string) []semanticToken {
 
 func semanticTokenTypeForLexToken(tokenType token.TokenType) (uint32, bool) {
 	switch tokenType {
-	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.BANG, token.EQUALITY, token.INEQUALITY:
+	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.LTE, token.GTE, token.BANG, token.EQUALITY, token.INEQUALITY, token.AND, token.OR:
 		return semanticTokenTypeIndex["operator"], true
 	case token.LPAREN, token.RPAREN, token.LBRACE, token.RBRACE, token.LSQUARE, token.RSQUARE, token.COMMA, token.SEMICOLON, token.COLON, token.DOT:
 		return semanticTokenTypeIndex["punctuation"], true
