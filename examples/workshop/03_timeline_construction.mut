@@ -1,0 +1,43 @@
+// ============================================================
+//  Workshop 3/5 - Timeline construction
+//
+//  What:  Merge events from several artifact sources into one ordered
+//         "supertimeline". Every event just needs a numeric `ts` field
+//         (unix seconds); timeline_merge flattens + sorts them together.
+//  Input: NONE. Uses built-in sample events. In a real case these arrays
+//         would come from parsers (mft_parse, evtx_parse, prefetch_parse, ...).
+//  Run:   mutant run examples/workshop/03_timeline_construction.mut -pwd <pw>
+//         mutant     examples/workshop/03_timeline_construction.mu   -pwd <pw>
+// ============================================================
+
+let run = fn() {
+    putln("=== 3/5 Timeline construction ===");
+
+    // Two "sources", each a list of events carrying a `ts` (unix seconds).
+    // Note they are NOT in order and come from different artifacts.
+    let execution = [
+        { "ts": 1717243500, "source": "prefetch", "msg": "evil.exe executed" },
+        { "ts": 1717240000, "source": "evtx",     "msg": "service installed" }
+    ];
+    let browsing = [
+        { "ts": 1717241800, "source": "browser",  "msg": "downloaded evil.exe" }
+    ];
+
+    // Merge into a single, chronologically-sorted supertimeline.
+    let timeline = timeline_merge([execution, browsing], "ts");
+
+    putln("supertimeline (", len(timeline), "events, oldest first):");
+    each(timeline, fn(ev) {
+        // Turn the unix ts back into a readable string for display.
+        let when, err = timestamp_normalize(ev["ts"], "unix");
+        let stamp = ev["ts"];
+        if (!err) {
+            stamp = when["iso"];
+        };
+        putln("  ", stamp, "  [", ev["source"], "]  ", ev["msg"]);
+    });
+
+    return true;
+};
+
+run();
