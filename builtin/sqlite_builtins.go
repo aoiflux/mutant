@@ -10,10 +10,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	_ "modernc.org/sqlite"
-
 	"mutant/object"
 )
+
+// The pure-Go SQLite driver is registered in sqlite_driver.go, which is excluded
+// from wasm builds (modernc.org/sqlite pulls in modernc.org/libc, which has no
+// wasm target). On wasm, sql.Open("sqlite", …) returns an honest "unknown driver"
+// error — SQLite access is a host-only capability, unavailable in the browser.
 
 // sqliteMaxRows caps a single query's result set to guard against a runaway
 // query exhausting memory; the result carries a `truncated` flag when hit.
