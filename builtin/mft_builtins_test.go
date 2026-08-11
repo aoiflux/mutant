@@ -4,11 +4,39 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"mutant/object"
 )
+
+// TestMFTTimeFieldsPreservesSubSecond verifies mft_parse/fs_deleted retain the
+// NTFS 100 ns sub-second component — the basis for the sub-second timestomping
+// tell (whole-second values across a file's SI times are suspicious).
+func TestMFTTimeFieldsPreservesSubSecond(t *testing.T) {
+	// 0.1234567 s = 1234567 intervals of 100 ns -> 123456700 ns.
+	unix, ns, iso := mftTimeFields(time.Unix(1500000000, 123456700).UTC())
+	if unix != 1500000000 {
+		t.Fatalf("unix = %d, want 1500000000", unix)
+	}
+	if ns != 123456700 {
+		t.Fatalf("ns = %d, want 123456700 (lost sub-second precision)", ns)
+	}
+	if !strings.Contains(iso, ".1234567") {
+		t.Fatalf("iso = %q, want a sub-second fraction", iso)
+	}
+
+	// A whole-second time reports a zero fraction and no fractional part in iso.
+	unix0, ns0, iso0 := mftTimeFields(time.Unix(1500000000, 0).UTC())
+	if unix0 != 1500000000 || ns0 != 0 {
+		t.Fatalf("whole-second: unix=%d ns=%d, want 1500000000/0", unix0, ns0)
+	}
+	if strings.Contains(iso0, ".") {
+		t.Fatalf("whole-second iso = %q, want no fractional part", iso0)
+	}
+}
 
 // --- minimal $MFT record builder (crafts valid FILE records the libntfs
 // ParseMFTRecord path can consume: header + fixup + $STANDARD_INFORMATION +
@@ -192,6 +220,11 @@ func TestMftParseStandalone(t *testing.T) {
 	}
 	if got := hStr(t, np, "si_modified_iso"); got != unixToISO(wantUnix) {
 		t.Errorf("si_modified_iso = %q, want %q", got, unixToISO(wantUnix))
+	}
+	// The sub-second fraction is emitted per timestamp; a whole-second crafted
+	// time reports 0 (the feature that powers sub-second timestomping detection).
+	if got := hInt(t, np, "si_modified_ns"); got != 0 {
+		t.Errorf("si_modified_ns = %d, want 0 (whole-second crafted time)", got)
 	}
 	if got := hInt(t, np, "fn_created"); got != wantUnix {
 		t.Errorf("fn_created = %d, want %d", got, wantUnix)

@@ -242,17 +242,24 @@ func addMFTTimes(m map[string]object.Object, prefix string, present bool, t macT
 		"mft_modified": t.mftModified,
 		"created":      t.created,
 	} {
-		unix, iso := mftTimeFields(tv)
+		unix, ns, iso := mftTimeFields(tv)
 		m[prefix+"_"+label] = intObj(unix)
+		// The sub-second (100 ns resolution) fraction, 0-999999999. NTFS records
+		// timestamps at 100 ns; a value of exactly 0 across a file's SI times while
+		// its FN times are non-zero is a strong timestomping tell (tools that set
+		// whole-second times). The _iso string carries the same fraction.
+		m[prefix+"_"+label+"_ns"] = intObj(ns)
 		m[prefix+"_"+label+"_iso"] = stringObj(iso)
 	}
 }
 
-func mftTimeFields(t time.Time) (int64, string) {
+// mftTimeFields returns a timestamp's unix seconds, its sub-second nanosecond
+// fraction (0-999999999), and an RFC3339Nano string that preserves the fraction.
+func mftTimeFields(t time.Time) (int64, int64, string) {
 	if t.IsZero() {
-		return 0, ""
+		return 0, 0, ""
 	}
-	return t.Unix(), t.UTC().Format(time.RFC3339)
+	return t.Unix(), int64(t.Nanosecond()), t.UTC().Format(time.RFC3339Nano)
 }
 
 // reconstructMFTPaths walks each record's $FILE_NAME parent reference up to the
