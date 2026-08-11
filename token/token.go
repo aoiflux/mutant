@@ -99,6 +99,8 @@ const (
 	BANG       = "!"
 	EQUALITY   = "=="
 	INEQUALITY = "!="
+	AND        = "&&"
+	OR         = "||"
 	COLON      = ":"
 
 	// Delimiters

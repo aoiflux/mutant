@@ -97,6 +97,24 @@ func (l *Lexer) NextToken() token.Token {
 		} else {
 			tok = newToken(token.BANG, l.ch)
 		}
+	case '&':
+		if l.peekRune() == '&' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.AND, Literal: ch + string(l.ch)}
+		} else {
+			// Mutant has no bitwise '&'; a lone '&' is not a valid token.
+			tok = newToken(token.ILLEGAL, l.ch)
+		}
+	case '|':
+		if l.peekRune() == '|' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.OR, Literal: ch + string(l.ch)}
+		} else {
+			// Mutant has no bitwise '|'; a lone '|' is not a valid token.
+			tok = newToken(token.ILLEGAL, l.ch)
+		}
 	case '(':
 		tok = newToken(token.LPAREN, l.ch)
 	case ')':

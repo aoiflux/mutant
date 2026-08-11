@@ -141,6 +141,12 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
 	case *ast.InfixExpression:
+		// Logical && / || short-circuit and produce a strict boolean. They compile
+		// to conditional jumps (like `if`) rather than an arithmetic opcode, so the
+		// right operand's instructions only run when the left doesn't decide it.
+		if node.Operator == "&&" || node.Operator == "||" {
+			return c.compileLogicalExpression(node)
+		}
 		// a < b  ==  b > a ;  a <= b  ==  b >= a. Compile with swapped operands
 		// so we need only the "greater" family of opcodes.
 		if node.Operator == "<" || node.Operator == "<=" {
@@ -545,6 +551,50 @@ func (c *Compiler) changeOperand(pos int, operand int) {
 	op := code.Opcode(c.currentInstructions()[pos])
 	newInstruction := code.Make(op, operand)
 	c.replaceInstruction(pos, newInstruction)
+}
+
+// compileLogicalExpression emits short-circuit code for && / || that leaves a
+// strict boolean on the stack. OpJumpFalse pops its condition and jumps when it
+// is falsy, so we branch on the operands and only evaluate the right side when
+// the left doesn't already decide the result.
+func (c *Compiler) compileLogicalExpression(node *ast.InfixExpression) error {
+	if err := c.Compile(node.Left); err != nil {
+		return err
+	}
+
+	if node.Operator == "&&" {
+		leftFalse := c.emit(code.OpJumpFalse, 9999) // left falsy -> result is false
+		if err := c.Compile(node.Right); err != nil {
+			return err
+		}
+		rightFalse := c.emit(code.OpJumpFalse, 9999) // right falsy -> result is false
+		c.emit(code.OpTrue)
+		toEnd := c.emit(code.OpJump, 9999)
+		falsePos := len(c.currentInstructions())
+		c.changeOperand(leftFalse, falsePos)
+		c.changeOperand(rightFalse, falsePos)
+		c.emit(code.OpFalse)
+		c.changeOperand(toEnd, len(c.currentInstructions()))
+		return nil
+	}
+
+	// "||": OpJumpFalse falls through when the left is truthy -> result is true.
+	leftFalse := c.emit(code.OpJumpFalse, 9999)
+	c.emit(code.OpTrue)
+	trueEnd1 := c.emit(code.OpJump, 9999)
+	c.changeOperand(leftFalse, len(c.currentInstructions())) // left falsy -> test right
+	if err := c.Compile(node.Right); err != nil {
+		return err
+	}
+	rightFalse := c.emit(code.OpJumpFalse, 9999)
+	c.emit(code.OpTrue)
+	trueEnd2 := c.emit(code.OpJump, 9999)
+	c.changeOperand(rightFalse, len(c.currentInstructions()))
+	c.emit(code.OpFalse)
+	endPos := len(c.currentInstructions())
+	c.changeOperand(trueEnd1, endPos)
+	c.changeOperand(trueEnd2, endPos)
+	return nil
 }
 
 func (c *Compiler) currentInstructions() code.Instructions {
