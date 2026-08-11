@@ -16,6 +16,14 @@ type builtinDoc struct {
 	signature string
 	summary   string
 	params    []builtinParamDoc
+	// platforms lists the GOOS values on which the builtin actually works. An
+	// empty/nil slice means "all platforms" (the common case). The LSP reads this
+	// to warn when a program calls a builtin unsupported on the host OS.
+	platforms []string
+	// platformNote is a soft, human-readable caveat surfaced in hover (not a hard
+	// availability gate) — e.g. a builtin that works everywhere but whose behavior
+	// differs per OS, or one path of which is platform-specific.
+	platformNote string
 }
 
 type builtinParamDoc struct {
@@ -29,6 +37,7 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Returns the length of a string, array, hash, or bytes value.",
 		params:    []builtinParamDoc{{name: "value", doc: "String, array, hash, or bytes value to measure."}},
 	},
+	BuiltinNameHelp:  {signature: "help(topic?, mode?)", summary: "Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name.", params: []builtinParamDoc{{name: "topic?", doc: "Optional topic or builtin name."}, {name: "mode?", doc: "Optional rendering mode."}}},
 	BuiltinNamePutln: {signature: "putln(value)", summary: "Prints a value followed by a newline."},
 	BuiltinNamePutf: {
 		signature: "putf(format, ...values)",
@@ -38,7 +47,7 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "...values", doc: "Values interpolated into format."},
 		},
 	},
-	BuiltinNameGets:          {signature: "gets()", summary: "Reads a line of input from stdin."},
+	BuiltinNameGets:          {signature: "gets()", summary: "Reads a full line of input from stdin and returns it as a STRING (newline trimmed). Use to_int/to_float/parse_int to convert."},
 	BuiltinNameFirst:         {signature: "first(array)", summary: "Returns the first element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
 	BuiltinNameLast:          {signature: "last(array)", summary: "Returns the last element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
 	BuiltinNameRest:          {signature: "rest(array)", summary: "Returns a new array without the first element.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
@@ -49,13 +58,178 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameFsAppend:      {signature: "fs_append(path, data)", summary: "Appends data to the end of a file.", params: []builtinParamDoc{{name: "path", doc: "Path to file."}, {name: "data", doc: "String/bytes payload."}}},
 	BuiltinNameFsExists:      {signature: "fs_exists(path)", summary: "Returns whether a file or directory exists.", params: []builtinParamDoc{{name: "path", doc: "Path to check."}}},
 	BuiltinNameHttpGet:       {signature: "http_get(url)", summary: "Performs an HTTP GET request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}}},
-	BuiltinNameHttpPost:      {signature: "http_post(url, body)", summary: "Performs an HTTP POST request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}}},
-	BuiltinNameHttpRequest:   {signature: "http_request(method, url, opts)", summary: "Performs a configurable HTTP request.", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "opts", doc: "Headers/body/timeout options."}}},
+	BuiltinNameHttpPost:      {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}, {name: "contentType?", doc: "Optional Content-Type header (default application/octet-stream)."}}},
+	BuiltinNameHttpRequest:   {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value (\"\" for none)."}, {name: "headers", doc: "Hash of request headers."}}},
 	BuiltinNameJsonParse:     {signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.", params: []builtinParamDoc{{name: "text", doc: "JSON string input."}}},
 	BuiltinNameJsonStringify: {signature: "json_stringify(value)", summary: "Serializes Mutant values into JSON text.", params: []builtinParamDoc{{name: "value", doc: "Value to serialize."}}},
 	BuiltinNameLuaRunString:  {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string."},
 	BuiltinNameLuaRunFile:    {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file."},
-	BuiltinNameLuaRunHttp:    {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint."},
+	BuiltinNameLuaRunHttp:    {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries)."},
+	BuiltinNameStrUpper:      {signature: "str_upper(s)", summary: "Returns s with all letters upper-cased."},
+	BuiltinNameStrLower:      {signature: "str_lower(s)", summary: "Returns s with all letters lower-cased."},
+	BuiltinNameStrTrim:       {signature: "str_trim(s)", summary: "Returns s with leading and trailing whitespace removed."},
+	BuiltinNameStrTrimLeft:   {signature: "str_trim_left(s, cutset)", summary: "Trims any leading characters in cutset from s."},
+	BuiltinNameStrTrimRight:  {signature: "str_trim_right(s, cutset)", summary: "Trims any trailing characters in cutset from s."},
+	BuiltinNameStrTrimPrefix: {signature: "str_trim_prefix(s, prefix)", summary: "Removes prefix from s if present."},
+	BuiltinNameStrTrimSuffix: {signature: "str_trim_suffix(s, suffix)", summary: "Removes suffix from s if present."},
+	BuiltinNameStrStartsWith: {signature: "str_starts_with(s, prefix)", summary: "Returns whether s begins with prefix."},
+	BuiltinNameStrEndsWith:   {signature: "str_ends_with(s, suffix)", summary: "Returns whether s ends with suffix."},
+	BuiltinNameStrJoin:       {signature: "str_join(array, sep)", summary: "Joins an array of strings with sep (inverse of text_split)."},
+	BuiltinNameStrRepeat:     {signature: "str_repeat(s, n)", summary: "Returns s repeated n times."},
+	BuiltinNameStrPadLeft:    {signature: "str_pad_left(s, width, pad)", summary: "Left-pads s with pad until it reaches width runes."},
+	BuiltinNameStrPadRight:   {signature: "str_pad_right(s, width, pad)", summary: "Right-pads s with pad until it reaches width runes."},
+	BuiltinNameStrReverse:    {signature: "str_reverse(s)", summary: "Returns s reversed (rune-aware)."},
+	BuiltinNameStrSubstr:     {signature: "str_substr(s, start, length)", summary: "Returns length runes of s starting at rune index start (clamped to bounds)."},
+	BuiltinNameStrCharAt:     {signature: "str_char_at(s, index)", summary: "Returns the rune at index as a string."},
+	BuiltinNameStrFormat:     {signature: "str_format(format, ...values)", summary: "Returns a printf-style formatted string (like putf but returns instead of printing)."},
+	BuiltinNameStrTitle:      {signature: "str_title(s)", summary: "Upper-cases the first letter of each word in s."},
+	// generic: hashing & IDs
+	BuiltinNameHashMD5:    {signature: "hash_md5(s)", summary: "Returns the lowercase hex MD5 digest of s."},
+	BuiltinNameHashSHA1:   {signature: "hash_sha1(s)", summary: "Returns the lowercase hex SHA-1 digest of s."},
+	BuiltinNameHashSHA256: {signature: "hash_sha256(s)", summary: "Returns the lowercase hex SHA-256 digest of s."},
+	BuiltinNameHashSHA512: {signature: "hash_sha512(s)", summary: "Returns the lowercase hex SHA-512 digest of s."},
+	BuiltinNameHashCRC32:  {signature: "hash_crc32(s)", summary: "Returns the CRC-32 (IEEE) checksum of s as 8 hex chars."},
+	BuiltinNameHashBlake2: {signature: "hash_blake2(s)", summary: "Returns the lowercase hex BLAKE2b-256 digest of s."},
+	BuiltinNameHMAC:       {signature: "hmac(key, message, algo)", summary: "Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512.", params: []builtinParamDoc{{name: "key", doc: "Secret key."}, {name: "message", doc: "Message to authenticate."}, {name: "algo", doc: "Hash algorithm: md5/sha1/sha256/sha512."}}},
+	BuiltinNameUUIDv4:     {signature: "uuid_v4()", summary: "Returns a random (v4) UUID string."},
+	BuiltinNameUUIDv7:     {signature: "uuid_v7()", summary: "Returns a time-ordered (v7) UUID string."},
+	BuiltinNameRandomHex:  {signature: "random_hex(n)", summary: "Returns n cryptographically-random bytes as a 2n-char hex string."},
+	BuiltinNameNanoID:     {signature: "nanoid(n)", summary: "Returns a URL-safe random identifier of length n."},
+	// generic: math
+	BuiltinNameAbs:       {signature: "abs(x)", summary: "Absolute value (preserves INTEGER/FLOAT type)."},
+	BuiltinNameMin:       {signature: "min(...values)", summary: "Returns the smallest of the numeric arguments (original type preserved)."},
+	BuiltinNameMax:       {signature: "max(...values)", summary: "Returns the largest of the numeric arguments (original type preserved)."},
+	BuiltinNameClamp:     {signature: "clamp(x, lo, hi)", summary: "Constrains x to the range [lo, hi]."},
+	BuiltinNamePow:       {signature: "pow(x, y)", summary: "Returns x raised to the power y (FLOAT)."},
+	BuiltinNameSqrt:      {signature: "sqrt(x)", summary: "Returns the square root of x (FLOAT); errors on negative x."},
+	BuiltinNameMod:       {signature: "mod(a, b)", summary: "Returns a modulo b; errors on b=0. Integer mod when both are INTEGER."},
+	BuiltinNameFloor:     {signature: "floor(x)", summary: "Largest integer <= x (INTEGER)."},
+	BuiltinNameCeil:      {signature: "ceil(x)", summary: "Smallest integer >= x (INTEGER)."},
+	BuiltinNameRound:     {signature: "round(x)", summary: "Nearest integer to x (INTEGER)."},
+	BuiltinNameSum:       {signature: "sum(array)", summary: "Sum of a numeric array (INTEGER if all elements are integers)."},
+	BuiltinNameAvg:       {signature: "avg(array)", summary: "Arithmetic mean of a numeric array (FLOAT); errors on empty."},
+	BuiltinNameRand:      {signature: "rand()", summary: "Returns a random FLOAT in [0, 1)."},
+	BuiltinNameRandInt:   {signature: "rand_int(lo, hi)", summary: "Returns a random INTEGER in [lo, hi)."},
+	BuiltinNameRandBytes: {signature: "rand_bytes(n)", summary: "Returns n cryptographically-random bytes (as a byte string)."},
+	BuiltinNameMathPi:    {signature: "math_pi()", summary: "Returns the constant pi."},
+	BuiltinNameMathE:     {signature: "math_e()", summary: "Returns the constant e."},
+	// generic: encoding (decoders return (value, err))
+	BuiltinNameBase64Encode:    {signature: "base64_encode(s)", summary: "Standard base64-encodes s."},
+	BuiltinNameBase64Decode:    {signature: "base64_decode(s)", summary: "Decodes standard base64; returns (bytes, err)."},
+	BuiltinNameBase64URLEncode: {signature: "base64url_encode(s)", summary: "URL-safe base64-encodes s."},
+	BuiltinNameBase64URLDecode: {signature: "base64url_decode(s)", summary: "Decodes URL-safe base64; returns (bytes, err)."},
+	BuiltinNameBase32Encode:    {signature: "base32_encode(s)", summary: "Standard base32-encodes s."},
+	BuiltinNameBase32Decode:    {signature: "base32_decode(s)", summary: "Decodes standard base32; returns (bytes, err)."},
+	BuiltinNameHexEncode:       {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex."},
+	BuiltinNameHexDecode:       {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err)."},
+	BuiltinNameURLEncode:       {signature: "url_encode(s)", summary: "URL query-escapes s."},
+	BuiltinNameURLDecode:       {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err)."},
+	BuiltinNameGzip:            {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string)."},
+	BuiltinNameGunzip:          {signature: "gunzip(s)", summary: "Gzip-decompresses s; returns (bytes, err)."},
+	BuiltinNameZlibCompress:    {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string)."},
+	BuiltinNameZlibDecompress:  {signature: "zlib_decompress(s)", summary: "Zlib-decompresses s; returns (bytes, err)."},
+	BuiltinNameToBase:          {signature: "to_base(n, base)", summary: "Formats integer n in the given base (2–36)."},
+	BuiltinNameFromBase:        {signature: "from_base(s, base)", summary: "Parses s as an integer in the given base (2–36); returns (int, err)."},
+	// generic: type conversion & introspection
+	BuiltinNameToInt:      {signature: "to_int(v)", summary: "Converts a number/bool/string to INTEGER; returns (int, err)."},
+	BuiltinNameToFloat:    {signature: "to_float(v)", summary: "Converts a number/bool/string to FLOAT; returns (float, err)."},
+	BuiltinNameToString:   {signature: "to_string(v)", summary: "Converts any value to its STRING representation."},
+	BuiltinNameToBool:     {signature: "to_bool(v)", summary: "Converts a bool/number/string to BOOLEAN; returns (bool, err)."},
+	BuiltinNameParseInt:   {signature: "parse_int(s, base)", summary: "Parses s as an integer in base (0 auto-detects); returns (int, err)."},
+	BuiltinNameParseFloat: {signature: "parse_float(s)", summary: "Parses s as a float; returns (float, err)."},
+	BuiltinNameTypeOf:     {signature: "type_of(v)", summary: "Returns the object type name of v (e.g. INTEGER, STRING, ARRAY)."},
+	BuiltinNameIsNull:     {signature: "is_null(v)", summary: "Returns whether v is NULL."},
+	// generic: time & date (epoch seconds; Go reference layout, e.g. \"2006-01-02 15:04:05\")
+	BuiltinNameTimeNow:    {signature: "time_now()", summary: "Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}."},
+	BuiltinNameTimeUnix:   {signature: "time_unix()", summary: "Returns the current Unix time in seconds."},
+	BuiltinNameTimeFormat: {signature: "time_format(unix, layout)", summary: "Formats a Unix timestamp (UTC) using a Go reference layout."},
+	BuiltinNameTimeParse:  {signature: "time_parse(value, layout)", summary: "Parses value with a Go reference layout; returns (unixSeconds, err)."},
+	BuiltinNameTimeDiff:   {signature: "time_diff(a, b)", summary: "Returns a - b in seconds (both Unix timestamps)."},
+	BuiltinNameTimeAdd:    {signature: "time_add(unix, seconds)", summary: "Returns the Unix timestamp shifted by seconds."},
+	// generic: collections (array + hash operations; return new values, never mutate)
+	BuiltinNameSort:         {signature: "sort(array)", summary: "Returns a sorted copy of an array (all numbers or all strings)."},
+	BuiltinNameReverseArray: {signature: "reverse(array)", summary: "Returns a reversed copy of an array."},
+	BuiltinNameContains:     {signature: "contains(array, value)", summary: "Returns whether array contains value (by value equality)."},
+	BuiltinNameIndexOf:      {signature: "index_of(array, value)", summary: "Returns the first index of value in array, or -1."},
+	BuiltinNameSlice:        {signature: "slice(array, start, end)", summary: "Returns the sub-array array[start:end] (bounds-clamped)."},
+	BuiltinNameConcat:       {signature: "concat(a, b)", summary: "Returns a new array with the elements of a followed by b."},
+	BuiltinNameFlatten:      {signature: "flatten(array)", summary: "Flattens one level of nested arrays."},
+	BuiltinNameUnique:       {signature: "unique(array)", summary: "Returns a new array with duplicate values removed (order preserved)."},
+	BuiltinNameRange:        {signature: "range(start, end, step?)", summary: "Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1."},
+	BuiltinNameZip:          {signature: "zip(a, b)", summary: "Returns an array of [a[i], b[i]] pairs up to the shorter length."},
+	BuiltinNameMap:          {signature: "map(array, fn)", summary: "Returns a new array of fn applied to each element. fn takes (element) or (element, index)."},
+	BuiltinNameFilter:       {signature: "filter(array, fn)", summary: "Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index)."},
+	BuiltinNameReduce:       {signature: "reduce(array, fn, initial)", summary: "Folds the array to a single value: fn(accumulator, element) starting from initial."},
+	BuiltinNameEach:         {signature: "each(array, fn)", summary: "Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index)."},
+	BuiltinNameSortBy:       {signature: "sort_by(array, fn)", summary: "Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys)."},
+	BuiltinNameKeys:         {signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism)."},
+	BuiltinNameValues:       {signature: "values(hash)", summary: "Returns the hash values as an array (ordered by sorted key)."},
+	BuiltinNameEntries:      {signature: "entries(hash)", summary: "Returns the hash as an array of [key, value] pairs (sorted by key)."},
+	BuiltinNameHasKey:       {signature: "has_key(hash, key)", summary: "Returns whether hash contains key."},
+	BuiltinNameGet:          {signature: "get(hash, key, default)", summary: "Returns hash[key], or default when the key is absent."},
+	BuiltinNameSet:          {signature: "set(hash, key, value)", summary: "Returns a new hash with key set to value (original unchanged)."},
+	BuiltinNameMerge:        {signature: "merge(a, b)", summary: "Returns a new hash combining a and b (b wins on key conflicts)."},
+	BuiltinNameDelete:       {signature: "delete(hash, key)", summary: "Returns a new hash with key removed."},
+	// security: Go binary analysis (GoReSym) — parses PE/ELF/Mach-O Go binaries
+	BuiltinNameGoBuildInfo: {signature: "go_buildinfo(path)", summary: "Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary (PE/ELF/Mach-O)."}}},
+	BuiltinNameGoBuildID:   {signature: "go_build_id(path)", summary: "Extracts the Go build ID from a binary. Returns (build_id, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary."}}},
+	BuiltinNameGoSymbols:   {signature: "go_symbols(path, mode?)", summary: "Recovers function symbols from a Go binary via the pclntab — works even on STRIPPED binaries. Returns {go_version, arch, os, pclntab_va, function_count, user_function_count, std_function_count, functions:[{name, package, start, end, stdlib}]}. mode is \"all\" (default), \"user\", or \"std\". Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary."}, {name: "mode?", doc: "Filter: all/user/std (default all)."}}},
+	BuiltinNameGoTypes:     {signature: "go_types(path)", summary: "Recovers type and interface definitions from a Go binary via GoReSym typelink/itablink parsing, including reconstructed Go source for structs/interfaces where possible. Returns {go_version, type_count, itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}. Type recovery needs a parseable moduledata; GoReSym v1.7.1 supports it up to ~Go 1.24 and returns an honest error on newer toolchains. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary."}}},
+	BuiltinNameBinIsGo:     {signature: "bin_is_go(path)", summary: "Quick check whether a binary was produced by the Go toolchain, using three signals (build info blob, Go build ID, and a parseable pclntab — the one that survives stripping). Returns {is_go, go_version, has_buildinfo, has_build_id, has_pclntab}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a binary (PE/ELF/Mach-O)."}}},
+	// security: IOC / network intelligence
+	BuiltinNameDefang:        {signature: "defang(ioc)", summary: "Defangs an indicator for safe display (http->hxxp, .->[.], @->[at])."},
+	BuiltinNameRefang:        {signature: "refang(ioc)", summary: "Reverses common defang encodings ([.]/(.)/[dot]->., hxxp->http, [at]->@)."},
+	BuiltinNameIPIsPrivate:   {signature: "ip_is_private(ip)", summary: "Returns whether an IP is private/loopback/link-local (RFC1918 etc.)."},
+	BuiltinNameIPInCIDR:      {signature: "ip_in_cidr(ip, cidr)", summary: "Returns whether an IP falls within a CIDR range.", params: []builtinParamDoc{{name: "ip", doc: "IPv4 or IPv6 address."}, {name: "cidr", doc: "CIDR network, e.g. 10.0.0.0/8."}}},
+	BuiltinNameCIDRHosts:     {signature: "cidr_hosts(cidr)", summary: "Returns all addresses in a CIDR range (capped; errors if >20 host bits)."},
+	BuiltinNameIPVersion:     {signature: "ip_version(ip)", summary: "Returns 4, 6, or 0 (invalid) for an IP address."},
+	BuiltinNameIPToInt:       {signature: "ip_to_int(ip)", summary: "Converts an IPv4 address to its 32-bit integer form."},
+	BuiltinNameIntToIP:       {signature: "int_to_ip(n)", summary: "Converts a 32-bit integer to an IPv4 dotted-quad string."},
+	BuiltinNameDomainExtract: {signature: "domain_extract(url)", summary: "Extracts the lowercased hostname from a URL or host string."},
+	BuiltinNameTLDExtract:    {signature: "tld_extract(domain)", summary: "Returns {domain, etld1, suffix} using the public suffix list."},
+	BuiltinNameIsValidDomain: {signature: "is_valid_domain(s)", summary: "Returns whether s is a syntactically valid domain name."},
+	BuiltinNameExtractIOCs:   {signature: "extract_iocs(text)", summary: "Extracts IOCs from text (refanged first): {ipv4, urls, domains, emails, md5, sha1, sha256}, each unique and sorted."},
+	// forensic: hash sets (known-file filtering, NSRL-style)
+	BuiltinNameHashsetLoad:     {signature: "hashset_load(path)", summary: "Loads a file of hashes (one per line, or CSV/NSRL where the hash is the first field) into an in-memory set. Skips headers/comments/non-hex. Returns {handle, count}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a hash list (md5/sha1/sha256 hex)."}}},
+	BuiltinNameHashsetContains: {signature: "hashset_contains(handle, hash)", summary: "Returns whether a hash is in a loaded set (case-insensitive). Returns (bool, err).", params: []builtinParamDoc{{name: "handle", doc: "Handle from hashset_load."}, {name: "hash", doc: "Hex hash to look up."}}},
+	BuiltinNameHashsetClose:    {signature: "hashset_close(handle)", summary: "Frees a loaded hash set. Returns (bool, err)."},
+	// forensic: timeline
+	BuiltinNameTimestampNormalize: {signature: "timestamp_normalize(value, format?)", summary: "Normalizes a timestamp to {unix, unix_ms, iso, format}. Formats: unix (s/ms/us/ns), filetime (Windows), webkit/chrome, dos (packed 32-bit), iso (RFC3339 string). Default \"auto\" detects unix magnitude or parses an ISO string. Returns (result, err).", params: []builtinParamDoc{{name: "value", doc: "INTEGER epoch/packed value, or ISO STRING."}, {name: "format?", doc: "One of auto/unix/unix_ms/unix_us/unix_ns/filetime/webkit/dos/iso."}}},
+	BuiltinNameTimelineSort:       {signature: "timeline_sort(events, field?)", summary: "Returns events (array of hashes) sorted ascending by a numeric timestamp field (default \"ts\"); events missing the field sort last. Stable."},
+	BuiltinNameTimelineMerge:      {signature: "timeline_merge(sources, field?)", summary: "Flattens an array of event arrays into one supertimeline sorted by a numeric timestamp field (default \"ts\")."},
+	BuiltinNameBodyfileParse:      {signature: "bodyfile_parse(path)", summary: "Parses a Sleuth Kit bodyfile (MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime) into an array of entry hashes. Returns (entries, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a TSK bodyfile."}}},
+	BuiltinNamePlistParse:         {signature: "plist_parse(path)", summary: "Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .plist file (binary or XML)."}}},
+	BuiltinNameHiveOpen:       {signature: "hive_open(path)", summary: "Opens a real Windows registry hive (regf binary format — SOFTWARE/SYSTEM/NTUSER.DAT, etc.) and returns {handle, path}. Distinct from the JSON-fixture reg_* family. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a registry hive file."}}},
+	BuiltinNameHiveClose:      {signature: "hive_close(handle)", summary: "Closes a hive handle. Returns (bool, err)."},
+	BuiltinNameHiveKeyInfo:    {signature: "hive_key_info(handle, keypath?)", summary: "Returns {name, last_write, last_write_iso, subkey_count, value_count} for a key (keypath is backslash-separated under the root; default root). Returns (result, err)."},
+	BuiltinNameHiveListKeys:   {signature: "hive_list_keys(handle, keypath?)", summary: "Returns the subkey names under a key (default root) as an array. Returns (array, err)."},
+	BuiltinNameHiveListValues: {signature: "hive_list_values(handle, keypath?)", summary: "Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Returns (array, err)."},
+	BuiltinNameHiveGetValue:   {signature: "hive_get_value(handle, keypath, name)", summary: "Returns {name, type, data} for a single value under keypath. Returns (result, err)."},
+	BuiltinNameShimcacheParse: {signature: "shimcache_parse(path)", summary: "Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "SYSTEM hive file or raw AppCompatCache blob."}}},
+	BuiltinNameAmcacheParse:   {signature: "amcache_parse(path)", summary: "Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\\File layouts. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to an Amcache.hve hive file."}}},
+	BuiltinNamePrefetchParse:  {signature: "prefetch_parse(path)", summary: "Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .pf prefetch file (compressed or raw SCCA)."}}},
+	BuiltinNameMftParse:       {signature: "mft_parse(path)", summary: "Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
+	BuiltinNameEvtxParse:      {signature: "evtx_parse(path)", summary: "Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .evtx Windows Event Log file."}}},
+	BuiltinNameJumplistParse:  {signature: "jumplist_parse(path)", summary: "Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .automaticDestinations-ms or .customDestinations-ms jump list."}}},
+	BuiltinNameSyslogParse:    {signature: "syslog_parse(path)", summary: "Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a syslog text file (RFC 3164 or RFC 5424)."}}},
+	BuiltinNameSqliteQuery:    {signature: "sqlite_query(path, sql, params?)", summary: "Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a SQLite database file."}, {name: "sql", doc: "SQL query to run."}, {name: "params?", doc: "Optional ARRAY of bind parameters."}}},
+	BuiltinNameBrowserHistory:   {signature: "browser_history(path)", summary: "Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
+	BuiltinNameBrowserCookies:   {signature: "browser_cookies(path)", summary: "Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium Cookies or Firefox cookies.sqlite database."}}},
+	BuiltinNameBrowserDownloads: {signature: "browser_downloads(path)", summary: "Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
+	BuiltinNameFsDeleted:      {signature: "fs_deleted(path)", summary: "Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
+	BuiltinNameLnkParse:           {signature: "lnk_parse(path)", summary: "Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .lnk shell link file."}}},
+	BuiltinNameMactime:            {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge)."},
+	// security: fingerprinting
+	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{{name: "pe_path", doc: "Path to a PE (Windows) binary."}}},
+	BuiltinNameNTHash:  {signature: "nt_hash(password)", summary: "Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use."},
+	BuiltinNameLMHash:  {signature: "lm_hash(password)", summary: "Returns the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex. Empty password -> aad3b435b51404eeaad3b435b51404ee."},
+	BuiltinNameJA3:     {signature: "ja3(client_hello)", summary: "Computes the JA3 TLS-client fingerprint from a ClientHello (raw bytes, with or without the TLS record layer). Hashes version,ciphers,extensions,curves,point_formats with GREASE (RFC 8701) removed. Returns {ja3, ja3_hash (md5), tls_version, ciphers[], extensions[], curves[], point_formats[]}. Returns (result, err).", params: []builtinParamDoc{{name: "client_hello", doc: "Raw bytes of a TLS ClientHello (optionally wrapped in its record layer)."}}},
+	// security: crypto
+	BuiltinNameX509Parse:  {signature: "x509_parse(pem_or_der)", summary: "Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err).", params: []builtinParamDoc{{name: "pem_or_der", doc: "Certificate bytes in PEM or DER form."}}},
+	BuiltinNameJWTDecode:  {signature: "jwt_decode(token)", summary: "Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err).", params: []builtinParamDoc{{name: "token", doc: "Compact JWT string (header.payload.signature)."}}},
+	BuiltinNameAESEncrypt: {signature: "aes_encrypt(key, plaintext)", summary: "AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err).", params: []builtinParamDoc{{name: "key", doc: "16/24/32-byte key (AES-128/192/256)."}, {name: "plaintext", doc: "Data to encrypt."}}},
+	BuiltinNameAESDecrypt: {signature: "aes_decrypt(key, ciphertext)", summary: "AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering.", params: []builtinParamDoc{{name: "key", doc: "16/24/32-byte key."}, {name: "ciphertext", doc: "Nonce-prefixed AES-GCM ciphertext."}}},
+	BuiltinNamePEMDecode:  {signature: "pem_decode(s)", summary: "Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err)."},
 	BuiltinNameTextContains:  {signature: "text_contains(haystack, needle)", summary: "Returns whether a string contains a substring."},
 	BuiltinNameTextIndex:     {signature: "text_index(haystack, needle)", summary: "Returns the first index of substring occurrence, or -1."},
 	BuiltinNameTextCount:     {signature: "text_count(haystack, needle)", summary: "Counts non-overlapping substring occurrences."},
@@ -168,26 +342,27 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "cache_clear(name)",
 		summary:   "Clears all entries and resets relevant cache state.",
 	},
-	BuiltinNameProcessList: {signature: "process_list()", summary: "Lists visible processes with pid, ppid, and executable name."},
+	BuiltinNameProcessList: {signature: "process_list()", summary: "Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS."},
 	BuiltinNameProcessTree: {
 		signature: "process_tree(rootPid?)",
-		summary:   "Returns descendant processes for a root pid (default current process).",
+		summary:   "Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS.",
 		params:    []builtinParamDoc{{name: "rootPid?", doc: "Optional root process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessOpenFiles: {
 		signature: "process_open_files(pid?)",
-		summary:   "Lists open file paths for a process (platform dependent).",
+		summary:   "Lists open file paths for a process (cross-platform; may require privileges for other processes).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessThreads: {
 		signature: "process_threads(pid?)",
-		summary:   "Lists thread IDs for a process (platform dependent).",
+		summary:   "Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessModules: {
 		signature: "process_modules(pid?)",
-		summary:   "Lists loaded module/library paths for a process.",
+		summary:   "Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
+		platforms: []string{"windows", "linux"},
 	},
 	BuiltinNameProcessHash: {
 		signature: "process_hash(pid?)",
@@ -196,15 +371,16 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameProcessMemoryScan: {
 		signature: "process_memory_scan(pid, pattern)",
-		summary:   "Scans process memory for a string pattern (advisory/stub on some platforms).",
+		summary:   "Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS.",
 		params: []builtinParamDoc{
-			{name: "pid", doc: "Target process ID to scan."},
-			{name: "pattern", doc: "String pattern searched in process memory."},
+			{name: "pid", doc: "Target process ID (must be the current process for now)."},
+			{name: "pattern", doc: "Non-empty byte pattern to search for."},
 		},
+		platforms: []string{"windows", "linux"},
 	},
 	BuiltinNameProcessEnv: {
 		signature: "process_env(pid?)",
-		summary:   "Returns environment variables for a process.",
+		summary:   "Returns environment variables for a process (cross-platform; other processes may require privileges).",
 		params:    []builtinParamDoc{{name: "pid?", doc: "Optional process ID; defaults to current process."}},
 	},
 	BuiltinNameProcessKill: {
@@ -214,6 +390,7 @@ var builtinDocs = map[string]builtinDoc{
 			{name: "pid", doc: "Target process ID."},
 			{name: "signal?", doc: "Optional integer signal number."},
 		},
+		platformNote: "On Windows only SIGKILL semantics are honored; other signal numbers are ignored.",
 	},
 	BuiltinNameExecString: {
 		signature: "exec_string(command, shell?)",
@@ -255,7 +432,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameFsMagic: {
 		signature: "fs_magic(path)",
-		summary:   "Infers file type/magic information from file contents.",
+		summary:   "Infers file type/magic from a file's header against a ~40-signature database (executables PE/ELF/Mach-O, images, archives, documents, SQLite/registry/EVTX/pcap, media, and forensic artifacts like lnk/prefetch). Returns {path, type, mime, signature}.",
 	},
 	BuiltinNameFsExtractStrings: {
 		signature: "fs_extract_strings(path, minLen?)",
@@ -267,14 +444,14 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameFsDiff: {
 		signature: "fs_diff(leftPath, rightPath)",
-		summary:   "Compares two files or directories and reports differences.",
+		summary:   "Compares two files (not directories) and reports differences.",
 	},
 	BuiltinNameFsCarve: {
 		signature: "fs_carve(path, type)",
-		summary:   "Carves matching binary artifacts from a file by known artifact type.",
+		summary:   "Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length.",
 		params: []builtinParamDoc{
 			{name: "path", doc: "Path to source file."},
-			{name: "type", doc: "Artifact type signature such as pe/elf/pdf/zip."},
+			{name: "type", doc: "Signature type name from the shared database (e.g. pe/elf/macho64/png/jpeg/gif/zip/gzip/7z/rar/pdf/ole/sqlite/regf/evtx/gzip/mp3/mp4); an unsupported name errors with the full list."},
 		},
 	},
 	BuiltinNameFsEntropy: {
@@ -290,6 +467,11 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_elf_parse(path)",
 		summary:   "Parses ELF headers and returns core binary metadata.",
 	},
+	BuiltinNameBinMachoParse: {
+		signature: "bin_macho_parse(path)",
+		summary:   "Parses a Mach-O binary (macOS/iOS). Handles thin and fat/universal images. For a thin binary returns {format, fat, magic, cpu, type, flags, num_sections, num_commands, imported_libraries}; for a fat binary returns {format, fat, num_arches, architectures:[{cpu, type, offset, size, align}]}. Returns (result, err).",
+		params:    []builtinParamDoc{{name: "path", doc: "Path to a Mach-O binary."}},
+	},
 	BuiltinNameBinDwarfParse: {
 		signature: "bin_dwarf_parse(path)",
 		summary:   "Parses DWARF metadata and reports compile unit information.",
@@ -303,8 +485,13 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Computes binary entropy signal.",
 	},
 	BuiltinNameBinYaraScan: {
-		signature: "bin_yara_scan(path, rules)",
-		summary:   "Runs YARA-like signature scanning on a binary.",
+		signature: "bin_yara_scan(path, rules, caseInsensitive?)",
+		summary:   "Literal multi-string scan of a file (NOT a real YARA engine — that needs cgo). Reports every offset of each rule string. Case-sensitive unless caseInsensitive is true. Returns {engine, matched, total_hits, hits:[{rule, count, offsets}]}.",
+		params: []builtinParamDoc{
+			{name: "path", doc: "Path to the file to scan."},
+			{name: "rules", doc: "Array of literal STRING patterns."},
+			{name: "caseInsensitive?", doc: "Optional BOOLEAN; default false (case-sensitive)."},
+		},
 	},
 	BuiltinNameBinImports: {
 		signature: "bin_imports(path)",
@@ -314,9 +501,10 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 	},
-	BuiltinNameNetSynScan: {signature: "net_syn_scan(target, ports)", summary: "Performs TCP SYN scanning for target ports."},
-	BuiltinNameNetUdpScan: {signature: "net_udp_scan(target, ports)", summary: "Performs UDP scanning for target ports."},
-	BuiltinNameNetBanner:  {signature: "net_banner(address)", summary: "Collects service banner text from a network endpoint."},
+	BuiltinNameNetSynScan: {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetConnectScan: {signature: "net_connect_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges).", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetUdpScan: {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port timeout in ms."}}},
+	BuiltinNameNetBanner:  {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Read timeout in ms."}}},
 	BuiltinNameNetTlsFingerprint: {
 		signature: "net_tls_fingerprint(address, timeoutMs)",
 		summary:   "Collects TLS certificate and handshake fingerprint metadata.",
@@ -338,8 +526,9 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Analyzes PCAP captures and returns flow/session signals.",
 	},
 	BuiltinNameNetCaptureRaw: {
-		signature: "net_capture_raw()",
-		summary:   "Captures raw packets from an interface for a time window.",
+		signature: "net_capture_raw(pcap_path)",
+		summary:   "Reads raw packets from an offline pcap file into a per-packet listing (live interface capture needs cgo/raw sockets and is unavailable; net_pcap_analyze gives the flow summary, this gives the packets). Returns {file, link_type, count, truncated, packets:[{index, ts, timestamp, length, src, dst, protocol, sport, dport}]}. Returns (result, err).",
+		params:    []builtinParamDoc{{name: "pcap_path", doc: "Path to an offline pcap capture file."}},
 	},
 	BuiltinNameNetFlowReconstruct: {
 		signature: "net_flow_reconstruct(packets)",
@@ -347,51 +536,51 @@ var builtinDocs = map[string]builtinDoc{
 		params:    []builtinParamDoc{{name: "packets", doc: "Array of packet hashes with src/dst/ports/protocol/bytes fields."}},
 	},
 	BuiltinNameNetOsFingerprint: {
-		signature: "net_os_fingerprint(target, timeoutMs)",
-		summary:   "Infers probable remote OS fingerprint from network responses.",
+		signature: "net_os_fingerprint(pcap_path)",
+		summary:   "Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges.",
 		params: []builtinParamDoc{
-			{name: "target", doc: "Target host or address."},
-			{name: "timeoutMs", doc: "Probe timeout in milliseconds."},
+			{name: "pcap_path", doc: "Path to a pcap file to analyze."},
 		},
 	},
 	BuiltinNameRegOpen: {
-		signature: "reg_open(path)",
-		summary:   "Opens a registry hive data source and returns a handle.",
-		params:    []builtinParamDoc{{name: "path", doc: "Path to hive JSON file."}},
+		signature: "reg_open(source)",
+		summary:   "Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\\SOFTWARE\\...) -> live registry (Windows only). Returns (result, err).",
+		params:    []builtinParamDoc{{name: "source", doc: "regf hive file, hive-JSON file, or live registry key path (HKLM/HKCU/HKCR/HKU/HKCC)."}},
+		platformNote: "The live-registry path (HKLM\\..., HKCU\\..., etc.) is Windows-only; captured hive files and hive-JSON inputs are parsed on all platforms.",
 	},
 	BuiltinNameRegEnumKeys: {
-		signature: "reg_enum_keys(hiveHandle, keyPath)",
-		summary:   "Enumerates subkeys under a registry path.",
+		signature: "reg_enum_keys(handle, keyPath?)",
+		summary:   "Enumerates subkeys under a key. For hive/live sources keyPath is relative to the opened key (default root); for JSON it is the absolute path. Returns (array, err).",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open."},
-			{name: "keyPath", doc: "Registry path to enumerate."},
+			{name: "handle", doc: "Handle returned by reg_open."},
+			{name: "keyPath?", doc: "Subkey path (default: the opened key/root)."},
 		},
 	},
 	BuiltinNameRegEnumValues: {
-		signature: "reg_enum_values(hiveHandle, keyPath)",
-		summary:   "Enumerates values under a registry path.",
+		signature: "reg_enum_values(handle, keyPath?)",
+		summary:   "Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Works across JSON/hive-file/live sources. Returns (array, err).",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open."},
-			{name: "keyPath", doc: "Registry path to enumerate."},
+			{name: "handle", doc: "Handle returned by reg_open."},
+			{name: "keyPath?", doc: "Key path (default: the opened key/root)."},
 		},
 	},
 	BuiltinNameRegGetValue: {
-		signature: "reg_get_value(hiveHandle, keyPath, valueName)",
-		summary:   "Reads a specific registry value with type metadata.",
+		signature: "reg_get_value(handle, keyPath, valueName)",
+		summary:   "Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Returns (result, err).",
 		params: []builtinParamDoc{
-			{name: "hiveHandle", doc: "Handle returned by reg_open."},
-			{name: "keyPath", doc: "Registry path that contains the value."},
+			{name: "handle", doc: "Handle returned by reg_open."},
+			{name: "keyPath", doc: "Key path that contains the value."},
 			{name: "valueName", doc: "Registry value name to fetch."},
 		},
 	},
 	BuiltinNameRegDeletedKeys: {
-		signature: "reg_deleted_keys(hiveHandle)",
-		summary:   "Lists deleted keys recovered from hive artifacts.",
+		signature: "reg_deleted_keys(handle)",
+		summary:   "Lists deleted-key entries. Populated only for the JSON source (its deleted_keys field); empty for real hive files and live registry (no unallocated-cell carving).",
 	},
 	BuiltinNameRegTimeline: {
-		signature: "reg_timeline(hiveHandle)",
-		summary:   "Returns timeline events extracted from an opened registry hive.",
-		params:    []builtinParamDoc{{name: "hiveHandle", doc: "Handle returned by reg_open."}},
+		signature: "reg_timeline(handle)",
+		summary:   "Returns timeline entries. Populated only for the JSON source (its timeline field); empty for real hive files and live registry.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Handle returned by reg_open."}},
 	},
 	BuiltinNameEmailParse: {
 		signature: "email_parse(raw)",
@@ -410,7 +599,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameEmailSpfDkim: {
 		signature: "email_spf_dkim(raw)",
-		summary:   "Evaluates SPF/DKIM/DMARC signals from message headers.",
+		summary:   "Cryptographically verifies DKIM signatures (public key via DNS) and reports SPF/DMARC. SPF is reported as recorded by the receiving MTA; DMARC combines the reported result with DKIM alignment.",
 		params:    []builtinParamDoc{{name: "raw", doc: "RFC822-style raw email text."}},
 	},
 	BuiltinNameEmailUrls: {
@@ -420,7 +609,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameMemMap: {
 		signature: "mem_map(path)",
-		summary:   "Builds memory map segments from a memory dump file.",
+		summary:   "Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported.",
 	},
 	BuiltinNameMemRead: {
 		signature: "mem_read(path, offset, size)",
@@ -449,7 +638,7 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameMemFindPe: {
 		signature: "mem_find_pe(path)",
-		summary:   "Finds PE header offsets in memory image data.",
+		summary:   "Finds PE headers in a memory image: carves each MZ marker and confirms real PEs by following e_lfanew to \"PE\\0\\0\". Returns {candidates, confirmed, headers:[{mz_offset, confirmed, pe_offset, machine}]}.",
 	},
 	BuiltinNameMemFindShellcode: {
 		signature: "mem_find_shellcode(path)",
@@ -463,13 +652,13 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameDetectInjection: {
 		signature: "detect_injection(facts)",
-		summary:   "Detects probable code injection signals from memory-derived evidence.",
+		summary:   "Scores probable code injection in a memory image using multiple PE headers plus weighted shellcode signatures (GetPC via fnstenv/call-pop, PEB walks, NOP sleds); returns score and matched_signatures.",
 		params:    []builtinParamDoc{{name: "facts", doc: "Hash containing evidence such as mem_path."}},
 	},
 	BuiltinNameDetectNetworkBeacon: {
 		signature: "detect_network_beacon(flows)",
-		summary:   "Detects beacon-like repeated outbound network destinations.",
-		params:    []builtinParamDoc{{name: "flows", doc: "Array of flow hashes that include destination endpoint data."}},
+		summary:   "Detects C2 beaconing by analyzing inter-arrival interval regularity (low coefficient of variation) and optional transfer-size consistency per destination; each flow may carry ts (epoch/RFC3339) and bytes. Returns per-dst score, interval_cv, and confidence.",
+		params:    []builtinParamDoc{{name: "flows", doc: "Array of flow hashes with a dst, and optional ts and bytes fields."}},
 	},
 	BuiltinNameDetectPrivEsc: {
 		signature: "detect_priv_esc(facts)",
@@ -478,29 +667,29 @@ var builtinDocs = map[string]builtinDoc{
 	},
 	BuiltinNameDetectSuspiciousFiles: {
 		signature: "detect_suspicious_files(paths)",
-		summary:   "Detects suspicious file artifacts using extension/path heuristics.",
+		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
 		params:    []builtinParamDoc{{name: "paths", doc: "Array of filesystem paths to inspect."}},
 	},
 	BuiltinNameNetResolve:        {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses."},
-	BuiltinNameNetDial:           {signature: "net_dial(address)", summary: "Opens a network connection."},
+	BuiltinNameNetDial:           {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in ms."}}},
 	BuiltinNameDbOpen:            {signature: "db_open()", summary: "Creates an in-memory graph database handle."},
-	BuiltinNameDbOpenDisk:        {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database.", params: []builtinParamDoc{{name: "path", doc: "Database file path."}}},
+	BuiltinNameDbOpenDisk:        {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open.", params: []builtinParamDoc{{name: "path", doc: "Database file path."}}},
 	BuiltinNameDbClose:           {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameDbAddNode:         {signature: "db_add_node(db, label, props)", summary: "Adds a node to the graph database.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "label", doc: "Node label/category."}, {name: "props", doc: "Node properties hash."}}},
-	BuiltinNameDbAddEdge:         {signature: "db_add_edge(db, from, to, label, props)", summary: "Adds an edge between graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "label", doc: "Edge label/type."}, {name: "props", doc: "Edge properties hash."}}},
-	BuiltinNameDbAddArtifact:     {signature: "db_add_artifact(db, artifact)", summary: "Adds a forensic artifact entity to the graph.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "artifact", doc: "Artifact hash payload."}}},
-	BuiltinNameDbAddRelation:     {signature: "db_add_relation(db, from, to, relation, props?)", summary: "Adds a named relation edge between entities.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}, {name: "props?", doc: "Optional relation properties hash."}}},
-	BuiltinNameDbIndexProp:       {signature: "db_index_prop(db, key)", summary: "Builds or updates an index on a property key.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "key", doc: "Property key to index."}}},
-	BuiltinNameDbQueryNodes:      {signature: "db_query_nodes(db, filter)", summary: "Queries nodes by label/properties filter.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "filter", doc: "Filter hash or query object."}}},
-	BuiltinNameDbQuery:           {signature: "db_query(db, query)", summary: "Executes a graph query expression and returns results.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "query", doc: "Query expression string."}}},
-	BuiltinNameDbBfs:             {signature: "db_bfs(db, start, maxDepth?)", summary: "Performs breadth-first graph traversal from a start node.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "start", doc: "Start node ID."}, {name: "maxDepth?", doc: "Optional traversal depth limit."}}},
+	BuiltinNameDbAddNode:         {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type (0–127)."}}},
+	BuiltinNameDbAddEdge:         {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "edgeType?", doc: "Optional integer/enum edge type."}}},
+	BuiltinNameDbAddArtifact:     {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "type", doc: "Artifact type string."}, {name: "attrs?", doc: "Optional attributes hash (indexed)."}}},
+	BuiltinNameDbAddRelation:     {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}}},
+	BuiltinNameDbIndexProp:       {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeID", doc: "Node ID to index."}, {name: "key", doc: "Property key."}, {name: "value", doc: "Property value."}}},
+	BuiltinNameDbQueryNodes:      {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type filter."}}},
+	BuiltinNameDbQuery:           {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbBfs:             {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first traversal from origin up to depth. direction is \"in\", \"out\", or \"both\". All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "origin", doc: "Origin node ID."}, {name: "depth", doc: "Maximum traversal depth."}, {name: "direction", doc: "Edge direction: \"in\", \"out\", or \"both\"."}}},
 	BuiltinNameDbShortestPath:    {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}}},
-	BuiltinNameDbTimeline:        {signature: "db_timeline(db, opts?)", summary: "Builds chronological timeline views from graph evidence.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "opts?", doc: "Optional timeline filtering options."}}},
-	BuiltinNameDbStats:           {signature: "db_stats(db)", summary: "Returns graph database statistics.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbTimeline:        {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbStats:           {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
 	BuiltinNameBytesLen:          {signature: "bytes_len(data)", summary: "Returns length of a bytes value."},
 	BuiltinNameBytesGet:          {signature: "bytes_get(data, index)", summary: "Reads one byte at index as integer."},
-	BuiltinNameBytesSlice:        {signature: "bytes_slice(data, start, end)", summary: "Returns byte sub-slice from start to end."},
-	BuiltinNameBytesHex:          {signature: "bytes_hex(data)", summary: "Returns uppercase hexadecimal representation of bytes."},
+	BuiltinNameBytesSlice:        {signature: "bytes_slice(data, start, length)", summary: "Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]).", params: []builtinParamDoc{{name: "data", doc: "Source byte string."}, {name: "start", doc: "Start offset."}, {name: "length", doc: "Number of bytes to take."}}},
+	BuiltinNameBytesHex:          {signature: "bytes_hex(value, width)", summary: "Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> \"0x00001234\"). This formats a number; it does not hex-encode a byte string.", params: []builtinParamDoc{{name: "value", doc: "Integer value to format."}, {name: "width", doc: "Minimum hex digit width (zero-padded)."}}},
 	BuiltinNameBytesCstrAt:       {signature: "bytes_cstr_at(data, offset)", summary: "Reads null-terminated string from bytes at offset."},
 	BuiltinNameBytesCharFromInt:  {signature: "bytes_char_from_int(value)", summary: "Converts an integer byte value to a single-character string."},
 	BuiltinNameBytesIntFromChar:  {signature: "bytes_int_from_char(char)", summary: "Converts a single-character string to its integer byte value."},
@@ -548,6 +737,157 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameSecurityDiagnostics: {signature: "security_diagnostics()", summary: "Returns security diagnostics for the current runtime."},
 	BuiltinNameSandboxStatus:       {signature: "sandbox_status()", summary: "Returns sandbox-detection status information."},
 	BuiltinNameDebugStatus:         {signature: "debug_status()", summary: "Returns runtime/debugger status information."},
+	// secure networking (dev-sec)
+	BuiltinNameNetConnect: {
+		signature: "net_connect(address, timeoutMs)",
+		summary:   "Opens a persistent TCP connection and returns a connection handle.",
+		params:    []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in milliseconds."}},
+	},
+	BuiltinNameNetTlsConnect: {
+		signature: "net_tls_connect(address, timeoutMs, options?)",
+		summary:   "Opens a TLS (secure) client connection and returns a connection handle.",
+		params: []builtinParamDoc{
+			{name: "address", doc: "host:port endpoint."},
+			{name: "timeoutMs", doc: "Dial timeout in milliseconds."},
+			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key."},
+		},
+	},
+	BuiltinNameNetConnWrite: {
+		signature: "net_conn_write(handle, data, timeout_ms?)",
+		summary:   "Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}, {name: "timeout_ms", doc: "Optional write timeout in ms (default 30000; <=0 = block indefinitely)."}},
+	},
+	BuiltinNameNetConnRead: {
+		signature: "net_conn_read(handle, maxBytes, timeoutMs)",
+		summary:   "Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field.",
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "maxBytes", doc: "Maximum bytes to read (1..32 MiB)."}, {name: "timeoutMs", doc: "Read timeout in ms (0 = block)."}},
+	},
+	BuiltinNameNetConnClose: {signature: "net_conn_close(handle)", summary: "Closes a connection and releases its handle."},
+	BuiltinNameNetConnInfo:  {signature: "net_conn_info(handle)", summary: "Returns addressing and negotiated TLS session details for a connection."},
+	BuiltinNameNetListen:    {signature: "net_listen(address)", summary: "Opens a plain TCP listener and returns a listener handle."},
+	BuiltinNameNetTlsListen: {
+		signature: "net_tls_listen(address, certPem, keyPem, options?)",
+		summary:   "Opens a TLS-terminating listener from a PEM cert/key pair.",
+		params: []builtinParamDoc{
+			{name: "address", doc: "host:port to bind."},
+			{name: "certPem", doc: "Server certificate chain (PEM)."},
+			{name: "keyPem", doc: "Server private key (PEM)."},
+			{name: "options?", doc: "Hash: alpn, min_version, client_ca (mutual TLS)."},
+		},
+	},
+	BuiltinNameNetAccept:      {signature: "net_accept(listener, timeoutMs)", summary: "Accepts one connection; returns {ok, handle, remote_addr, timeout, error}."},
+	BuiltinNameNetListenClose: {signature: "net_listen_close(handle)", summary: "Closes a listener and releases its handle."},
+	BuiltinNameNetServe:       {signature: "net_serve(listener, handler_path, arg?)", summary: "Accept loop that dispatches each connection to a fresh VM running handler_path; handler reads its connection via serve_conn() and shared arg via serve_arg(). Concurrent."},
+	BuiltinNameNetSpawn:       {signature: "net_spawn(handler_path, arg?)", summary: "Runs handler_path on a new goroutine with no connection (serve_conn()->0) and arg via serve_arg(). For auxiliary workers, e.g. a WebSocket reverse pump."},
+	BuiltinNameServeConn:      {signature: "serve_conn()", summary: "Inside a net_serve handler, returns the connection handle (INTEGER); null otherwise."},
+	BuiltinNameServeArg:       {signature: "serve_arg()", summary: "Inside a net_serve handler, returns the shared arg passed to net_serve; null otherwise."},
+	BuiltinNameSleepMs:        {signature: "sleep_ms(ms)", summary: "Blocks the current handler for ms milliseconds."},
+	BuiltinNameTimeMs:         {signature: "time_ms()", summary: "Returns the current Unix time in milliseconds."},
+	BuiltinNameWsAcceptKey:    {signature: "ws_accept_key(client_key)", summary: "Computes the Sec-WebSocket-Accept value for an RFC 6455 101 handshake response."},
+	BuiltinNameWsReadFrame:    {signature: "ws_read_frame(handle, timeoutMs)", summary: "Reads one WebSocket frame (unmasked); returns {fin, opcode, payload, masked, length, is_control}."},
+	BuiltinNameWsWriteFrame:   {signature: "ws_write_frame(handle, opcode, payload, mask, timeout_ms?)", summary: "Writes one WebSocket frame; mask=true for client->server, false for server->client. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write."},
+	BuiltinNameNetTlsUpgradeServer: {
+		signature: "net_tls_upgrade_server(handle, certPem, keyPem, options?)",
+		summary:   "Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept).",
+		params: []builtinParamDoc{
+			{name: "handle", doc: "Connection handle to upgrade."},
+			{name: "certPem", doc: "Leaf certificate (PEM), e.g. issued by tls_sign_cert."},
+			{name: "keyPem", doc: "Leaf private key (PEM)."},
+			{name: "options?", doc: "Hash: alpn, min_version, handshake_timeout_ms, client_ca."},
+		},
+	},
+	BuiltinNameNetTlsUpgradeClient: {
+		signature: "net_tls_upgrade_client(handle, options?)",
+		summary:   "Upgrades an open connection to client-side TLS (STARTTLS / upstream leg).",
+		params: []builtinParamDoc{
+			{name: "handle", doc: "Connection handle to upgrade."},
+			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key, handshake_timeout_ms."},
+		},
+	},
+	BuiltinNameTlsGenerateCa: {
+		signature: "tls_generate_ca(options?)",
+		summary:   "Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}.",
+		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, days."}},
+	},
+	BuiltinNameTlsGenerateCert: {
+		signature: "tls_generate_cert(options?)",
+		summary:   "Creates a self-signed leaf/server certificate and key.",
+		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, dns_names, ip_addresses, days."}},
+	},
+	BuiltinNameTlsSignCert: {
+		signature: "tls_sign_cert(caCertPem, caKeyPem, options?)",
+		summary:   "Issues a leaf certificate signed by a CA (per-host interception cert).",
+		params: []builtinParamDoc{
+			{name: "caCertPem", doc: "CA certificate (PEM)."},
+			{name: "caKeyPem", doc: "CA private key (PEM)."},
+			{name: "options?", doc: "Hash: common_name, dns_names, ip_addresses, days."},
+		},
+	},
+	BuiltinNameHttpParseRequest:         {signature: "http_parse_request(raw)", summary: "Parses a raw HTTP request into {method, url, path, host, proto, query, headers, body}."},
+	BuiltinNameHttpParseResponse:        {signature: "http_parse_response(raw)", summary: "Parses a raw HTTP response into {status, status_text, proto, headers, body}."},
+	BuiltinNameHttpBuildRequest:         {signature: "http_build_request(request)", summary: "Serialises a request hash into HTTP wire bytes."},
+	BuiltinNameHttpBuildResponse:        {signature: "http_build_response(response)", summary: "Serialises a response hash into HTTP wire bytes (adds Content-Length)."},
+	BuiltinNameHttpConnReadRequest:      {signature: "http_conn_read_request(handle, timeoutMs)", summary: "Reads exactly one HTTP request from a connection handle."},
+	BuiltinNameHttpConnReadResponse:     {signature: "http_conn_read_response(handle, timeoutMs)", summary: "Reads exactly one HTTP response from a connection handle."},
+	BuiltinNameHttpConnReadRequestHead:  {signature: "http_conn_read_request_head(handle, timeoutMs)", summary: "Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
+	BuiltinNameHttpConnReadResponseHead: {signature: "http_conn_read_response_head(handle, timeoutMs)", summary: "Reads a response's status line+headers without the body (stream it via net_conn_read); adds content_length, chunked."},
+
+	// filesystem parsers — each *_open(image) returns a handle used by the rest.
+	BuiltinNameNtfsOpen:      {signature: "ntfs_open(image)", summary: "Opens an NTFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an NTFS image/partition."}}},
+	BuiltinNameNtfsListFiles: {signature: "ntfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened NTFS image.", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "dir", doc: "Directory path within the image."}}},
+	BuiltinNameNtfsReadFile:  {signature: "ntfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened NTFS image.", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "path", doc: "File path within the image."}}},
+	BuiltinNameNtfsMetadata:  {signature: "ntfs_metadata(handle, path)", summary: "Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error).", params: []builtinParamDoc{{name: "handle", doc: "Handle from ntfs_open."}, {name: "path", doc: "Path within the image."}}},
+	BuiltinNameNtfsClose:     {signature: "ntfs_close(handle)", summary: "Closes an NTFS handle and releases its file."},
+	BuiltinNameFatOpen:       {signature: "fat_open(image)", summary: "Opens a FAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a FAT image/partition."}}},
+	BuiltinNameFatListFiles:  {signature: "fat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened FAT image."},
+	BuiltinNameFatReadFile:   {signature: "fat_read_file(handle, path)", summary: "Reads a file's bytes from an opened FAT image."},
+	BuiltinNameFatMetadata:   {signature: "fat_metadata(handle, path)", summary: "Returns metadata for a path in an opened FAT image."},
+	BuiltinNameFatClose:      {signature: "fat_close(handle)", summary: "Closes a FAT handle and releases its file."},
+	BuiltinNameXfatOpen:      {signature: "xfat_open(image)", summary: "Opens an exFAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an exFAT image/partition."}}},
+	BuiltinNameXfatListFiles: {signature: "xfat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened exFAT image, with created_at/modified_at/accessed_at, per-timestamp *_utc_offset_valid flags, attributes and valid_data_size. A nameless entry is reported as \"(unnamed)\"."},
+	BuiltinNameXfatReadFile:  {signature: "xfat_read_file(handle, path)", summary: "Reads a file's bytes from an opened exFAT image. Content is staged through a temporary file because libxfat extracts to a path, so reads are capped at 32 MiB."},
+	BuiltinNameXfatMetadata:  {signature: "xfat_metadata(handle, path)", summary: "Returns metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack)."},
+	BuiltinNameXfatClose:     {signature: "xfat_close(handle)", summary: "Closes an exFAT handle and releases its file."},
+	BuiltinNameExtOpen:       {signature: "ext_open(image)", summary: "Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an ext image/partition."}}},
+	BuiltinNameExtListFiles:  {signature: "ext_list_files(handle, dir)", summary: "Lists entries under a directory in an opened ext image, with created_at/modified_at/accessed_at/changed_at and deleted."},
+	BuiltinNameExtReadFile:   {signature: "ext_read_file(handle, path)", summary: "Reads a file's bytes from an opened ext image."},
+	BuiltinNameExtMetadata:   {signature: "ext_metadata(handle, path)", summary: "Returns metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete)."},
+	BuiltinNameExtClose:      {signature: "ext_close(handle)", summary: "Closes an ext handle and releases its file."},
+	BuiltinNameHfsOpen:       {signature: "hfs_open(image)", summary: "Opens an HFS+ filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an HFS+ image/partition."}}},
+	BuiltinNameHfsListFiles:  {signature: "hfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened HFS+ image."},
+	BuiltinNameHfsReadFile:   {signature: "hfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened HFS+ image."},
+	BuiltinNameHfsMetadata:   {signature: "hfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size."},
+	BuiltinNameHfsClose:      {signature: "hfs_close(handle)", summary: "Closes an HFS+ handle and releases its file."},
+	BuiltinNameXfsOpen:       {signature: "xfs_open(image)", summary: "Opens an XFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to an XFS image/partition."}}},
+	BuiltinNameXfsListFiles:  {signature: "xfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened XFS image, with file_type from the directory record. A damaged inode no longer aborts the listing: that entry is reported with inode_error set and size 0."},
+	BuiltinNameXfsReadFile:   {signature: "xfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened XFS image."},
+	BuiltinNameXfsMetadata:   {signature: "xfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion)."},
+	BuiltinNameXfsClose:      {signature: "xfs_close(handle)", summary: "Closes an XFS handle and releases its file."},
+
+	// disk-image parsers — *_read_at caps length at 32 MiB.
+	BuiltinNameVhdiOpen:      {signature: "vhdi_open(image)", summary: "Opens a VHD/VHDX disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a VHD/VHDX image."}}},
+	BuiltinNameVhdiMetadata:  {signature: "vhdi_metadata(handle)", summary: "Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed)."},
+	BuiltinNameVhdiReadAt:    {signature: "vhdi_read_at(handle, offset, length)", summary: "Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB)."},
+	BuiltinNameVhdiMapOffset: {signature: "vhdi_map_offset(handle, offset)", summary: "Maps a virtual offset to a backing file offset. Returns {virtual_offset, mapped, file_offset}."},
+	BuiltinNameVhdiClose:     {signature: "vhdi_close(handle)", summary: "Closes a VHD/VHDX handle."},
+	BuiltinNameEwfOpen:       {signature: "ewf_open(segments)", summary: "Opens an EWF/E01 image (a segment path or an array of segment paths). Returns (result, err).", params: []builtinParamDoc{{name: "segments", doc: "Segment file path or array of paths."}}},
+	BuiltinNameEwfMetadata:   {signature: "ewf_metadata(handle)", summary: "Returns EWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method). chunk_tables_invalid counts chunk-table groups that failed both their primary and backup checksum — their data decoded unverified and should be treated as suspect; chunk_tables_recovered, observed_chunk_count and acquisition_error_count report the rest of the integrity picture."},
+	BuiltinNameEwfReadAt:     {signature: "ewf_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from an EWF image (length capped at 32 MiB)."},
+	BuiltinNameEwfClose:      {signature: "ewf_close(handle)", summary: "Closes an EWF handle and its segment files."},
+	BuiltinNameRawOpen:       {signature: "raw_open(image)", summary: "Opens a raw disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a raw (dd) image."}}},
+	BuiltinNameRawMetadata:   {signature: "raw_metadata(handle)", summary: "Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata)."},
+	BuiltinNameRawReadAt:     {signature: "raw_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from a raw image (length capped at 32 MiB)."},
+	BuiltinNameRawClose:      {signature: "raw_close(handle)", summary: "Closes a raw image handle."},
+
+	// partition table parser
+	BuiltinNameTableOpen:           {signature: "table_open(image)", summary: "Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err).", params: []builtinParamDoc{{name: "image", doc: "Path to a disk image."}}},
+	BuiltinNameTableListPartitions: {signature: "table_list_partitions(handle)", summary: "Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset."},
+	BuiltinNameTablePartitionInfo:  {signature: "table_partition_info(handle, index)", summary: "Returns details for a single partition by index, including absolute start_byte/length_byte."},
+	BuiltinNameTableClose:          {signature: "table_close(handle)", summary: "Closes a partition-table handle."},
+
+	// close helpers that lacked docs
+	BuiltinNameCacheClose: {signature: "cache_close(name)", summary: "Closes a named cache and frees its entries and backend."},
+	BuiltinNameRegClose:   {signature: "reg_close(handle)", summary: "Closes a registry-hive handle opened with reg_open."},
 }
 
 var builtinFamilyDocs = []builtinFamilyDoc{
@@ -556,10 +896,24 @@ var builtinFamilyDocs = []builtinFamilyDoc{
 	{prefix: "fs_", summary: "Filesystem helper for reading/writing/managing files and directories."},
 	{prefix: "http_", summary: "HTTP helper for network requests."},
 	{prefix: "net_", summary: "Network helper for address resolution, sockets, scanning, and capture analysis."},
+	{prefix: "tls_", summary: "TLS certificate authority helper for generating and signing X.509 certificates."},
 	{prefix: "cmd_", summary: "Command execution helper."},
 	{prefix: "exec_", summary: "Execution helper for running script/code strings in controlled contexts."},
 	{prefix: "json_", summary: "JSON serialization/parsing helper."},
 	{prefix: "lua_", summary: "Lua execution helper."},
+	{prefix: "str_", summary: "String manipulation helper (case, trim, pad, join, slice, format)."},
+	{prefix: "hash_", summary: "Cryptographic/checksum hashing helper (md5/sha1/sha256/sha512/crc32/blake2)."},
+	{prefix: "math_", summary: "Mathematical constant accessor."},
+	{prefix: "rand", summary: "Random value generator."},
+	{prefix: "uuid_", summary: "UUID generator."},
+	{prefix: "time_", summary: "Time and date helper (Unix timestamps, formatting, parsing)."},
+	{prefix: "base64", summary: "Base64 encoding/decoding helper."},
+	{prefix: "base32", summary: "Base32 encoding/decoding helper."},
+	{prefix: "go_", summary: "Go-compiled binary analysis helper (GoReSym): build info, build ID, and symbol recovery from stripped binaries."},
+	{prefix: "ip_", summary: "IP address helper (validation, CIDR membership, conversions)."},
+	{prefix: "timeline_", summary: "Forensic timeline helper (sort/merge events into a supertimeline)."},
+	{prefix: "hashset_", summary: "Known-file hash-set helper (NSRL-style load/lookup for filtering)."},
+	{prefix: "hive_", summary: "Real Windows registry hive parser (regf binary format)."},
 	{prefix: "text_", summary: "Text analysis and fuzzy matching helper."},
 	{prefix: "regex_", summary: "Regular expression matching and extraction helper."},
 	{prefix: "policy_", summary: "Policy evaluation and trace helper."},
@@ -611,4 +965,165 @@ func HasTeachingCoverage(name string) bool {
 	}
 	_, ok := TeachingFamilySummary(name)
 	return ok
+}
+
+// PlatformSupport reports the GOOS values a builtin actually works on and a soft
+// caveat note, if any. An empty platforms slice means the builtin works on all
+// platforms. The LSP uses this to warn when a program targets a builtin that is
+// unsupported on the host OS, and surfaces the note in hover.
+func PlatformSupport(name string) (platforms []string, note string) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return nil, ""
+	}
+	return doc.platforms, doc.platformNote
+}
+
+// UnsupportedOn reports whether the named builtin is known to NOT work on the
+// given GOOS. It returns false when the builtin has no platform restriction
+// (the common case) or when the builtin is unknown — callers should not warn on
+// something they cannot classify.
+func UnsupportedOn(name, goos string) bool {
+	doc, ok := builtinDocs[name]
+	if !ok || len(doc.platforms) == 0 {
+		return false
+	}
+	for _, p := range doc.platforms {
+		if p == goos {
+			return false
+		}
+	}
+	return true
+}
+
+// capabilityCategory maps a builtin-name prefix to a human-readable capability
+// category. It is a decorative label surfaced in LSP hover and completion detail
+// (e.g. "builtin · filesystem"). Order matters: more specific prefixes must come
+// before shorter ones they would otherwise shadow (e.g. random_hex before rand).
+type capabilityCategory struct {
+	prefix   string
+	category string
+}
+
+var capabilityCategories = []capabilityCategory{
+	// networking / http
+	{"http_", "http"},
+	{"ws_", "network"},
+	{"net_", "network"},
+	{"tls_", "network"},
+	{"ip_", "network intelligence"},
+	{"cidr_", "network intelligence"},
+	{"domain_", "network intelligence"},
+	{"tld_", "network intelligence"},
+	{"defang", "network intelligence"},
+	{"refang", "network intelligence"},
+	{"extract_iocs", "network intelligence"},
+	{"is_valid_domain", "network intelligence"},
+	// structured data / encoding
+	{"json_", "structured data"},
+	{"base64", "structured data"},
+	{"base32", "structured data"},
+	{"hex_", "structured data"},
+	{"url_", "structured data"},
+	{"gzip", "structured data"},
+	{"gunzip", "structured data"},
+	{"zlib_", "structured data"},
+	{"to_base", "structured data"},
+	{"from_base", "structured data"},
+	{"to_", "structured data"},
+	{"parse_", "structured data"},
+	{"plist_", "structured data"},
+	// graph database
+	{"db_", "graph database"},
+	// runtime integration
+	{"lua_", "runtime integration"},
+	// command execution
+	{"exec_", "command execution"},
+	{"cmd_", "command execution"},
+	// strings / text
+	{"str_", "strings"},
+	{"text_", "text analysis"},
+	{"regex_", "text analysis"},
+	// hashing / ids
+	{"hashset_", "hash-set forensics"},
+	{"hash_", "hashing"},
+	{"hmac", "hashing"},
+	{"uuid_", "hashing"},
+	{"nanoid", "hashing"},
+	{"random_hex", "hashing"},
+	{"crc32", "hashing"},
+	// math
+	{"math_", "math"},
+	{"rand", "math"},
+	// time / timeline
+	{"time_", "time"},
+	{"timestamp_", "forensic timeline"},
+	{"timeline_", "forensic timeline"},
+	{"bodyfile", "forensic timeline"},
+	{"mactime", "forensic timeline"},
+	// cryptography / fingerprinting
+	{"x509_", "cryptography"},
+	{"jwt_", "cryptography"},
+	{"aes_", "cryptography"},
+	{"pem_", "cryptography"},
+	{"imphash", "fingerprinting"},
+	{"nt_hash", "fingerprinting"},
+	{"lm_hash", "fingerprinting"},
+	{"ja3", "fingerprinting"},
+	// policy / cache
+	{"policy_", "policy"},
+	{"cache_", "cache"},
+	// system / process / memory forensics
+	{"process_", "process forensics"},
+	{"mem_", "memory forensics"},
+	// registry forensics
+	{"reg_", "registry forensics"},
+	{"hive_", "registry forensics"},
+	{"amcache_", "registry forensics"},
+	{"shimcache_", "registry forensics"},
+	// binary analysis
+	{"bin_", "binary analysis"},
+	{"go_", "binary analysis"},
+	// email
+	{"email_", "email forensics"},
+	// detection
+	{"detect_", "detection"},
+	// windows execution artifacts
+	{"prefetch_", "windows artifacts"},
+	{"evtx_", "windows artifacts"},
+	{"lnk_", "windows artifacts"},
+	{"jumplist_", "windows artifacts"},
+	{"syslog_", "unix artifacts"},
+	{"browser_", "browser artifacts"},
+	{"sqlite_", "browser artifacts"},
+	// filesystem
+	{"fs_", "filesystem"},
+	{"mft_", "filesystem forensics"},
+	{"ntfs_", "filesystem forensics"},
+	{"fat_", "filesystem forensics"},
+	{"xfat_", "filesystem forensics"},
+	{"ext_", "filesystem forensics"},
+	{"hfs_", "filesystem forensics"},
+	{"xfs_", "filesystem forensics"},
+	// disk images / partition tables
+	{"vhdi_", "disk image forensics"},
+	{"ewf_", "disk image forensics"},
+	{"raw_", "disk image forensics"},
+	{"table_", "disk image forensics"},
+	// bytes
+	{"bytes_", "bytes"},
+}
+
+// CapabilityCategory returns a human-readable capability category for a builtin
+// (e.g. "filesystem", "network", "graph database"), derived from its name. It is
+// used by the LSP to enrich hover and completion detail. Unclassified builtins
+// (core language primitives, functional collections, etc.) return
+// "standard library".
+func CapabilityCategory(name string) string {
+	for _, c := range capabilityCategories {
+		if strings.HasPrefix(name, c.prefix) {
+			return c.category
+		}
+	}
+	return "standard library"
 }

@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,12 +62,9 @@ func TestMemScanFindPEAndShellcode(t *testing.T) {
 	if errObj != nil {
 		t.Fatalf("mem_find_pe error: %s", errObj.Inspect())
 	}
-	peArr, ok := pePayload.(*object.Array)
-	if !ok {
-		t.Fatalf("mem_find_pe payload type: %T", pePayload)
-	}
-	if len(peArr.Elements) < 1 {
-		t.Fatalf("expected pe marker hit")
+	peHash := mfMustHash(t, pePayload)
+	if mfMustHashInt(t, peHash, "candidates") < 1 {
+		t.Fatalf("expected at least one MZ candidate")
 	}
 
 	shellPayload, errObj := unwrapPair(t, MemFindShellcode(stringObj(fixture)))
@@ -79,6 +77,52 @@ func TestMemScanFindPEAndShellcode(t *testing.T) {
 	}
 	if len(shellArr.Elements) < 1 {
 		t.Fatalf("expected shellcode signature hit")
+	}
+}
+
+func TestMemFindPEConfirmsRealHeader(t *testing.T) {
+	// Build a minimal blob: a bare "MZ" (candidate only) followed by a valid
+	// DOS header whose e_lfanew points to "PE\0\0" with an amd64 machine field.
+	blob := make([]byte, 0x100)
+	// bare MZ candidate at offset 0 with a bogus e_lfanew (points outside/no PE).
+	blob[0], blob[1] = 'M', 'Z'
+	// real PE at offset 0x40: MZ, e_lfanew=0x20 (-> 0x60), "PE\0\0", machine amd64.
+	base := 0x40
+	blob[base], blob[base+1] = 'M', 'Z'
+	binary.LittleEndian.PutUint32(blob[base+0x3C:base+0x40], 0x20)
+	pe := base + 0x20
+	blob[pe], blob[pe+1], blob[pe+2], blob[pe+3] = 'P', 'E', 0, 0
+	binary.LittleEndian.PutUint16(blob[pe+4:pe+6], 0x8664)
+
+	dir := t.TempDir()
+	path := dir + "/pe.bin"
+	if err := os.WriteFile(path, blob, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	payload, errObj := unwrapPair(t, MemFindPE(stringObj(path)))
+	if errObj != nil {
+		t.Fatalf("mem_find_pe error: %s", errObj.Inspect())
+	}
+	h := mfMustHash(t, payload)
+	if mfMustHashInt(t, h, "candidates") != 2 {
+		t.Fatalf("expected 2 MZ candidates, got %d", mfMustHashInt(t, h, "candidates"))
+	}
+	if mfMustHashInt(t, h, "confirmed") != 1 {
+		t.Fatalf("expected exactly 1 confirmed PE, got %d", mfMustHashInt(t, h, "confirmed"))
+	}
+	headers := h.Pairs[(&object.String{Value: "headers"}).HashKey()].Value.(*object.Array)
+	var sawAmd64 bool
+	for _, el := range headers.Elements {
+		hh := el.(*object.Hash)
+		if hh.Pairs[(&object.String{Value: "confirmed"}).HashKey()].Value.(*object.Boolean).Value {
+			if hh.Pairs[(&object.String{Value: "machine"}).HashKey()].Value.(*object.String).Value == "amd64" {
+				sawAmd64 = true
+			}
+		}
+	}
+	if !sawAmd64 {
+		t.Fatal("confirmed PE should report machine=amd64")
 	}
 }
 

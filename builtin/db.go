@@ -13,7 +13,21 @@ import (
 
 var (
 	dbHandleCounter int64
-	dbHandles       sync.Map // int64 → *graphene.Graph
+	// dbHandles maps int64 → *graphene.Graph.
+	//
+	// There is deliberately no lock around graph operations. graphene documents
+	// both bundled backends as safe for concurrent use — the in-memory store is
+	// a thread-safe GraphStore, the disk store carries its own RWMutex — and
+	// every method takes the locks it needs internally. A single process-wide
+	// mutex here also serialised unrelated handles against each other, which
+	// matters under net_serve where many handlers run at once.
+	//
+	// What the library does *not* offer is snapshot isolation: a sequence of
+	// calls is not a transaction, and an ID returned by a query may already be
+	// gone by the time it is used. Each db_* builtin is a single store call, so
+	// that is not a concern here; a builtin that ever spans several calls would
+	// need graphene's own Begin/Commit rather than a lock.
+	dbHandles sync.Map
 )
 
 const DATA = 0
@@ -39,16 +53,20 @@ func dbTypeFromEnumValue(enumValue *object.EnumValue, kind string) (int64, objec
 func dbNodeTypeFromObject(arg object.Object) (store.NodeType, object.Object) {
 	switch value := arg.(type) {
 	case *object.Integer:
-		if value.Value < 1 || value.Value > 127 {
-			return 0, newError("node type must be in range 1..127, got %d", value.Value)
+		// 0 is accepted: it is the DATA type that db_add_node uses when no type
+		// is given, and the DATA enum tag produces it too. Rejecting it here
+		// while accepting it everywhere else meant db_add_node(h, 0) errored
+		// where db_add_node(h) succeeded with the very same type.
+		if value.Value < 0 || value.Value > 127 {
+			return 0, newError("node type must be in range 0..127, got %d", value.Value)
 		}
-		return store.CustomNodeType(uint8(value.Value)), nil
+		return store.CustomNodeType(uint16(value.Value)), nil
 	case *object.EnumValue:
 		enumType, errObj := dbTypeFromEnumValue(value, "node")
 		if errObj != nil {
 			return 0, errObj
 		}
-		return store.CustomNodeType(uint8(enumType)), nil
+		return store.CustomNodeType(uint16(enumType)), nil
 	default:
 		return 0, newError("node type must be INTEGER or ENUM_VALUE, got %s", arg.Type())
 	}
@@ -57,16 +75,17 @@ func dbNodeTypeFromObject(arg object.Object) (store.NodeType, object.Object) {
 func dbEdgeTypeFromObject(arg object.Object) (store.EdgeType, object.Object) {
 	switch value := arg.(type) {
 	case *object.Integer:
-		if value.Value < 1 || value.Value > 127 {
-			return 0, newError("edge type must be in range 1..127, got %d", value.Value)
+		// 0 is accepted for the same reason as node types above.
+		if value.Value < 0 || value.Value > 127 {
+			return 0, newError("edge type must be in range 0..127, got %d", value.Value)
 		}
-		return store.CustomEdgeType(uint8(value.Value)), nil
+		return store.CustomEdgeType(uint16(value.Value)), nil
 	case *object.EnumValue:
 		enumType, errObj := dbTypeFromEnumValue(value, "edge")
 		if errObj != nil {
 			return 0, errObj
 		}
-		return store.CustomEdgeType(uint8(enumType)), nil
+		return store.CustomEdgeType(uint16(enumType)), nil
 	default:
 		return 0, newError("edge type must be INTEGER or ENUM_VALUE, got %s", arg.Type())
 	}
@@ -116,11 +135,16 @@ func DbClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument to `db_close` must be INTEGER, got %s", args[0].Type()))
 	}
-	g, found := dbGet(h.Value)
+	// LoadAndDelete claims the handle atomically, so two concurrent db_close
+	// calls cannot both reach Close on the same graph.
+	value, found := dbHandles.LoadAndDelete(h.Value)
 	if !found {
 		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
 	}
-	dbHandles.Delete(h.Value)
+	g, ok := value.(*graphene.Graph)
+	if !ok {
+		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
+	}
 	if err := g.Close(); err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))
 	}
@@ -140,7 +164,7 @@ func DbAddNode(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_add_node: invalid handle %d", h.Value))
 	}
 
-	nodeType := store.CustomNodeType(uint8(DATA))
+	nodeType := store.CustomNodeType(uint16(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
@@ -179,7 +203,7 @@ func DbAddEdge(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_add_edge: invalid handle %d", h.Value))
 	}
 
-	edgeType := store.CustomEdgeType(uint8(DATA))
+	edgeType := store.CustomEdgeType(uint16(DATA))
 	if len(args) == 4 {
 		parsedType, errObj := dbEdgeTypeFromObject(args[3])
 		if errObj != nil {
@@ -243,7 +267,7 @@ func DbQueryNodes(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_query_nodes: invalid handle %d", h.Value))
 	}
 
-	nodeType := store.CustomNodeType(uint8(DATA))
+	nodeType := store.CustomNodeType(uint16(DATA))
 	if len(args) == 2 {
 		parsedType, errObj := dbNodeTypeFromObject(args[1])
 		if errObj != nil {
@@ -362,10 +386,28 @@ func DbStats(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("db_stats: %s", err.Error()))
 	}
-	return resultAndError(makeHashObject(map[string]object.Object{
+	out := map[string]object.Object{
 		"nodes": intObj(int64(stats.NodeCount)),
 		"edges": intObj(int64(stats.EdgeCount)),
-	}), nil)
+		// has_storage is false on the in-memory backend, which has no delta,
+		// WAL or compaction to report on.
+		"has_storage": boolObj(stats.HasStorage),
+	}
+	if stats.HasStorage {
+		// Everything written since the last compaction stays in memory and is
+		// replayed at every open, so a store that is never compacted degrades
+		// in memory, open time and read speed with no error to signal it.
+		// These are the figures that make that visible.
+		out["delta_records"] = intObj(int64(stats.Storage.DeltaRecords()))
+		out["csr_records"] = intObj(int64(stats.Storage.CSRRecords()))
+		out["deleted_nodes"] = intObj(int64(stats.Storage.DeletedNodes))
+		out["deleted_edges"] = intObj(int64(stats.Storage.DeletedEdges))
+		out["wal_bytes"] = intObj(stats.Storage.WALBytes)
+		out["commit_seq"] = intObj(int64(stats.Storage.CommitSeq))
+		out["last_compact"] = stringObj(formatTime(stats.Storage.LastCompact))
+	}
+
+	return resultAndError(makeHashObject(out), nil)
 }
 
 func dbParseDirection(s string) store.Direction {

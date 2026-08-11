@@ -2531,58 +2531,6 @@ func TestDocumentFormattingFormatsNestedBlocks(t *testing.T) {
 
 	updated := applyTextEdits(t, original, edits)
 	want := "let answer = fn(x) {\n" +
-		"  if (x > 0) {\n" +
-		"    return x;\n" +
-		"  } else {\n" +
-		"    return 0;\n" +
-		"  }\n" +
-		"};\n"
-	if updated != want {
-		t.Fatalf("formatted nested text = %q, want %q", updated, want)
-	}
-}
-
-func TestDocumentFormattingHonorsTabSizeOption(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	original := "let answer=fn(x){if (x > 0) {return x;} else {return 0;}};"
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///format-tabsize.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       original,
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen returned error: %v", err)
-	}
-
-	formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentFormatting),
-		Params: mustJSON(t, lsp.DocumentFormattingParams{
-			TextDocument: lsp.TextDocumentIdentifier{URI: "file:///format-tabsize.mut"},
-			Options:      lsp.FormattingOptions{"tabSize": 4, "insertSpaces": true},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("formatting returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	edits, ok := formatAny.([]lsp.TextEdit)
-	if !ok || len(edits) != 1 {
-		t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
-	}
-
-	updated := applyTextEdits(t, original, edits)
-	want := "let answer = fn(x) {\n" +
 		"    if (x > 0) {\n" +
 		"        return x;\n" +
 		"    } else {\n" +
@@ -2590,59 +2538,85 @@ func TestDocumentFormattingHonorsTabSizeOption(t *testing.T) {
 		"    }\n" +
 		"};\n"
 	if updated != want {
-		t.Fatalf("formatted tabSize text = %q, want %q", updated, want)
+		t.Fatalf("formatted nested text = %q, want %q", updated, want)
 	}
 }
 
-func TestDocumentFormattingHonorsTabsOption(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	original := "let answer=fn(x){if (x > 0) {return x;} else {return 0;}};"
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///format-tabs.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       original,
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen returned error: %v", err)
+// Mutant formatting is canonical: the client's tabSize/insertSpaces
+// preferences must not change a single byte of the output. Two developers
+// with different editor settings have to produce identical files, which is
+// the whole point of a strict formatter.
+func TestDocumentFormattingIgnoresClientOptions(t *testing.T) {
+	optionSets := []struct {
+		name    string
+		options lsp.FormattingOptions
+	}{
+		{"two spaces", lsp.FormattingOptions{"tabSize": 2, "insertSpaces": true}},
+		{"four spaces", lsp.FormattingOptions{"tabSize": 4, "insertSpaces": true}},
+		{"eight spaces", lsp.FormattingOptions{"tabSize": 8, "insertSpaces": true}},
+		{"tabs", lsp.FormattingOptions{"tabSize": 8, "insertSpaces": false}},
+		{"tabs width four", lsp.FormattingOptions{"tabSize": 4, "insertSpaces": false}},
+		{"no options", lsp.FormattingOptions{}},
 	}
 
-	formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentFormatting),
-		Params: mustJSON(t, lsp.DocumentFormattingParams{
-			TextDocument: lsp.TextDocumentIdentifier{URI: "file:///format-tabs.mut"},
-			Options:      lsp.FormattingOptions{"tabSize": 8, "insertSpaces": false},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("formatting returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	edits, ok := formatAny.([]lsp.TextEdit)
-	if !ok || len(edits) != 1 {
-		t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
-	}
-
-	updated := applyTextEdits(t, original, edits)
+	// Canonical output: always four spaces, never a tab.
 	want := "let answer = fn(x) {\n" +
-		"\tif (x > 0) {\n" +
-		"\t\treturn x;\n" +
-		"\t} else {\n" +
-		"\t\treturn 0;\n" +
-		"\t}\n" +
+		"    if (x > 0) {\n" +
+		"        return x;\n" +
+		"    } else {\n" +
+		"        return 0;\n" +
+		"    }\n" +
 		"};\n"
-	if updated != want {
-		t.Fatalf("formatted tabs text = %q, want %q", updated, want)
+
+	for _, set := range optionSets {
+		t.Run(set.name, func(t *testing.T) {
+			s := New(false)
+			initializeServer(t, s)
+
+			original := "let answer=fn(x){if (x > 0) {return x;} else {return 0;}};"
+			uri := lsp.DocumentUri("file:///format-options.mut")
+			_, _, _, err := s.handler.Handle(&glsp.Context{
+				Method: string(lsp.MethodTextDocumentDidOpen),
+				Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+					TextDocument: lsp.TextDocumentItem{
+						URI:        uri,
+						LanguageID: "mutant",
+						Version:    1,
+						Text:       original,
+					},
+				}),
+				Notify: func(string, any) {},
+			})
+			if err != nil {
+				t.Fatalf("didOpen returned error: %v", err)
+			}
+
+			formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+				Method: string(lsp.MethodTextDocumentFormatting),
+				Params: mustJSON(t, lsp.DocumentFormattingParams{
+					TextDocument: lsp.TextDocumentIdentifier{URI: uri},
+					Options:      set.options,
+				}),
+			})
+			if err != nil {
+				t.Fatalf("formatting returned error: %v", err)
+			}
+			if !validMethod || !validParams {
+				t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
+			}
+			edits, ok := formatAny.([]lsp.TextEdit)
+			if !ok || len(edits) != 1 {
+				t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
+			}
+
+			updated := applyTextEdits(t, original, edits)
+			if updated != want {
+				t.Fatalf("formatted text = %q, want %q", updated, want)
+			}
+			if strings.Contains(updated, "\t") {
+				t.Errorf("formatted output contains a tab for options %v", set.options)
+			}
+		})
 	}
 }
 
@@ -2696,18 +2670,216 @@ func TestDocumentFormattingCanonicalizesCommentedBlocks(t *testing.T) {
 	}
 
 	updated := applyTextEdits(t, original, edits)
+	// The authored `}` / blank line / `else {` split is not canonical:
+	// printing from the AST always produces `} else {`.
 	want := "let answer = fn(x) {\n" +
-		"  // keep comment\n" +
-		"  if (x > 0) {\n" +
-		"    return x; // inline\n" +
-		"  }\n" +
-		"\n" +
-		"  else {\n" +
-		"    return 0;\n" +
-		"  }\n" +
+		"    // keep comment\n" +
+		"    if (x > 0) {\n" +
+		"        return x; // inline\n" +
+		"    } else {\n" +
+		"        return 0;\n" +
+		"    }\n" +
 		"};\n"
 	if updated != want {
 		t.Fatalf("formatted commented block text = %q, want %q", updated, want)
+	}
+}
+
+func TestDocumentFormattingCanonicalizesIndexAndLiteralSpacing(t *testing.T) {
+	s := New(false)
+	initializeServer(t, s)
+
+	original := "// keep access chains readable\n" +
+		"let events = parsed [\"events\"];\n" +
+		"let first = events [0] [\"payload\"];\n" +
+		"let item = records [0].meta [\"name\"];\n" +
+		"let payload = {\"count\" : first [\"count\"]};\n"
+
+	_, _, _, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidOpen),
+		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        "file:///format-index-spacing.mut",
+				LanguageID: "mutant",
+				Version:    1,
+				Text:       original,
+			},
+		}),
+		Notify: func(string, any) {},
+	})
+	if err != nil {
+		t.Fatalf("didOpen returned error: %v", err)
+	}
+
+	formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentFormatting),
+		Params: mustJSON(t, lsp.DocumentFormattingParams{
+			TextDocument: lsp.TextDocumentIdentifier{URI: "file:///format-index-spacing.mut"},
+			Options:      lsp.FormattingOptions{"tabSize": 2, "insertSpaces": true},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("formatting returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
+	}
+	edits, ok := formatAny.([]lsp.TextEdit)
+	if !ok || len(edits) != 1 {
+		t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
+	}
+
+	updated := applyTextEdits(t, original, edits)
+	want := "// keep access chains readable\n" +
+		"let events = parsed[\"events\"];\n" +
+		"let first = events[0][\"payload\"];\n" +
+		"let item = records[0].meta[\"name\"];\n" +
+		"let payload = {\"count\": first[\"count\"]};\n"
+	if updated != want {
+		t.Fatalf("formatted index spacing text = %q, want %q", updated, want)
+	}
+}
+
+func TestDocumentFormattingCanonicalizesExampleAccessSpacing(t *testing.T) {
+	s := New(false)
+	initializeServer(t, s)
+
+	original := "// excerpt from ioc_event_triage\n" +
+		"let events = parsed [\"events\"];\n" +
+		"\n" +
+		"for (let i = 0; i < event_count; i = i + 1) {\n" +
+		"let ev = events [i];\n" +
+		"if (ev [\"event\"] == \"auth_fail\") {\n" +
+		"let updated_findings, err = push(findings, {\n" +
+		"\"src\": ev [\"src\"],\n" +
+		"\"count\": ev [\"count\"]\n" +
+		"});\n" +
+		"findings = updated_findings;\n" +
+		"};\n" +
+		"}\n"
+
+	_, _, _, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidOpen),
+		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        "file:///format-example-access-spacing.mut",
+				LanguageID: "mutant",
+				Version:    1,
+				Text:       original,
+			},
+		}),
+		Notify: func(string, any) {},
+	})
+	if err != nil {
+		t.Fatalf("didOpen returned error: %v", err)
+	}
+
+	formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentFormatting),
+		Params: mustJSON(t, lsp.DocumentFormattingParams{
+			TextDocument: lsp.TextDocumentIdentifier{URI: "file:///format-example-access-spacing.mut"},
+			Options:      lsp.FormattingOptions{"tabSize": 2, "insertSpaces": true},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("formatting returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
+	}
+	edits, ok := formatAny.([]lsp.TextEdit)
+	if !ok || len(edits) != 1 {
+		t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
+	}
+
+	updated := applyTextEdits(t, original, edits)
+	// Canonical form: four-space indent, fully parenthesised operator
+	// expressions, hash entries kept in authored order, and no stray `;`
+	// after the brace-terminated `if`.
+	want := "// excerpt from ioc_event_triage\n" +
+		"let events = parsed[\"events\"];\n" +
+		"\n" +
+		"for (let i = 0; (i < event_count); i = (i + 1)) {\n" +
+		"    let ev = events[i];\n" +
+		"    if (ev[\"event\"] == \"auth_fail\") {\n" +
+		"        let updated_findings, err = push(findings, {\"src\": ev[\"src\"], \"count\": ev[\"count\"]});\n" +
+		"        findings = updated_findings;\n" +
+		"    }\n" +
+		"}\n"
+	if updated != want {
+		t.Fatalf("formatted example access text = %q, want %q", updated, want)
+	}
+}
+
+func TestDocumentFormattingCanonicalizesTimelineAccessSpacing(t *testing.T) {
+	s := New(false)
+	initializeServer(t, s)
+
+	original := "// excerpt from mini_timeline_builder\n" +
+		"let files = parsed [\"files\"];\n" +
+		"\n" +
+		"for (let i = 0; i < timeline_file_count; i = i + 1) {\n" +
+		"let f = files [i];\n" +
+		"let st, err = fs_stat(f);\n" +
+		"check(db_index_prop(db, event_node, \"mod_time\", st [\"mod_time\"]), \"db_index_prop\");\n" +
+		"let updated_timeline, err = push(timeline, {\n" +
+		"\"size\": st [\"size\"],\n" +
+		"\"mod_time\": st [\"mod_time\"]\n" +
+		"});\n" +
+		"timeline = updated_timeline;\n" +
+		"}\n" +
+		"\n" +
+		"check(db_add_edge(db, event_nodes [i - 1], event_nodes [i], EDGE_NEXT_EVENT), \"db_add_edge\");\n"
+
+	_, _, _, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentDidOpen),
+		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
+			TextDocument: lsp.TextDocumentItem{
+				URI:        "file:///format-timeline-access-spacing.mut",
+				LanguageID: "mutant",
+				Version:    1,
+				Text:       original,
+			},
+		}),
+		Notify: func(string, any) {},
+	})
+	if err != nil {
+		t.Fatalf("didOpen returned error: %v", err)
+	}
+
+	formatAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
+		Method: string(lsp.MethodTextDocumentFormatting),
+		Params: mustJSON(t, lsp.DocumentFormattingParams{
+			TextDocument: lsp.TextDocumentIdentifier{URI: "file:///format-timeline-access-spacing.mut"},
+			Options:      lsp.FormattingOptions{"tabSize": 2, "insertSpaces": true},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("formatting returned error: %v", err)
+	}
+	if !validMethod || !validParams {
+		t.Fatalf("formatting validity flags = method:%t params:%t", validMethod, validParams)
+	}
+	edits, ok := formatAny.([]lsp.TextEdit)
+	if !ok || len(edits) != 1 {
+		t.Fatalf("formatting result = %T (len=%d), want one edit", formatAny, len(edits))
+	}
+
+	updated := applyTextEdits(t, original, edits)
+	want := "// excerpt from mini_timeline_builder\n" +
+		"let files = parsed[\"files\"];\n" +
+		"\n" +
+		"for (let i = 0; (i < timeline_file_count); i = (i + 1)) {\n" +
+		"    let f = files[i];\n" +
+		"    let st, err = fs_stat(f);\n" +
+		"    check(db_index_prop(db, event_node, \"mod_time\", st[\"mod_time\"]), \"db_index_prop\");\n" +
+		"    let updated_timeline, err = push(timeline, {\"size\": st[\"size\"], \"mod_time\": st[\"mod_time\"]});\n" +
+		"    timeline = updated_timeline;\n" +
+		"}\n" +
+		"\n" +
+		"check(db_add_edge(db, event_nodes[(i - 1)], event_nodes[i], EDGE_NEXT_EVENT), \"db_add_edge\");\n"
+	if updated != want {
+		t.Fatalf("formatted timeline access text = %q, want %q", updated, want)
 	}
 }
 
@@ -2763,14 +2935,15 @@ func TestDocumentFormattingCanonicalizesStyleTwoOpeningBraces(t *testing.T) {
 	}
 
 	updated := applyTextEdits(t, original, edits)
+	// The authored newline before `else` is not canonical; printing from the
+	// AST always yields `} else {`.
 	want := "// style-two braces input\n" +
 		"let run = fn(x) {\n" +
-		"  if (x > 0) {\n" +
-		"    return x;\n" +
-		"  }\n" +
-		"  else {\n" +
-		"    return 0;\n" +
-		"  }\n" +
+		"    if (x > 0) {\n" +
+		"        return x;\n" +
+		"    } else {\n" +
+		"        return 0;\n" +
+		"    }\n" +
 		"};\n"
 	if updated != want {
 		t.Fatalf("formatted style-two text = %q, want %q", updated, want)
@@ -2823,9 +2996,9 @@ func TestDocumentOnTypeFormattingFormatsOnSupportedTrigger(t *testing.T) {
 
 	updated := applyTextEdits(t, original, edits)
 	want := "let run = fn(x) {\n" +
-		"  if (x > 0) {\n" +
-		"    return x;\n" +
-		"  }\n" +
+		"    if (x > 0) {\n" +
+		"        return x;\n" +
+		"    }\n" +
 		"};\n"
 	if updated != want {
 		t.Fatalf("on-type formatted text = %q, want %q", updated, want)

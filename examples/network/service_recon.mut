@@ -1,0 +1,43 @@
+// service_recon.mut — resolve a host, connect-scan a port range, grab a banner.
+//
+// Uses the unprivileged, cross-platform network builtins. Pointed at localhost so
+// it is safe to run; ports with nothing listening simply report closed / error
+// honestly (no fake success).
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("service_recon");
+
+    let host = "127.0.0.1";
+
+    // Name resolution.
+    let addrs, err = net_resolve(host);
+    if (err) {
+        putln("[error] net_resolve:", err);
+    } else {
+        putln("resolved", host, "->", addrs);
+    };
+
+    // Full-connect port scan (net_connect_scan; this is NOT a half-open SYN scan —
+    // that would need raw sockets and privileges). Scans a tiny range with a short
+    // per-port timeout.
+    let scan, serr = net_connect_scan(host, 78, 82, 200);
+    if (serr) {
+        putln("[error] net_connect_scan:", serr);
+    } else {
+        putln("scanned", scan["scanned"], "ports; open:", scan["open_ports"]);
+    };
+
+    // Banner grab: succeeds if a service greets us, fails honestly otherwise.
+    let banner, berr = net_banner(host + ":80", 300);
+    if (berr) {
+        putln("no banner on :80 (expected when nothing is listening):", berr);
+    } else {
+        putln("banner:", banner);
+    };
+
+    return true;
+};
+
+run();

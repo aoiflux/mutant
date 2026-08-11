@@ -1,0 +1,61 @@
+// command_sandbox.mut — gate command execution behind a policy, then run guarded.
+//
+// Demonstrates the capability-gating pattern: evaluate an allow/deny policy first,
+// and only then attempt execution through the security-guarded exec_string. Command
+// execution is subject to the runtime's command_exec capability policy, so a denied
+// or disabled attempt is handled honestly (never faked as success).
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+// A small Rego policy: allow only a whitelist of safe, read-only commands.
+let policy = {
+    "module": "package cmd\n\ndefault allow = false\n\n" +
+        "allow {\n  input.command == \"whoami\"\n}\n\n" +
+        "allow {\n  input.command == \"hostname\"\n}\n\n" +
+        "decision = {\"command\": input.command, \"allow\": allow}",
+    "eval_query": "data.cmd.decision",
+    "allow_query": "data.cmd.allow"
+};
+
+let run = fn() {
+    header("command_sandbox");
+
+    let loaded, err = policy_load("cmd_policy", policy);
+    if (err) {
+        putln("[error] policy_load:", err);
+        return false;
+    };
+
+    // Decide-then-act for each candidate command.
+    let candidates = ["whoami", "rm -rf /"];
+    each(candidates, fn(cmd) {
+        let allowed, aerr = policy_allow("cmd_policy", { "command": cmd });
+        if (aerr) {
+            putln("[error] policy_allow:", aerr);
+        } else {
+            if (allowed) {
+                putln("policy ALLOWS:", cmd);
+                // Execution is still subject to the runtime command_exec capability.
+                let out, xerr = exec_string(cmd);
+                if (xerr) {
+                    putln("  exec error:", xerr);
+                } else {
+                    putln("  exec result:", out);
+                };
+            } else {
+                putln("policy DENIES:", cmd, "(not executed)");
+            };
+        };
+    });
+
+    // Composing a command with the builder (does not run until cmd_run).
+    let b, berr = cmd_builder();
+    if (!berr) {
+        let b2, aerr = cmd_add(b, "echo");
+        putln("built a command via cmd_builder (guarded by the same policy at run time)");
+    };
+
+    return true;
+};
+
+run();

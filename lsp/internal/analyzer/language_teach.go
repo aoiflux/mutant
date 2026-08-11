@@ -58,26 +58,47 @@ func macroSpecialFormSignatureInformation(name string) (lsp.SignatureInformation
 }
 
 func builtinHoverText(name string) (string, bool) {
+	suffix := builtinCategoryAndPlatformSuffix(name)
+
 	if signature, summary, params, ok := builtin.TeachingDoc(name); ok {
 		if len(params) == 0 {
-			return fmt.Sprintf("builtin `%s`\n\n%s", signature, summary), true
+			return fmt.Sprintf("builtin `%s`\n\n%s%s", signature, summary, suffix), true
 		}
 
 		parts := make([]string, 0, len(params))
 		for _, p := range params {
 			parts = append(parts, fmt.Sprintf("- `%s`: %s", p.Name, p.Doc))
 		}
-		return fmt.Sprintf("builtin `%s`\n\n%s\n\n%s", signature, summary, strings.Join(parts, "\n")), true
+		return fmt.Sprintf("builtin `%s`\n\n%s\n\n%s%s", signature, summary, strings.Join(parts, "\n"), suffix), true
 	}
 
 	if summary, ok := builtin.TeachingFamilySummary(name); ok {
-		return fmt.Sprintf("builtin `%s(...)`\n\n%s", name, summary), true
+		return fmt.Sprintf("builtin `%s(...)`\n\n%s%s", name, summary, suffix), true
 	}
 	if builtin.GetBuiltinByName(name) != nil {
-		return fmt.Sprintf("builtin `%s(...)`\n\nBuiltin function.", name), true
+		return fmt.Sprintf("builtin `%s(...)`\n\nBuiltin function.%s", name, suffix), true
 	}
 
 	return "", false
+}
+
+// builtinCategoryAndPlatformSuffix builds the trailing hover metadata: the
+// capability category the builtin belongs to and, for platform-constrained
+// builtins, the supported OS set and/or a behavioral caveat. Returns "" for a
+// plain, cross-platform builtin with no category (rare) so hover stays clean.
+func builtinCategoryAndPlatformSuffix(name string) string {
+	var b strings.Builder
+	if category := builtin.CapabilityCategory(name); category != "" {
+		fmt.Fprintf(&b, "\n\n_Category: %s_", category)
+	}
+	platforms, note := builtin.PlatformSupport(name)
+	if len(platforms) > 0 {
+		fmt.Fprintf(&b, "\n\n**Platforms:** %s — not supported on other operating systems.", strings.Join(platforms, ", "))
+	}
+	if note != "" {
+		fmt.Fprintf(&b, "\n\n_Note: %s_", note)
+	}
+	return b.String()
 }
 
 func keywordHoverText(keyword string) (string, bool) {

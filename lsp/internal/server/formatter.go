@@ -1,162 +1,233 @@
 package server
 
 import (
+	"sort"
 	"strings"
 
 	mast "mutant/ast"
 	"mutant/lsp/internal/analyzer"
-
-	lsp "github.com/tliron/glsp/protocol_3_16"
+	"mutant/token"
 )
 
-type formatterConfig struct {
-	indentUnit string
-}
+// Canonical Mutant style. These are constants, not settings.
+//
+// Mutant formatting is strict in the gofmt tradition: one canonical rendering
+// per valid program, with no knobs. The language server deliberately ignores
+// the client's `tabSize` and `insertSpaces` FormattingOptions — honouring them
+// would mean two developers with different editor settings produce different
+// bytes for the same source, which is exactly what this formatter exists to
+// prevent.
+const (
+	// indentUnit is four spaces. Never a tab.
+	indentUnit = "    "
+)
 
-func newFormatterConfig(options lsp.FormattingOptions) formatterConfig {
-	insertSpaces := true
-	if raw, ok := options["insertSpaces"]; ok {
-		if value, ok := raw.(bool); ok {
-			insertSpaces = value
-		}
+// formatSnapshotText renders snapshot as canonical Mutant source.
+//
+// When the document has hard parse errors the AST cannot be trusted, so the
+// formatter degrades to whitespace normalisation rather than emitting a
+// mangled program. Recoverable problems (a missing or redundant `;`) do not
+// trigger the fallback — repairing those is the formatter's job, and it
+// happens naturally: terminators are emitted from Statement.RequiresSemicolon
+// rather than copied from the source, and stray semicolons never reach the
+// tree in the first place.
+func formatSnapshotText(snapshot *analyzer.Snapshot) string {
+	if snapshot == nil {
+		return ""
 	}
-
-	tabSize := 2
-	if raw, ok := options["tabSize"]; ok {
-		switch value := raw.(type) {
-		case int:
-			if value > 0 {
-				tabSize = value
-			}
-		case float64:
-			if int(value) > 0 {
-				tabSize = int(value)
-			}
-		}
-	}
-
-	if !insertSpaces {
-		return formatterConfig{indentUnit: "\t"}
-	}
-	return formatterConfig{indentUnit: strings.Repeat(" ", tabSize)}
-}
-
-func formatSnapshotText(snapshot *analyzer.Snapshot, config formatterConfig) string {
-	if snapshot == nil || snapshot.Program == nil || len(snapshot.ParseErrors) > 0 {
-		if snapshot == nil {
-			return ""
-		}
+	if snapshot.Program == nil || len(snapshot.ParseErrors) > 0 {
 		return normalizeDocumentWhitespace(snapshot.Source)
 	}
 
-	// Use a source-layout formatter when comments/blank lines are present so we
-	// keep authored structure while still applying a deterministic code style.
-	if hasLineComments(snapshot.Source) || hasIntentionalBlankLines(snapshot.Source) {
-		return formatSourceLayout(snapshot.Source, config)
-	}
+	p := newPrinter(snapshot.Program)
+	body := p.statements(snapshot.Program.Statements, 0, endOfSourceOffset(snapshot.Source))
 
-	var b strings.Builder
-	statements := make([]string, 0, len(snapshot.Program.Statements))
-	for _, stmt := range snapshot.Program.Statements {
-		formatted := formatStatement(stmt, 0, config)
-		if formatted == "" {
-			continue
-		}
-		statements = append(statements, formatted)
-	}
-	b.WriteString(strings.Join(statements, "\n"))
-
-	formatted := strings.TrimSpace(b.String())
+	formatted := strings.TrimRight(body, "\n")
 	if formatted == "" {
 		return ""
 	}
 	return formatted + "\n"
 }
 
-func formatStatement(stmt mast.Statement, indent int, config formatterConfig) string {
+// endOfSourceOffset is the offset past the final byte, used as the flush
+// boundary for comments trailing the last statement in the file.
+func endOfSourceOffset(src string) int { return len(src) }
+
+// printer walks the AST in source order, emitting canonical text.
+//
+// Comments are not part of the AST; they arrive as a position-ordered side
+// table on the Program. The printer re-attaches them by consuming that table
+// with a monotonically advancing cursor as it walks. This is only correct
+// because the walk itself is strictly source-ordered — statements in order,
+// and any block nested inside a statement visited at the point where it
+// appears — so a comment is always reached at the position it was authored.
+type printer struct {
+	program  *mast.Program
+	comments []token.Comment
+	next     int
+
+	// lastLine is the source line of the most recently emitted construct.
+	// Comparing it against the next construct's start line is how authored
+	// blank lines survive: a gap of two or more lines becomes exactly one
+	// blank line, which keeps the transform idempotent.
+	lastLine int
+}
+
+func newPrinter(program *mast.Program) *printer {
+	comments := make([]token.Comment, len(program.Comments))
+	copy(comments, program.Comments)
+	// The lexer emits comments in order; sorting makes the cursor invariant
+	// explicit and cheap to rely on.
+	sort.SliceStable(comments, func(i, j int) bool {
+		return comments[i].Start.Offset < comments[j].Start.Offset
+	})
+
+	return &printer{program: program, comments: comments}
+}
+
+func indent(level int) string {
+	if level <= 0 {
+		return ""
+	}
+	return strings.Repeat(indentUnit, level)
+}
+
+// statements renders a statement list — a whole file or a block body —
+// including interleaved comments and preserved blank lines. endOffset bounds
+// the region so comments trailing the final statement are flushed at the
+// right indent instead of leaking to an outer scope.
+func (p *printer) statements(stmts []mast.Statement, level int, endOffset int) string {
+	var b strings.Builder
+
+	for _, stmt := range stmts {
+		if stmt == nil {
+			continue
+		}
+
+		rng, hasRange := p.program.RangeOf(stmt)
+		if hasRange {
+			b.WriteString(p.flushCommentsBefore(rng.Start.Offset, level))
+			b.WriteString(p.blankLineBefore(rng.Start.Line))
+		}
+
+		text := p.statement(stmt, level)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+
+		b.WriteString(text)
+		if stmt.RequiresSemicolon() {
+			b.WriteString(";")
+		}
+
+		if hasRange {
+			p.lastLine = rng.End.Line
+			b.WriteString(p.trailingCommentOn(rng.End.Line))
+		}
+		b.WriteString("\n")
+	}
+
+	// Comments sitting after the last statement but still inside this scope.
+	b.WriteString(p.flushCommentsBefore(endOffset, level))
+
+	return b.String()
+}
+
+// flushCommentsBefore emits every pending comment that starts before offset
+// as its own line at the given indent, preserving authored blank lines
+// between them.
+func (p *printer) flushCommentsBefore(offset int, level int) string {
+	var b strings.Builder
+
+	for p.next < len(p.comments) {
+		comment := p.comments[p.next]
+		if comment.Start.Offset >= offset {
+			break
+		}
+
+		b.WriteString(p.blankLineBefore(comment.Start.Line))
+		b.WriteString(indent(level))
+		b.WriteString(strings.TrimRight(comment.Text, " \t"))
+		b.WriteString("\n")
+
+		p.lastLine = comment.End.Line
+		p.next++
+	}
+
+	return b.String()
+}
+
+// trailingCommentOn consumes a comment that begins on line, if any, and
+// renders it as ` // ...` appended to the construct just emitted.
+func (p *printer) trailingCommentOn(line int) string {
+	if p.next >= len(p.comments) {
+		return ""
+	}
+	comment := p.comments[p.next]
+	if comment.Start.Line != line {
+		return ""
+	}
+
+	p.next++
+	p.lastLine = comment.End.Line
+	return " " + strings.TrimRight(comment.Text, " \t")
+}
+
+// blankLineBefore returns a single newline when the source had at least one
+// blank line between the previous construct and startLine. Runs of blank
+// lines collapse to one, so re-formatting formatted output is a no-op.
+func (p *printer) blankLineBefore(startLine int) string {
+	if p.lastLine == 0 || startLine <= p.lastLine+1 {
+		return ""
+	}
+	return "\n"
+}
+
+func (p *printer) statement(stmt mast.Statement, level int) string {
 	if stmt == nil {
 		return ""
 	}
-	prefix := strings.Repeat(config.indentUnit, indent)
+	prefix := indent(level)
 
 	switch node := stmt.(type) {
 	case *mast.LetStatement:
-		name := ""
-		if len(node.Names) > 0 {
-			parts := make([]string, 0, len(node.Names))
-			for _, ident := range node.Names {
-				if ident != nil {
-					parts = append(parts, ident.Value)
-				}
-			}
-			name = strings.Join(parts, ", ")
-		} else if node.Name != nil {
-			name = node.Name.Value
-		}
-		return prefix + "let " + name + " = " + formatExpression(node.Value, indent, config) + ";"
+		return prefix + "let " + letNames(node) + " = " + p.expression(node.Value, level)
 	case *mast.ReturnStatement:
-		if len(node.ReturnValues) > 0 {
-			parts := make([]string, 0, len(node.ReturnValues))
-			for _, expr := range node.ReturnValues {
-				parts = append(parts, formatExpression(expr, indent, config))
-			}
-			return prefix + "return " + strings.Join(parts, ", ") + ";"
-		}
-		if node.ReturnValue == nil {
-			return prefix + "return;"
-		}
-		return prefix + "return " + formatExpression(node.ReturnValue, indent, config) + ";"
+		return prefix + "return" + p.returnValues(node, level)
 	case *mast.ExpressionStatement:
-		if _, ok := node.Expression.(*mast.IfExpression); ok {
-			return prefix + formatExpression(node.Expression, indent, config)
-		}
-		return prefix + formatExpression(node.Expression, indent, config) + ";"
+		return prefix + p.expression(node.Expression, level)
 	case *mast.BlockStatement:
-		return formatBlock(node, indent, config)
+		return prefix + p.block(node, level)
 	case *mast.ForStatement:
-		return prefix + formatForStatement(node, indent, config)
+		return prefix + p.forStatement(node, level)
 	case *mast.StructStatement:
-		fields := make([]string, 0, len(node.Fields))
-		for _, field := range node.Fields {
-			if field != nil {
-				fields = append(fields, field.Value)
-			}
-		}
-		body := ""
-		if len(fields) > 0 {
-			body = " " + strings.Join(fields, "; ") + "; "
-		}
-		name := ""
-		if node.Name != nil {
-			name = node.Name.Value
-		}
-		return prefix + "struct " + name + " {" + body + "}"
+		return prefix + "struct " + identValue(node.Name) + " {" + bracedIdents(node.Fields, "; ", ";") + "}"
 	case *mast.EnumStatement:
-		variants := make([]string, 0, len(node.Variants))
-		for _, variant := range node.Variants {
-			if variant != nil {
-				variants = append(variants, variant.Value)
-			}
-		}
-		body := ""
-		if len(variants) > 0 {
-			body = " " + strings.Join(variants, ", ") + " "
-		}
-		name := ""
-		if node.Name != nil {
-			name = node.Name.Value
-		}
-		return prefix + "enum " + name + " {" + body + "}"
+		return prefix + "enum " + identValue(node.Name) + " {" + bracedIdents(node.Variants, ", ", "") + "}"
 	case *mast.BreakStatement:
-		return prefix + "break;"
+		return prefix + "break"
 	case *mast.ContinueStatement:
-		return prefix + "continue;"
+		return prefix + "continue"
 	default:
 		return prefix + strings.TrimSpace(stmt.String())
 	}
 }
 
-func formatExpression(expr mast.Expression, indent int, config formatterConfig) string {
+func (p *printer) returnValues(node *mast.ReturnStatement, level int) string {
+	if len(node.ReturnValues) > 0 {
+		parts := make([]string, 0, len(node.ReturnValues))
+		for _, expr := range node.ReturnValues {
+			parts = append(parts, p.expression(expr, level))
+		}
+		return " " + strings.Join(parts, ", ")
+	}
+	if node.ReturnValue == nil {
+		return ""
+	}
+	return " " + p.expression(node.ReturnValue, level)
+}
+
+func (p *printer) expression(expr mast.Expression, level int) string {
 	if expr == nil {
 		return ""
 	}
@@ -167,132 +238,216 @@ func formatExpression(expr mast.Expression, indent int, config formatterConfig) 
 	case *mast.IntegerLiteral, *mast.FloatLiteral, *mast.Boolean:
 		return expr.String()
 	case *mast.StringLiteral:
-		escaped := strings.ReplaceAll(node.Value, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-		return "\"" + escaped + "\""
+		return quoteString(node.Value)
 	case *mast.PrefixExpression:
-		return "(" + node.Operator + formatExpression(node.Right, indent, config) + ")"
+		// Mutant's canonical form parenthesises every operator expression, so
+		// precedence is always explicit in the printed text.
+		return "(" + node.Operator + p.expression(node.Right, level) + ")"
 	case *mast.InfixExpression:
-		return "(" + formatExpression(node.Left, indent, config) + " " + node.Operator + " " + formatExpression(node.Right, indent, config) + ")"
+		return "(" + p.expression(node.Left, level) + " " + node.Operator + " " + p.expression(node.Right, level) + ")"
 	case *mast.AssignExpression:
-		return formatExpression(node.Left, indent, config) + " = " + formatExpression(node.Value, indent, config)
+		return p.expression(node.Left, level) + " = " + p.expression(node.Value, level)
 	case *mast.CallExpression:
-		parts := make([]string, 0, len(node.Arguments))
-		for _, arg := range node.Arguments {
-			parts = append(parts, formatExpression(arg, indent, config))
-		}
-		return formatExpression(node.Function, indent, config) + "(" + strings.Join(parts, ", ") + ")"
+		return p.expression(node.Function, level) + "(" + p.expressionList(node.Arguments, level) + ")"
 	case *mast.FunctionLiteral:
-		params := make([]string, 0, len(node.Parameters))
-		for _, p := range node.Parameters {
-			if p != nil {
-				params = append(params, p.Value)
-			}
-		}
-		return "fn(" + strings.Join(params, ", ") + ") " + formatBlock(node.Body, indent, config)
+		return "fn(" + joinIdents(node.Parameters, ", ") + ") " + p.block(node.Body, level)
 	case *mast.MacroLiteral:
-		params := make([]string, 0, len(node.Parameters))
-		for _, p := range node.Parameters {
-			if p != nil {
-				params = append(params, p.Value)
-			}
-		}
-		return "macro(" + strings.Join(params, ", ") + ") " + formatBlock(node.Body, indent, config)
+		return "macro(" + joinIdents(node.Parameters, ", ") + ") " + p.block(node.Body, level)
 	case *mast.IfExpression:
-		result := "if " + formatCondition(node.Condition, indent, config) + " " + formatBlock(node.Consequence, indent, config)
+		result := "if " + p.condition(node.Condition, level) + " " + p.block(node.Consequence, level)
 		if node.Alternative != nil {
-			result += " else " + formatBlock(node.Alternative, indent, config)
+			result += " else " + p.block(node.Alternative, level)
 		}
 		return result
 	case *mast.ArrayLiteral:
-		parts := make([]string, 0, len(node.Elements))
-		for _, element := range node.Elements {
-			parts = append(parts, formatExpression(element, indent, config))
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return "[" + p.expressionList(node.Elements, level) + "]"
 	case *mast.IndexExpression:
-		return formatExpression(node.Left, indent, config) + "[" + formatExpression(node.Index, indent, config) + "]"
+		return p.expression(node.Left, level) + "[" + p.expression(node.Index, level) + "]"
 	case *mast.FieldExpression:
-		field := ""
-		if node.Field != nil {
-			field = node.Field.Value
-		}
-		return formatExpression(node.Left, indent, config) + "." + field
+		return p.expression(node.Left, level) + "." + identValue(node.Field)
 	case *mast.StructLiteral:
-		fields := make([]string, 0, len(node.Fields))
-		for _, field := range node.Fields {
-			if field == nil || field.Name == nil {
-				continue
-			}
-			fields = append(fields, field.Name.Value+": "+formatExpression(field.Value, indent, config))
-		}
-		name := ""
-		if node.Name != nil {
-			name = node.Name.Value + " "
-		}
-		return name + "{" + strings.Join(fields, ", ") + "}"
+		return p.structLiteral(node, level)
 	case *mast.HashLiteral:
-		parts := make([]string, 0, len(node.Pairs))
-		for key, value := range node.Pairs {
-			parts = append(parts, formatExpression(key, indent, config)+": "+formatExpression(value, indent, config))
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
+		return p.hashLiteral(node, level)
 	default:
 		return strings.TrimSpace(expr.String())
 	}
 }
 
-func formatCondition(expr mast.Expression, indent int, config formatterConfig) string {
-	formatted := formatExpression(expr, indent, config)
+func (p *printer) expressionList(exprs []mast.Expression, level int) string {
+	parts := make([]string, 0, len(exprs))
+	for _, expr := range exprs {
+		parts = append(parts, p.expression(expr, level))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (p *printer) structLiteral(node *mast.StructLiteral, level int) string {
+	fields := make([]string, 0, len(node.Fields))
+	for _, field := range node.Fields {
+		if field == nil || field.Name == nil {
+			continue
+		}
+		fields = append(fields, field.Name.Value+": "+p.expression(field.Value, level))
+	}
+
+	name := ""
+	if node.Name != nil {
+		name = node.Name.Value + " "
+	}
+	return name + "{" + strings.Join(fields, ", ") + "}"
+}
+
+// hashLiteral emits entries in the order the author wrote them.
+//
+// HashLiteral.Pairs is a Go map, so ranging over it yields a random order —
+// printing that directly would make the formatter non-deterministic and break
+// idempotency outright. Recovering the authored order from each key's source
+// range fixes that without reordering anyone's code; keys the parser did not
+// record fall back to their rendered text so the result is still total.
+func (p *printer) hashLiteral(node *mast.HashLiteral, level int) string {
+	type entry struct {
+		text     string
+		offset   int
+		hasRange bool
+	}
+
+	entries := make([]entry, 0, len(node.Pairs))
+	for key, value := range node.Pairs {
+		e := entry{text: p.expression(key, level) + ": " + p.expression(value, level)}
+		if rng, ok := p.program.RangeOf(key); ok {
+			e.offset = rng.Start.Offset
+			e.hasRange = true
+		}
+		entries = append(entries, e)
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].hasRange != entries[j].hasRange {
+			return entries[i].hasRange
+		}
+		if entries[i].hasRange && entries[i].offset != entries[j].offset {
+			return entries[i].offset < entries[j].offset
+		}
+		return entries[i].text < entries[j].text
+	})
+
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		parts = append(parts, e.text)
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
+func (p *printer) condition(expr mast.Expression, level int) string {
+	formatted := p.expression(expr, level)
 	if strings.HasPrefix(formatted, "(") && strings.HasSuffix(formatted, ")") {
 		return formatted
 	}
 	return "(" + formatted + ")"
 }
 
-func formatBlock(block *mast.BlockStatement, indent int, config formatterConfig) string {
-	if block == nil || len(block.Statements) == 0 {
+// block renders a brace-delimited body. The opening brace stays on the
+// declaration's line and the closing brace gets its own line at the parent's
+// indent. A block with neither statements nor comments collapses to `{}`.
+func (p *printer) block(block *mast.BlockStatement, level int) string {
+	if block == nil {
 		return "{}"
 	}
 
-	var b strings.Builder
-	b.WriteString("{\n")
-	for i, stmt := range block.Statements {
-		formatted := formatStatement(stmt, indent+1, config)
-		if formatted == "" {
-			continue
-		}
-		b.WriteString(formatted)
-		if i < len(block.Statements)-1 {
-			b.WriteByte('\n')
-		}
+	endOffset := 0
+	if rng, ok := p.program.RangeOf(block); ok {
+		endOffset = rng.End.Offset
+		// Anchor blank-line accounting to the opening brace. Without this,
+		// lastLine still refers to the line before the enclosing statement
+		// began, and the first statement in the body would look like it was
+		// separated by blank lines that the author never wrote.
+		p.lastLine = rng.Start.Line
 	}
-	b.WriteByte('\n')
-	b.WriteString(strings.Repeat(config.indentUnit, indent))
-	b.WriteString("}")
-	return b.String()
+
+	body := p.statements(block.Statements, level+1, endOffset)
+	if strings.TrimSpace(body) == "" {
+		return "{}"
+	}
+
+	return "{\n" + strings.TrimRight(body, "\n") + "\n" + indent(level) + "}"
 }
 
-func formatForStatement(stmt *mast.ForStatement, indent int, config formatterConfig) string {
+func (p *printer) forStatement(stmt *mast.ForStatement, level int) string {
 	if stmt == nil {
 		return ""
 	}
+
 	init := ""
 	if stmt.Init != nil {
-		init = strings.TrimSpace(formatStatement(stmt.Init, 0, config))
-		init = strings.TrimSuffix(init, ";")
+		init = strings.TrimSpace(p.statement(stmt.Init, 0))
 	}
 	cond := ""
 	if stmt.Condition != nil {
-		cond = formatExpression(stmt.Condition, indent, config)
+		cond = p.expression(stmt.Condition, level)
 	}
 	post := ""
 	if stmt.Post != nil {
-		post = formatExpression(stmt.Post, indent, config)
+		post = p.expression(stmt.Post, level)
 	}
-	return "for (" + init + "; " + cond + "; " + post + ") " + formatBlock(stmt.Body, indent, config)
+
+	return "for (" + init + "; " + cond + "; " + post + ") " + p.block(stmt.Body, level)
 }
 
+func letNames(node *mast.LetStatement) string {
+	if len(node.Names) > 0 {
+		parts := make([]string, 0, len(node.Names))
+		for _, ident := range node.Names {
+			if ident != nil {
+				parts = append(parts, ident.Value)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return identValue(node.Name)
+}
+
+func identValue(ident *mast.Identifier) string {
+	if ident == nil {
+		return ""
+	}
+	return ident.Value
+}
+
+// joinIdents renders an identifier list with sep between entries and no
+// surrounding padding. Used for parameter lists, where `fn(a, b)` hugs its
+// parentheses.
+func joinIdents(idents []*mast.Identifier, sep string) string {
+	parts := make([]string, 0, len(idents))
+	for _, ident := range idents {
+		if ident != nil {
+			parts = append(parts, ident.Value)
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
+// bracedIdents renders a declaration body that sits inside braces, padded
+// away from them. Struct fields are semicolon-terminated including the last
+// (`struct P { x; y; }`); enum variants are comma-separated but not
+// comma-terminated (`enum C { Red, Green }`). An empty list yields `{}`.
+func bracedIdents(idents []*mast.Identifier, sep string, terminator string) string {
+	joined := joinIdents(idents, sep)
+	if joined == "" {
+		return ""
+	}
+	return " " + joined + terminator + " "
+}
+
+func quoteString(value string) string {
+	escaped := strings.ReplaceAll(value, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	return "\"" + escaped + "\""
+}
+
+// normalizeDocumentWhitespace is the degraded path used when the document
+// does not parse: strip trailing whitespace, normalise line endings, and
+// guarantee a single trailing newline, without touching structure.
 func normalizeDocumentWhitespace(input string) string {
 	normalized := strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
 	if normalized == "" {
@@ -310,383 +465,4 @@ func normalizeDocumentWhitespace(input string) string {
 		return ""
 	}
 	return joined + "\n"
-}
-
-func hasLineComments(input string) bool {
-	normalized := strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
-	if normalized == "" {
-		return false
-	}
-
-	lines := strings.Split(normalized, "\n")
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
-			return true
-		}
-		if idx := strings.Index(line, "//"); idx >= 0 {
-			// Inline comments should be preserved as authored.
-			return true
-		}
-	}
-	return false
-}
-
-func hasIntentionalBlankLines(input string) bool {
-	normalized := strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
-	return strings.Contains(normalized, "\n\n")
-}
-
-func formatSourceLayout(input string, config formatterConfig) string {
-	normalized := strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
-	if normalized == "" {
-		return ""
-	}
-
-	lines := collapseStandaloneOpeningBraces(strings.Split(normalized, "\n"))
-	formatted := make([]string, 0, len(lines))
-	indent := 0
-
-	for _, rawLine := range lines {
-		line := strings.TrimRight(rawLine, " \t")
-		if strings.TrimSpace(line) == "" {
-			formatted = append(formatted, "")
-			continue
-		}
-
-		codePart, commentPart, hasInlineComment := splitCodeAndInlineComment(line)
-		code := normalizeCodeSpacing(strings.TrimSpace(codePart))
-
-		leadingClosers := leadingClosingBraceCount(code)
-		if leadingClosers > 0 {
-			indent -= leadingClosers
-			if indent < 0 {
-				indent = 0
-			}
-		}
-
-		prefix := strings.Repeat(config.indentUnit, indent)
-		if code == "" {
-			comment := strings.TrimSpace(commentPart)
-			formatted = append(formatted, prefix+comment)
-			continue
-		}
-
-		lineOut := prefix + code
-		if hasInlineComment {
-			comment := strings.TrimSpace(commentPart)
-			if comment != "" {
-				lineOut += " " + comment
-			}
-		}
-		formatted = append(formatted, lineOut)
-
-		delta := braceDelta(code)
-		indent += delta + leadingClosers
-		if indent < 0 {
-			indent = 0
-		}
-	}
-
-	joined := strings.Join(formatted, "\n")
-	joined = strings.TrimRight(joined, "\n")
-	if joined == "" {
-		return ""
-	}
-	return joined + "\n"
-}
-
-func collapseStandaloneOpeningBraces(lines []string) []string {
-	if len(lines) == 0 {
-		return lines
-	}
-
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "{" {
-			out = append(out, line)
-			continue
-		}
-
-		attachTo := -1
-		for i := len(out) - 1; i >= 0; i-- {
-			if strings.TrimSpace(out[i]) == "" {
-				continue
-			}
-			attachTo = i
-			break
-		}
-
-		if attachTo >= 0 && canAttachOpeningBrace(strings.TrimSpace(out[attachTo])) {
-			out[attachTo] = strings.TrimRight(out[attachTo], " \t") + " {"
-			continue
-		}
-
-		out = append(out, line)
-	}
-
-	return out
-}
-
-func canAttachOpeningBrace(previous string) bool {
-	if previous == "" || strings.HasPrefix(previous, "//") || strings.Contains(previous, "//") {
-		return false
-	}
-	if strings.HasSuffix(previous, "{") {
-		return false
-	}
-
-	if previous == "else" {
-		return true
-	}
-	if strings.HasPrefix(previous, "if ") || strings.HasPrefix(previous, "for ") {
-		return true
-	}
-	if strings.HasPrefix(previous, "fn(") || strings.HasPrefix(previous, "macro(") {
-		return true
-	}
-	if strings.HasPrefix(previous, "struct ") || strings.HasPrefix(previous, "enum ") {
-		return true
-	}
-
-	return strings.HasSuffix(previous, ")")
-}
-
-func splitCodeAndInlineComment(line string) (string, string, bool) {
-	inString := false
-	escaped := false
-	runes := []rune(line)
-
-	for i := 0; i < len(runes)-1; i++ {
-		ch := runes[i]
-		next := runes[i+1]
-
-		if inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		if ch == '"' {
-			inString = true
-			continue
-		}
-
-		if ch == '/' && next == '/' {
-			return string(runes[:i]), string(runes[i:]), true
-		}
-	}
-
-	return line, "", false
-}
-
-func leadingClosingBraceCount(code string) int {
-	count := 0
-	for _, ch := range code {
-		if ch == '}' {
-			count++
-			continue
-		}
-		break
-	}
-	return count
-}
-
-func braceDelta(code string) int {
-	if code == "" {
-		return 0
-	}
-
-	delta := 0
-	inString := false
-	escaped := false
-	runes := []rune(code)
-
-	for i := 0; i < len(runes); i++ {
-		ch := runes[i]
-
-		if inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		if ch == '"' {
-			inString = true
-			continue
-		}
-
-		if ch == '{' {
-			delta++
-		} else if ch == '}' {
-			delta--
-		}
-	}
-
-	return delta
-}
-
-func normalizeCodeSpacing(code string) string {
-	if code == "" {
-		return ""
-	}
-
-	tokens := tokenizeCode(code)
-	if len(tokens) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	for i, tok := range tokens {
-		if i == 0 {
-			b.WriteString(tok)
-			continue
-		}
-
-		prev := tokens[i-1]
-		if needsSpace(prev, tok) {
-			b.WriteByte(' ')
-		}
-		b.WriteString(tok)
-	}
-
-	return b.String()
-}
-
-func tokenizeCode(code string) []string {
-	runes := []rune(code)
-	tokens := make([]string, 0, len(runes)/2)
-
-	for i := 0; i < len(runes); {
-		ch := runes[i]
-
-		if ch == ' ' || ch == '\t' {
-			i++
-			continue
-		}
-
-		if ch == '"' {
-			start := i
-			i++
-			escaped := false
-			for i < len(runes) {
-				if escaped {
-					escaped = false
-					i++
-					continue
-				}
-				if runes[i] == '\\' {
-					escaped = true
-					i++
-					continue
-				}
-				if runes[i] == '"' {
-					i++
-					break
-				}
-				i++
-			}
-			tokens = append(tokens, string(runes[start:i]))
-			continue
-		}
-
-		if isIdentifierStart(ch) {
-			start := i
-			i++
-			for i < len(runes) && isIdentifierPart(runes[i]) {
-				i++
-			}
-			tokens = append(tokens, string(runes[start:i]))
-			continue
-		}
-
-		if isDigit(ch) {
-			start := i
-			i++
-			for i < len(runes) && (isDigit(runes[i]) || runes[i] == '.') {
-				i++
-			}
-			tokens = append(tokens, string(runes[start:i]))
-			continue
-		}
-
-		if i+1 < len(runes) {
-			two := string(runes[i : i+2])
-			switch two {
-			case "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", ":=":
-				tokens = append(tokens, two)
-				i += 2
-				continue
-			}
-		}
-
-		tokens = append(tokens, string(ch))
-		i++
-	}
-
-	return tokens
-}
-
-func needsSpace(prev, next string) bool {
-	if next == "" || prev == "" {
-		return false
-	}
-	if next == "(" {
-		return prev == "if" || prev == "for"
-	}
-
-	if next == "," || next == ";" || next == ")" || next == "]" || next == "}" || next == "." || next == ":" {
-		return false
-	}
-	if prev == "(" || prev == "[" || prev == "{" || prev == "." {
-		return false
-	}
-	if prev == ":" || prev == "," {
-		return true
-	}
-	if isOperator(prev) || isOperator(next) {
-		return true
-	}
-
-	return true
-}
-
-func isOperator(tok string) bool {
-	switch tok {
-	case "=", "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "!", ":=":
-		return true
-	default:
-		return false
-	}
-}
-
-func isIdentifierStart(ch rune) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
-}
-
-func isIdentifierPart(ch rune) bool {
-	return isIdentifierStart(ch) || isDigit(ch)
-}
-
-func isDigit(ch rune) bool {
-	return ch >= '0' && ch <= '9'
 }

@@ -1,0 +1,27 @@
+// concurrent_server.mut
+// A concurrent HTTP server built with net_serve (dev-sec-platform-upgrades).
+//
+// Unlike the serial accept loop (see mitmproxy.mut), net_serve runs the accept
+// loop in Go and dispatches every connection to a FRESH per-connection VM running
+// a handler script, so connections are serviced in parallel. Each handler sleeps
+// 1s here; N simultaneous clients still finish in ~1s, not N seconds.
+//
+// The handler script (concurrent_server_handler.mut) reads its connection from
+// the predefined global `serve_conn`, and any shared context passed as the third
+// net_serve argument from `serve_arg`.
+//
+// Run:  mutant concurrent_server.mut --compat
+//   then:  curl http://127.0.0.1:8130/hello   (from several terminals at once)
+
+let bind = "127.0.0.1:8130";
+let handler = "examples/network/concurrent_server_handler.mut";
+
+let ln, err = net_listen(bind);
+if (err) {
+    putln("listen failed: ", err);
+} else {
+    putln("concurrent server listening on ", bind);
+    putln("each request sleeps 1s; fire several at once to see them overlap.");
+    let ok, serr = net_serve(ln, handler, "demo-context");
+    putln("serve ended: ", serr);
+}

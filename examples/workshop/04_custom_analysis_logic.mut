@@ -1,0 +1,30 @@
+// Workshop 4/5 - Custom analysis logic
+//
+// The point of a language (not a fixed tool): YOU write the analysis. Score files
+// from several signals using small rules + map/filter. Input: none.
+
+putln("=== 4/5 Custom analysis logic ===");
+
+let files = [
+    { "name": "invoice.pdf.exe", "entropy": 7.90, "ext_mismatch": true,  "stomped": false },
+    { "name": "report.docx",     "entropy": 5.10, "ext_mismatch": false, "stomped": false },
+    { "name": "svc.dll",         "entropy": 6.20, "ext_mismatch": false, "stomped": true }
+];
+
+// Each rule adds points. Add a rule without touching the others.
+let score_file = fn(f) {
+    let score = 0;
+    if (f["entropy"] > 7.5) { score = score + 40; };   // packed / encrypted
+    if (f["ext_mismatch"])  { score = score + 50; };   // wrong extension
+    if (f["stomped"])       { score = score + 60; };   // tampered timestamps
+    return score;
+};
+
+let scored = map(files, fn(f) { return { "name": f["name"], "score": score_file(f) }; });
+let flagged = filter(scored, fn(s) { return s["score"] >= 50; });
+
+putln("scores:");
+each(scored, fn(s) { putln("  ", s["name"], "=>", s["score"]); });
+
+putln("flagged (>= 50):");
+each(flagged, fn(s) { putln("  ! ", s["name"], "(", s["score"], ")"); });

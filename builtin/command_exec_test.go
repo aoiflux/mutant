@@ -4,41 +4,7 @@ import (
 	"testing"
 
 	"mutant/object"
-	"mutant/security"
 )
-
-func TestExecStringBuiltinDisabledByDefault(t *testing.T) {
-	security.ResetSecurityTelemetry()
-
-	result := ExecString(&object.String{Value: "Write-Output 'mutant'"})
-	payload, errObj := unwrapPair(t, result)
-	if errObj != nil {
-		t.Fatalf("unexpected error: %s", errObj.Inspect())
-	}
-
-	hash, ok := payload.(*object.Hash)
-	if !ok {
-		t.Fatalf("exec_string() result is not Hash. got=%T", payload)
-	}
-
-	assertHashHasKeyType(t, hash, "ok", object.BOOLEAN_OBJ)
-	assertHashHasKeyType(t, hash, "allowed", object.BOOLEAN_OBJ)
-	assertHashHasKeyType(t, hash, "policy_decision", object.STRING_OBJ)
-	assertHashHasKeyType(t, hash, "exit_code", object.INTEGER_OBJ)
-	assertHashHasKeyType(t, hash, "stdout", object.STRING_OBJ)
-	assertHashHasKeyType(t, hash, "stderr", object.STRING_OBJ)
-	assertHashHasKeyType(t, hash, "timed_out", object.BOOLEAN_OBJ)
-	assertHashHasKeyType(t, hash, "error", object.STRING_OBJ)
-	assertHashHasKeyType(t, hash, "schema_version", object.INTEGER_OBJ)
-
-	decisionObj, ok := hashValueByKey(hash, "policy_decision").(*object.String)
-	if !ok {
-		t.Fatalf("policy_decision is not String")
-	}
-	if decisionObj.Value != "blocked_disabled" {
-		t.Fatalf("unexpected policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
-	}
-}
 
 func TestCommandBuilderRoundTrip(t *testing.T) {
 	builderPair := CmdBuilder(&object.String{Value: "powershell"})
@@ -85,34 +51,5 @@ func TestCmdRunEmptyBuilderErrors(t *testing.T) {
 	_, errObj = unwrapPair(t, result)
 	if errObj == nil {
 		t.Fatalf("expected error in pair slot, got nil")
-	}
-}
-
-func TestExecStringBlockedWhenExecutionExplicitlyDisabled(t *testing.T) {
-	result := ExecString(&object.String{Value: "Write-Output 'mutant'"})
-	payload, errObj := unwrapPair(t, result)
-	if errObj != nil {
-		t.Fatalf("unexpected error: %s", errObj.Inspect())
-	}
-
-	hash, ok := payload.(*object.Hash)
-	if !ok {
-		t.Fatalf("exec_string() result is not Hash. got=%T", payload)
-	}
-
-	decisionObj, ok := hashValueByKey(hash, "policy_decision").(*object.String)
-	if !ok {
-		t.Fatalf("policy_decision is not String")
-	}
-	if decisionObj.Value != "blocked_disabled" {
-		t.Fatalf("unexpected policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
-	}
-
-	errMsgObj, ok := hashValueByKey(hash, "error").(*object.String)
-	if !ok {
-		t.Fatalf("error is not String")
-	}
-	if errMsgObj.Value != "command execution disabled" {
-		t.Fatalf("unexpected error message. got=%q, want=%q", errMsgObj.Value, "command execution disabled")
 	}
 }

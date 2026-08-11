@@ -536,8 +536,8 @@ func TestRAWBuiltinFlowWithSyntheticDataset(t *testing.T) {
 	if mustHashIntValue(t, metaHash, "file_size") != 4096 {
 		t.Fatalf("unexpected file_size")
 	}
-	if mustHashIntValue(t, metaHash, "sector_size") != 512 {
-		t.Fatalf("unexpected sector_size")
+	if mustHashIntValue(t, metaHash, "assumed_sector_size") != 512 {
+		t.Fatalf("unexpected assumed_sector_size")
 	}
 
 	readPayload, readErr := unwrapPair(t, RAWReadAt(stringObj(handle), intObj(0), intObj(9)))

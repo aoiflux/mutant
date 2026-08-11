@@ -1,0 +1,75 @@
+// file_triage_report.mut — hash files, detect type, and filter against a hash set.
+//
+// A realistic triage step: hash a file, identify its type, and check whether it
+// is a known file (NSRL-style include/exclude). Self-seeds its own inputs.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("file_triage_report");
+
+    let dir = "example_output/file_triage";
+    let mk, mkerr = fs_mkdir(dir);          // idempotent
+    if (mkerr) {
+        putln("[error] fs_mkdir:", mkerr);
+        return false;
+    };
+
+    // Seed a sample file to triage.
+    let sample = dir + "/note.txt";
+    let w, werr = fs_write(sample, "incident notes: suspicious login at 02:14\n");
+    if (werr) {
+        putln("[error] fs_write:", werr);
+        return false;
+    };
+
+    // Hash the file's contents.
+    let data, rerr = fs_read(sample);
+    if (rerr) {
+        putln("[error] fs_read:", rerr);
+        return false;
+    };
+    let digest = hash_sha256(data);
+    putln("sha256(note.txt):", digest);
+
+    // Identify the file type from its header signature.
+    let magic, gerr = fs_magic(sample);
+    if (gerr) {
+        putln("[error] fs_magic:", gerr);
+    } else {
+        putln("type:", magic["type"], " mime:", magic["mime"]);
+    };
+
+    // Build a known-file hash set and test membership.
+    let setfile = dir + "/known.hashes";
+    let known = digest + "\n" + hash_sha256("some benign content") + "\n";
+    let sw, swerr = fs_write(setfile, known);
+    if (swerr) {
+        putln("[error] fs_write set:", swerr);
+        return false;
+    };
+
+    let hs, herr = hashset_load(setfile);
+    if (herr) {
+        putln("[error] hashset_load:", herr);
+        return false;
+    };
+    putln("known-set size:", hs["count"]);
+
+    let hit, cerr = hashset_contains(hs["handle"], digest);
+    if (cerr) {
+        putln("[error] hashset_contains:", cerr);
+    } else {
+        putln("note.txt is a known file:", hit);
+    };
+
+    let unknown, uerr = hashset_contains(hs["handle"], hash_sha256("never seen"));
+    if (!uerr) {
+        putln("random content is known:", unknown);
+    };
+
+    let closed, clerr = hashset_close(hs["handle"]);
+    return true;
+};
+
+run();

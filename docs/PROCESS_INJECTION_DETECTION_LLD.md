@@ -689,14 +689,14 @@ Sprint D (enforcement):
 2. Roll out to secure profile first. [in progress]
 3. Keep emergency kill-switch env var. [done via mode/off gate]
 
-### 13.13 Deep-dive reference
+### 13.12 Deep-dive reference
 
 For a code-accurate deep dive on current remote-scan architecture and behavior,
 see:
 
 1. [REMOTE_PROCESS_SCAN_DEEP_DIVE.md](REMOTE_PROCESS_SCAN_DEEP_DIVE.md)
 
-### 13.12 Mermaid implementation dependency graph
+### 13.13 Mermaid implementation dependency graph
 
 ```mermaid
 flowchart TD
@@ -709,7 +709,7 @@ flowchart TD
    H[processscan_windows_stub.go] --> D
 ```
 
-### 13.13 Practical coding tip for this repo
+### 13.14 Practical coding tip for this repo
 
 Follow the same OS pattern already used in security package:
 

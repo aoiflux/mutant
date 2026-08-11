@@ -16,6 +16,14 @@ accessible, secure system for programming & security research.
    works on **YOUR** machine
 4. Cross Compilation: mutant supports compiling standalone, independent binary
    executables for multiple platforms.
+5. Batteries included: a **399-builtin** standard library (pure-Go, no cgo)
+   spanning strings/math/hashing/time, structured data, higher-order collection
+   functions, networking (sockets/TLS/HTTP), graph modeling, cryptography,
+   detection, sandboxed Lua, and a deep forensic suite — see the
+   [Capability Reference](docs/CAPABILITY_REFERENCE.md).
+6. Go-style tooling: a separate `mlsp` language-server binary with strict
+   formatting, diagnostics (including OS-aware platform warnings), hover, and
+   completion.
 
 ## Download & Install
 
@@ -322,9 +330,15 @@ For VS Code language tooling specifics (teaching hovers, signature help, and
 snippet completions), see:
 
 - [docs/WHAT_IS_MUTANT.md](docs/WHAT_IS_MUTANT.md)
-- [docs/VSCODE_LSP_TEACHING_REFERENCE.md](docs/VSCODE_LSP_TEACHING_REFERENCE.md)
+- [docs/MUTANT_LANGUAGE_REFERENCE.md](docs/MUTANT_LANGUAGE_REFERENCE.md)
+- [docs/CAPABILITY_REFERENCE.md](docs/CAPABILITY_REFERENCE.md) — full builtin catalog
+- [docs/SECURE_NETWORKING.md](docs/SECURE_NETWORKING.md)
+- [docs/GRAPH_DATABASE.md](docs/GRAPH_DATABASE.md)
+- [docs/RUNTIME_INTEGRATION.md](docs/RUNTIME_INTEGRATION.md)
+- [docs/STRUCTURED_DATA.md](docs/STRUCTURED_DATA.md)
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
+- [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)
 
 ## License
 

@@ -1,0 +1,68 @@
+// crypto_toolkit.mut — hashing, HMAC, AES-GCM, certificate parsing, and JWTs.
+//
+// A self-contained tour of the cryptography builtins: everything here runs with
+// no external input (the CA and its certificate are generated at runtime).
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("crypto_toolkit");
+
+    let msg = "the quick brown fox";
+
+    // Digests and keyed HMAC.
+    putln("sha256:", hash_sha256(msg));
+    putln("hmac  :", hmac("secret-key", msg, "sha256"));
+
+    // AES-GCM authenticated encryption (256-bit key = 32 bytes; nonce prepended).
+    let key = "0123456789abcdef0123456789abcdef";
+    let ct, err = aes_encrypt(key, "top secret payload");
+    if (err) {
+        putln("[error] aes_encrypt:", err);
+        return false;
+    };
+    let pt, derr = aes_decrypt(key, ct);
+    if (derr) {
+        putln("[error] aes_decrypt:", derr);
+        return false;
+    };
+    putln("aes round-trip ok:", pt == "top secret payload");
+
+    // Tampering is detected (GCM authentication).
+    let bad, berr = aes_decrypt("ffffffffffffffffffffffffffffffff", ct);
+    putln("wrong key rejected:", berr != false);
+
+    // Generate a CA and parse its certificate.
+    let ca, caerr = tls_generate_ca();
+    if (caerr) {
+        putln("[error] tls_generate_ca:", caerr);
+        return false;
+    };
+    let cert, perr = x509_parse(ca["cert_pem"]);
+    if (perr) {
+        putln("[error] x509_parse:", perr);
+    } else {
+        putln("CA subject:", cert["subject"]);
+        putln("CA is_ca  :", cert["is_ca"]);
+        putln("sha256 fp :", cert["sha256"]);
+    };
+
+    // Decode a JWT (structure only — signature is NOT verified).
+    let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" +
+        ".eyJzdWIiOiIxMjMiLCJuYW1lIjoiYWxpY2UifQ.c2lnbmF0dXJl";
+    let jwt, jerr = jwt_decode(token);
+    if (jerr) {
+        putln("[error] jwt_decode:", jerr);
+    } else {
+        putln("jwt alg:", jwt["algorithm"]);
+        putln("jwt sub:", jwt["claims"]["sub"]);
+        putln("jwt verified:", jwt["verified"]);
+    };
+
+    // Random identifiers.
+    putln("uuid :", uuid_v4());
+    putln("nonce:", random_hex(16));
+    return true;
+};
+
+run();

@@ -1,8 +1,8 @@
 {
     "name": "mutant-language-tools",
     "displayName": "Mutant Language Tools",
-    "description": "Language support for Mutant with LSP-powered navigation, diagnostics, and rename.",
-    "version": "0.0.2",
+    "description": "Language tools for Mutant, powered by a dedicated language server: strict canonical formatting, rich diagnostics (OS-aware platform warnings, unreachable code, unused/undefined/duplicate checks, semicolons), hover with capability categories, completion, semantic highlighting, go-to-definition, references, and rename.",
+    "version": "0.0.5",
     "publisher": "aoiflux",
     "icon": "images/icon-128.png",
     "license": "AGPL-3.0-only",
@@ -14,7 +14,20 @@
         "vscode": "^1.90.0"
     },
     "categories": [
-        "Programming Languages"
+        "Programming Languages",
+        "Linters",
+        "Formatters",
+        "Snippets"
+    ],
+    "keywords": [
+        "mutant",
+        "forensics",
+        "dfir",
+        "security",
+        "language server",
+        "lsp",
+        "formatter",
+        "linter"
     ],
     "main": "./out/extension.js",
     "contributes": {
@@ -68,6 +81,11 @@
                 "command": "mutant.copyLspLogs",
                 "title": "Mutant: Copy LSP Logs",
                 "category": "Mutant"
+            },
+            {
+                "command": "mutant.formatDocument",
+                "title": "Mutant: Format Document",
+                "category": "Mutant"
             }
         ],
         "configuration": {
@@ -86,10 +104,15 @@
                         "type": "string"
                     }
                 },
+                "mutant.strictFormatting": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Format Mutant files using the canonical style: four-space indentation, spaces only, and a semicolon after every statement that requires one. This is a master on/off switch, not a style option — Mutant formatting is deliberately not configurable, so that the same source always produces the same bytes. Set to false to disable Mutant formatting entirely."
+                },
                 "mutant.format.onType.enabled": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Enable on-type formatting for Mutant files. Off by default to avoid intrusive edits while typing."
+                    "description": "Enable on-type formatting for Mutant files. Off by default: on-type formatting reformats the whole document on every ';', '}' and newline, which is disruptive while typing. Format-on-save is enabled by default instead."
                 },
                 "mutant.lint.rules.duplicateTopLevelDeclaration.severity": {
                     "type": "string",
@@ -127,6 +150,18 @@
                     ],
                     "description": "Severity for undefined identifier lint diagnostics. Set to 'off' to suppress the rule."
                 },
+                "mutant.lint.rules.semicolon.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for missing or redundant semicolon diagnostics. Both come with a quick fix. Set to 'off' to suppress the rule."
+                },
                 "mutant.lint.rules.nestingComplexity.severity": {
                     "type": "string",
                     "default": "warning",
@@ -138,6 +173,30 @@
                         "off"
                     ],
                     "description": "Severity for deep nesting diagnostics in function bodies. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.unreachableCode.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unreachable-code diagnostics (statements after an unconditional return/break/continue). Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.platformSupport.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for platform-support diagnostics: warns when a program calls a builtin that is not supported on the operating system the language server is running on (for example a Windows/Linux-only builtin used on macOS). Set to 'off' to suppress the rule."
                 }
             }
         },

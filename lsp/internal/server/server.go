@@ -32,9 +32,14 @@ type Server struct {
 	symbols   *workspace.SymbolIndex
 	analyzer  *analyzer.Analyzer
 
-	mu                     sync.RWMutex
-	snapshots              map[lsp.DocumentUri]*analyzer.Snapshot
-	lintConfig             analyzer.LintConfig
+	mu         sync.RWMutex
+	snapshots  map[lsp.DocumentUri]*analyzer.Snapshot
+	lintConfig analyzer.LintConfig
+	// strictFormatting mirrors the `mutant.strictFormatting` setting. It is a
+	// master switch, not a style knob: when false the server declines to
+	// format at all. There is deliberately no setting that changes *how*
+	// formatting is done.
+	strictFormatting       bool
 	shutdown               bool
 	semanticFallbackWarned bool
 }
@@ -48,6 +53,8 @@ func New(debug bool) *Server {
 		analyzer:   analyzer.New(),
 		snapshots:  make(map[lsp.DocumentUri]*analyzer.Snapshot),
 		lintConfig: analyzer.DefaultLintConfig(),
+		// Strict formatting is the default; opting out is explicit.
+		strictFormatting: true,
 	}
 	_ = debug
 
@@ -72,6 +79,7 @@ func New(debug bool) *Server {
 	handler.TextDocumentRename = s.rename
 	handler.TextDocumentSemanticTokensFull = s.semanticTokensFull
 	handler.TextDocumentFormatting = s.formatting
+	handler.TextDocumentRangeFormatting = s.rangeFormatting
 	handler.TextDocumentOnTypeFormatting = s.onTypeFormatting
 	handler.WorkspaceSymbol = s.workspaceSymbols
 
@@ -114,6 +122,7 @@ func (s *Server) initialize(_ *glsp.Context, _ *lsp.InitializeParams) (any, erro
 			DocumentSymbolProvider:           docSymbols,
 			SemanticTokensProvider:           semanticTokens,
 			DocumentFormattingProvider:       true,
+			DocumentRangeFormattingProvider:  true,
 			DocumentOnTypeFormattingProvider: onTypeFormatting,
 		},
 		ServerInfo: &lsp.InitializeResultServerInfo{
@@ -131,6 +140,7 @@ func (s *Server) initialized(_ *glsp.Context, _ *lsp.InitializedParams) error {
 
 func (s *Server) didChangeConfiguration(ctx *glsp.Context, params *lsp.DidChangeConfigurationParams) error {
 	s.setLintConfig(parseLintConfig(params.Settings))
+	s.setStrictFormatting(parseStrictFormatting(params.Settings))
 	s.republishAllDiagnostics(ctx)
 	return nil
 }
@@ -305,6 +315,10 @@ func quickFixesForDiagnostic(uri lsp.DocumentUri, text string, snapshot *analyze
 		}
 	}
 
+	if *diagnostic.Source == analyzer.DiagnosticSourceFormat {
+		return semicolonQuickFixes(uri, diagnostic)
+	}
+
 	if *diagnostic.Source == "mutant-parser" && strings.Contains(diagnostic.Message, "expected next token to be ;") {
 		insertAt := diagnostic.Range.Start
 		actions = append(actions, lsp.CodeAction{
@@ -333,6 +347,43 @@ func quickFixesForDiagnostic(uri lsp.DocumentUri, text string, snapshot *analyze
 	}
 
 	return nil
+}
+
+// semicolonQuickFixes turns a recoverable semicolon diagnostic into a
+// one-character edit.
+//
+// For a missing terminator the diagnostic range was widened leftwards so it
+// renders, but End still marks the true insertion point, so the fix inserts
+// there. For a redundant one the range already covers the stray token, so the
+// fix simply deletes it.
+func semicolonQuickFixes(uri lsp.DocumentUri, diagnostic lsp.Diagnostic) []lsp.CodeAction {
+	kind := lsp.CodeActionKindQuickFix
+	preferred := true
+
+	var title string
+	var edit lsp.TextEdit
+
+	switch {
+	case strings.HasPrefix(diagnostic.Message, "missing ';'"):
+		insertAt := diagnostic.Range.End
+		title = "Insert missing ';'"
+		edit = lsp.TextEdit{Range: lsp.Range{Start: insertAt, End: insertAt}, NewText: ";"}
+	case strings.HasPrefix(diagnostic.Message, "redundant ';'"):
+		title = "Remove redundant ';'"
+		edit = lsp.TextEdit{Range: diagnostic.Range, NewText: ""}
+	default:
+		return nil
+	}
+
+	return []lsp.CodeAction{{
+		Title:       title,
+		Kind:        &kind,
+		Diagnostics: []lsp.Diagnostic{diagnostic},
+		IsPreferred: &preferred,
+		Edit: &lsp.WorkspaceEdit{Changes: map[lsp.DocumentUri][]lsp.TextEdit{
+			uri: {edit},
+		}},
+	}}
 }
 
 func quickFixesForUndefinedIdentifier(uri lsp.DocumentUri, text string, snapshot *analyzer.Snapshot, diagnostic lsp.Diagnostic) []lsp.CodeAction {
@@ -738,6 +789,10 @@ func (s *Server) semanticTokensFull(ctx *glsp.Context, params *lsp.SemanticToken
 }
 
 func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParams) ([]lsp.TextEdit, error) {
+	if !s.strictFormattingEnabled() {
+		return nil, nil
+	}
+
 	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
 	if !ok || doc == nil {
 		return nil, nil
@@ -748,7 +803,9 @@ func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParam
 		snapshot = s.analyzer.Analyze(doc.Text)
 	}
 
-	formatted := formatSnapshotText(snapshot, newFormatterConfig(params.Options))
+	// params.Options is intentionally ignored: Mutant formatting is canonical
+	// and never varies with the client's tabSize/insertSpaces settings.
+	formatted := formatSnapshotText(snapshot)
 	if formatted == doc.Text {
 		return nil, nil
 	}
@@ -759,8 +816,36 @@ func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParam
 	}}, nil
 }
 
+// rangeFormatting formats only the selected lines.
+//
+// The document is formatted as a whole — a Mutant fragment cannot be parsed
+// in isolation — and the resulting edits are then filtered down to those
+// contained in the selection, so nothing outside it is touched.
+func (s *Server) rangeFormatting(_ *glsp.Context, params *lsp.DocumentRangeFormattingParams) ([]lsp.TextEdit, error) {
+	if params == nil || !s.strictFormattingEnabled() {
+		return nil, nil
+	}
+
+	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
+	if !ok || doc == nil {
+		return nil, nil
+	}
+
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok || snapshot == nil {
+		snapshot = s.analyzer.Analyze(doc.Text)
+	}
+
+	formatted := formatSnapshotText(snapshot)
+	if formatted == doc.Text {
+		return nil, nil
+	}
+
+	return rangeFormattingEdits(doc.Text, formatted, params.Range), nil
+}
+
 func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFormattingParams) ([]lsp.TextEdit, error) {
-	if params == nil {
+	if params == nil || !s.strictFormattingEnabled() {
 		return nil, nil
 	}
 
@@ -779,7 +864,7 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 		snapshot = s.analyzer.Analyze(doc.Text)
 	}
 
-	formatted := formatSnapshotText(snapshot, newFormatterConfig(params.Options))
+	formatted := formatSnapshotText(snapshot)
 	if formatted == doc.Text {
 		return nil, nil
 	}
@@ -843,6 +928,18 @@ func (s *Server) currentLintConfig() analyzer.LintConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lintConfig
+}
+
+func (s *Server) strictFormattingEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.strictFormatting
+}
+
+func (s *Server) setStrictFormatting(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.strictFormatting = enabled
 }
 
 func (s *Server) setLintConfig(config analyzer.LintConfig) {

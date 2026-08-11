@@ -2,10 +2,10 @@ package builtin
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -14,6 +14,11 @@ import (
 
 	"mutant/object"
 )
+
+// maxInMemoryReadBytes caps how much image content a single builtin call will
+// materialise as a mutant string. Shared by the *_read_at builtins and by
+// xfat_read_file, which has to stage its content through a temp file.
+const maxInMemoryReadBytes = 32 * 1024 * 1024
 
 type vhdiMetadata struct {
 	Format           string
@@ -25,6 +30,18 @@ type vhdiMetadata struct {
 	IsDifferencing   bool
 	ParentFilename   string
 	ParentIdentifier string
+	// Chain state. A differencing disk whose parent could not be resolved still
+	// opens; only reads fail. Without these a script sees is_differencing=true
+	// and has no way to learn the chain is broken until a read errors.
+	NeedsParent        bool
+	ChainComplete      bool
+	ChainDepth         int
+	ParentResolveError string
+	// VHDX log state. A dirty image did not reflect its last committed state,
+	// which is forensically material.
+	IsDirty     bool
+	HasLog      bool
+	LogReplayed bool
 }
 
 type vhdiSession interface {
@@ -68,6 +85,15 @@ type ewfMetadata struct {
 	NumberOfSectors   uint64
 	NumberOfChunks    uint64
 	TotalLogicalBytes uint64
+	SectorSize        int
+	CompressionMethod uint16
+	// Chunk-table integrity. ChunkTablesInvalid counts groups where neither the
+	// primary table nor its table2 backup validated: their chunks were decoded
+	// unverified and the data they describe should be treated as suspect.
+	ChunkTablesInvalid    int
+	ChunkTablesRecovered  int
+	ObservedChunkCount    uint64
+	AcquisitionErrorCount int
 }
 
 type ewfSession interface {
@@ -207,6 +233,14 @@ func VHDIMetadata(args ...object.Object) object.Object {
 		"is_differencing":   boolObj(metadata.IsDifferencing),
 		"parent_filename":   stringObj(metadata.ParentFilename),
 		"parent_identifier": stringObj(metadata.ParentIdentifier),
+
+		"needs_parent":         boolObj(metadata.NeedsParent),
+		"chain_complete":       boolObj(metadata.ChainComplete),
+		"chain_depth":          intObj(int64(metadata.ChainDepth)),
+		"parent_resolve_error": stringObj(metadata.ParentResolveError),
+		"is_dirty":             boolObj(metadata.IsDirty),
+		"has_log":              boolObj(metadata.HasLog),
+		"log_replayed":         boolObj(metadata.LogReplayed),
 	}), nil)
 }
 
@@ -234,7 +268,7 @@ func VHDIReadAt(args ...object.Object) object.Object {
 	if lengthObj.Value < 0 {
 		return resultAndError(nil, newError("vhdi_read_at: length must be >= 0"))
 	}
-	if lengthObj.Value > 32*1024*1024 {
+	if lengthObj.Value > maxInMemoryReadBytes {
 		return resultAndError(nil, newError("vhdi_read_at: length too large (max 33554432)"))
 	}
 
@@ -375,6 +409,13 @@ func EWFMetadata(args ...object.Object) object.Object {
 		"number_of_sectors":   intObj(int64(metadata.NumberOfSectors)),
 		"number_of_chunks":    intObj(int64(metadata.NumberOfChunks)),
 		"total_logical_bytes": intObj(int64(metadata.TotalLogicalBytes)),
+
+		"sector_size":             intObj(int64(metadata.SectorSize)),
+		"compression_method":      intObj(int64(metadata.CompressionMethod)),
+		"chunk_tables_invalid":    intObj(int64(metadata.ChunkTablesInvalid)),
+		"chunk_tables_recovered":  intObj(int64(metadata.ChunkTablesRecovered)),
+		"observed_chunk_count":    intObj(int64(metadata.ObservedChunkCount)),
+		"acquisition_error_count": intObj(int64(metadata.AcquisitionErrorCount)),
 	}), nil)
 }
 
@@ -402,7 +443,7 @@ func EWFReadAt(args ...object.Object) object.Object {
 	if lengthObj.Value < 0 {
 		return resultAndError(nil, newError("ewf_read_at: length must be >= 0"))
 	}
-	if lengthObj.Value > 32*1024*1024 {
+	if lengthObj.Value > maxInMemoryReadBytes {
 		return resultAndError(nil, newError("ewf_read_at: length too large (max 33554432)"))
 	}
 
@@ -497,9 +538,13 @@ func RAWMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("raw_metadata: %s", err.Error()))
 	}
 
+	// A raw disk image carries no stored sector-size metadata, so 512 is an
+	// assumption (the near-universal default), surfaced honestly as such rather
+	// than as a discovered value.
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"file_size":   intObj(metadata.FileSize),
-		"sector_size": intObj(int64(metadata.SectorSize)),
+		"file_size":           intObj(metadata.FileSize),
+		"assumed_sector_size": intObj(int64(metadata.SectorSize)),
+		"sector_size_assumed": boolObj(true),
 	}), nil)
 }
 
@@ -527,7 +572,7 @@ func RAWReadAt(args ...object.Object) object.Object {
 	if lengthObj.Value < 0 {
 		return resultAndError(nil, newError("raw_read_at: length must be >= 0"))
 	}
-	if lengthObj.Value > 32*1024*1024 {
+	if lengthObj.Value > maxInMemoryReadBytes {
 		return resultAndError(nil, newError("raw_read_at: length too large (max 33554432)"))
 	}
 
@@ -683,7 +728,7 @@ func (s *realVHDISession) ReadAt(offset int64, length int64) ([]byte, error) {
 	}
 	buf := make([]byte, length)
 	n, err := s.disk.ReadAt(buf, offset)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return buf[:n], nil
@@ -696,6 +741,15 @@ func (s *realVHDISession) Metadata() (vhdiMetadata, error) {
 		SectorSize:     s.disk.SectorSize(),
 		Identifier:     s.disk.GUIDString(),
 		IsDifferencing: s.disk.IsDifferencing(),
+		NeedsParent:    s.disk.NeedsParent(),
+		ChainComplete:  s.disk.ChainComplete(),
+		ChainDepth:     s.disk.ChainDepth(),
+		IsDirty:        s.disk.IsDirty(),
+		HasLog:         s.disk.HasLog(),
+		LogReplayed:    s.disk.LogReplayed(),
+	}
+	if err := s.disk.ParentResolveError(); err != nil {
+		meta.ParentResolveError = err.Error()
 	}
 
 	switch s.disk.Format() {
@@ -720,7 +774,14 @@ func (s *realVHDISession) Metadata() (vhdiMetadata, error) {
 
 	if meta.IsDifferencing {
 		meta.ParentFilename = s.disk.ParentFilename()
-		meta.ParentIdentifier = guidBytesToString(s.disk.ParentIdentifier())
+		// Take the parent GUID from the parent disk's own GUIDString so it is
+		// formatted identically to Identifier above. A hand-rolled big-endian
+		// formatter over ParentIdentifier() produces a string that can never
+		// match the parent's reported identifier, since the library byte-swaps
+		// the first three GUID fields.
+		if parent := s.disk.Parent(); parent != nil {
+			meta.ParentIdentifier = parent.GUIDString()
+		}
 	}
 
 	return meta, nil
@@ -743,7 +804,7 @@ func (s *realEWFSession) ReadAt(offset int64, length int64) ([]byte, error) {
 	}
 	buf := make([]byte, length)
 	n, err := s.reader.ReadAt(buf, offset)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return buf[:n], nil
@@ -762,6 +823,15 @@ func (s *realEWFSession) Metadata() (ewfMetadata, error) {
 		HasIntegrityHash: meta.HasIntegrityHashBlocks,
 		HasMD5Digest:     meta.HasMD5Digest,
 		HasSHA1Digest:    meta.HasSHA1Digest,
+		// The decoded device size comes from the reader, not from multiplying
+		// two media fields that are absent on some images.
+		TotalLogicalBytes:     uint64(s.reader.Size()),
+		SectorSize:            s.reader.SectorSize(),
+		CompressionMethod:     meta.CompressionMethod,
+		ChunkTablesInvalid:    meta.ChunkTablesInvalid,
+		ChunkTablesRecovered:  meta.ChunkTablesRecovered,
+		ObservedChunkCount:    meta.ObservedChunkCount,
+		AcquisitionErrorCount: len(meta.AcquisitionErrors),
 	}
 
 	if meta.HasMD5Digest {
@@ -776,7 +846,6 @@ func (s *realEWFSession) Metadata() (ewfMetadata, error) {
 		out.SectorsPerChunk = meta.Media.SectorsPerChunk
 		out.NumberOfSectors = meta.Media.NumberOfSectors
 		out.NumberOfChunks = meta.Media.NumberOfChunks
-		out.TotalLogicalBytes = uint64(meta.Media.BytesPerSector) * meta.Media.NumberOfSectors
 	}
 
 	return out, nil
@@ -805,7 +874,7 @@ func (s *realRawSession) ReadAt(offset int64, length int64) ([]byte, error) {
 	}
 	buf := make([]byte, length)
 	n, err := s.file.ReadAt(buf, offset)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return buf[:n], nil
@@ -854,31 +923,4 @@ func parseEWFSegmentPaths(arg object.Object, op string) ([]string, *object.Error
 	}
 
 	return paths, nil
-}
-
-func guidBytesToString(guid [16]byte) string {
-	parts := []int{4, 2, 2, 2, 6}
-	buf := make([]byte, 0, 36)
-	idx := 0
-	for i, n := range parts {
-		for j := 0; j < n; j++ {
-			buf = append(buf, fmt.Sprintf("%02x", guid[idx])...)
-			idx++
-		}
-		if i < len(parts)-1 {
-			buf = append(buf, '-')
-		}
-	}
-	return string(buf)
-}
-
-func sortedVHDIHandles() []string {
-	vhdiStore.RLock()
-	defer vhdiStore.RUnlock()
-	keys := make([]string, 0, len(vhdiStore.handles))
-	for k := range vhdiStore.handles {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

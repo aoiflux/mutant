@@ -12,8 +12,9 @@ type ReturnStatement struct {
 	ReturnValues []Expression
 }
 
-func (rs *ReturnStatement) statementNode()       {}
-func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
+func (rs *ReturnStatement) statementNode()          {}
+func (rs *ReturnStatement) RequiresSemicolon() bool { return true }
+func (rs *ReturnStatement) TokenLiteral() string    { return rs.Token.Literal }
 func (rs *ReturnStatement) String() string {
 	var out bytes.Buffer
 

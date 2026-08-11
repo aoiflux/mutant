@@ -119,21 +119,21 @@ type fakeXFSSession struct {
 }
 
 func (f *fakeXFSSession) ListFiles(dirPath string) ([]xfsListEntry, error) {
-	if v, ok := f.entries[normalizeXFSPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeXFSSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeXFSPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeXFSSession) Metadata(filePath string) (xfsMetadata, error) {
-	if v, ok := f.meta[normalizeXFSPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return xfsMetadata{}, errors.New("metadata not found")
@@ -144,21 +144,21 @@ func (f *fakeXFSSession) Close() error {
 }
 
 func (f *fakeHFSSession) ListFiles(dirPath string) ([]hfsListEntry, error) {
-	if v, ok := f.entries[normalizeHFSPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeHFSSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeHFSPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeHFSSession) Metadata(filePath string) (hfsMetadata, error) {
-	if v, ok := f.meta[normalizeHFSPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return hfsMetadata{}, errors.New("metadata not found")
@@ -169,21 +169,21 @@ func (f *fakeHFSSession) Close() error {
 }
 
 func (f *fakeEXTSession) ListFiles(dirPath string) ([]extListEntry, error) {
-	if v, ok := f.entries[normalizeEXTPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeEXTSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeEXTPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeEXTSession) Metadata(filePath string) (extMetadata, error) {
-	if v, ok := f.meta[normalizeEXTPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return extMetadata{}, errors.New("metadata not found")
@@ -194,21 +194,21 @@ func (f *fakeEXTSession) Close() error {
 }
 
 func (f *fakeXFATSession) ListFiles(dirPath string) ([]xfatListEntry, error) {
-	if v, ok := f.entries[normalizeXFATPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeXFATSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeXFATPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeXFATSession) Metadata(filePath string) (xfatMetadata, error) {
-	if v, ok := f.meta[normalizeXFATPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return xfatMetadata{}, errors.New("metadata not found")
@@ -219,21 +219,21 @@ func (f *fakeXFATSession) Close() error {
 }
 
 func (f *fakeFATSession) ListFiles(dirPath string) ([]fatListEntry, error) {
-	if v, ok := f.entries[normalizeFATPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeFATSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeFATPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeFATSession) Metadata(filePath string) (fatMetadata, error) {
-	if v, ok := f.meta[normalizeFATPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return fatMetadata{}, errors.New("metadata not found")
@@ -244,21 +244,21 @@ func (f *fakeFATSession) Close() error {
 }
 
 func (f *fakeNTFSSession) ListFiles(dirPath string) ([]ntfsListEntry, error) {
-	if v, ok := f.entries[normalizeNTFSPath(dirPath)]; ok {
+	if v, ok := f.entries[normalizeFSPath(dirPath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("path not found")
 }
 
 func (f *fakeNTFSSession) ReadFile(filePath string) ([]byte, error) {
-	if v, ok := f.files[normalizeNTFSPath(filePath)]; ok {
+	if v, ok := f.files[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return nil, errors.New("file not found")
 }
 
 func (f *fakeNTFSSession) Metadata(filePath string) (ntfsMetadata, error) {
-	if v, ok := f.meta[normalizeNTFSPath(filePath)]; ok {
+	if v, ok := f.meta[normalizeFSPath(filePath)]; ok {
 		return v, nil
 	}
 	return ntfsMetadata{}, errors.New("metadata not found")

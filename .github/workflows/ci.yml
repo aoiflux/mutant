@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+# Enforces the two hard project constraints on every change:
+#   1. Pure-Go only — the whole module must build and test with CGO_ENABLED=0.
+#   2. Cross-platform — it must build on Windows, Linux, and macOS.
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  build-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build (CGO disabled)
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (CGO disabled)
+        run: go test ./...
+
+  cross-build:
+    name: cross-compile all targets (CGO disabled)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The pure-Go / cross-platform gate: every supported target must build with
+      # cgo off. A dependency that pulls in cgo, or platform-specific code without a
+      # fallback, fails here.
+      - name: Build matrix
+        run: |
+          set -e
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            echo "== $os/$arch =="
+            GOOS="$os" GOARCH="$arch" go build ./...
+          done
+
+      - name: Build language server (mlsp)
+        working-directory: lsp
+        run: go build ./cmd/mlsp
+
+  deps:
+    name: dependency consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Verify the module graph and downloaded sums. Combined with the cross-OS
+      # build matrix above (which fails if any aoiflux/* forensic library or other
+      # dependency is missing, broken, or inconsistent for a target platform), this
+      # is the dependency-consistency gate. We intentionally do NOT run a
+      # `go mod tidy` diff check here: tidy results can vary with the toolchain and
+      # this module deliberately carries dependencies across platforms.
+      - name: go mod verify
+        run: go mod verify
+
+      - name: Dependencies resolve without changes
+        run: go mod download && go build ./...

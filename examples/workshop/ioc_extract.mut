@@ -1,0 +1,21 @@
+// Workshop extra - Extract IOCs from text
+//
+// Pull every indicator (IPs, domains, URLs, emails, hashes) out of a blob of
+// text in ONE call, then defang them for a safe report. Input: none.
+
+putln("=== Extract IOCs ===");
+
+let report = "Beaconing to 185.12.0.9 and evil.example.com " +
+    "(http://evil.example.com/panel). Dropper sha256 " +
+    "44d88612fea8a8f36de82e1278abb02f. Contact ops@evil.example.com.";
+
+// extract_iocs refangs the text first, then returns unique, sorted indicators.
+let iocs = extract_iocs(report);
+putln("ipv4   :", iocs["ipv4"]);
+putln("domains:", iocs["domains"]);
+putln("urls   :", iocs["urls"]);
+putln("emails :", iocs["emails"]);
+putln("md5    :", iocs["md5"]);
+
+// Defang before pasting into a ticket so nobody clicks it by accident.
+putln("safe   :", defang("http://evil.example.com/panel"));

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
+
 	"mutant/builtin"
 	"mutant/compiler"
 	"mutant/errrs"
@@ -34,11 +36,36 @@ var (
 
 const processProtectionTerminateConfidence = 80
 
+// stopwatch prints elapsed-since-start to stderr for each labelled stage when
+// MUTANT_TIMING is set. Zero overhead otherwise. (dev-sec-platform-upgrades)
+type stopwatch struct {
+	on    bool
+	start time.Time
+	last  time.Time
+}
+
+func newStopwatch() *stopwatch {
+	now := time.Now()
+	return &stopwatch{on: os.Getenv("MUTANT_TIMING") != "", start: now, last: now}
+}
+
+func (s *stopwatch) mark(label string) {
+	if !s.on {
+		return
+	}
+	now := time.Now()
+	fmt.Fprintf(os.Stderr, "[timing] %-22s +%7.1fms  (total %7.1fms)\n",
+		label, float64(now.Sub(s.last).Microseconds())/1000, float64(now.Sub(s.start).Microseconds())/1000)
+	s.last = now
+}
+
 func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
+	sw := newStopwatch()
 	signedCode, err := os.ReadFile(srcpath)
 	if err != nil {
 		return err, errrs.ERROR
 	}
+	sw.mark("read+extract")
 
 	signedCode, err = extractStandaloneSignedCode(signedCode)
 	if err != nil {
@@ -76,20 +103,33 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 		}
 	}
 
+	sw.mark("verify-signature")
+
 	if err := enforceAntiRev(secureMode, "pre-decode"); err != nil {
 		return err, errrs.ERROR
 	}
+	sw.mark("antirev-pre-decode")
 
 	bytecode, err := decode(signedCode, password)
 	if err != nil {
 		return err, errrs.ERROR
 	}
+	sw.mark("decode(argon2+aes)")
 
-	if err := enforceAntiRev(secureMode, "pre-execution"); err != nil {
-		return err, errrs.ERROR
+	// The anti-reversing probe suite is expensive (~1.5s). In secure mode it runs
+	// twice (pre-decode and pre-execution) for defense in depth. In non-secure
+	// (--compat/--dev) mode the probes are advisory-only, so the second pass is
+	// pure startup cost with no security value — skip it. (dev-sec-platform-upgrades)
+	if secureMode {
+		if err := enforceAntiRev(secureMode, "pre-execution"); err != nil {
+			return err, errrs.ERROR
+		}
 	}
+	sw.mark("antirev-pre-exec")
 
-	return runvm(bytecode, password, secureMode)
+	res, et := runvm(bytecode, password, secureMode)
+	sw.mark("runvm(execute)")
+	return res, et
 }
 
 func enforceAntiRev(secureMode bool, stage string) error {

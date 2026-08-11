@@ -1,50 +1,41 @@
 package builtin
 
 import (
-	"fmt"
+	"bufio"
+	"io"
+	"os"
+	"strings"
+
 	"mutant/object"
-	"strconv"
 )
 
-func getType(in string) (string, any) {
-	if val, err := strconv.ParseInt(in, 10, 64); err == nil {
-		return "int", val
-	}
-	if val, err := strconv.ParseFloat(in, 64); err == nil {
-		return "float", val
-	}
-	if val, err := strconv.ParseBool(in); err == nil {
-		return "bool", val
-	}
-	return "str", in
-}
+// stdinReader buffers os.Stdin across calls so multiple gets() invocations don't
+// drop data between reads.
+var stdinReader = bufio.NewReader(os.Stdin)
 
+// Gets reads a full line of input from stdin and returns it as a STRING (without
+// the trailing newline). Use to_int/to_float/parse_int/parse_float to convert.
 func Gets(args ...object.Object) object.Object {
 	if len(args) != 0 {
 		return newError("wrong number of arguments. got=%d, want=0", len(args))
 	}
-
-	var in string
-	_, err := fmt.Scanln(&in)
+	line, err := readStdinLine(stdinReader)
 	if err != nil {
-		return newError("something went wrong :/")
+		return newError("gets: %s", err.Error())
 	}
-	inType, inVal := getType(in)
+	return stringObj(line)
+}
 
-	switch inType {
-	case "bool":
-		inVal := inVal.(bool)
-		return &object.Boolean{Value: inVal}
-	case "int":
-		inVal := inVal.(int64)
-		return &object.Integer{Value: inVal}
-	case "float":
-		inVal := inVal.(float64)
-		return &object.Float{Value: inVal}
-	case "str":
-		inVal := inVal.(string)
-		return &object.String{Value: inVal}
-	default:
-		return nil
+// readStdinLine reads through the next newline and returns the line without its
+// trailing CR/LF. A final line that has data but no newline (EOF) is still
+// returned; EOF with no data is reported as an error.
+func readStdinLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		if err == io.EOF && line != "" {
+			return strings.TrimRight(line, "\r\n"), nil
+		}
+		return "", err
 	}
+	return strings.TrimRight(line, "\r\n"), nil
 }

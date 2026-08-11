@@ -12,7 +12,7 @@ func Rest(args ...object.Object) object.Object {
 
 	arr := args[0].(*object.Array)
 	length := len(arr.Elements)
-	if length > 1 {
+	if length > 0 {
 		newElements := make([]object.Object, length-1)
 		copy(newElements, arr.Elements[1:length])
 		return &object.Array{Elements: newElements}

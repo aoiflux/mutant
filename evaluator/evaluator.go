@@ -30,6 +30,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return evalPrefixExpression(node.Operator, right)
 
 	case *ast.InfixExpression:
+		// Logical && / || short-circuit: the right operand is only evaluated when
+		// the left operand does not already decide the result.
+		if node.Operator == "&&" || node.Operator == "||" {
+			return evalLogicalExpression(node, env)
+		}
 		left := Eval(node.Left, env)
 		if isError(left) {
 			return left
@@ -212,6 +217,12 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		evaluated := Eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
+		// Higher-order builtins (map/filter/reduce/each/sort_by) call user
+		// functions, which the builtin itself cannot; the evaluator handles them
+		// natively via applyFunction, mirroring the VM's native handling.
+		if kind := builtin.HigherOrderKind(fun); kind != "" {
+			return applyHigherOrder(kind, args)
+		}
 		result := fun.Fn(args...)
 		if result == nil {
 			return NULL
@@ -287,14 +298,50 @@ func destructureValues(source object.Object, arity int) []object.Object {
 	return values
 }
 
+// evalLogicalExpression evaluates && / || with short-circuit semantics and a
+// strict BOOLEAN result. For &&, the right operand is skipped when the left is
+// falsy; for ||, it is skipped when the left is truthy.
+func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) object.Object {
+	left := Eval(node.Left, env)
+	if isError(left) {
+		return left
+	}
+	leftTruthy := isTruthy(left)
+
+	if node.Operator == "&&" {
+		if !leftTruthy {
+			return FALSE
+		}
+	} else { // "||"
+		if leftTruthy {
+			return TRUE
+		}
+	}
+
+	right := Eval(node.Right, env)
+	if isError(right) {
+		return right
+	}
+	if isTruthy(right) {
+		return TRUE
+	}
+	return FALSE
+}
+
 func isTruthy(obj object.Object) bool {
-	switch obj {
-	case NULL:
+	// Conventional truthiness (dev-sec-platform-upgrades): false, null, empty
+	// string, 0 and 0.0 are falsy; everything else is truthy.
+	switch o := obj.(type) {
+	case *object.Boolean:
+		return o.Value
+	case *object.Null:
 		return false
-	case TRUE:
-		return true
-	case FALSE:
-		return false
+	case *object.String:
+		return len(o.Value) != 0
+	case *object.Integer:
+		return o.Value != 0
+	case *object.Float:
+		return o.Value != 0
 	default:
 		return true
 	}

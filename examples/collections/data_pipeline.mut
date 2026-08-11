@@ -1,0 +1,66 @@
+// data_pipeline.mut — functional data processing.
+//
+// Demonstrates first-class functions, closures, and the higher-order collection
+// builtins (map / filter / reduce / each / sort_by) working over a real dataset.
+// Everything is self-contained, so this runs with no external input.
+
+let header = fn(title) {
+    putln("=== " + title + " ===");
+};
+
+let run = fn() {
+    header("data_pipeline");
+
+    // A small dataset: security events, each with a severity score.
+    let events = [
+        { "host": "web01", "kind": "login_fail", "score": 3 },
+        { "host": "web01", "kind": "login_fail", "score": 3 },
+        { "host": "db01",  "kind": "exfil",      "score": 9 },
+        { "host": "web02", "kind": "scan",       "score": 5 },
+        { "host": "db01",  "kind": "priv_esc",   "score": 8 }
+    ];
+
+    // map: project one field out of each record.
+    let scores = map(events, fn(e) { return e["score"]; });
+    putln("scores:", scores);
+
+    // filter: keep only high-severity events. The closure captures `threshold`.
+    let threshold = 8;
+    let high = filter(events, fn(e) { return e["score"] >= threshold; });
+    putln("high-severity events:", len(high));
+
+    // reduce / aggregates.
+    let total = reduce(scores, fn(acc, s) { return acc + s; }, 0);
+    putln("total risk:", total);
+    putln("mean risk:", avg(scores));
+    // max/min are variadic (max(a, b, ...)), so fold the array to find the peak.
+    let peak = reduce(scores, fn(acc, s) {
+        if (s > acc) {
+            return s;
+        };
+        return acc;
+    }, 0);
+    putln("max risk: ", peak);
+
+    // sort_by: rank events by descending score (negate the key to reverse).
+    let ranked = sort_by(events, fn(e) { return 0 - e["score"]; });
+    putln("ranked (highest first):");
+    each(ranked, fn(e) {
+        putln("  " + e["host"] + "  " + e["kind"] + "  score=" + to_string(e["score"]));
+    });
+
+    // Closures as a factory: build a reusable scorer parameterized by weight.
+    let weighted_scorer = fn(weight) {
+        return fn(s) { return s * weight; };
+    };
+    let doubler = weighted_scorer(2);
+    putln("weighted (x2):", map(scores, doubler));
+
+    // Deduplicate + sort the affected hosts.
+    let hosts = map(events, fn(e) { return e["host"]; });
+    putln("unique hosts:", sort(unique(hosts)));
+
+    return true;
+};
+
+run();

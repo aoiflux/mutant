@@ -11,9 +11,20 @@ type Node interface {
 	String() string
 }
 
+// Statement is a Mutant statement node.
+//
+// RequiresSemicolon reports whether canonical Mutant source terminates this
+// statement with `;`. Mutant mandates semicolons — there is no automatic
+// insertion as in Go — so this is the single source of truth shared by the
+// parser (which reports a missing `;` as a recoverable error) and the
+// formatter (which emits one during AST-to-text printing). Statements whose
+// canonical form already ends in a closing brace — blocks, `for` loops,
+// `struct`/`enum` declarations, and expression statements wrapping an `if` —
+// report false.
 type Statement interface {
 	Node
 	statementNode()
+	RequiresSemicolon() bool
 }
 
 type Expression interface {
@@ -39,9 +50,14 @@ func (r Range) IsValid() bool { return r.Start.IsValid() && r.End.IsValid() }
 // remain untouched and existing tests that construct nodes directly still
 // work. Consumers that don't need positions can ignore the map; consumers
 // that do should prefer RangeOf which is nil-safe.
+// Comments holds the comment trivia the lexer skipped, in source order. It
+// is a side-table for the same reason NodePositions is: the compiler,
+// evaluator and VM are indifferent to comments, while the formatter needs
+// them to reproduce authored documentation around the code it prints.
 type Program struct {
 	Statements    []Statement
 	NodePositions map[Node]Range
+	Comments      []token.Comment
 }
 
 // RangeOf returns the source range recorded for n during parsing.

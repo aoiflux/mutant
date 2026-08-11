@@ -6,9 +6,7 @@ import (
 	"io"
 	"os"
 	"path"
-	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +50,7 @@ type ntfsMetadata struct {
 	CreatedAt     string
 	ModifiedAt    string
 	AccessedAt    string
+	ChangedAt     string
 }
 
 type ntfsSession interface {
@@ -138,6 +137,39 @@ type fatHandleState struct {
 	Session    fatSession
 }
 
+// xfatTimes holds the exFAT MAC times for one entry. exFAT stores a wall-clock
+// reading plus an optional UTC offset; *OffsetValid says whether the offset was
+// actually recorded, so a caller can tell a real UTC time from a face-value one.
+type xfatTimes struct {
+	CreatedAt           string
+	ModifiedAt          string
+	AccessedAt          string
+	CreatedOffsetValid  bool
+	ModifiedOffsetValid bool
+	AccessedOffsetValid bool
+}
+
+func xfatTimesFromEntry(entry libxfat.Entry) xfatTimes {
+	ts := entry.GetTimestamps()
+	return xfatTimes{
+		CreatedAt:           formatTime(ts.Created),
+		ModifiedAt:          formatTime(ts.Modified),
+		AccessedAt:          formatTime(ts.Accessed),
+		CreatedOffsetValid:  ts.CreatedOffsetValid,
+		ModifiedOffsetValid: ts.ModifiedOffsetValid,
+		AccessedOffsetValid: ts.AccessedOffsetValid,
+	}
+}
+
+func (t xfatTimes) toHash(m map[string]object.Object) {
+	m["created_at"] = stringObj(t.CreatedAt)
+	m["modified_at"] = stringObj(t.ModifiedAt)
+	m["accessed_at"] = stringObj(t.AccessedAt)
+	m["created_utc_offset_valid"] = boolObj(t.CreatedOffsetValid)
+	m["modified_utc_offset_valid"] = boolObj(t.ModifiedOffsetValid)
+	m["accessed_utc_offset_valid"] = boolObj(t.AccessedOffsetValid)
+}
+
 type xfatListEntry struct {
 	Name         string
 	Path         string
@@ -149,21 +181,29 @@ type xfatListEntry struct {
 	Virtual      bool
 	Indexed      bool
 	HasFATChain  bool
+	Attributes   uint16
+	// ValidDataSize is how much of Size was actually written; the gap between
+	// the two is allocated-but-never-written slack.
+	ValidDataSize uint64
+	Times         xfatTimes
 }
 
 type xfatMetadata struct {
-	Path         string
-	Name         string
-	EntryCluster uint32
-	Size         uint64
-	IsDirectory  bool
-	Deleted      bool
-	Special      bool
-	Virtual      bool
-	Indexed      bool
-	HasFATChain  bool
-	VolumeLabel  string
-	ClusterSize  uint64
+	Path          string
+	Name          string
+	EntryCluster  uint32
+	Size          uint64
+	IsDirectory   bool
+	Deleted       bool
+	Special       bool
+	Virtual       bool
+	Indexed       bool
+	HasFATChain   bool
+	VolumeLabel   string
+	ClusterSize   uint64
+	Attributes    uint16
+	ValidDataSize uint64
+	Times         xfatTimes
 }
 
 type xfatSession interface {
@@ -183,6 +223,10 @@ type realXFATSession struct {
 	img   *os.File
 	fs    *libxfat.ExFAT
 	cache map[string]libxfat.Entry
+	// mu guards path resolution (the cache map + volume reads within it). XFAT
+	// handles can be shared across concurrent serve goroutines, and an
+	// unsynchronized map write is a fatal "concurrent map writes" crash.
+	mu sync.Mutex
 }
 
 type xfatHandleState struct {
@@ -196,6 +240,11 @@ type extListEntry struct {
 	Inode       uint32
 	IsDirectory bool
 	Size        uint64
+	Deleted     bool
+	CreatedAt   string
+	ModifiedAt  string
+	AccessedAt  string
+	ChangedAt   string
 }
 
 type extMetadata struct {
@@ -207,6 +256,14 @@ type extMetadata struct {
 	Kind        string
 	BlockSize   uint32
 	InodesCount uint32
+	CreatedAt   string
+	ModifiedAt  string
+	AccessedAt  string
+	ChangedAt   string
+	Deleted     bool
+	// Warnings records where libext judged the answer may be incomplete or
+	// wrong — an unknown feature bit, a checksum mismatch, a truncated image.
+	Warnings []string
 }
 
 type extSession interface {
@@ -252,6 +309,20 @@ type hfsMetadata struct {
 	FreeBlocks  uint32
 	FileCount   uint32
 	FolderCount uint32
+	CreatedAt   string
+	ModifiedAt  string
+	AccessedAt  string
+	ChangedAt   string
+	BackupAt    string
+	// TimeSource distinguishes HFS+ GMT stamps from classic HFS wall-clock
+	// local time, which carries no recorded UTC offset. Compare times across
+	// volumes only when the sources match.
+	TimeSource string
+	// Compressed files store their data in the resource fork / decmpfs xattr;
+	// CompressionType names the codec even when it cannot be decoded.
+	Compressed       bool
+	CompressionType  uint32
+	ResourceForkSize uint64
 }
 
 type hfsSession interface {
@@ -283,6 +354,11 @@ type xfsListEntry struct {
 	Inode       uint64
 	IsDirectory bool
 	Size        uint64
+	FileType    string
+	// InodeError records why this entry's inode could not be read. A damaged
+	// inode no longer aborts the whole listing, so the entry is still reported
+	// with whatever the directory record itself could supply.
+	InodeError string
 }
 
 type xfsMetadata struct {
@@ -296,6 +372,11 @@ type xfsMetadata struct {
 	InodeSize     uint16
 	VolumeBlocks  uint64
 	RootInode     uint64
+	NeedsRepair   bool
+	CreatedAt     string
+	ModifiedAt    string
+	AccessedAt    string
+	ChangedAt     string
 }
 
 type xfsSession interface {
@@ -520,6 +601,7 @@ func NtfsMetadata(args ...object.Object) object.Object {
 		"created_at":     stringObj(metadata.CreatedAt),
 		"modified_at":    stringObj(metadata.ModifiedAt),
 		"accessed_at":    stringObj(metadata.AccessedAt),
+		"changed_at":     stringObj(metadata.ChangedAt),
 	}), nil)
 }
 
@@ -803,18 +885,22 @@ func XFATListFiles(args ...object.Object) object.Object {
 
 	items := make([]object.Object, 0, len(entries))
 	for _, entry := range entries {
-		items = append(items, makeHashObject(map[string]object.Object{
-			"name":          stringObj(entry.Name),
-			"path":          stringObj(entry.Path),
-			"entry_cluster": intObj(int64(entry.EntryCluster)),
-			"size":          intObj(int64(entry.Size)),
-			"is_dir":        boolObj(entry.IsDirectory),
-			"deleted":       boolObj(entry.Deleted),
-			"special":       boolObj(entry.Special),
-			"virtual":       boolObj(entry.Virtual),
-			"indexed":       boolObj(entry.Indexed),
-			"has_fat_chain": boolObj(entry.HasFATChain),
-		}))
+		row := map[string]object.Object{
+			"name":            stringObj(entry.Name),
+			"path":            stringObj(entry.Path),
+			"entry_cluster":   intObj(int64(entry.EntryCluster)),
+			"size":            intObj(int64(entry.Size)),
+			"is_dir":          boolObj(entry.IsDirectory),
+			"deleted":         boolObj(entry.Deleted),
+			"special":         boolObj(entry.Special),
+			"virtual":         boolObj(entry.Virtual),
+			"indexed":         boolObj(entry.Indexed),
+			"has_fat_chain":   boolObj(entry.HasFATChain),
+			"attributes":      intObj(int64(entry.Attributes)),
+			"valid_data_size": intObj(int64(entry.ValidDataSize)),
+		}
+		entry.Times.toHash(row)
+		items = append(items, makeHashObject(row))
 	}
 
 	return resultAndError(&object.Array{Elements: items}, nil)
@@ -863,20 +949,25 @@ func XFATMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("xfat_metadata: %s", err.Error()))
 	}
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"path":          stringObj(metadata.Path),
-		"name":          stringObj(metadata.Name),
-		"entry_cluster": intObj(int64(metadata.EntryCluster)),
-		"size":          intObj(int64(metadata.Size)),
-		"is_dir":        boolObj(metadata.IsDirectory),
-		"deleted":       boolObj(metadata.Deleted),
-		"special":       boolObj(metadata.Special),
-		"virtual":       boolObj(metadata.Virtual),
-		"indexed":       boolObj(metadata.Indexed),
-		"has_fat_chain": boolObj(metadata.HasFATChain),
-		"volume_label":  stringObj(metadata.VolumeLabel),
-		"cluster_size":  intObj(int64(metadata.ClusterSize)),
-	}), nil)
+	out := map[string]object.Object{
+		"path":            stringObj(metadata.Path),
+		"name":            stringObj(metadata.Name),
+		"entry_cluster":   intObj(int64(metadata.EntryCluster)),
+		"size":            intObj(int64(metadata.Size)),
+		"is_dir":          boolObj(metadata.IsDirectory),
+		"deleted":         boolObj(metadata.Deleted),
+		"special":         boolObj(metadata.Special),
+		"virtual":         boolObj(metadata.Virtual),
+		"indexed":         boolObj(metadata.Indexed),
+		"has_fat_chain":   boolObj(metadata.HasFATChain),
+		"volume_label":    stringObj(metadata.VolumeLabel),
+		"cluster_size":    intObj(int64(metadata.ClusterSize)),
+		"attributes":      intObj(int64(metadata.Attributes)),
+		"valid_data_size": intObj(int64(metadata.ValidDataSize)),
+	}
+	metadata.Times.toHash(out)
+
+	return resultAndError(makeHashObject(out), nil)
 }
 
 func XFATClose(args ...object.Object) object.Object {
@@ -977,11 +1068,16 @@ func ExtListFiles(args ...object.Object) object.Object {
 	items := make([]object.Object, 0, len(entries))
 	for _, entry := range entries {
 		items = append(items, makeHashObject(map[string]object.Object{
-			"name":   stringObj(entry.Name),
-			"path":   stringObj(entry.Path),
-			"inode":  intObj(int64(entry.Inode)),
-			"is_dir": boolObj(entry.IsDirectory),
-			"size":   intObj(int64(entry.Size)),
+			"name":        stringObj(entry.Name),
+			"path":        stringObj(entry.Path),
+			"inode":       intObj(int64(entry.Inode)),
+			"is_dir":      boolObj(entry.IsDirectory),
+			"size":        intObj(int64(entry.Size)),
+			"deleted":     boolObj(entry.Deleted),
+			"created_at":  stringObj(entry.CreatedAt),
+			"modified_at": stringObj(entry.ModifiedAt),
+			"accessed_at": stringObj(entry.AccessedAt),
+			"changed_at":  stringObj(entry.ChangedAt),
 		}))
 	}
 
@@ -1040,6 +1136,12 @@ func ExtMetadata(args ...object.Object) object.Object {
 		"kind":         stringObj(metadata.Kind),
 		"block_size":   intObj(int64(metadata.BlockSize)),
 		"inodes_count": intObj(int64(metadata.InodesCount)),
+		"deleted":      boolObj(metadata.Deleted),
+		"created_at":   stringObj(metadata.CreatedAt),
+		"modified_at":  stringObj(metadata.ModifiedAt),
+		"accessed_at":  stringObj(metadata.AccessedAt),
+		"changed_at":   stringObj(metadata.ChangedAt),
+		"warnings":     stringArrayObj(metadata.Warnings),
 	}), nil)
 }
 
@@ -1207,6 +1309,16 @@ func HFSMetadata(args ...object.Object) object.Object {
 		"free_blocks":  intObj(int64(metadata.FreeBlocks)),
 		"file_count":   intObj(int64(metadata.FileCount)),
 		"folder_count": intObj(int64(metadata.FolderCount)),
+
+		"created_at":         stringObj(metadata.CreatedAt),
+		"modified_at":        stringObj(metadata.ModifiedAt),
+		"accessed_at":        stringObj(metadata.AccessedAt),
+		"changed_at":         stringObj(metadata.ChangedAt),
+		"backup_at":          stringObj(metadata.BackupAt),
+		"time_source":        stringObj(metadata.TimeSource),
+		"compressed":         boolObj(metadata.Compressed),
+		"compression_type":   intObj(int64(metadata.CompressionType)),
+		"resource_fork_size": intObj(int64(metadata.ResourceForkSize)),
 	}), nil)
 }
 
@@ -1308,11 +1420,13 @@ func XFSListFiles(args ...object.Object) object.Object {
 	items := make([]object.Object, 0, len(entries))
 	for _, entry := range entries {
 		items = append(items, makeHashObject(map[string]object.Object{
-			"name":   stringObj(entry.Name),
-			"path":   stringObj(entry.Path),
-			"inode":  intObj(int64(entry.Inode)),
-			"is_dir": boolObj(entry.IsDirectory),
-			"size":   intObj(int64(entry.Size)),
+			"name":        stringObj(entry.Name),
+			"path":        stringObj(entry.Path),
+			"inode":       intObj(int64(entry.Inode)),
+			"is_dir":      boolObj(entry.IsDirectory),
+			"size":        intObj(int64(entry.Size)),
+			"file_type":   stringObj(entry.FileType),
+			"inode_error": stringObj(entry.InodeError),
 		}))
 	}
 
@@ -1373,6 +1487,11 @@ func XFSMetadata(args ...object.Object) object.Object {
 		"inode_size":     intObj(int64(metadata.InodeSize)),
 		"volume_blocks":  intObj(int64(metadata.VolumeBlocks)),
 		"root_inode":     intObj(int64(metadata.RootInode)),
+		"needs_repair":   boolObj(metadata.NeedsRepair),
+		"created_at":     stringObj(metadata.CreatedAt),
+		"modified_at":    stringObj(metadata.ModifiedAt),
+		"accessed_at":    stringObj(metadata.AccessedAt),
+		"changed_at":     stringObj(metadata.ChangedAt),
 	}), nil)
 }
 
@@ -1540,13 +1659,24 @@ func (realXFATBackend) Open(volumePath string) (xfatSession, error) {
 		return nil, err
 	}
 
-	fs, err := libxfat.New(img, false)
+	// Open is the constructor libxfat directs callers to; New is retained for
+	// compatibility. Size enables bounds checking (a malformed image yields a
+	// clean io.ErrUnexpectedEOF instead of an out-of-range read), and Strict is
+	// the library's recommended setting for evidence processing — it turns on
+	// the partition cross-check and file-name checksum verification.
+	info, err := img.Stat()
 	if err != nil {
 		_ = img.Close()
 		return nil, err
 	}
 
-	return &realXFATSession{img: img, fs: &fs, cache: map[string]libxfat.Entry{}}, nil
+	fs, err := libxfat.Open(libxfat.Source{Reader: img, Size: info.Size(), Strict: true})
+	if err != nil {
+		_ = img.Close()
+		return nil, err
+	}
+
+	return &realXFATSession{img: img, fs: fs}, nil
 }
 
 func (realEXTBackend) Open(volumePath string) (extSession, error) {
@@ -1589,7 +1719,7 @@ func (realXFSBackend) Open(volumePath string) (xfsSession, error) {
 }
 
 func (s *realNTFSSession) ListFiles(dirPath string) ([]ntfsListEntry, error) {
-	cleanPath := normalizeNTFSPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
 	dir, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1608,7 +1738,7 @@ func (s *realNTFSSession) ListFiles(dirPath string) ([]ntfsListEntry, error) {
 	for _, entry := range entries {
 		out = append(out, ntfsListEntry{
 			Name:          entry.Name,
-			Path:          joinNTFSPath(cleanPath, entry.Name),
+			Path:          joinFSPath(cleanPath, entry.Name),
 			EntryNum:      entry.EntryNum,
 			SequenceNum:   entry.SequenceNum,
 			IsDirectory:   entry.IsDirectory,
@@ -1622,7 +1752,7 @@ func (s *realNTFSSession) ListFiles(dirPath string) ([]ntfsListEntry, error) {
 }
 
 func (s *realFATSession) ListFiles(dirPath string) ([]fatListEntry, error) {
-	cleanPath := normalizeFATPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
 	dir, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1661,7 +1791,7 @@ func (s *realFATSession) ListFiles(dirPath string) ([]fatListEntry, error) {
 }
 
 func (s *realXFATSession) ListFiles(dirPath string) ([]xfatListEntry, error) {
-	cleanPath := normalizeXFATPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
 	entries, err := s.readDirAtPath(cleanPath)
 	if err != nil {
@@ -1671,17 +1801,25 @@ func (s *realXFATSession) ListFiles(dirPath string) ([]xfatListEntry, error) {
 	out := make([]xfatListEntry, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.GetName()
+		// A nameless entry gets a stable placeholder path rather than a unique
+		// one, so repeated runs over the same image agree.
+		if entry.HasNoName() {
+			name = unnamedEntryPlaceholder
+		}
 		out = append(out, xfatListEntry{
-			Name:         name,
-			Path:         joinXFATPath(cleanPath, name),
-			EntryCluster: entry.GetEntryCluster(),
-			Size:         entry.GetSize(),
-			IsDirectory:  entry.IsDir(),
-			Deleted:      entry.IsDeleted(),
-			Special:      entry.IsSpecialFile(),
-			Virtual:      entry.IsVirtualEntry(),
-			Indexed:      entry.IsIndexed(),
-			HasFATChain:  entry.HasFatChain(),
+			Name:          name,
+			Path:          joinFSPath(cleanPath, name),
+			EntryCluster:  entry.GetEntryCluster(),
+			Size:          entry.GetSize(),
+			IsDirectory:   entry.IsDir(),
+			Deleted:       entry.IsDeleted(),
+			Special:       entry.IsSpecialFile(),
+			Virtual:       entry.IsVirtualEntry(),
+			Indexed:       entry.IsIndexed(),
+			HasFATChain:   entry.HasFatChain(),
+			Attributes:    entry.GetAttributes(),
+			ValidDataSize: entry.GetValidDataSize(),
+			Times:         xfatTimesFromEntry(entry),
 		})
 	}
 
@@ -1689,7 +1827,7 @@ func (s *realXFATSession) ListFiles(dirPath string) ([]xfatListEntry, error) {
 }
 
 func (s *realEXTSession) ListFiles(dirPath string) ([]extListEntry, error) {
-	cleanPath := normalizeEXTPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
 	dir, err := s.fs.OpenPath(cleanPath)
 	if err != nil {
@@ -1709,12 +1847,19 @@ func (s *realEXTSession) ListFiles(dirPath string) ([]extListEntry, error) {
 		if entry.Name == "." || entry.Name == ".." {
 			continue
 		}
+		// ReadDir reads each child's inode to resolve type and size, so the
+		// timestamps and deleted state come along at no additional cost.
 		out = append(out, extListEntry{
 			Name:        entry.Name,
-			Path:        joinEXTPath(cleanPath, entry.Name),
+			Path:        joinFSPath(cleanPath, entry.Name),
 			Inode:       entry.Inode,
 			IsDirectory: entry.IsDirectory,
 			Size:        entry.Size,
+			Deleted:     entry.Deleted,
+			CreatedAt:   formatTime(entry.Times.Crtime),
+			ModifiedAt:  formatTime(entry.Times.Mtime),
+			AccessedAt:  formatTime(entry.Times.Atime),
+			ChangedAt:   formatTime(entry.Times.Ctime),
 		})
 	}
 
@@ -1722,7 +1867,7 @@ func (s *realEXTSession) ListFiles(dirPath string) ([]extListEntry, error) {
 }
 
 func (s *realHFSSession) ListFiles(dirPath string) ([]hfsListEntry, error) {
-	cleanPath := normalizeHFSPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
 	entries, err := s.volume.ReadDir(cleanPath)
 	if err != nil {
@@ -1736,7 +1881,7 @@ func (s *realHFSSession) ListFiles(dirPath string) ([]hfsListEntry, error) {
 		}
 		out = append(out, hfsListEntry{
 			Name:        entry.Name,
-			Path:        joinHFSPath(cleanPath, entry.Name),
+			Path:        joinFSPath(cleanPath, entry.Name),
 			CNID:        entry.CNID,
 			IsDirectory: entry.IsDirectory,
 			IsSystem:    entry.IsSystem,
@@ -1747,38 +1892,56 @@ func (s *realHFSSession) ListFiles(dirPath string) ([]hfsListEntry, error) {
 }
 
 func (s *realXFSSession) ListFiles(dirPath string) ([]xfsListEntry, error) {
-	cleanPath := normalizeXFSPath(dirPath)
+	cleanPath := normalizeFSPath(dirPath)
 
-	entries, err := s.volume.ListDirectoryEntriesByPath(cleanPath)
+	dirInode, err := s.volume.ResolveInodeByPath(cleanPath)
 	if err != nil {
 		return nil, err
 	}
 
-	out := make([]xfsListEntry, 0, len(entries))
-	for _, entry := range entries {
+	// BestEffort keeps what was recovered from healthy blocks and resynchronises
+	// past damage instead of failing the whole listing — the library calls this
+	// "usually what forensic callers want on a damaged image".
+	listing, err := s.volume.ListDirectoryEntriesWithOptions(dirInode, libxfs.DirectoryScanOptions{BestEffort: true})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]xfsListEntry, 0, len(listing.Entries))
+	for _, entry := range listing.Entries {
 		if entry.Name == "." || entry.Name == ".." || entry.Name == "" {
 			continue
 		}
 
+		row := xfsListEntry{
+			Name:     entry.Name,
+			Path:     joinFSPath(cleanPath, entry.Name),
+			Inode:    entry.InodeNumber,
+			FileType: libxfs.DirEntryFileTypeName(entry.FileType),
+		}
+		// The directory record carries the entry type directly on filesystems
+		// with the ftype feature, so the inode is only needed for the size.
+		row.IsDirectory = entry.FileType == libxfs.DirEntryFileTypeDirectory
+
 		inode, inodeErr := s.volume.OpenInode(entry.InodeNumber)
-		if inodeErr != nil {
-			return nil, inodeErr
+		switch {
+		case inodeErr != nil:
+			row.InodeError = inodeErr.Error()
+		default:
+			row.Size = inode.Size
+			if entry.FileType == libxfs.DirEntryFileTypeUnknown {
+				row.IsDirectory = inode.IsDirectory()
+			}
 		}
 
-		out = append(out, xfsListEntry{
-			Name:        entry.Name,
-			Path:        joinXFSPath(cleanPath, entry.Name),
-			Inode:       entry.InodeNumber,
-			IsDirectory: inode.IsDirectory(),
-			Size:        inode.Size,
-		})
+		out = append(out, row)
 	}
 
 	return out, nil
 }
 
 func (s *realNTFSSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeNTFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1792,7 +1955,7 @@ func (s *realNTFSSession) ReadFile(filePath string) ([]byte, error) {
 }
 
 func (s *realFATSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeFATPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1806,13 +1969,21 @@ func (s *realFATSession) ReadFile(filePath string) ([]byte, error) {
 }
 
 func (s *realXFATSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeXFATPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 	entry, err := s.findEntryByPath(cleanPath)
 	if err != nil {
 		return nil, err
 	}
 	if entry.IsDir() {
 		return nil, errors.New("target path is a directory")
+	}
+
+	// libxfat only extracts to a path, so the content has to round-trip through
+	// a temp file. Refuse oversized entries up front rather than writing them to
+	// disk and then pulling the whole thing into memory — the same 32 MiB ceiling
+	// the *_read_at builtins apply.
+	if size := entry.GetSize(); size > maxInMemoryReadBytes {
+		return nil, fmt.Errorf("entry is %d bytes, larger than the %d byte read limit", size, maxInMemoryReadBytes)
 	}
 
 	tmpFile, err := os.CreateTemp("", "mutant-xfat-read-*.bin")
@@ -1831,7 +2002,7 @@ func (s *realXFATSession) ReadFile(filePath string) ([]byte, error) {
 }
 
 func (s *realEXTSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeEXTPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.fs.OpenPath(cleanPath)
 	if err != nil {
@@ -1845,7 +2016,7 @@ func (s *realEXTSession) ReadFile(filePath string) ([]byte, error) {
 }
 
 func (s *realHFSSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeHFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.volume.OpenFileByPath(cleanPath)
 	if err != nil {
@@ -1856,12 +2027,12 @@ func (s *realHFSSession) ReadFile(filePath string) ([]byte, error) {
 }
 
 func (s *realXFSSession) ReadFile(filePath string) ([]byte, error) {
-	cleanPath := normalizeXFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 	return s.volume.ReadFileDataByPath(cleanPath)
 }
 
 func (s *realNTFSSession) Metadata(filePath string) (ntfsMetadata, error) {
-	cleanPath := normalizeNTFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1885,17 +2056,21 @@ func (s *realNTFSSession) Metadata(filePath string) (ntfsMetadata, error) {
 		BlockingError: errorString(support.BlockingError),
 	}
 
-	if stdInfo, stdErr := f.GetMetadata(); stdErr == nil {
-		md.CreatedAt = extractTimeField(stdInfo, "CreationTime", "CreatedAt", "Created")
-		md.ModifiedAt = extractTimeField(stdInfo, "ModificationTime", "ModifiedAt", "LastWriteTime", "Modified")
-		md.AccessedAt = extractTimeField(stdInfo, "AccessTime", "AccessedAt", "Accessed")
+	// $STANDARD_INFORMATION carries the four MAC times directly; read them by
+	// name so a field rename is a compile error rather than a silently empty
+	// string. mft_builtins.go reads the same fields off the same type.
+	if stdInfo, stdErr := f.GetMetadata(); stdErr == nil && stdInfo != nil {
+		md.CreatedAt = formatTime(stdInfo.CreateTime)
+		md.ModifiedAt = formatTime(stdInfo.ModifyTime)
+		md.AccessedAt = formatTime(stdInfo.AccessTime)
+		md.ChangedAt = formatTime(stdInfo.MFTChangeTime)
 	}
 
 	return md, nil
 }
 
 func (s *realFATSession) Metadata(filePath string) (fatMetadata, error) {
-	cleanPath := normalizeFATPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1926,30 +2101,38 @@ func (s *realFATSession) Metadata(filePath string) (fatMetadata, error) {
 }
 
 func (s *realXFATSession) Metadata(filePath string) (xfatMetadata, error) {
-	cleanPath := normalizeXFATPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 	entry, err := s.findEntryByPath(cleanPath)
 	if err != nil {
 		return xfatMetadata{}, err
 	}
 
+	name := entry.GetName()
+	if entry.HasNoName() {
+		name = unnamedEntryPlaceholder
+	}
+
 	return xfatMetadata{
-		Path:         cleanPath,
-		Name:         entry.GetName(),
-		EntryCluster: entry.GetEntryCluster(),
-		Size:         entry.GetSize(),
-		IsDirectory:  entry.IsDir(),
-		Deleted:      entry.IsDeleted(),
-		Special:      entry.IsSpecialFile(),
-		Virtual:      entry.IsVirtualEntry(),
-		Indexed:      entry.IsIndexed(),
-		HasFATChain:  entry.HasFatChain(),
-		VolumeLabel:  s.fs.GetVolumeLabel(),
-		ClusterSize:  s.fs.GetClusterSize(),
+		Path:          cleanPath,
+		Name:          name,
+		EntryCluster:  entry.GetEntryCluster(),
+		Size:          entry.GetSize(),
+		IsDirectory:   entry.IsDir(),
+		Deleted:       entry.IsDeleted(),
+		Special:       entry.IsSpecialFile(),
+		Virtual:       entry.IsVirtualEntry(),
+		Indexed:       entry.IsIndexed(),
+		HasFATChain:   entry.HasFatChain(),
+		VolumeLabel:   s.fs.GetVolumeLabel(),
+		ClusterSize:   s.fs.GetClusterSize(),
+		Attributes:    entry.GetAttributes(),
+		ValidDataSize: entry.GetValidDataSize(),
+		Times:         xfatTimesFromEntry(entry),
 	}, nil
 }
 
 func (s *realEXTSession) Metadata(filePath string) (extMetadata, error) {
-	cleanPath := normalizeEXTPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	f, err := s.fs.OpenPath(cleanPath)
 	if err != nil {
@@ -1957,8 +2140,10 @@ func (s *realEXTSession) Metadata(filePath string) (extMetadata, error) {
 	}
 
 	sb := s.fs.Superblock()
+	inode := f.Inode()
+	times := inode.Timestamps()
 
-	return extMetadata{
+	md := extMetadata{
 		Path:        cleanPath,
 		Name:        f.Name(),
 		Inode:       f.InodeNumber(),
@@ -1967,11 +2152,21 @@ func (s *realEXTSession) Metadata(filePath string) (extMetadata, error) {
 		Kind:        string(s.fs.Kind()),
 		BlockSize:   sb.BlockSize,
 		InodesCount: sb.InodesCount,
-	}, nil
+		CreatedAt:   formatTime(times.Crtime),
+		ModifiedAt:  formatTime(times.Mtime),
+		AccessedAt:  formatTime(times.Atime),
+		ChangedAt:   formatTime(times.Ctime),
+		Deleted:     inode.Deleted(),
+	}
+	for _, w := range s.fs.Warnings() {
+		md.Warnings = append(md.Warnings, w.String())
+	}
+
+	return md, nil
 }
 
 func (s *realHFSSession) Metadata(filePath string) (hfsMetadata, error) {
-	cleanPath := normalizeHFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
 	rec, err := s.volume.OpenPath(cleanPath)
 	if err != nil {
@@ -1979,38 +2174,47 @@ func (s *realHFSSession) Metadata(filePath string) (hfsMetadata, error) {
 	}
 
 	hdr := s.volume.Header()
+	// The catalog record already carries the fork sizes, so there is no need to
+	// resolve the path a second time through OpenFileByPath just to read one.
 	size := int64(0)
 	if !rec.IsDirectory() {
-		f, openErr := s.volume.OpenFileByPath(cleanPath)
-		if openErr != nil {
-			return hfsMetadata{}, openErr
-		}
-		size = f.Size()
+		size = int64(rec.DataFork.LogicalSize)
 	}
 
 	return hfsMetadata{
-		Path:        cleanPath,
-		Name:        rec.Name,
-		CNID:        rec.CNID,
-		IsDirectory: rec.IsDirectory(),
-		Size:        size,
-		Kind:        string(s.volume.Kind()),
-		BlockSize:   hdr.BlockSize,
-		TotalBlocks: hdr.TotalBlocks,
-		FreeBlocks:  hdr.FreeBlocks,
-		FileCount:   hdr.FileCount,
-		FolderCount: hdr.FolderCount,
+		Path:             cleanPath,
+		Name:             rec.Name,
+		CNID:             rec.CNID,
+		IsDirectory:      rec.IsDirectory(),
+		Size:             size,
+		Kind:             string(s.volume.Kind()),
+		BlockSize:        hdr.BlockSize,
+		TotalBlocks:      hdr.TotalBlocks,
+		FreeBlocks:       hdr.FreeBlocks,
+		FileCount:        hdr.FileCount,
+		FolderCount:      hdr.FolderCount,
+		CreatedAt:        formatTime(rec.Times.Created),
+		ModifiedAt:       formatTime(rec.Times.ContentModified),
+		AccessedAt:       formatTime(rec.Times.Accessed),
+		ChangedAt:        formatTime(rec.Times.AttrModified),
+		BackupAt:         formatTime(rec.Times.Backup),
+		TimeSource:       rec.Times.Source.String(),
+		Compressed:       rec.Compressed,
+		CompressionType:  rec.CompressionType,
+		ResourceForkSize: rec.RsrcFork.LogicalSize,
 	}, nil
 }
 
 func (s *realXFSSession) Metadata(filePath string) (xfsMetadata, error) {
-	cleanPath := normalizeXFSPath(filePath)
+	cleanPath := normalizeFSPath(filePath)
 
+	// Resolve first and open by number: xfs_metadata reports the inode number,
+	// and libxfs.Inode does not carry its own, so OpenInodeByPath would mean a
+	// second path walk rather than fewer.
 	inodeNumber, err := s.volume.ResolveInodeByPath(cleanPath)
 	if err != nil {
 		return xfsMetadata{}, err
 	}
-
 	inode, err := s.volume.OpenInode(inodeNumber)
 	if err != nil {
 		return xfsMetadata{}, err
@@ -2033,69 +2237,78 @@ func (s *realXFSSession) Metadata(filePath string) (xfsMetadata, error) {
 		InodeSize:     sb.InodeSize,
 		VolumeBlocks:  sb.NumberOfBlocks,
 		RootInode:     sb.RootDirectoryInodeNumber,
+		// NeedsRepair means the filesystem was left inconsistent and its
+		// metadata should be treated with suspicion.
+		NeedsRepair: sb.NeedsRepair(),
+		CreatedAt:   formatTime(inode.CreationTime()),
+		ModifiedAt:  formatTime(inode.ModificationTime()),
+		AccessedAt:  formatTime(inode.AccessTime()),
+		ChangedAt:   formatTime(inode.InodeChangeTime()),
 	}, nil
+}
+
+// closeImage releases the backing file and joins its error with the library
+// volume's. Discarding the volume's error — as these sessions used to — reports a
+// failed teardown as success whenever the *os.File happens to close cleanly.
+func closeImage(volErr error, img *os.File) error {
+	var imgErr error
+	if img != nil {
+		imgErr = img.Close()
+	}
+	return errors.Join(volErr, imgErr)
 }
 
 func (s *realNTFSSession) Close() error {
 	if s == nil {
 		return nil
 	}
+	var volErr error
 	if s.volume != nil {
-		_ = s.volume.Close()
+		volErr = s.volume.Close()
 	}
-	if s.img != nil {
-		return s.img.Close()
-	}
-	return nil
+	return closeImage(volErr, s.img)
 }
 
 func (s *realFATSession) Close() error {
 	if s == nil {
 		return nil
 	}
+	var volErr error
 	if s.volume != nil {
-		_ = s.volume.Close()
+		volErr = s.volume.Close()
 	}
-	if s.img != nil {
-		return s.img.Close()
-	}
-	return nil
+	return closeImage(volErr, s.img)
 }
 
 func (s *realXFATSession) Close() error {
 	if s == nil {
 		return nil
 	}
-	if s.img != nil {
-		return s.img.Close()
-	}
-	return nil
+	// libxfat.ExFAT holds no OS resources of its own, so there is nothing to
+	// close beyond the backing image.
+	return closeImage(nil, s.img)
 }
 
 func (s *realEXTSession) Close() error {
 	if s == nil {
 		return nil
 	}
+	var fsErr error
 	if s.fs != nil {
-		_ = s.fs.Close()
+		fsErr = s.fs.Close()
 	}
-	if s.img != nil {
-		return s.img.Close()
-	}
-	return nil
+	return closeImage(fsErr, s.img)
 }
 
 func (s *realHFSSession) Close() error {
 	if s == nil {
 		return nil
 	}
+	var volErr error
 	if s.volume != nil {
-		_ = s.volume.Close()
+		volErr = s.volume.Close()
 	}
-	if s.img != nil {
-		return s.img.Close()
-	}
-	return nil
+	return closeImage(volErr, s.img)
 }
 
 func (s *realXFSSession) Close() error {
@@ -2123,6 +2336,8 @@ func (s *realXFATSession) readDirAtPath(dirPath string) ([]libxfat.Entry, error)
 }
 
 func (s *realXFATSession) findEntryByPath(targetPath string) (libxfat.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cache == nil {
 		s.cache = map[string]libxfat.Entry{}
 	}
@@ -2173,14 +2388,23 @@ func xfatFindEntryByName(entries []libxfat.Entry, name string) (libxfat.Entry, b
 		if strings.EqualFold(entryName, name) {
 			return entry, true
 		}
-		if strings.EqualFold(strings.TrimSuffix(entryName, " (deleted)"), name) {
+		// libxfat marks recovered entries by appending its DELETED suffix to the
+		// name; take the constant from the library rather than restating it, so
+		// a change there is a compile-time concern rather than a silent miss.
+		if strings.EqualFold(strings.TrimSuffix(entryName, libxfat.DELETED), name) {
 			return entry, true
 		}
 	}
 	return libxfat.Entry{}, false
 }
 
-func normalizeNTFSPath(p string) string {
+// normalizeFSPath turns a caller-supplied path into an absolute, cleaned,
+// forward-slash path inside an image. Cleaning happens *after* rooting so that
+// "../.." collapses to "/" rather than escaping above the volume root.
+//
+// This replaces six per-filesystem copies. The EXT/HFS/XFS copies cleaned before
+// rooting, which let "\.." through as the literal path "/..".
+func normalizeFSPath(p string) string {
 	v := strings.TrimSpace(p)
 	if v == "" {
 		return "/"
@@ -2192,129 +2416,25 @@ func normalizeNTFSPath(p string) string {
 	return path.Clean(v)
 }
 
-func normalizeFATPath(p string) string {
-	v := strings.TrimSpace(p)
-	if v == "" {
-		return "/"
-	}
-	v = strings.ReplaceAll(v, "\\", "/")
-	if !strings.HasPrefix(v, "/") {
-		v = "/" + v
-	}
-	return path.Clean(v)
-}
-
-func normalizeXFATPath(p string) string {
-	v := strings.TrimSpace(p)
-	if v == "" {
-		return "/"
-	}
-	v = strings.ReplaceAll(v, "\\", "/")
-	if !strings.HasPrefix(v, "/") {
-		v = "/" + v
-	}
-	return path.Clean(v)
-}
-
-func normalizeEXTPath(p string) string {
-	v := strings.TrimSpace(p)
-	v = strings.ReplaceAll(v, "\\", "/")
-	v = path.Clean(v)
-	if v == "" || v == "." {
-		return "/"
-	}
-	if !strings.HasPrefix(v, "/") {
-		v = "/" + v
-	}
-	return v
-}
-
-func normalizeHFSPath(p string) string {
-	v := strings.TrimSpace(p)
-	v = strings.ReplaceAll(v, "\\", "/")
-	v = path.Clean(v)
-	if v == "" || v == "." {
-		return "/"
-	}
-	if !strings.HasPrefix(v, "/") {
-		v = "/" + v
-	}
-	return v
-}
-
-func normalizeXFSPath(p string) string {
-	v := strings.TrimSpace(p)
-	v = strings.ReplaceAll(v, "\\", "/")
-	v = path.Clean(v)
-	if v == "" || v == "." {
-		return "/"
-	}
-	if !strings.HasPrefix(v, "/") {
-		v = "/" + v
-	}
-	return v
-}
-
-func joinNTFSPath(base string, child string) string {
-	return path.Clean(strings.TrimSuffix(base, "/") + "/" + child)
-}
-
-func joinXFATPath(base string, child string) string {
+// joinFSPath appends a directory entry name to its parent path. A nameless entry
+// (exFAT allows one; see Entry.HasNoName) gets a stable placeholder rather than a
+// synthesised unique name — listing the same image twice must produce the same
+// paths for the output to be usable as evidence.
+func joinFSPath(base string, child string) string {
 	if strings.TrimSpace(child) == "" {
-		child = "entry-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		child = unnamedEntryPlaceholder
 	}
 	return path.Clean(strings.TrimSuffix(base, "/") + "/" + child)
 }
 
-func joinEXTPath(base string, child string) string {
-	return path.Clean(strings.TrimSuffix(base, "/") + "/" + child)
-}
-
-func joinHFSPath(base string, child string) string {
-	return path.Clean(strings.TrimSuffix(base, "/") + "/" + child)
-}
-
-func joinXFSPath(base string, child string) string {
-	return path.Clean(strings.TrimSuffix(base, "/") + "/" + child)
-}
+// unnamedEntryPlaceholder stands in for a directory entry that carries no name.
+const unnamedEntryPlaceholder = "(unnamed)"
 
 func errorString(err error) string {
 	if err == nil {
 		return ""
 	}
 	return err.Error()
-}
-
-func extractTimeField(value any, candidateFields ...string) string {
-	rv := reflect.ValueOf(value)
-	if !rv.IsValid() {
-		return ""
-	}
-	if rv.Kind() == reflect.Pointer {
-		if rv.IsNil() {
-			return ""
-		}
-		rv = rv.Elem()
-	}
-	if rv.Kind() != reflect.Struct {
-		return ""
-	}
-
-	for _, fieldName := range candidateFields {
-		field := rv.FieldByName(fieldName)
-		if !field.IsValid() || !field.CanInterface() {
-			continue
-		}
-
-		timeValue, ok := field.Interface().(time.Time)
-		if !ok || timeValue.IsZero() {
-			continue
-		}
-
-		return timeValue.UTC().Format(time.RFC3339Nano)
-	}
-
-	return ""
 }
 
 func formatTime(t time.Time) string {

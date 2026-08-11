@@ -12,8 +12,11 @@ type EnumStatement struct {
 	Variants []*Identifier
 }
 
-func (es *EnumStatement) statementNode()       {}
-func (es *EnumStatement) TokenLiteral() string { return es.Token.Literal }
+func (es *EnumStatement) statementNode() {}
+
+// RequiresSemicolon is false: an enum declaration ends with `}`.
+func (es *EnumStatement) RequiresSemicolon() bool { return false }
+func (es *EnumStatement) TokenLiteral() string    { return es.Token.Literal }
 func (es *EnumStatement) String() string {
 	var out bytes.Buffer
 	variants := []string{}

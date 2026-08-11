@@ -19,7 +19,7 @@ import (
 	"mutant/object"
 )
 
-func TestNetSynScanFindsOpenPort(t *testing.T) {
+func TestNetConnectScanFindsOpenPort(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start TCP listener: %v", err)
@@ -37,7 +37,7 @@ func TestNetSynScanFindsOpenPort(t *testing.T) {
 	}()
 
 	port := int64(ln.Addr().(*net.TCPAddr).Port)
-	result := NetSynScan(stringObj("127.0.0.1"), intObj(port), intObj(port), intObj(200))
+	result := NetConnectScan(stringObj("127.0.0.1"), intObj(port), intObj(port), intObj(200))
 	payload, errObj := unwrapPair(t, result)
 	if errObj != nil {
 		t.Fatalf("unexpected error: %s", errObj.Inspect())
@@ -257,15 +257,135 @@ func TestNetPCAPAnalyze(t *testing.T) {
 	}
 }
 
-func TestNetCaptureAndOSFingerprintUnsupported(t *testing.T) {
-	_, errObj := unwrapPair(t, NetCaptureRaw())
-	if errObj == nil || !strings.Contains(errObj.Message, "unsupported") {
-		t.Fatalf("expected unsupported error from net_capture_raw")
+func TestNetOSFingerprint(t *testing.T) {
+	path := writeFingerprintPCAPFixture(t)
+
+	payload, errObj := unwrapPair(t, NetOSFingerprint(stringObj(path)))
+	if errObj != nil {
+		t.Fatalf("net_os_fingerprint error: %s", errObj.Inspect())
+	}
+	result := nfMustHash(t, payload)
+
+	if got := nfMustHashValue(t, result, "syn_packets").(*object.Integer).Value; got != 2 {
+		t.Fatalf("expected 2 SYN packets, got=%d", got)
 	}
 
-	_, errObj = unwrapPair(t, NetOSFingerprint(stringObj("127.0.0.1"), intObj(100)))
-	if errObj == nil || !strings.Contains(errObj.Message, "unsupported") {
-		t.Fatalf("expected unsupported error from net_os_fingerprint")
+	hostsArr, ok := nfMustHashValue(t, result, "hosts").(*object.Array)
+	if !ok || len(hostsArr.Elements) != 2 {
+		t.Fatalf("expected 2 fingerprinted hosts, got=%v", nfMustHashValue(t, result, "hosts"))
+	}
+
+	// Hosts are sorted by "ip/type": 10.0.0.1 (Windows) then 10.0.0.2 (Linux).
+	win := nfMustHash(t, hostsArr.Elements[0])
+	if got := win.Pairs[(&object.String{Value: "os_guess"}).HashKey()].Value.(*object.String).Value; got != "Windows" {
+		t.Fatalf("expected Windows guess for 10.0.0.1, got=%q", got)
+	}
+	if got := win.Pairs[(&object.String{Value: "initial_ttl"}).HashKey()].Value.(*object.Integer).Value; got != 128 {
+		t.Fatalf("expected initial_ttl 128 for Windows host, got=%d", got)
+	}
+
+	lin := nfMustHash(t, hostsArr.Elements[1])
+	linGuess := lin.Pairs[(&object.String{Value: "os_guess"}).HashKey()].Value.(*object.String).Value
+	if !strings.HasPrefix(linGuess, "Linux/Unix") {
+		t.Fatalf("expected Linux/Unix family for 10.0.0.2, got=%q", linGuess)
+	}
+	if got := lin.Pairs[(&object.String{Value: "initial_ttl"}).HashKey()].Value.(*object.Integer).Value; got != 64 {
+		t.Fatalf("expected initial_ttl 64 for Linux host, got=%d", got)
+	}
+}
+
+func writeFingerprintPCAPFixture(t *testing.T) string {
+	t.Helper()
+
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "syn.pcap")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create pcap fixture: %v", err)
+	}
+	defer f.Close()
+
+	w := pcapgo.NewWriter(f)
+	if err := w.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
+		t.Fatalf("write pcap header: %v", err)
+	}
+
+	// Windows-like SYN: TTL 128, DF set, window 8192, opts MSS,NOP,WScale,NOP,NOP,SACK.
+	winTCP := &layers.TCP{SrcPort: 50000, DstPort: 443, SYN: true, Window: 8192, Options: []layers.TCPOption{
+		{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: []byte{0x05, 0xb4}},
+		{OptionType: layers.TCPOptionKindNop, OptionLength: 1},
+		{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{0x08}},
+		{OptionType: layers.TCPOptionKindNop, OptionLength: 1},
+		{OptionType: layers.TCPOptionKindNop, OptionLength: 1},
+		{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2},
+	}}
+	winBytes := serializePacketBytes(t,
+		&layers.Ethernet{SrcMAC: []byte{0, 1, 2, 3, 4, 5}, DstMAC: []byte{6, 7, 8, 9, 10, 11}, EthernetType: layers.EthernetTypeIPv4},
+		&layers.IPv4{Version: 4, IHL: 5, TTL: 128, Flags: layers.IPv4DontFragment, Protocol: layers.IPProtocolTCP, SrcIP: net.ParseIP("10.0.0.1").To4(), DstIP: net.ParseIP("10.0.0.9").To4()},
+		winTCP,
+	)
+	if err := w.WritePacket(gopacket.CaptureInfo{Timestamp: time.Unix(1700000000, 0), Length: len(winBytes), CaptureLength: len(winBytes)}, winBytes); err != nil {
+		t.Fatalf("write windows syn: %v", err)
+	}
+
+	// Linux-like SYN: TTL 64, DF set, window 64240, opts MSS,SACK,TS,NOP,WScale.
+	linTCP := &layers.TCP{SrcPort: 51000, DstPort: 443, SYN: true, Window: 64240, Options: []layers.TCPOption{
+		{OptionType: layers.TCPOptionKindMSS, OptionLength: 4, OptionData: []byte{0x05, 0xb4}},
+		{OptionType: layers.TCPOptionKindSACKPermitted, OptionLength: 2},
+		{OptionType: layers.TCPOptionKindTimestamps, OptionLength: 10, OptionData: []byte{0, 0, 0, 1, 0, 0, 0, 0}},
+		{OptionType: layers.TCPOptionKindNop, OptionLength: 1},
+		{OptionType: layers.TCPOptionKindWindowScale, OptionLength: 3, OptionData: []byte{0x07}},
+	}}
+	linBytes := serializePacketBytes(t,
+		&layers.Ethernet{SrcMAC: []byte{0, 1, 2, 3, 4, 5}, DstMAC: []byte{6, 7, 8, 9, 10, 11}, EthernetType: layers.EthernetTypeIPv4},
+		&layers.IPv4{Version: 4, IHL: 5, TTL: 64, Flags: layers.IPv4DontFragment, Protocol: layers.IPProtocolTCP, SrcIP: net.ParseIP("10.0.0.2").To4(), DstIP: net.ParseIP("10.0.0.9").To4()},
+		linTCP,
+	)
+	if err := w.WritePacket(gopacket.CaptureInfo{Timestamp: time.Unix(1700000001, 0), Length: len(linBytes), CaptureLength: len(linBytes)}, linBytes); err != nil {
+		t.Fatalf("write linux syn: %v", err)
+	}
+
+	return path
+}
+
+func TestNetCaptureRawOffline(t *testing.T) {
+	path := writeFingerprintPCAPFixture(t) // two TCP SYN packets
+
+	payload, errObj := unwrapPair(t, NetCaptureRaw(stringObj(path)))
+	if errObj != nil {
+		t.Fatalf("net_capture_raw error: %s", errObj.Inspect())
+	}
+	h := payload.(*object.Hash)
+	if got := hInt(t, h, "count"); got != 2 {
+		t.Fatalf("count = %d, want 2", got)
+	}
+	if hBoolAt(t, h, "truncated") {
+		t.Error("should not be truncated")
+	}
+	packets := hashValueByKey(h, "packets").(*object.Array)
+
+	p0 := packets.Elements[0].(*object.Hash)
+	if hStr(t, p0, "protocol") != "TCP" || hStr(t, p0, "src") != "10.0.0.1" || hStr(t, p0, "dst") != "10.0.0.9" {
+		t.Errorf("packet 0 = %s", p0.Inspect())
+	}
+	if hInt(t, p0, "sport") != 50000 || hInt(t, p0, "dport") != 443 {
+		t.Errorf("packet 0 ports = %d/%d, want 50000/443", hInt(t, p0, "sport"), hInt(t, p0, "dport"))
+	}
+	if hInt(t, p0, "index") != 0 || hInt(t, p0, "length") <= 0 {
+		t.Errorf("packet 0 index/length wrong: %s", p0.Inspect())
+	}
+
+	p1 := packets.Elements[1].(*object.Hash)
+	if hStr(t, p1, "src") != "10.0.0.2" || hInt(t, p1, "sport") != 51000 {
+		t.Errorf("packet 1 = %s", p1.Inspect())
+	}
+
+	// Errors: wrong arg count and a missing file.
+	if _, e := unwrapPair(t, NetCaptureRaw()); e == nil {
+		t.Error("expected arg-count error")
+	}
+	if _, e := unwrapPair(t, NetCaptureRaw(stringObj(filepath.Join(t.TempDir(), "nope.pcap")))); e == nil {
+		t.Error("expected missing-file error")
 	}
 }
 
@@ -275,8 +395,8 @@ func TestNetForensicsArgumentValidation(t *testing.T) {
 		call func() object.Object
 	}{
 		{
-			name: "syn scan port range invalid",
-			call: func() object.Object { return NetSynScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100)) },
+			name: "connect scan port range invalid",
+			call: func() object.Object { return NetConnectScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100)) },
 		},
 		{
 			name: "udp scan bad host type",

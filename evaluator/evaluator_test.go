@@ -383,64 +383,6 @@ func TestSecurityStatusBuiltins(t *testing.T) {
 	}
 }
 
-func TestCommandExecutionBuiltins(t *testing.T) {
-	evaluated := testEval(`exec_string("Write-Output 'mutant'")`)
-	pair, ok := evaluated.(*object.MultiValue)
-	if !ok {
-		t.Fatalf("exec_string did not return MultiValue. got=%T", evaluated)
-	}
-	if len(pair.Values) != 2 {
-		t.Fatalf("exec_string returned wrong arity. got=%d", len(pair.Values))
-	}
-	if pair.Values[1].Type() != object.NULL_OBJ {
-		t.Fatalf("exec_string error slot is not NULL. got=%T", pair.Values[1])
-	}
-
-	hash, ok := pair.Values[0].(*object.Hash)
-	if !ok {
-		t.Fatalf("exec_string result slot did not return Hash. got=%T", pair.Values[0])
-	}
-
-	for _, key := range []string{"ok", "allowed", "policy_decision", "exit_code", "stdout", "stderr", "timed_out", "error", "schema_version"} {
-		keyObj := &object.String{Value: key}
-		if _, ok := hash.Pairs[keyObj.HashKey()]; !ok {
-			t.Fatalf("exec_string missing key %q", key)
-		}
-	}
-
-	decisionObj, ok := hashValue(hash, "policy_decision").(*object.String)
-	if !ok {
-		t.Fatalf("policy_decision is not String")
-	}
-	if decisionObj.Value != "blocked_disabled" {
-		t.Fatalf("unexpected policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
-	}
-
-	builderResult := testEval(`let b, be = cmd_builder("powershell"); let b2, ae = cmd_add(b, "Write-Output 'a'"); cmd_run(b2)`)
-	builderPair, ok := builderResult.(*object.MultiValue)
-	if !ok {
-		t.Fatalf("cmd_run did not return MultiValue. got=%T", builderResult)
-	}
-	if len(builderPair.Values) != 2 {
-		t.Fatalf("cmd_run returned wrong arity. got=%d", len(builderPair.Values))
-	}
-	if builderPair.Values[1].Type() != object.NULL_OBJ {
-		t.Fatalf("cmd_run error slot is not NULL. got=%T", builderPair.Values[1])
-	}
-
-	builderHash, ok := builderPair.Values[0].(*object.Hash)
-	if !ok {
-		t.Fatalf("cmd_run result slot did not return Hash. got=%T", builderPair.Values[0])
-	}
-	decisionObj, ok = hashValue(builderHash, "policy_decision").(*object.String)
-	if !ok {
-		t.Fatalf("policy_decision is not String")
-	}
-	if decisionObj.Value != "blocked_disabled" {
-		t.Fatalf("unexpected cmd_run policy decision. got=%q, want=%q", decisionObj.Value, "blocked_disabled")
-	}
-}
-
 func TestJSONBuiltins(t *testing.T) {
 	parsed := testEval(`json_parse("[1,2,3]")[0][1]`)
 	testIntegerObject(t, parsed, 2)

@@ -1,0 +1,15 @@
+// Workshop extra - IP address triage
+//
+// Quick network-intel checks: which IPs are internal, which fall in a range,
+// and expand a small CIDR. Input: none.
+
+putln("=== IP triage ===");
+
+let ips = ["10.0.0.5", "8.8.8.8", "192.168.1.20", "1.1.1.1"];
+each(ips, fn(ip) {
+    // ip_is_private returns a plain boolean.
+    putln("  ", ip, " private:", ip_is_private(ip));
+});
+
+putln("10.0.0.5 in 10.0.0.0/24 :", ip_in_cidr("10.0.0.5", "10.0.0.0/24"));
+putln("hosts in 192.168.1.0/29 :", cidr_hosts("192.168.1.0/29"));

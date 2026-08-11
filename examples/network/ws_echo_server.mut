@@ -1,0 +1,19 @@
+// ws_echo_server.mut
+// A concurrent WebSocket echo server (dev-sec-platform-upgrades), using net_serve
+// for concurrency and the ws_* frame primitives for RFC 6455.
+//
+// Each connection: the handler (ws_echo_handler.mut) reads the HTTP Upgrade
+// request, completes the 101 handshake with ws_accept_key, then echoes text
+// frames back with a prefix until the client sends a close frame.
+//
+// Run:  mutant ws_echo_server.mut --compat
+//   then connect a WebSocket client to ws://127.0.0.1:8140/
+
+let ln, err = net_listen("127.0.0.1:8140");
+if (err) {
+    putln("listen failed: ", err);
+} else {
+    putln("websocket echo server on ws://127.0.0.1:8140/");
+    let ok, serr = net_serve(ln, "examples/network/ws_echo_handler.mut", "");
+    putln("serve ended: ", serr);
+}

@@ -1,0 +1,68 @@
+// json_config_pipeline.mut — parse, transform, and re-serialize nested JSON.
+//
+// Shows deep field access, iterating nested arrays, immutable hash transforms
+// (set/merge), a JSON round-trip, and encoding + type conversion. Self-contained.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("json_config_pipeline");
+
+    // A nested JSON document, as if read from a config file or an API.
+    let source = "{\"service\":\"scanner\",\"enabled\":true," +
+        "\"targets\":[{\"host\":\"10.0.0.1\",\"ports\":[22,80,443]}," +
+        "{\"host\":\"10.0.0.2\",\"ports\":[3389]}]," +
+        "\"limits\":{\"timeout_ms\":1500,\"max_hosts\":50}}";
+
+    let doc, err = json_parse(source);
+    if (err) {
+        putln("[error] json_parse:", err);
+        return false;
+    };
+
+    // Deep field access.
+    putln("service:", doc["service"]);
+    putln("timeout_ms:", doc["limits"]["timeout_ms"]);
+
+    // Iterate a nested array with map.
+    let summaries = map(doc["targets"], fn(t) {
+        return t["host"] + " (" + to_string(len(t["ports"])) + " ports)";
+    });
+    each(summaries, fn(s) { putln("  target:", s); });
+
+    // Transform: derive a total and add fields immutably (set returns a new hash).
+    let total_ports = reduce(doc["targets"], fn(acc, t) {
+        return acc + len(t["ports"]);
+    }, 0);
+    let enriched = set(doc, "total_ports", total_ports);
+    let enriched2 = set(enriched, "generated_by", "json_config_pipeline");
+
+    // Re-serialize (round-trip).
+    let out, serr = json_stringify(enriched2);
+    if (serr) {
+        putln("[error] json_stringify:", serr);
+        return false;
+    };
+    putln("re-serialized:", out);
+
+    // Encoding round-trip over the JSON blob.
+    let encoded = base64_encode(out);
+    putln("base64 length:", len(encoded));
+    let decoded, derr = base64_decode(encoded);
+    if (derr) {
+        putln("[error] base64_decode:", derr);
+        return false;
+    };
+    putln("round-trip matches:", to_string(decoded) == out);
+
+    // Safe type conversion of string input.
+    let n, cerr = to_int("41");
+    if (cerr) {
+        putln("[error] to_int:", cerr);
+    } else {
+        putln("parsed int + 1:", n + 1);
+    };
+    return true;
+};
+
+run();

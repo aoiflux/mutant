@@ -39,12 +39,15 @@ func RegexFind(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `regex_find` is not a valid regex: %s", err.Error()))
 	}
 
-	match := re.FindString(input)
-	if match == "" {
+	// Use FindStringIndex so a legitimate empty-string match (e.g. pattern `a*`
+	// against "b") is distinguished from "no match" — FindString returns "" for
+	// both cases.
+	loc := re.FindStringIndex(input)
+	if loc == nil {
 		return resultAndError(globalNullObject(), nil)
 	}
 
-	return resultAndError(stringObj(match), nil)
+	return resultAndError(stringObj(input[loc[0]:loc[1]]), nil)
 }
 
 func RegexFindAll(args ...object.Object) object.Object {

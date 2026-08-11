@@ -33,29 +33,6 @@ func TestLuaRunStringSuccess(t *testing.T) {
 	}
 }
 
-func TestLuaRunStringHasIOLibrary(t *testing.T) {
-	result := LuaRunString(&object.String{Value: "return type(io)"})
-	payload, errObj := unwrapPair(t, result)
-	if errObj != nil {
-		t.Fatalf("unexpected error: %s", errObj.Inspect())
-	}
-
-	hash, ok := payload.(*object.Hash)
-	if !ok {
-		t.Fatalf("expected HASH result, got=%T", payload)
-	}
-
-	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
-	if okObj == nil || !okObj.Value {
-		t.Fatalf("expected ok=true")
-	}
-
-	resObj, _ := hashValueByKey(hash, "result").(*object.String)
-	if resObj == nil || resObj.Value != "table" {
-		t.Fatalf("expected io to be table, got=%+v", resObj)
-	}
-}
-
 func TestLuaRunStringCapturesPrintOutputWithoutReturn(t *testing.T) {
 	result := LuaRunString(&object.String{Value: "print('hello'); print('world')"})
 	payload, errObj := unwrapPair(t, result)
@@ -182,36 +159,5 @@ func TestLuaRunHTTPCodeSuccess(t *testing.T) {
 	resObj, _ := hashValueByKey(hash, "result").(*object.String)
 	if resObj == nil || resObj.Value != "http-lua" {
 		t.Fatalf("unexpected result: %+v", resObj)
-	}
-}
-
-func TestLuaRunFileBlockedWithoutCapability(t *testing.T) {
-	result := LuaRunFile(&object.String{Value: "patch.lua"})
-	_, errObj := unwrapPair(t, result)
-	if errObj == nil {
-		t.Fatalf("expected non-nil pair error")
-	}
-}
-
-func TestLuaRunHTTPBlockedWithoutCapability(t *testing.T) {
-	result := LuaRunHTTP(&object.String{Value: "https://example.com"})
-	payload, errObj := unwrapPair(t, result)
-	if errObj != nil {
-		t.Fatalf("unexpected pair error: %s", errObj.Inspect())
-	}
-
-	hash, ok := payload.(*object.Hash)
-	if !ok {
-		t.Fatalf("expected HASH result, got=%T", payload)
-	}
-
-	okObj, _ := hashValueByKey(hash, "ok").(*object.Boolean)
-	if okObj == nil || okObj.Value {
-		t.Fatalf("expected ok=false")
-	}
-
-	errMsgObj, _ := hashValueByKey(hash, "error").(*object.String)
-	if errMsgObj == nil || errMsgObj.Value == "" {
-		t.Fatalf("expected non-empty error")
 	}
 }

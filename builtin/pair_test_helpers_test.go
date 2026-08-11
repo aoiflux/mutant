@@ -35,6 +35,27 @@ func unwrapPair(t *testing.T, value object.Object) (object.Object, *object.Error
 	return result, errObj
 }
 
+// unwrapPairNoFatal is unwrapPair for use off the test goroutine, where calling
+// t.Fatalf is not allowed. Shape violations are reported through the error slot
+// instead of aborting.
+func unwrapPairNoFatal(value object.Object) (object.Object, *object.Error) {
+	pair, ok := value.(*object.MultiValue)
+	if !ok || len(pair.Values) != 2 {
+		return nil, &object.Error{Message: "builtin result is not a 2-value MultiValue"}
+	}
+
+	result, errValue := pair.Values[0], pair.Values[1]
+	if errValue == nil || errValue.Type() == object.NULL_OBJ {
+		return result, nil
+	}
+
+	errObj, ok := errValue.(*object.Error)
+	if !ok {
+		return result, &object.Error{Message: "builtin error slot must be Error or Null"}
+	}
+	return result, errObj
+}
+
 // unwrapSingleOrPair handles both single value returns and MultiValue returns
 // For pure functions that return single values, it returns (value, nil)
 // For fallible functions that return MultiValue, it extracts and returns (result, error)

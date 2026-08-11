@@ -24,7 +24,8 @@ Secure mode behavior:
 2. Signer-auth is optional and can be explicitly enforced with `--signer-auth`.
 3. Without `--signer-auth`, secure mode keeps runtime hardening gates but does
    not run signer pinning verification.
-4. Trusted key pinning uses `MUTANT_TRUSTED_PUBLIC_KEY_HEX`.
+4. Trusted key pinning uses `MUTANT_TRUSTED_PUBLIC_KEY_HEX` (with local
+   bootstrap fallback if unset).
 
 Compatibility/dev behavior:
 
@@ -80,6 +81,14 @@ Threshold:
 
 1. `detected=true` with `confidence >= 80` is treated as process protection
    event.
+
+Remote scan status:
+
+1. Remote scan manager integration exists behind
+   `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`.
+2. Mode gate is `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce`.
+3. Current Windows scanner is scaffolding-safe no-op, so integration is
+   present while detector depth is still partial.
 
 ## 7) Are polymorphic mutations fully active?
 

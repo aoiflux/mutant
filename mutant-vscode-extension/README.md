@@ -2,12 +2,23 @@
 
 VS Code language support for Mutant.
 
-## Included in this MVP
+## Features
 
-- Language Server integration over stdio
-- Diagnostics from the Mutant LSP server
-- Hover, completion, go to definition, references, and rename
-- Starter syntax highlighting via TextMate grammar
+- A dedicated Mutant language server (`mlsp`) over stdio (gopls-style), with
+  prebuilt binaries bundled for Windows, Linux, and macOS.
+- **Diagnostics**: missing/redundant semicolons, unused / undefined / duplicate
+  declarations, deep-nesting hints, unreachable code, and **OS-aware
+  platform-support warnings** — flags a builtin that isn't supported on the
+  operating system the server is running on. Each rule's severity is
+  configurable, and several carry quick fixes.
+- **Canonical formatting** (format-on-save by default): four-space indentation
+  and strict semicolons, emitted from the AST so the same source always formats
+  to the same bytes.
+- **Hover & completion** showing each builtin's signature, summary, capability
+  category, and any platform constraint.
+- **Semantic highlighting**, go-to-definition, references, rename, document and
+  workspace symbols, and signature help.
+- Syntax highlighting via a TextMate grammar.
 
 ## Configuration
 
@@ -24,6 +35,14 @@ VS Code language support for Mutant.
 - `mutant.lint.rules.nestingComplexity.severity`: severity for deep nesting
   diagnostics in function bodies (`error`, `warning`, `information`, `hint`,
   `off`)
+- `mutant.lint.rules.semicolon.severity`: severity for missing/redundant
+  semicolon diagnostics (each with a quick fix)
+- `mutant.lint.rules.unreachableCode.severity`: severity for unreachable-code
+  diagnostics (statements after an unconditional `return`/`break`/`continue`)
+- `mutant.lint.rules.platformSupport.severity`: severity for OS-aware
+  platform-support warnings (a builtin unsupported on the host OS)
+- `mutant.strictFormatting`: master on/off switch for canonical formatting
+  (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing
   (`false` by default)
 
@@ -95,8 +114,10 @@ absolute path.
 
 ## Troubleshooting
 
-For full troubleshooting coverage (PATH setup, settings validation, logs,
-restart flow), see `../docs/VSCODE_EXTENSION_TROUBLESHOOTING.md`.
+For a deeper walkthrough of the language server and extension (PATH setup,
+settings, logs, restart flow), see
+[../docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](../docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
+and [../docs/LSP_EXTENSION_LLD.md](../docs/LSP_EXTENSION_LLD.md).
 
 Quick commands:
 
