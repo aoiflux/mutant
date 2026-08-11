@@ -425,7 +425,7 @@ func (c *duplicateCollector) collectStatement(stmt mast.Statement, current *decl
 
 		if len(names) > 1 {
 			for _, ident := range names {
-				if ident == nil || ident.Value == "" {
+				if ident == nil || ident.Value == "" || ident.Value == "_" {
 					continue
 				}
 				current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: true, topLevel: current.depth == 0})
@@ -560,7 +560,9 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 }
 
 func (c *duplicateCollector) collectDeclaration(ident *mast.Identifier, current *declarationScope, fromMultiNameLet bool) {
-	if ident == nil || ident.Value == "" || current == nil || c == nil || c.snapshot == nil {
+	// `_` is the discard identifier — it may be bound repeatedly (e.g. the error
+	// half of several `let value, _ = ...` bindings), so it is never a duplicate.
+	if ident == nil || ident.Value == "" || ident.Value == "_" || current == nil || c == nil || c.snapshot == nil {
 		return
 	}
 

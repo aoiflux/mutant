@@ -96,6 +96,17 @@ func TestNoUnreachableCodeForNormalFlow(t *testing.T) {
 	}
 }
 
+func TestUnderscoreDiscardIsNotDuplicate(t *testing.T) {
+	// `_` is the discard identifier and may be bound repeatedly (e.g. the error
+	// half of several `let value, _ = ...` pairs) without being a duplicate.
+	src := "let a, _ = fs_read(\"x\");\nlet b, _ = fs_read(\"y\");\nputln(a, b);\n"
+	for _, m := range collectMessages(src) {
+		if strings.Contains(m.message, "duplicate") && strings.Contains(m.message, "`_`") {
+			t.Fatalf("`_` should not be flagged as a duplicate declaration, got %q", m.message)
+		}
+	}
+}
+
 func TestHoverShowsCapabilityCategory(t *testing.T) {
 	hover, ok := builtinHoverText("fs_read")
 	if !ok {

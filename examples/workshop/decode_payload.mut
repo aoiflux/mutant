@@ -1,0 +1,19 @@
+// Workshop extra - Decode an obfuscated payload
+//
+// Malware hides commands behind layers of encoding. Peel them off with builtins.
+// Encoders return a string; decoders return (bytes, err). Input: none.
+
+putln("=== Decode payload ===");
+
+// Imagine you found this base64 blob inside a script.
+let command = "Invoke-Mimikatz -DumpCreds";
+let blob = base64_encode(command);
+putln("found (base64):", blob);
+
+let revealed, err = base64_decode(blob);
+putln("decoded       :", to_string(revealed));
+
+// Every encoder/decoder composes the same way - hex, url, gzip, zlib.
+putln("hex('hi')     :", hex_encode("hi"));
+let back, e2 = hex_decode("6869");
+putln("hex decode    :", to_string(back));

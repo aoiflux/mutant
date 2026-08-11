@@ -1,15 +1,10 @@
-// ============================================================
-//  Workshop 2/5 - Timestamp normalization
+// Workshop 2/5 - Timestamp normalization
 //
-//  What:  Forensic artifacts store time in different epochs. To compare or
-//         order events, first normalize every timestamp to a common form:
-//         a unix value + an ISO-8601 string. timestamp_normalize does this.
-//  Input: NONE. Uses built-in sample values (one per epoch).
-//  Run:   mutant run examples/workshop/02_timestamp_normalization.mut -pwd <pw>
-//         mutant     examples/workshop/02_timestamp_normalization.mu   -pwd <pw>
-// ============================================================
+// Forensic artifacts store time in different epochs. timestamp_normalize turns
+// any of them into one common form: a unix value + an ISO-8601 string.
+// Input: none (built-in sample values).
 
-// Normalize one value and print the result on a single tidy line.
+// Normalize one value and print it on a single line.
 let show = fn(label, value, format) {
     let norm, err = timestamp_normalize(value, format);
     if (err) {
@@ -19,17 +14,10 @@ let show = fn(label, value, format) {
     };
 };
 
-let run = fn() {
-    putln("=== 2/5 Timestamp normalization ===");
-    putln("Five source formats, each normalized to a common {unix, iso} form:");
+putln("=== 2/5 Timestamp normalization ===");
 
-    show("Windows FILETIME  ", 132537600000000000, "filetime");
-    show("Chrome / WebKit   ", 13300000000000000, "webkit");
-    show("Unix milliseconds ", 1717243500000, "ms");
-    show("ISO-8601 string   ", "2024-06-01T12:05:00Z", "iso");
-    show("auto-detect (unix)", 1717243500, "auto");
-
-    return true;
-};
-
-run();
+show("Windows FILETIME  ", 132537600000000000, "filetime");
+show("Chrome / WebKit   ", 13300000000000000, "webkit");
+show("Unix milliseconds ", 1717243500000, "ms");
+show("ISO-8601 string   ", "2024-06-01T12:05:00Z", "iso");
+show("auto-detect (unix)", 1717243500, "auto");

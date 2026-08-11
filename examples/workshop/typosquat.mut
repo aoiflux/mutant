@@ -1,0 +1,21 @@
+// Workshop extra - Detect look-alike (typosquat) domains
+//
+// Flag domains that are suspiciously similar to a brand you protect, using
+// string-similarity scoring. Input: none.
+
+putln("=== Typosquat detection ===");
+
+let brand = "paypal.com";
+let seen = ["paypa1.com", "paypal.com", "paypal-login.com", "google.com", "paypaI.com"];
+
+each(seen, fn(d) {
+    let distance = text_levenshtein(brand, d);   // edits to turn one into the other
+    let similarity = text_jaro_winkler(brand, d); // 0..1, higher = closer
+
+    // Close to the brand, but not the brand itself -> likely impersonation.
+    if (d != brand && similarity > 0.85) {
+        putln("  SUSPICIOUS:", d, "(distance", distance, ", similarity", similarity, ")");
+    } else {
+        putln("  ok        :", d);
+    };
+});

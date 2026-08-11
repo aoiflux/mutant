@@ -1,54 +1,30 @@
-// ============================================================
-//  Workshop 4/5 - Custom logic for forensic analysis
+// Workshop 4/5 - Custom analysis logic
 //
-//  What:  The point of a language (vs. a fixed tool) is that YOU write the
-//         analysis. Here we score files from several weighted signals using
-//         small, named rules (closures) composed with map / filter / each.
-//  Input: NONE. Uses built-in sample records. In a real case the fields would
-//         come from fs_magic / fs_entropy / detect_suspicious_files / mft_parse.
-//  Run:   mutant run examples/workshop/04_custom_analysis_logic.mut -pwd <pw>
-//         mutant     examples/workshop/04_custom_analysis_logic.mu   -pwd <pw>
-// ============================================================
+// The point of a language (not a fixed tool): YOU write the analysis. Score files
+// from several signals using small rules + map/filter. Input: none.
 
-let run = fn() {
-    putln("=== 4/5 Custom analysis logic ===");
+putln("=== 4/5 Custom analysis logic ===");
 
-    // Sample file records. Each carries a few signals an analyst cares about.
-    let files = [
-        { "name": "invoice.pdf.exe", "entropy": 7.90, "ext_mismatch": true,  "stomped": false },
-        { "name": "report.docx",     "entropy": 5.10, "ext_mismatch": false, "stomped": false },
-        { "name": "svc.dll",         "entropy": 6.20, "ext_mismatch": false, "stomped": true }
-    ];
+let files = [
+    { "name": "invoice.pdf.exe", "entropy": 7.90, "ext_mismatch": true,  "stomped": false },
+    { "name": "report.docx",     "entropy": 5.10, "ext_mismatch": false, "stomped": false },
+    { "name": "svc.dll",         "entropy": 6.20, "ext_mismatch": false, "stomped": true }
+];
 
-    // Each rule is a small closure returning points. Add rules without touching
-    // the ones you already have - this is your analysis, expressed in code.
-    let score_file = fn(f) {
-        let score = 0;
-        if (f["entropy"] > 7.5) {
-            score = score + 40;      // high entropy -> packed/encrypted
-        };
-        if (f["ext_mismatch"]) {
-            score = score + 50;      // extension disagrees with real type
-        };
-        if (f["stomped"]) {
-            score = score + 60;      // timestamps look tampered (see 5/5)
-        };
-        return score;
-    };
-
-    // Apply the scorer to every file, then keep the risky ones.
-    let scored = map(files, fn(f) {
-        return { "name": f["name"], "score": score_file(f) };
-    });
-    let flagged = filter(scored, fn(s) { return s["score"] >= 50; });
-
-    putln("scores:");
-    each(scored, fn(s) { putln("  ", s["name"], "=>", s["score"]); });
-
-    putln("flagged (score >= 50):", len(flagged));
-    each(flagged, fn(s) { putln("  ! ", s["name"], " (", s["score"], ")"); });
-
-    return true;
+// Each rule adds points. Add a rule without touching the others.
+let score_file = fn(f) {
+    let score = 0;
+    if (f["entropy"] > 7.5) { score = score + 40; };   // packed / encrypted
+    if (f["ext_mismatch"])  { score = score + 50; };   // wrong extension
+    if (f["stomped"])       { score = score + 60; };   // tampered timestamps
+    return score;
 };
 
-run();
+let scored = map(files, fn(f) { return { "name": f["name"], "score": score_file(f) }; });
+let flagged = filter(scored, fn(s) { return s["score"] >= 50; });
+
+putln("scores:");
+each(scored, fn(s) { putln("  ", s["name"], "=>", s["score"]); });
+
+putln("flagged (>= 50):");
+each(flagged, fn(s) { putln("  ! ", s["name"], "(", s["score"], ")"); });

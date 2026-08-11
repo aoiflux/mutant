@@ -1,102 +1,44 @@
-// ============================================================
-//  Workshop 5/5 - Timestomping detection (capstone)
+// Workshop 5/5 - Timestomping detection
 //
-//  What:  Detect NTFS timestomping by comparing $STANDARD_INFORMATION (SI)
-//         against $FILE_NAME (FN) timestamps. Anti-forensic tools rewrite SI
-//         (what Explorer shows) but usually leave FN (set by the OS at file
-//         birth). Three tells are checked:
-//           1. SI created earlier than FN created (not physically plausible),
-//           2. SI created after SI modified (ordering anomaly),
-//           3. SI times on whole seconds while FN times are not (sub-second
-//              zeroing - real NTFS times have 100 ns resolution).
+// Windows stores TWO creation times per file:
+//   SI ($STANDARD_INFORMATION) - what Explorer shows; anti-forensic tools edit it.
+//   FN ($FILE_NAME)            - set by the OS at file birth; tools rarely touch it.
+// So if a file's SI "created" is OLDER than its FN "created", that is impossible
+// -> the timestamps were tampered with.
 //
-//  Input: REQUIRED - an NTFS $MFT. Set MFT_PATH below to either:
-//           - a standalone $MFT file (export with KAPE, FTK Imager, or `icat`), or
-//           - an NTFS volume image (a raw/dd image of one NTFS partition).
-//         (mft_parse auto-detects which of the two you gave it.)
-//         With no valid file present, this program prints these instructions
-//         and exits cleanly - it never fakes a result.
-//
-//  Run:   mutant run examples/workshop/05_timestomp_detection.mut -pwd <pw>
-//         mutant     examples/workshop/05_timestomp_detection.mu   -pwd <pw>
-// ============================================================
+// Input: an NTFS $MFT (a standalone $MFT from KAPE/FTK/icat, or an NTFS image).
+//        Set MFT_PATH below.
 
-// >>> Set this to your $MFT (or NTFS image) path. <<<
 let MFT_PATH = "C:/evidence/$MFT";
 
-// Return a reason string if the entry looks timestomped, or "" if it looks clean.
-// Times are unix seconds; get(..., 0) yields 0 when an SI/FN attribute is absent.
-let stomp_reason = fn(e) {
-    let si_created  = get(e, "si_created", 0);
-    let fn_created  = get(e, "fn_created", 0);
-    let si_modified = get(e, "si_modified", 0);
-
-    // Need real SI and FN creation times to compare.
-    if (si_created == 0) { return ""; };
-    if (fn_created == 0) { return ""; };
-
-    // 1) FN creation is set at file birth. SI older than FN is not plausible.
-    if (si_created < fn_created) { return "SI created precedes FN created"; };
-
-    // 2) "Created" after last "modified" is anomalous.
-    if (si_created > si_modified) { return "SI created is after SI modified"; };
-
-    // 3) Sub-second zeroing: SI times all land on whole seconds (fraction 0)
-    //    while FN times carry a real 100 ns fraction. Summing the fractions lets
-    //    us test "all zero" (sum == 0) vs "some non-zero" (sum > 0).
-    let si_frac = get(e, "si_created_ns", 0) + get(e, "si_modified_ns", 0) + get(e, "si_accessed_ns", 0);
-    let fn_frac = get(e, "fn_created_ns", 0) + get(e, "fn_modified_ns", 0) + get(e, "fn_accessed_ns", 0);
-    if (si_frac == 0 && fn_frac > 0) {
-        return "SI times are whole-seconds while FN times are not (sub-second zeroing)";
-    };
-
-    return "";
+// One clear rule: SI created earlier than FN created. get(...,0) is 0 when a
+// timestamp is missing, and we only compare when both are present.
+let looks_stomped = fn(e) {
+    let si = get(e, "si_created", 0);
+    let fun = get(e, "fn_created", 0);
+    return (((si > 0) && (fun > 0)) && (si < fun));
 };
 
-let print_finding = fn(e) {
-    putln("  suspect: ", e["path"]);
-    putln("    why:      ", stomp_reason(e));
-    putln("    si_created  ", get(e, "si_created_iso", "(none)"),
-          "   fn_created  ", get(e, "fn_created_iso", "(none)"));
-    putln("    si_modified ", get(e, "si_modified_iso", "(none)"));
-};
+putln("=== 5/5 Timestomping detection ===");
 
-let need_input = fn() {
-    putln("No NTFS $MFT found at: ", MFT_PATH);
-    putln("");
-    putln("This program needs an NTFS $MFT. Provide one of:");
-    putln("  - a standalone $MFT file (KAPE / FTK Imager / icat), or");
-    putln("  - an NTFS volume image (raw/dd of a single NTFS partition).");
-    putln("Then set MFT_PATH at the top of this file to that path and re-run.");
-};
-
-let run = fn() {
-    putln("=== 5/5 Timestomping detection ===");
-
-    let exists, err = fs_exists(MFT_PATH);
-    if (err) {
-        putln("[error] fs_exists:", err);
-        return false;
-    };
-    if (!exists) {
-        need_input();
-        return false;
-    };
-
-    let parsed, perr = mft_parse(MFT_PATH);
+let exists, err = fs_exists(MFT_PATH);
+if (!exists) {
+    putln("No $MFT at", MFT_PATH);
+    putln("Set MFT_PATH to a standalone $MFT or an NTFS image, then re-run.");
+} else {
+    let mft, perr = mft_parse(MFT_PATH);
     if (perr) {
         putln("[error] mft_parse:", perr);
-        putln("(If this is a full disk image, first find the NTFS partition with");
-        putln(" table_open, then point MFT_PATH at that partition/volume.)");
-        return false;
-    };
+    } else {
+        let suspects = filter(mft["entries"], looks_stomped);
+        putln("scanned", len(mft["entries"]), "records;", len(suspects), "look stomped:");
+        each(suspects, fn(e) {
+            putln("  ", e["path"]);
+            putln("    SI created", e["si_created_iso"], " < FN created", e["fn_created_iso"]);
+        });
+    }
+}
 
-    let entries = parsed["entries"];
-    let suspects = filter(entries, fn(e) { return stomp_reason(e) != ""; });
-
-    putln("scanned", len(entries), "MFT records;", len(suspects), "look timestomped");
-    each(suspects, print_finding);
-    return true;
-};
-
-run();
+// Want more? mft_parse also exposes si_created_ns / fn_created_ns (the sub-second
+// fraction). A second tell: SI times land on whole seconds (fraction 0) while FN
+// times don't - the fingerprint of tools that set whole-second timestamps.

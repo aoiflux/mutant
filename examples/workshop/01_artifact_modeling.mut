@@ -1,50 +1,27 @@
-// ============================================================
-//  Workshop 1/5 - Artifact modeling
+// Workshop 1/5 - Artifact modeling
 //
-//  What:  Model forensic artifacts (entities) and the relationships between
-//         them as a graph - the backbone of an investigation. An "artifact"
-//         is a typed thing (process, file, network endpoint) with attributes.
-//  Input: NONE. This program builds its own sample data.
-//  Run:   mutant run examples/workshop/01_artifact_modeling.mut -pwd <pw>
-//         mutant     examples/workshop/01_artifact_modeling.mu   -pwd <pw>
-// ============================================================
+// Model an investigation as a graph: artifacts (typed things with attributes)
+// and the relationships between them. Input: none.
 
-let run = fn() {
-    putln("=== 1/5 Artifact modeling ===");
+putln("=== 1/5 Artifact modeling ===");
 
-    // A graph holds artifacts (nodes) and relationships (edges).
-    let db, err = db_open();
-    if (err) {
-        putln("[error] db_open:", err);
-        return false;
-    };
+let db, _ = db_open();
 
-    // Each artifact has a TYPE and an ATTRIBUTE hash. The attributes are indexed,
-    // so you can look artifacts up by them later. db_add_artifact returns a hash
-    // whose node_id you use to link artifacts together.
-    let proc, e1 = db_add_artifact(db, "process", { "name": "powershell.exe", "pid": 4021 });
-    let file, e2 = db_add_artifact(db, "file",    { "path": "C:/Users/Public/x.ps1" });
-    let host, e3 = db_add_artifact(db, "network", { "dst": "185.12.0.9", "port": 443 });
+// Each artifact has a type + an attribute hash. db_add_artifact returns a hash
+// whose node_id we use to link artifacts together.
+let proc, _ = db_add_artifact(db, "process", { "name": "powershell.exe", "pid": 4021 });
+let file, _ = db_add_artifact(db, "file",    { "path": "C:/Users/Public/x.ps1" });
+let host, _ = db_add_artifact(db, "network", { "dst": "185.12.0.9", "port": 443 });
 
-    // Relationships describe WHAT HAPPENED between two artifacts.
-    db_add_relation(db, proc["node_id"], file["node_id"], "wrote");
-    db_add_relation(db, proc["node_id"], host["node_id"], "connected_to");
+// Relationships describe what happened between artifacts.
+db_add_relation(db, proc["node_id"], file["node_id"], "wrote");
+db_add_relation(db, proc["node_id"], host["node_id"], "connected_to");
 
-    // The model, in plain words.
-    putln("modeled:");
-    putln("  powershell.exe (pid 4021) --wrote-->        C:/Users/Public/x.ps1");
-    putln("  powershell.exe (pid 4021) --connected_to--> 185.12.0.9:443");
+putln("modeled:");
+putln("  powershell.exe --wrote-->        C:/Users/Public/x.ps1");
+putln("  powershell.exe --connected_to--> 185.12.0.9:443");
 
-    // How big is the graph?
-    let stats, serr = db_stats(db);
-    if (serr) {
-        putln("[error] db_stats:", serr);
-    } else {
-        putln("graph now holds", stats["nodes"], "artifacts and", stats["edges"], "relationships");
-    };
+let stats, _ = db_stats(db);
+putln("graph holds", stats["nodes"], "artifacts and", stats["edges"], "relationships");
 
-    db_close(db);
-    return true;
-};
-
-run();
+db_close(db);
