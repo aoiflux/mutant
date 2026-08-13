@@ -202,11 +202,19 @@ func writeIntegrationMemoryFixture(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "integration_memdump.bin")
+	// Synthetic memory dump crafted to trip detect_injection's signature set: an MZ
+	// marker (for mem_find_pe), a long NOP sled (>= 16 bytes), and several real
+	// shellcode signatures — fnstenv GetPC, an x86 PEB walk, and xor/push. Together
+	// these score well above the detection threshold (detected=true, legitimately).
 	data := []byte{
-		0x4d, 0x5a, 0x90, 0x00,
+		0x4d, 0x5a, 0x90, 0x00, // MZ header
 		'M', 'e', 'm', 'o', 'r', 'y', '-', 'S', 'n', 'a', 'p', 's', 'h', 'o', 't',
-		0x90, 0x90, 0x90,
-		0x31, 0xc0, 0x50, 0x68,
+		0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, // NOP sled (20 bytes)
+		0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+		0x90, 0x90, 0x90, 0x90,
+		0xd9, 0x74, 0x24, 0xf4, // fnstenv [esp-0Ch] — GetPC
+		0x64, 0xa1, 0x30, 0x00, 0x00, 0x00, // mov eax, fs:[0x30] — PEB walk (x86)
+		0x31, 0xc0, 0x50, 0x68, // xor eax,eax; push eax; push imm — xor/push
 		'X', 'Y', 'Z',
 	}
 	if err := os.WriteFile(path, data, 0644); err != nil {

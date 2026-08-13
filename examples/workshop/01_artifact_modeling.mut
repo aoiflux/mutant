@@ -1,0 +1,27 @@
+// Workshop 1/5 - Artifact modeling
+//
+// Model an investigation as a graph: artifacts (typed things with attributes)
+// and the relationships between them. Input: none.
+
+putln("=== 1/5 Artifact modeling ===");
+
+let db, _ = db_open();
+
+// Each artifact has a type + an attribute hash. db_add_artifact returns a hash
+// whose node_id we use to link artifacts together.
+let proc, _ = db_add_artifact(db, "process", { "name": "powershell.exe", "pid": 4021 });
+let file, _ = db_add_artifact(db, "file",    { "path": "C:/Users/Public/x.ps1" });
+let host, _ = db_add_artifact(db, "network", { "dst": "185.12.0.9", "port": 443 });
+
+// Relationships describe what happened between artifacts.
+db_add_relation(db, proc["node_id"], file["node_id"], "wrote");
+db_add_relation(db, proc["node_id"], host["node_id"], "connected_to");
+
+putln("modeled:");
+putln("  powershell.exe --wrote-->        C:/Users/Public/x.ps1");
+putln("  powershell.exe --connected_to--> 185.12.0.9:443");
+
+let stats, _ = db_stats(db);
+putln("graph holds", stats["nodes"], "artifacts and", stats["edges"], "relationships");
+
+db_close(db);

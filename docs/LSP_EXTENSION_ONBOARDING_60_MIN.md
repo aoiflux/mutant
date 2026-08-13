@@ -8,8 +8,7 @@ run, debug, and safely modify Mutant language tooling.
 Use this guide together with:
 
 - [LSP + Extension LLD](LSP_EXTENSION_LLD.md)
-- [VS Code LSP Teaching Reference](VSCODE_LSP_TEACHING_REFERENCE.md)
-- [VS Code Extension Troubleshooting](VSCODE_EXTENSION_TROUBLESHOOTING.md)
+- [Language Reference](MUTANT_LANGUAGE_REFERENCE.md)
 
 ## 1. Outcomes
 
@@ -81,7 +80,7 @@ npm test
 
 ```mermaid
 flowchart TD
-  E[Editor event\nhover/completion/rename] --> X[vscode-extension/src/extension.ts]
+  E[Editor event\nhover/completion/rename] --> X[mutant-vscode-extension/src/extension.ts]
   X --> Y[lsp/cmd/mlsp/main.go]
   Y --> Z[lsp/internal/server/server.go]
   Z --> A[lsp/internal/workspace/store.go]
@@ -92,7 +91,7 @@ flowchart TD
 
 Read these files in this order:
 
-1. [vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts)
+1. [mutant-vscode-extension/src/extension.ts](../mutant-vscode-extension/src/extension.ts)
 2. [lsp/cmd/mlsp/main.go](../lsp/cmd/mlsp/main.go)
 3. [lsp/internal/server/server.go](../lsp/internal/server/server.go)
 4. [lsp/internal/analyzer/analyzer.go](../lsp/internal/analyzer/analyzer.go)
@@ -191,7 +190,7 @@ Edit:
 - [lsp/internal/analyzer/diagnostics.go](../lsp/internal/analyzer/diagnostics.go)
 - [lsp/internal/server/lint_config.go](../lsp/internal/server/lint_config.go)
 - extension setting schema in
-  [vscode-extension/package.json](../vscode-extension/package.json)
+  [mutant-vscode-extension/package.json](../mutant-vscode-extension/package.json)
 
 Validate:
 
@@ -209,10 +208,10 @@ Use these commands in extension host when behavior seems wrong:
 
 If startup fails repeatedly:
 
-1. Check configured binary path setting.
-2. Confirm latest local mlsp binary selection behavior.
-3. Use troubleshooting steps in
-   [VSCODE_EXTENSION_TROUBLESHOOTING.md](VSCODE_EXTENSION_TROUBLESHOOTING.md).
+1. Check the configured binary path setting (`mutant.languageServer.path`).
+2. Confirm the latest local `mlsp` binary is being selected.
+3. Restart the language server (command: `Mutant: Restart LSP`) and review the
+   logs (`Mutant: Show LSP Logs`).
 
 ## 9. Common Pitfalls and How to Avoid Them
 

@@ -1,0 +1,44 @@
+// Workshop 5/5 - Timestomping detection
+//
+// Windows stores TWO creation times per file:
+//   SI ($STANDARD_INFORMATION) - what Explorer shows; anti-forensic tools edit it.
+//   FN ($FILE_NAME)            - set by the OS at file birth; tools rarely touch it.
+// So if a file's SI "created" is OLDER than its FN "created", that is impossible
+// -> the timestamps were tampered with.
+//
+// Input: an NTFS $MFT (a standalone $MFT from KAPE/FTK/icat, or an NTFS image).
+//        Set MFT_PATH below.
+
+let MFT_PATH = "C:/evidence/$MFT";
+
+// One clear rule: SI created earlier than FN created. get(...,0) is 0 when a
+// timestamp is missing, and we only compare when both are present.
+let looks_stomped = fn(e) {
+    let si = get(e, "si_created", 0);
+    let fun = get(e, "fn_created", 0);
+    return (((si > 0) && (fun > 0)) && (si < fun));
+};
+
+putln("=== 5/5 Timestomping detection ===");
+
+let exists, err = fs_exists(MFT_PATH);
+if (!exists) {
+    putln("No $MFT at", MFT_PATH);
+    putln("Set MFT_PATH to a standalone $MFT or an NTFS image, then re-run.");
+} else {
+    let mft, perr = mft_parse(MFT_PATH);
+    if (perr) {
+        putln("[error] mft_parse:", perr);
+    } else {
+        let suspects = filter(mft["entries"], looks_stomped);
+        putln("scanned", len(mft["entries"]), "records;", len(suspects), "look stomped:");
+        each(suspects, fn(e) {
+            putln("  ", e["path"]);
+            putln("    SI created", e["si_created_iso"], " < FN created", e["fn_created_iso"]);
+        });
+    }
+}
+
+// Want more? mft_parse also exposes si_created_ns / fn_created_ns (the sub-second
+// fraction). A second tell: SI times land on whole seconds (fraction 0) while FN
+// times don't - the fingerprint of tools that set whole-second timestamps.

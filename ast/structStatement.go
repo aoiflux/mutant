@@ -12,8 +12,12 @@ type StructStatement struct {
 	Fields []*Identifier
 }
 
-func (ss *StructStatement) statementNode()       {}
-func (ss *StructStatement) TokenLiteral() string { return ss.Token.Literal }
+func (ss *StructStatement) statementNode() {}
+
+// RequiresSemicolon is false: a struct declaration ends with `}`. Its field
+// list is semicolon-separated internally, which the formatter emits.
+func (ss *StructStatement) RequiresSemicolon() bool { return false }
+func (ss *StructStatement) TokenLiteral() string    { return ss.Token.Literal }
 func (ss *StructStatement) String() string {
 	var out bytes.Buffer
 	fields := []string{}

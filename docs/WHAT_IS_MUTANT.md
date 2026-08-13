@@ -16,13 +16,24 @@ If you want a concise answer to “what does it do?”:
 
 - It automates security and forensic workflows.
 - It can compile `.mut` source into encrypted bytecode and standalone binaries.
-- It has builtins for text, filesystem, network, registry, memory, binary
-  parsing, command execution, JSON, Lua, graph modeling, detection, policy, and
-  cache workflows.
+- It has a large standard library (**399 builtins** across 32 categories):
+  strings, math, hashing, time, structured data (JSON/encoding/compression),
+  higher-order collection functions, filesystem, networking (sockets/TLS/HTTP),
+  graph modeling, cryptography, IOC/network intelligence, fingerprinting,
+  detection, policy, sandboxed Lua, command execution, and a deep forensic
+  suite — process/memory/binary analysis, registry (hive/live), filesystem and
+  disk-image parsers, Windows/Unix/browser artifacts, and timeline building.
+  The full catalog is the [Capability Reference](CAPABILITY_REFERENCE.md).
 - It includes runtime protections such as signature verification, anti-tamper
   checks, anti-debug checks, anti-sandbox checks, process protection, and
   polymorphic bytecode stages.
+- It ships a Go-style language server (a separate `mlsp` binary) with strict
+  formatting, diagnostics, hover, completion, and OS-aware platform warnings.
 - It ships with real examples that you can study, adapt, and chain together.
+
+Deep-dive guides: [Capability Reference](CAPABILITY_REFERENCE.md) ·
+[Secure Networking](SECURE_NETWORKING.md) · [Graph Database](GRAPH_DATABASE.md) ·
+[Runtime Integration](RUNTIME_INTEGRATION.md) · [Structured Data](STRUCTURED_DATA.md).
 
 ## What you can do with it
 

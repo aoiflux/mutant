@@ -1,0 +1,37 @@
+// handler.mut — per-connection handler, run by net_serve in main.mut.
+//
+// net_serve spawns a fresh VM per connection and runs this file. The connection
+// handle is exposed via serve_conn() and the shared arg (a banner string, set in
+// main.mut) via serve_arg(). Because the file is a normal program, it also runs
+// standalone — in which case serve_conn() returns null and it prints a notice.
+
+let handle = fn() {
+    let conn = serve_conn();
+    if (is_null(conn)) {
+        putln("handler.mut run standalone (no connection). Launch via main.mut.");
+        return false;
+    };
+
+    let banner = serve_arg();
+
+    // Greet the client (bounded write; a stalled peer cannot hang us forever).
+    let n, werr = net_conn_write(conn, banner + "\r\n", 2000);
+    if (werr) {
+        putln("[handler] write error:", werr);
+    };
+
+    // Read one request line (up to 1 KiB, 2s timeout).
+    let req, rerr = net_conn_read(conn, 1024, 2000);
+    if (rerr) {
+        putln("[handler] read error:", rerr);
+    } else {
+        putln("[handler] received", req["bytes"], "bytes");
+    };
+
+    // Respond and close.
+    let m, w2 = net_conn_write(conn, "OK\r\n", 2000);
+    let closed, cerr = net_conn_close(conn);
+    return true;
+};
+
+handle();

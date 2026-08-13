@@ -1,6 +1,8 @@
 package lexer
 
 import (
+	"strings"
+
 	"mutant/token"
 	"unicode"
 )
@@ -23,6 +25,12 @@ type Lexer struct {
 	// lineStart is the byte offset in input at which the current line begins.
 	// Column of l.ch = l.position - l.lineStart + 1.
 	lineStart int
+
+	// comments accumulates comment trivia in source order as it is skipped.
+	// Comments are never emitted as tokens, so the parser is unaffected;
+	// tooling that needs them (the formatter) reads them after lexing via
+	// Comments().
+	comments []token.Comment
 }
 
 // New function initializes our lexer, takes input as a string
@@ -66,9 +74,21 @@ func (l *Lexer) NextToken() token.Token {
 	case '%':
 		tok = newToken(token.MODULO, l.ch)
 	case '<':
-		tok = newToken(token.LT, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.LTE, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.LT, l.ch)
+		}
 	case '>':
-		tok = newToken(token.GT, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.GTE, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.GT, l.ch)
+		}
 	case '!':
 		if l.peekRune() == '=' {
 			ch := string(l.ch)
@@ -76,6 +96,24 @@ func (l *Lexer) NextToken() token.Token {
 			tok = token.Token{Type: token.INEQUALITY, Literal: ch + string(l.ch)}
 		} else {
 			tok = newToken(token.BANG, l.ch)
+		}
+	case '&':
+		if l.peekRune() == '&' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.AND, Literal: ch + string(l.ch)}
+		} else {
+			// Mutant has no bitwise '&'; a lone '&' is not a valid token.
+			tok = newToken(token.ILLEGAL, l.ch)
+		}
+	case '|':
+		if l.peekRune() == '|' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.OR, Literal: ch + string(l.ch)}
+		} else {
+			// Mutant has no bitwise '|'; a lone '|' is not a valid token.
+			tok = newToken(token.ILLEGAL, l.ch)
 		}
 	case '(':
 		tok = newToken(token.LPAREN, l.ch)
@@ -110,7 +148,7 @@ func (l *Lexer) NextToken() token.Token {
 		tok.Type = token.STRING
 		tok.Literal = l.readString()
 	default:
-		if unicode.IsLetter(l.ch) {
+		if unicode.IsLetter(l.ch) || l.ch == '_' {
 			tok.Literal = l.readIdentifier()
 			tok.Type = token.LookupIdent(tok.Literal)
 			tok.Start = start
@@ -190,15 +228,47 @@ func (l *Lexer) nextRune() rune {
 	return next
 }
 
+// readString reads a double-quoted string literal, processing backslash escape
+// sequences: \n \r \t \" \\ \0. Unknown escapes are kept verbatim (backslash +
+// char). The lexer is byte-oriented, so bytes are accumulated directly to
+// preserve any multi-byte source content exactly. Leaves the cursor on the
+// closing quote (or EOF), matching the caller's trailing readRune().
 func (l *Lexer) readString() string {
-	position := l.position + 1
+	var sb strings.Builder
 	for {
 		l.readRune()
 		if l.ch == '"' || l.ch == 0 {
 			break
 		}
+		if l.ch == '\\' {
+			l.readRune()
+			switch l.ch {
+			case 'n':
+				sb.WriteByte('\n')
+			case 'r':
+				sb.WriteByte('\r')
+			case 't':
+				sb.WriteByte('\t')
+			case '"':
+				sb.WriteByte('"')
+			case '\\':
+				sb.WriteByte('\\')
+			case '0':
+				sb.WriteByte(0)
+			case 0:
+				// Trailing backslash at EOF: keep it literal and stop.
+				sb.WriteByte('\\')
+				return sb.String()
+			default:
+				// Unknown escape: preserve both characters.
+				sb.WriteByte('\\')
+				sb.WriteByte(byte(l.ch))
+			}
+			continue
+		}
+		sb.WriteByte(byte(l.ch))
 	}
-	return l.input[position:l.position]
+	return sb.String()
 }
 
 func newToken(tokenType token.TokenType, ch rune) token.Token {
@@ -253,10 +323,48 @@ func (l *Lexer) skipTrivia() {
 	}
 }
 
+// skipLineComment consumes a `// ...` comment up to (but not including) the
+// terminating newline, recording it as trivia. The cursor is left on the
+// newline (or EOF) so the enclosing skipTrivia loop keeps line accounting
+// intact.
 func (l *Lexer) skipLineComment() {
+	start := l.currentPos()
 	for l.ch != '\n' && l.ch != 0 {
 		l.readRune()
 	}
+	end := l.currentPos()
+
+	text := l.input[start.Offset:end.Offset]
+
+	// On CRLF input the '\r' sits before the '\n' and would otherwise be
+	// captured as part of the comment body. Drop it from both the text and
+	// the recorded end position so they stay consistent.
+	if strings.HasSuffix(text, "\r") {
+		text = text[:len(text)-1]
+		end.Offset--
+		end.Column--
+	}
+
+	l.comments = append(l.comments, token.Comment{
+		Kind:  token.LineComment,
+		Text:  text,
+		Start: start,
+		End:   end,
+	})
+}
+
+// Comments returns the comment trivia lexed so far, in source order.
+//
+// Because lexing is lazy, the result is only complete once the input has
+// been consumed through EOF. Callers that need every comment (the parser,
+// which publishes them on ast.Program) should read this after parsing
+// finishes rather than mid-stream. The returned slice aliases the lexer's
+// storage and must not be mutated.
+func (l *Lexer) Comments() []token.Comment {
+	if l == nil {
+		return nil
+	}
+	return l.comments
 }
 
 func (l *Lexer) peekRune() rune {

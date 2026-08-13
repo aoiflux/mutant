@@ -1,11 +1,10 @@
 package builtin
 
 import (
-	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"os"
-	"regexp"
 	"strings"
 
 	"mutant/object"
@@ -33,12 +32,16 @@ func MemMap(args ...object.Object) object.Object {
 			end = len(data)
 		}
 		segmentData := data[off:end]
+		// A raw dump carries no page-protection metadata, so instead of fabricating
+		// readable/writable/executable flags we report measurable per-segment
+		// properties: Shannon entropy and the ratio of printable bytes. High
+		// entropy suggests packed/encrypted/code regions; a high printable ratio
+		// suggests text/strings.
 		segments = append(segments, makeHashObject(map[string]object.Object{
-			"offset":     intObj(int64(off)),
-			"size":       intObj(int64(len(segmentData))),
-			"readable":   boolObj(true),
-			"writable":   boolObj(false),
-			"executable": boolObj(likelyExecutableChunk(segmentData)),
+			"offset":          intObj(int64(off)),
+			"size":            intObj(int64(len(segmentData))),
+			"entropy":         &object.Float{Value: shannonEntropy(segmentData)},
+			"printable_ratio": &object.Float{Value: printableByteRatio(segmentData)},
 		}))
 	}
 
@@ -179,12 +182,65 @@ func MemFindPE(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("mem_find_pe: %s", err.Error()))
 	}
 
-	offsets := carveOffsets(data, []byte{0x4d, 0x5a})
-	elements := make([]object.Object, len(offsets))
-	for i, off := range offsets {
-		elements[i] = intObj(int64(off))
+	// Each MZ marker is a candidate; a real PE is confirmed by following the DOS
+	// header's e_lfanew pointer (at +0x3C) to a "PE\0\0" signature.
+	mzOffsets := carveOffsets(data, []byte{0x4d, 0x5a})
+	headers := make([]object.Object, 0, len(mzOffsets))
+	confirmed := 0
+	for _, mz := range mzOffsets {
+		peOffset, machine, ok := validatePEAt(data, mz)
+		entry := map[string]object.Object{
+			"mz_offset": intObj(int64(mz)),
+			"confirmed": boolObj(ok),
+		}
+		if ok {
+			confirmed++
+			entry["pe_offset"] = intObj(int64(peOffset))
+			entry["machine"] = stringObj(peMachineName(machine))
+		}
+		headers = append(headers, makeHashObject(entry))
 	}
-	return resultAndError(&object.Array{Elements: elements}, nil)
+
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"candidates": intObj(int64(len(mzOffsets))),
+		"confirmed":  intObj(int64(confirmed)),
+		"headers":    &object.Array{Elements: headers},
+	}), nil)
+}
+
+// validatePEAt checks whether the MZ marker at mz is a real PE header by
+// following e_lfanew (DOS header +0x3C) to a "PE\0\0" signature, returning the
+// absolute PE-header offset and COFF machine type.
+func validatePEAt(data []byte, mz int) (peOffset int, machine uint16, ok bool) {
+	if mz+0x40 > len(data) {
+		return 0, 0, false
+	}
+	eLfanew := int(binary.LittleEndian.Uint32(data[mz+0x3C : mz+0x40]))
+	peAbs := mz + eLfanew
+	if eLfanew <= 0 || peAbs+6 > len(data) || peAbs < mz {
+		return 0, 0, false
+	}
+	if !(data[peAbs] == 'P' && data[peAbs+1] == 'E' && data[peAbs+2] == 0 && data[peAbs+3] == 0) {
+		return 0, 0, false
+	}
+	return peAbs, binary.LittleEndian.Uint16(data[peAbs+4 : peAbs+6]), true
+}
+
+func peMachineName(m uint16) string {
+	switch m {
+	case 0x014c:
+		return "i386"
+	case 0x8664:
+		return "amd64"
+	case 0x01c0:
+		return "arm"
+	case 0xaa64:
+		return "arm64"
+	case 0x0200:
+		return "ia64"
+	default:
+		return "unknown"
+	}
 }
 
 func MemFindShellcode(args ...object.Object) object.Object {
@@ -222,37 +278,17 @@ func MemFindShellcode(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: hits}, nil)
 }
 
-func likelyExecutableChunk(chunk []byte) bool {
-	if len(chunk) == 0 {
-		return false
+// printableByteRatio returns the fraction (0–1) of bytes that are printable
+// ASCII (including space, tab, CR, LF).
+func printableByteRatio(data []byte) float64 {
+	if len(data) == 0 {
+		return 0
 	}
-	if bytes.Contains(chunk, []byte{0x4d, 0x5a}) || bytes.Contains(chunk, []byte{0x7f, 0x45, 0x4c, 0x46}) {
-		return true
-	}
-	re := regexp.MustCompile(`[\x55\x8B\xE5\xE8\xE9\xC3]`)
-	return re.Match(chunk)
-}
-
-func MemMapLiveProcess(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-	_, ok := args[0].(*object.Integer)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `mem_map_live` must be INTEGER pid, got %s", args[0].Type()))
-	}
-	return resultAndError(nil, newError("mem_map_live unsupported: privileged live process memory access is not enabled"))
-}
-
-func memLines(data []byte) []string {
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	lines := make([]string, 0)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	printable := 0
+	for _, b := range data {
+		if (b >= 0x20 && b <= 0x7e) || b == '\t' || b == '\n' || b == '\r' {
+			printable++
 		}
-		lines = append(lines, line)
 	}
-	return lines
+	return float64(printable) / float64(len(data))
 }

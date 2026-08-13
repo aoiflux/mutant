@@ -13,8 +13,12 @@ type ForStatement struct {
 	Body      *BlockStatement
 }
 
-func (fs *ForStatement) statementNode()       {}
-func (fs *ForStatement) TokenLiteral() string { return fs.Token.Literal }
+func (fs *ForStatement) statementNode() {}
+
+// RequiresSemicolon is false: a `for` statement ends with its body's `}`.
+// The semicolons inside the header are structural, not terminators.
+func (fs *ForStatement) RequiresSemicolon() bool { return false }
+func (fs *ForStatement) TokenLiteral() string    { return fs.Token.Literal }
 func (fs *ForStatement) String() string {
 	var out bytes.Buffer
 

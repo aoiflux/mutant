@@ -19,6 +19,44 @@ type Position struct {
 // IsValid reports whether p carries meaningful position information.
 func (p Position) IsValid() bool { return p.Line > 0 }
 
+// CommentKind distinguishes the comment syntaxes the lexer recognises.
+// Mutant currently only has line comments, but the kind is recorded
+// explicitly so the formatter does not have to re-inspect the text and so
+// block comments can be added later without changing consumers.
+type CommentKind string
+
+const (
+	// LineComment is a `// ...` comment running to the end of the line.
+	LineComment CommentKind = "line"
+)
+
+// Comment is a piece of comment trivia captured by the lexer.
+//
+// Comments are not emitted as tokens (the parser never sees them); they are
+// collected on the side and published on ast.Program so that the formatter
+// can re-attach them to the nodes they document. Text holds the comment
+// exactly as authored, including the leading `//` and excluding the
+// terminating newline.
+//
+// Start/End follow the same convention as Token: Start is the position of
+// the first byte, End is one past the last byte.
+type Comment struct {
+	Kind  CommentKind
+	Text  string
+	Start Position
+	End   Position
+}
+
+// IsTrailing reports whether the comment begins on the same line as, and
+// after, the token ending at prev. A trailing comment belongs to the
+// statement it follows; a non-trailing one leads the statement below it.
+func (c Comment) IsTrailing(prev Position) bool {
+	if !prev.IsValid() || !c.Start.IsValid() {
+		return false
+	}
+	return prev.Line == c.Start.Line && c.Start.Offset >= prev.Offset
+}
+
 type TokenType string
 
 // Token is a lexed piece of source text.
@@ -56,9 +94,13 @@ const (
 	DOT        = "."
 	LT         = "<"
 	GT         = ">"
+	LTE        = "<="
+	GTE        = ">="
 	BANG       = "!"
 	EQUALITY   = "=="
 	INEQUALITY = "!="
+	AND        = "&&"
+	OR         = "||"
 	COLON      = ":"
 
 	// Delimiters

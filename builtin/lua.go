@@ -127,11 +127,23 @@ func loadSafeLuaLibraries(state *lua.LState) {
 	lua.OpenString(state)
 	lua.OpenTable(state)
 	lua.OpenOs(state)
-	lua.OpenIo(state)
+	// Note: io is deliberately NOT opened — it exposes arbitrary host file
+	// read/write. Scripts that need controlled input use mutant.read_file.
 
-	unsafeNames := []string{"debug", "package", "require", "dofile", "load", "loadfile", "loadstring", "collectgarbage"}
+	// Remove globals that allow loading/evaluating arbitrary code, and the io
+	// library (in case a future base lib pulls it in).
+	unsafeNames := []string{"debug", "package", "require", "dofile", "load", "loadfile", "loadstring", "collectgarbage", "io"}
 	for _, name := range unsafeNames {
 		state.SetGlobal(name, lua.LNil)
+	}
+
+	// OpenOs also exposes host-affecting calls: command execution, process exit
+	// (which would bypass the PCall context timeout), filesystem mutation, and
+	// environment access. Strip them so `os` keeps only safe time/date helpers.
+	if osTable, ok := state.GetGlobal("os").(*lua.LTable); ok {
+		for _, name := range []string{"execute", "exit", "remove", "rename", "setenv", "getenv", "tmpname"} {
+			state.SetField(osTable, name, lua.LNil)
+		}
 	}
 }
 

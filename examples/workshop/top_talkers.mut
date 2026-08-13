@@ -1,0 +1,21 @@
+// Workshop extra - Top talkers from connection logs
+//
+// Classic log analysis: count connections per source IP, then rank them.
+// Input: none.
+
+putln("=== Top talkers ===");
+
+let conns = ["10.0.0.5", "8.8.8.8", "10.0.0.5", "10.0.0.5", "1.1.1.1", "8.8.8.8"];
+
+// Tally counts into a hash. A for-loop shares scope, so `counts` accumulates.
+let counts = {};
+for (let i = 0; i < len(conns); i = i + 1) {
+    let ip = conns[i];
+    counts = set(counts, ip, get(counts, ip, 0) + 1);
+}
+
+// Rank the IPs by count, highest first (negate the key to reverse the sort).
+let ranked = sort_by(keys(counts), fn(ip) { return 0 - counts[ip]; });
+each(ranked, fn(ip) {
+    putln("  ", ip, "->", counts[ip], "connections");
+});

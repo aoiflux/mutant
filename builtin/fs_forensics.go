@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"hash"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -171,12 +172,22 @@ func FsMagic(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `fs_magic` must be STRING, got %s", args[0].Type()))
 	}
 
-	data, err := os.ReadFile(pathObj.Value)
+	// detectMagic only inspects a short header, so read a small prefix instead of
+	// slurping the whole file (which could be gigabytes) to check a few bytes.
+	f, err := os.Open(pathObj.Value)
 	if err != nil {
 		return resultAndError(nil, newError("fs_magic: %s", err.Error()))
 	}
+	// 512 bytes covers the offset-based signatures (e.g. TAR's "ustar" at 257)
+	// while still avoiding slurping a multi-gigabyte file to check its header.
+	header := make([]byte, 512)
+	n, err := io.ReadFull(f, header)
+	f.Close()
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return resultAndError(nil, newError("fs_magic: %s", err.Error()))
+	}
 
-	sigType, mime, sigBytes := detectMagic(data)
+	sigType, mime, sigBytes := detectMagic(header[:n])
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"path":      stringObj(pathObj.Value),
 		"type":      stringObj(sigType),
@@ -298,7 +309,7 @@ func FsCarve(args ...object.Object) object.Object {
 	target := strings.ToLower(strings.TrimSpace(typeObj.Value))
 	sig, ok := carveSignature(target)
 	if !ok {
-		return resultAndError(nil, newError("fs_carve: unsupported type `%s`", typeObj.Value))
+		return resultAndError(nil, newError("fs_carve: unsupported type `%s`. supported: %s", typeObj.Value, strings.Join(carveTypes(), ", ")))
 	}
 
 	hits := carveOffsets(data, sig)
@@ -349,33 +360,85 @@ func fsHashAlgorithm(algo string) (hash.Hash, *object.Error) {
 	}
 }
 
-func detectMagic(data []byte) (string, string, string) {
-	type magicDef struct {
-		typ  string
-		mime string
-		sig  []byte
-	}
-	defs := []magicDef{
-		{typ: "pe", mime: "application/vnd.microsoft.portable-executable", sig: []byte{0x4D, 0x5A}},
-		{typ: "elf", mime: "application/x-elf", sig: []byte{0x7F, 0x45, 0x4C, 0x46}},
-		{typ: "png", mime: "image/png", sig: []byte{0x89, 0x50, 0x4E, 0x47}},
-		{typ: "zip", mime: "application/zip", sig: []byte{0x50, 0x4B, 0x03, 0x04}},
-		{typ: "pdf", mime: "application/pdf", sig: []byte{0x25, 0x50, 0x44, 0x46}},
-	}
+type fileSignature struct {
+	typ    string
+	mime   string
+	sig    []byte
+	offset int // byte offset the signature sits at (0 for almost all)
+}
 
-	for _, def := range defs {
-		if len(data) >= len(def.sig) {
-			matches := true
-			for i := range def.sig {
-				if data[i] != def.sig[i] {
-					matches = false
-					break
-				}
-			}
-			if matches {
-				return def.typ, def.mime, strings.ToUpper(hex.EncodeToString(def.sig))
+// fileSignatures is the shared magic-number database used by both fs_magic (file
+// identification) and fs_carve (embedded-file scanning). Ordered longer/more
+// specific first so a short signature can't shadow a more precise one.
+var fileSignatures = []fileSignature{
+	// Executables & object files
+	{"ole", "application/x-ole-storage", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, 0}, // doc/xls/ppt/msi/msg
+	{"lnk", "application/x-ms-shortcut", []byte{0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00}, 0},
+	{"png", "image/png", []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, 0},
+	{"sqlite", "application/vnd.sqlite3", []byte("SQLite format 3\x00"), 0},
+	{"evtx", "application/x-ms-evtx", []byte("ElfFile\x00"), 0},
+	{"7z", "application/x-7z-compressed", []byte{'7', 'z', 0xBC, 0xAF, 0x27, 0x1C}, 0},
+	{"xz", "application/x-xz", []byte{0xFD, '7', 'z', 'X', 'Z', 0x00}, 0},
+	{"rar", "application/vnd.rar", []byte{'R', 'a', 'r', '!', 0x1A, 0x07}, 0},
+	{"elf", "application/x-elf", []byte{0x7F, 'E', 'L', 'F'}, 0},
+	{"macho32", "application/x-mach-binary", []byte{0xFE, 0xED, 0xFA, 0xCE}, 0},
+	{"macho64", "application/x-mach-binary", []byte{0xFE, 0xED, 0xFA, 0xCF}, 0},
+	{"macho32le", "application/x-mach-binary", []byte{0xCE, 0xFA, 0xED, 0xFE}, 0},
+	{"macho64le", "application/x-mach-binary", []byte{0xCF, 0xFA, 0xED, 0xFE}, 0},
+	{"macho_universal", "application/x-mach-binary", []byte{0xCA, 0xFE, 0xBA, 0xBE}, 0},
+	// Images
+	{"tiff_le", "image/tiff", []byte{0x49, 0x49, 0x2A, 0x00}, 0},
+	{"tiff_be", "image/tiff", []byte{0x4D, 0x4D, 0x00, 0x2A}, 0},
+	{"gif", "image/gif", []byte{'G', 'I', 'F', '8'}, 0},
+	{"ico", "image/x-icon", []byte{0x00, 0x00, 0x01, 0x00}, 0},
+	{"psd", "image/vnd.adobe.photoshop", []byte{'8', 'B', 'P', 'S'}, 0},
+	{"jpeg", "image/jpeg", []byte{0xFF, 0xD8, 0xFF}, 0},
+	{"bmp", "image/bmp", []byte{'B', 'M'}, 0},
+	// Archives & compression
+	{"zip", "application/zip", []byte{'P', 'K', 0x03, 0x04}, 0}, // also docx/xlsx/pptx/jar/apk
+	{"zstd", "application/zstd", []byte{0x28, 0xB5, 0x2F, 0xFD}, 0},
+	{"lz4", "application/x-lz4", []byte{0x04, 0x22, 0x4D, 0x18}, 0},
+	{"cab", "application/vnd.ms-cab-compressed", []byte{'M', 'S', 'C', 'F'}, 0},
+	{"bzip2", "application/x-bzip2", []byte{'B', 'Z', 'h'}, 0},
+	{"tar", "application/x-tar", []byte{'u', 's', 't', 'a', 'r'}, 257},
+	{"gzip", "application/gzip", []byte{0x1F, 0x8B}, 0},
+	// Documents
+	{"pdf", "application/pdf", []byte{'%', 'P', 'D', 'F'}, 0},
+	{"rtf", "application/rtf", []byte{'{', '\\', 'r', 't', 'f'}, 0},
+	// Databases / registry / logs / captures
+	{"regf", "application/x-ms-registry", []byte{'r', 'e', 'g', 'f'}, 0},
+	{"prefetch_mam", "application/x-ms-prefetch", []byte{'M', 'A', 'M', 0x04}, 0},
+	{"pcapng", "application/x-pcapng", []byte{0x0A, 0x0D, 0x0D, 0x0A}, 0},
+	{"pcap_le", "application/vnd.tcpdump.pcap", []byte{0xD4, 0xC3, 0xB2, 0xA1}, 0},
+	{"pcap_be", "application/vnd.tcpdump.pcap", []byte{0xA1, 0xB2, 0xC3, 0xD4}, 0},
+	// Media
+	{"matroska", "video/x-matroska", []byte{0x1A, 0x45, 0xDF, 0xA3}, 0}, // mkv/webm
+	{"flac", "audio/flac", []byte{'f', 'L', 'a', 'C'}, 0},
+	{"ogg", "application/ogg", []byte{'O', 'g', 'g', 'S'}, 0},
+	{"mp3", "audio/mpeg", []byte{'I', 'D', '3'}, 0},
+	{"mp4", "video/mp4", []byte{'f', 't', 'y', 'p'}, 4}, // also mov/m4a/heic (ISO-BMFF)
+	{"riff", "application/x-riff", []byte{'R', 'I', 'F', 'F'}, 0}, // refined to wav/avi/webp below
+	{"pe", "application/vnd.microsoft.portable-executable", []byte{0x4D, 0x5A}, 0},
+}
+
+func detectMagic(data []byte) (string, string, string) {
+	for _, def := range fileSignatures {
+		off := def.offset
+		if off+len(def.sig) > len(data) || !bytesEqual(data[off:off+len(def.sig)], def.sig) {
+			continue
+		}
+		typ := def.typ
+		if typ == "riff" && len(data) >= 12 { // refine RIFF container by its form type
+			switch string(data[8:12]) {
+			case "WAVE":
+				typ = "wav"
+			case "AVI ":
+				typ = "avi"
+			case "WEBP":
+				typ = "webp"
 			}
 		}
+		return typ, def.mime, strings.ToUpper(hex.EncodeToString(def.sig))
 	}
 	return "unknown", "application/octet-stream", ""
 }
@@ -418,20 +481,22 @@ func bytesEqual(a, b []byte) bool {
 }
 
 func carveSignature(name string) ([]byte, bool) {
-	switch name {
-	case "pe":
-		return []byte{0x4D, 0x5A}, true
-	case "elf":
-		return []byte{0x7F, 0x45, 0x4C, 0x46}, true
-	case "png":
-		return []byte{0x89, 0x50, 0x4E, 0x47}, true
-	case "zip":
-		return []byte{0x50, 0x4B, 0x03, 0x04}, true
-	case "pdf":
-		return []byte{0x25, 0x50, 0x44, 0x46}, true
-	default:
-		return nil, false
+	for _, def := range fileSignatures {
+		if def.typ == name {
+			return def.sig, true
+		}
 	}
+	return nil, false
+}
+
+// carveTypes lists the distinct signature type names, for error messages.
+func carveTypes() []string {
+	out := make([]string, 0, len(fileSignatures))
+	for _, def := range fileSignatures {
+		out = append(out, def.typ)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func carveOffsets(data []byte, sig []byte) []int {

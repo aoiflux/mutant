@@ -85,6 +85,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await copyLspLogs();
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mutant.formatDocument", async () => {
+      await formatActiveDocument();
+    })
+  );
+}
+
+// formatActiveDocument backs the "Mutant: Format Document" command. It
+// delegates to the editor's own format action so the edit goes through the
+// language server exactly as format-on-save does, rather than duplicating
+// formatting logic here.
+async function formatActiveDocument(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    void vscode.window.showWarningMessage("Mutant: no active editor to format.");
+    return;
+  }
+
+  if (editor.document.languageId !== "mutant") {
+    void vscode.window.showWarningMessage(
+      "Mutant: the active file is not a Mutant source file."
+    );
+    return;
+  }
+
+  const strictFormatting = vscode.workspace
+    .getConfiguration("mutant")
+    .get<boolean>("strictFormatting", true);
+  if (!strictFormatting) {
+    void vscode.window.showWarningMessage(
+      "Mutant: formatting is disabled because mutant.strictFormatting is false."
+    );
+    return;
+  }
+
+  await vscode.commands.executeCommand("editor.action.formatDocument");
 }
 
 function applyMutantFormattingPreferences(): void {

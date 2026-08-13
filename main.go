@@ -10,6 +10,8 @@ import (
 	"mutant/mutil"
 	"mutant/runner"
 	"mutant/security"
+	_ "mutant/serve" // installs net_serve concurrency hooks at init
+
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,7 +26,7 @@ const (
 	GENCMD     = "gen"
 	RUNCMD     = "run"
 	HELPCMD    = "help"
-	VERSION    = "Version: 2.2.0"
+	VERSION    = "Version: 2.3.0"
 )
 
 type cliRuntime struct {

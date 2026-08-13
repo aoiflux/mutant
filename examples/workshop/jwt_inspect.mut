@@ -1,0 +1,21 @@
+// Workshop extra - Inspect a JWT
+//
+// Decode a JSON Web Token's header and claims (structure only - jwt_decode does
+// NOT verify the signature). Input: none.
+
+putln("=== Inspect JWT ===");
+
+// A standard example token: header.payload.signature (base64url).
+let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" +
+    ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ" +
+    ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+
+let jwt, err = jwt_decode(token);
+if (err) {
+    putln("[error] jwt_decode:", err);
+} else {
+    putln("algorithm:", jwt["algorithm"]);
+    putln("subject  :", jwt["claims"]["sub"]);
+    putln("name     :", jwt["claims"]["name"]);
+    putln("verified :", jwt["verified"]);   // always false - decode never verifies
+};

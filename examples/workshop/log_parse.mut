@@ -1,0 +1,23 @@
+// Workshop extra - Parse logs with regex
+//
+// Turn unstructured log lines into structured fields with one regex. The capture
+// groups come back as an array: [full match, group 1, group 2, ...]. Input: none.
+
+putln("=== Parse logs ===");
+
+let lines = [
+    "2024-06-01 12:05:33 login user=alice ip=10.0.0.5 result=ok",
+    "2024-06-01 12:06:01 login user=bob ip=8.8.8.8 result=fail"
+];
+
+// [^ ]+ means "one or more non-space characters" - no backslashes needed.
+let pattern = "user=([^ ]+) ip=([^ ]+) result=([^ ]+)";
+
+each(lines, fn(line) {
+    let g, err = regex_capture_groups(pattern, line);
+    if (err) {
+        putln("  [no match]");
+    } else {
+        putln("  user:", g[1], " ip:", g[2], " result:", g[3]);
+    };
+});

@@ -1,0 +1,54 @@
+// supertimeline.mut — normalize timestamps and merge artifacts into one timeline.
+//
+// Different forensic artifacts record time in different epochs. timestamp_normalize
+// unifies them; timeline_merge/timeline_sort then interleave events from multiple
+// sources into a single ordered supertimeline. The synthetic-event portion runs
+// fully; the real artifact parser at the end fails honestly without a captured
+// artifact file.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("supertimeline");
+
+    // Normalize timestamps from different sources to a common unix field.
+    let ft, e1 = timestamp_normalize(132537600000000000, "filetime");   // Windows FILETIME
+    let iso, e2 = timestamp_normalize("2024-06-01T12:05:00Z", "iso");   // ISO-8601
+    let webkit, e3 = timestamp_normalize(13300000000000000, "webkit");  // Chrome/WebKit
+    if (e1) { putln("[error] filetime:", e1); return false; };
+    if (e2) { putln("[error] iso:", e2); return false; };
+    if (e3) { putln("[error] webkit:", e3); return false; };
+
+    putln("filetime -> unix:", ft["unix"]);
+    putln("iso      -> unix:", iso["unix"]);
+    putln("webkit   -> unix:", webkit["unix"]);
+
+    // Two artifact "sources", each an array of events carrying a `ts` field.
+    let execution = [
+        { "ts": ft["unix"],  "source": "prefetch", "msg": "evil.exe executed" },
+        { "ts": iso["unix"], "source": "evtx",     "msg": "service installed" }
+    ];
+    let browsing = [
+        { "ts": webkit["unix"], "source": "browser", "msg": "downloaded evil.exe" }
+    ];
+
+    // Merge into one ordered supertimeline. timeline_merge/timeline_sort return a
+    // plain array (not a (value, err) pair), so bind a single variable.
+    let timeline = timeline_merge([execution, browsing], "ts");
+    putln("--- supertimeline ---");
+    each(timeline, fn(ev) {
+        putln("  " + to_string(ev["ts"]) + "  [" + ev["source"] + "]  " + ev["msg"]);
+    });
+
+    // Real artifact parsing: honest error when the artifact file is absent.
+    let pf, perr = prefetch_parse("C:/Windows/Prefetch/NOTEPAD.EXE-00000000.pf");
+    if (perr) {
+        putln("prefetch_parse (no artifact present, honest error):", perr);
+    } else {
+        putln("prefetch executable:", pf["executable"], " runs:", pf["run_count"]);
+    };
+
+    return true;
+};
+
+run();

@@ -25,9 +25,10 @@ func (a *Analyzer) Analyze(src string) *Snapshot {
 	p := mutantparser.New(lexer.New(src))
 	program := p.ParseProgram()
 	return &Snapshot{
-		Source:      src,
-		Program:     program,
-		ParseErrors: p.TypedErrors(),
+		Source:       src,
+		Program:      program,
+		ParseErrors:  p.TypedErrors(),
+		Recoverables: p.Recoverables(),
 	}
 }
 
@@ -219,6 +220,9 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 	for _, b := range builtin.Builtins {
 		kind := lsp.CompletionItemKindFunction
 		detail := "builtin"
+		if category := builtin.CapabilityCategory(b.Name); category != "" {
+			detail = "builtin · " + category
+		}
 		completion := lsp.CompletionItem{Label: b.Name, Kind: &kind, Detail: &detail}
 		if doc, ok := builtinHoverText(b.Name); ok {
 			completion.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
@@ -286,7 +290,7 @@ func stableCompletionItems(items []lsp.CompletionItem) []lsp.CompletionItem {
 }
 
 func completionCategory(item lsp.CompletionItem) int {
-	if item.Detail != nil && *item.Detail == "builtin" {
+	if item.Detail != nil && strings.HasPrefix(*item.Detail, "builtin") {
 		return 1
 	}
 	if item.Kind != nil {
@@ -737,7 +741,7 @@ func lexicalSemanticTokens(src string) []semanticToken {
 
 func semanticTokenTypeForLexToken(tokenType token.TokenType) (uint32, bool) {
 	switch tokenType {
-	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.BANG, token.EQUALITY, token.INEQUALITY:
+	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.LTE, token.GTE, token.BANG, token.EQUALITY, token.INEQUALITY, token.AND, token.OR:
 		return semanticTokenTypeIndex["operator"], true
 	case token.LPAREN, token.RPAREN, token.LBRACE, token.RBRACE, token.LSQUARE, token.RSQUARE, token.COMMA, token.SEMICOLON, token.COLON, token.DOT:
 		return semanticTokenTypeIndex["punctuation"], true

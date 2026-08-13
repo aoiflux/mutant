@@ -937,8 +937,18 @@ func TestCleanupSensitiveDataWipesRuntimeBuffers(t *testing.T) {
 		t.Fatalf("vm error: %s", err)
 	}
 
-	if vm.stackPointer == 0 {
-		t.Fatalf("expected stack to have entries before cleanup")
+	// The stack pointer returns to 0 after a clean run, but popped slots are not
+	// nil'd, so sensitive object pointers still linger in the stack buffer (and in
+	// constants/globals). That residue is exactly what cleanup must wipe.
+	residual := false
+	for _, entry := range vm.stack {
+		if entry != nil {
+			residual = true
+			break
+		}
+	}
+	if !residual {
+		t.Fatalf("expected residual sensitive data in the stack buffer before cleanup")
 	}
 
 	vm.CleanupSensitiveData(true)

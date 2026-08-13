@@ -1,0 +1,51 @@
+// threat_triage.mut — run the detection heuristics over supplied evidence.
+//
+// Feeds facts to the detection builtins (suspicious files, C2 beaconing) and the
+// IOC helpers (extraction + defanging). All offline and self-contained.
+
+let header = fn(title) { putln("=== " + title + " ==="); };
+
+let run = fn() {
+    header("threat_triage");
+
+    // Suspicious-file heuristics: double extensions, magic/extension mismatch.
+    let files = ["invoice.pdf.exe", "report.docx", "update.scr", "photo.jpg"];
+    let sus, err = detect_suspicious_files(files);
+    if (err) {
+        putln("[error] detect_suspicious_files:", err);
+    } else {
+        putln("suspicious findings:", sus);
+    };
+
+    // Beacon detection over synthetic, highly-periodic flows (~60s interval,
+    // near-constant size) — the shape of C2 beaconing.
+    let flows = [
+        { "dst": "185.12.0.9", "ts": 1000, "bytes": 512 },
+        { "dst": "185.12.0.9", "ts": 1060, "bytes": 515 },
+        { "dst": "185.12.0.9", "ts": 1121, "bytes": 510 },
+        { "dst": "185.12.0.9", "ts": 1180, "bytes": 511 },
+        { "dst": "185.12.0.9", "ts": 1240, "bytes": 513 }
+    ];
+    let beacons, berr = detect_network_beacon(flows);
+    if (berr) {
+        putln("[error] detect_network_beacon:", berr);
+    } else {
+        putln("beacon analysis:", beacons);
+    };
+
+    // IOC extraction from free text, then defang for safe reporting.
+    let text = "seen beaconing to 185.12.0.9 and evil.example.com; " +
+        "dropper sha256 44d88612fea8a8f36de82e1278abb02f";
+    let iocs, ierr = extract_iocs(text);
+    if (ierr) {
+        putln("[error] extract_iocs:", ierr);
+    } else {
+        putln("ipv4 IOCs   :", iocs["ipv4"]);
+        putln("domain IOCs :", iocs["domains"]);
+    };
+    putln("defanged URL:", defang("http://evil.example.com/payload"));
+
+    return true;
+};
+
+run();

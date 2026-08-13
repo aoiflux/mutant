@@ -11,6 +11,8 @@ const (
 	_ int = iota
 	LOWEST
 	ASSIGNMENT
+	LOGIC_OR
+	LOGIC_AND
 	EQUALS
 	LESSGREATER
 	SUM
@@ -23,14 +25,19 @@ const (
 
 var precedences = map[token.TokenType]int{
 	token.ASSIGN:     ASSIGNMENT,
+	token.OR:         LOGIC_OR,
+	token.AND:        LOGIC_AND,
 	token.EQUALITY:   EQUALS,
 	token.INEQUALITY: EQUALS,
 	token.LT:         LESSGREATER,
 	token.GT:         LESSGREATER,
+	token.LTE:        LESSGREATER,
+	token.GTE:        LESSGREATER,
 	token.PLUS:       SUM,
 	token.MINUS:      SUM,
 	token.FSLASH:     PRODUCT,
 	token.ASTERISK:   PRODUCT,
+	token.MODULO:     PRODUCT,
 	token.LPAREN:     CALL,
 	token.LSQUARE:    INDEX,
 	token.DOT:        FIELD,
@@ -51,12 +58,43 @@ type ParseError struct {
 	Range ast.Range
 }
 
+// RecoverableKind classifies a problem the parser could parse through.
+type RecoverableKind string
+
+const (
+	// MissingSemicolon marks a statement that requires a `;` terminator but
+	// does not have one. Its Range is zero-width and sits immediately after
+	// the statement's final token, so it doubles as the insertion point for
+	// a formatter edit or an LSP quick fix.
+	MissingSemicolon RecoverableKind = "missing-semicolon"
+
+	// RedundantSemicolon marks a `;` that terminates nothing — an empty
+	// statement such as the second `;` in `let x = 1;;`. Its Range covers
+	// the stray token so it can be deleted verbatim.
+	RedundantSemicolon RecoverableKind = "redundant-semicolon"
+)
+
+// RecoverableError is a parse problem that does not prevent the parser from
+// producing a complete, usable AST.
+//
+// Mutant mandates semicolons but the formatter is required to repair them,
+// which is only possible if the tree survives the mistake. Recoverable
+// errors are therefore kept out of Errors and TypedErrors: the CLI, REPL,
+// compiler and evaluator continue to reject only genuinely unparseable
+// input, while tooling that opts in via Recoverables can offer diagnostics
+// and fixes.
+type RecoverableError struct {
+	ParseError
+	Kind RecoverableKind
+}
+
 type Parser struct {
 	l              *lexer.Lexer
 	curToken       token.Token
 	peekToken      token.Token
 	errors         []string
 	typedErrors    []ParseError
+	recoverables   []RecoverableError
 	nodeRanges     map[ast.Node]ast.Range
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
@@ -88,6 +126,11 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.INEQUALITY, p.parseInfixExpression)
 	p.registerInfix(token.LT, p.parseInfixExpression)
 	p.registerInfix(token.GT, p.parseInfixExpression)
+	p.registerInfix(token.LTE, p.parseInfixExpression)
+	p.registerInfix(token.GTE, p.parseInfixExpression)
+	p.registerInfix(token.MODULO, p.parseInfixExpression)
+	p.registerInfix(token.AND, p.parseInfixExpression)
+	p.registerInfix(token.OR, p.parseInfixExpression)
 	p.registerInfix(token.ASSIGN, p.parseAssignExpression)
 	p.registerInfix(token.LPAREN, p.parseCallExpression)
 	p.registerInfix(token.LSQUARE, p.parseIndexExpression)
@@ -130,6 +173,11 @@ func (p *Parser) ParseProgram() *ast.Program {
 	if len(p.nodeRanges) > 0 {
 		program.NodePositions = p.nodeRanges
 	}
+
+	// The lexer has now been driven through EOF, so its comment trivia is
+	// complete and can be published for the formatter.
+	program.Comments = p.l.Comments()
+
 	return program
 }
 
@@ -200,6 +248,57 @@ func (p *Parser) recordRange(n ast.Node, start token.Position) {
 // appendError records both a legacy string error and a range-annotated
 // ParseError for the same problem. The range is derived from tok so that
 // LSP clients can highlight the offending token precisely.
+// Recoverables returns problems the parser repaired its way past, in source
+// order. It is deliberately separate from Errors and TypedErrors so that
+// existing consumers keep their pass/fail behaviour unchanged.
+func (p *Parser) Recoverables() []RecoverableError { return p.recoverables }
+
+// consumeStatementTerminator settles the `;` at the end of stmt.
+//
+// It is called with curToken on the statement's final token. When a
+// semicolon follows it is consumed, leaving curToken on the `;` exactly as
+// the previous hand-rolled checks did. When one is required but absent, a
+// recoverable error is recorded and the cursor is left in place — crucially
+// *without* advancing, so the next statement starts where it should. The
+// older `if !p.curTokenIs(SEMICOLON) { p.nextToken() }` idiom swallowed the
+// first token of the following statement whenever a semicolon was missing.
+func (p *Parser) consumeStatementTerminator(stmt ast.Statement) {
+	if p.peekTokenIs(token.SEMICOLON) {
+		p.nextToken()
+		return
+	}
+
+	if stmt == nil || !stmt.RequiresSemicolon() {
+		return
+	}
+
+	p.recordMissingSemicolon(p.curToken)
+}
+
+// recordMissingSemicolon notes that the statement ending at tok needs a `;`.
+// The range is zero-width at tok's end so consumers can treat it directly as
+// an insertion point.
+func (p *Parser) recordMissingSemicolon(tok token.Token) {
+	p.recoverables = append(p.recoverables, RecoverableError{
+		ParseError: ParseError{
+			Msg:   "missing ';' at end of statement",
+			Range: ast.Range{Start: tok.End, End: tok.End},
+		},
+		Kind: MissingSemicolon,
+	})
+}
+
+// recordRedundantSemicolon notes a `;` that terminates no statement.
+func (p *Parser) recordRedundantSemicolon(tok token.Token) {
+	p.recoverables = append(p.recoverables, RecoverableError{
+		ParseError: ParseError{
+			Msg:   "redundant ';'",
+			Range: ast.Range{Start: tok.Start, End: tok.End},
+		},
+		Kind: RedundantSemicolon,
+	})
+}
+
 func (p *Parser) appendError(tok token.Token, msg string) {
 	p.errors = append(p.errors, msg)
 	p.typedErrors = append(p.typedErrors, ParseError{

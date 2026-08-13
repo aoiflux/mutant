@@ -1,0 +1,23 @@
+// Workshop extra - Inspect an X.509 certificate
+//
+// Generate a CA certificate on the fly, then parse it: subject, validity,
+// fingerprint. Fully self-contained. Input: none.
+
+putln("=== Inspect certificate ===");
+
+let ca, err = tls_generate_ca();
+if (err) {
+    putln("[error] tls_generate_ca:", err);
+} else {
+    let cert, perr = x509_parse(ca["cert_pem"]);
+    if (perr) {
+        putln("[error] x509_parse:", perr);
+    } else {
+        let expiry, _ = timestamp_normalize(cert["not_after"], "unix");
+        putln("subject   :", cert["subject"]);
+        putln("issuer    :", cert["issuer"]);
+        putln("is_ca     :", cert["is_ca"]);
+        putln("expires   :", expiry["iso"]);
+        putln("sha256 fp :", cert["sha256"]);
+    };
+};

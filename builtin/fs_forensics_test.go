@@ -143,6 +143,74 @@ func TestFsMagicDiffCarveEntropy(t *testing.T) {
 	}
 }
 
+func TestDetectMagicSignatures(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"sqlite", []byte("SQLite format 3\x00 the rest"), "sqlite"},
+		{"gzip", []byte{0x1F, 0x8B, 0x08}, "gzip"},
+		{"jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0}, "jpeg"},
+		{"gif", []byte("GIF89a"), "gif"},
+		{"7z", []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}, "7z"},
+		{"elf", []byte{0x7F, 'E', 'L', 'F', 1}, "elf"},
+		{"macho64", []byte{0xFE, 0xED, 0xFA, 0xCF}, "macho64"},
+		{"ole", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, "ole"},
+		{"evtx", []byte("ElfFile\x00abcd"), "evtx"},
+		{"regf", []byte("regf and more"), "regf"},
+		{"lnk", []byte{0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00}, "lnk"},
+		{"pdf", []byte("%PDF-1.7"), "pdf"},
+		{"pe", []byte{0x4D, 0x5A, 0x90}, "pe"},
+		{"unknown", []byte{0x00, 0x01, 0x02, 0x03}, "unknown"},
+	}
+	for _, tc := range cases {
+		if typ, _, _ := detectMagic(tc.data); typ != tc.want {
+			t.Errorf("%s: detectMagic = %q, want %q", tc.name, typ, tc.want)
+		}
+	}
+
+	// Offset-based signature (TAR "ustar" at 257).
+	tar := make([]byte, 300)
+	copy(tar[257:], []byte("ustar"))
+	if typ, _, _ := detectMagic(tar); typ != "tar" {
+		t.Errorf("tar: got %q, want tar", typ)
+	}
+	// ISO-BMFF "ftyp" at offset 4.
+	mp4 := make([]byte, 16)
+	copy(mp4[4:], []byte("ftypisom"))
+	if typ, _, _ := detectMagic(mp4); typ != "mp4" {
+		t.Errorf("mp4: got %q, want mp4", typ)
+	}
+	// RIFF container refinement.
+	for form, want := range map[string]string{"WAVE": "wav", "AVI ": "avi", "WEBP": "webp"} {
+		buf := append([]byte("RIFF\x00\x00\x00\x00"), []byte(form)...)
+		if typ, _, _ := detectMagic(buf); typ != want {
+			t.Errorf("RIFF %q: got %q, want %q", form, typ, want)
+		}
+	}
+}
+
+func TestFsCarveExpandedType(t *testing.T) {
+	// A gzip signature embedded twice in a buffer.
+	data := []byte{0x00, 0x00, 0x1F, 0x8B, 0x00, 0x00, 0x00, 0x1F, 0x8B, 0x00}
+	path := filepath.Join(t.TempDir(), "blob.bin")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	res, errObj := unwrapPair(t, FsCarve(stringObj(path), stringObj("gzip")))
+	if errObj != nil {
+		t.Fatalf("fs_carve(gzip) error: %s", errObj.Inspect())
+	}
+	if arr := res.(*object.Array); len(arr.Elements) != 2 {
+		t.Fatalf("gzip carve found %d, want 2", len(arr.Elements))
+	}
+	// Unsupported type errors (and lists supported types).
+	if _, e := unwrapPair(t, FsCarve(stringObj(path), stringObj("definitely-not-a-type"))); e == nil {
+		t.Error("expected error for an unsupported carve type")
+	}
+}
+
 func fsfxMustHashString(t *testing.T, hash *object.Hash, key string) string {
 	t.Helper()
 	obj := fsfxMustHashValue(t, hash, key)

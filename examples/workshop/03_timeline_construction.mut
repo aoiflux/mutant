@@ -1,0 +1,24 @@
+// Workshop 3/5 - Timeline construction
+//
+// Merge events from several sources into one time-ordered "supertimeline".
+// Every event just needs a numeric `ts` (unix seconds); timeline_merge flattens
+// and sorts them together. Input: none (built-in sample events).
+
+putln("=== 3/5 Timeline construction ===");
+
+// Two sources, each a list of events. They are NOT in order.
+let execution = [
+    { "ts": 1717243500, "source": "prefetch", "msg": "evil.exe executed" },
+    { "ts": 1717240000, "source": "evtx",     "msg": "service installed" }
+];
+let browsing = [
+    { "ts": 1717241800, "source": "browser",  "msg": "downloaded evil.exe" }
+];
+
+// Merge into one chronological timeline.
+let timeline = timeline_merge([execution, browsing], "ts");
+
+putln("supertimeline (", len(timeline), "events, oldest first):");
+each(timeline, fn(ev) {
+    putln("  ", ev["ts"], "  [", ev["source"], "]  ", ev["msg"]);
+});

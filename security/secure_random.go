@@ -79,6 +79,73 @@ func SecureXORAt(data []byte, seed int64, password string, offset int64) ([]byte
 	return result, nil
 }
 
+// XORStream caches the derived key/nonce for a fixed (seed, password) so callers
+// on a hot path (e.g. the VM decrypting every opcode byte, where seed=inslen and
+// password are constant for the whole run) avoid recomputing two SHA-256 hashes
+// per byte. It is safe for concurrent use: each call builds its own cipher.
+// (dev-sec-platform-upgrades)
+type XORStream struct {
+	key   [32]byte
+	nonce [12]byte
+}
+
+// NewXORStream derives and caches the key/nonce for the given seed and password.
+func NewXORStream(seed int64, password string) *XORStream {
+	key, nonce := deriveStreamKeyAndNonce(seed, password)
+	return &XORStream{key: key, nonce: nonce}
+}
+
+// XOROneAt decrypts/encrypts a single byte at the given stream offset using the
+// cached key/nonce. Equivalent to SecureXOROneAt but without the per-call KDF.
+func (s *XORStream) XOROneAt(b byte, offset int64) (byte, error) {
+	if offset < 0 {
+		return 0, errors.New("offset cannot be negative")
+	}
+	cipher, err := chacha20.NewUnauthenticatedCipher(s.key[:], s.nonce[:])
+	if err != nil {
+		return 0, err
+	}
+	blockOffset := uint32(offset / streamBlockSize)
+	if blockOffset > 0 {
+		cipher.SetCounter(blockOffset)
+	}
+	skip := int(offset % streamBlockSize)
+	if skip > 0 {
+		discard := make([]byte, skip)
+		cipher.XORKeyStream(discard, discard)
+	}
+	out := [1]byte{b}
+	cipher.XORKeyStream(out[:], out[:])
+	return out[0], nil
+}
+
+// XORAt decrypts/encrypts a buffer at the given stream offset using the cached
+// key/nonce (the multi-byte analogue of XOROneAt).
+func (s *XORStream) XORAt(data []byte, offset int64) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("data cannot be empty")
+	}
+	if offset < 0 {
+		return nil, errors.New("offset cannot be negative")
+	}
+	cipher, err := chacha20.NewUnauthenticatedCipher(s.key[:], s.nonce[:])
+	if err != nil {
+		return nil, err
+	}
+	blockOffset := uint32(offset / streamBlockSize)
+	if blockOffset > 0 {
+		cipher.SetCounter(blockOffset)
+	}
+	skip := int(offset % streamBlockSize)
+	if skip > 0 {
+		discard := make([]byte, skip)
+		cipher.XORKeyStream(discard, discard)
+	}
+	result := make([]byte, len(data))
+	cipher.XORKeyStream(result, data)
+	return result, nil
+}
+
 // SecureXOROne performs XOR on a single byte with secure random key derived from seed and password
 func SecureXOROne(instruction byte, seed int64, password string) (byte, error) {
 	return SecureXOROneAt(instruction, seed, password, 0)

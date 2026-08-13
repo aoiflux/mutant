@@ -54,6 +54,40 @@ func TestBinStringsEntropyAndYara(t *testing.T) {
 	}
 }
 
+func TestBinYaraScanAllOffsetsAndCase(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "multi.bin")
+	// "AB" appears twice (offsets 0 and 4); lowercase "ab" appears once (offset 8).
+	if err := os.WriteFile(path, []byte("AB..AB..ab"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	rules := &object.Array{Elements: []object.Object{stringObj("AB")}}
+
+	// Case-sensitive (default): only the two uppercase "AB" match.
+	res, errObj := unwrapPair(t, BinYaraScan(stringObj(path), rules))
+	if errObj != nil {
+		t.Fatalf("bin_yara_scan error: %s", errObj.Inspect())
+	}
+	h := res.(*object.Hash)
+	if got := mustHashIntValue(t, h, "total_hits"); got != 2 {
+		t.Fatalf("case-sensitive total_hits = %d, want 2", got)
+	}
+	hits := h.Pairs[(&object.String{Value: "hits"}).HashKey()].Value.(*object.Array)
+	offsets := hits.Elements[0].(*object.Hash).Pairs[(&object.String{Value: "offsets"}).HashKey()].Value.(*object.Array)
+	if len(offsets.Elements) != 2 || offsets.Elements[0].(*object.Integer).Value != 0 || offsets.Elements[1].(*object.Integer).Value != 4 {
+		t.Fatalf("unexpected offsets: %s", offsets.Inspect())
+	}
+
+	// Case-insensitive: all three (AB, AB, ab) match.
+	res2, errObj := unwrapPair(t, BinYaraScan(stringObj(path), rules, boolObj(true)))
+	if errObj != nil {
+		t.Fatalf("bin_yara_scan (ci) error: %s", errObj.Inspect())
+	}
+	if got := mustHashIntValue(t, res2.(*object.Hash), "total_hits"); got != 3 {
+		t.Fatalf("case-insensitive total_hits = %d, want 3", got)
+	}
+}
+
 func TestBinaryFormatParsersWithExecutable(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -92,18 +126,25 @@ func TestBinaryImportsSectionsAndDwarf(t *testing.T) {
 
 	importsPayload, errObj := unwrapPair(t, BinImports(stringObj(exe)))
 	if errObj != nil {
-		if runtime.GOOS == "darwin" && strings.Contains(errObj.Message, "unsupported") {
-			t.Skip("imports parser not implemented for this format")
+		// A statically linked binary — which is exactly what a CGO_ENABLED=0 Go
+		// build produces on Linux — has no dynamic symbol/import section, and macOS
+		// uses a different format. Both are legitimate "no imports" outcomes for
+		// this self-referential test, not failures; still assert sections + DWARF.
+		if strings.Contains(errObj.Message, "no symbol section") ||
+			(runtime.GOOS == "darwin" && strings.Contains(errObj.Message, "unsupported")) {
+			t.Logf("bin_imports: no import section to assert on this binary (%s)", errObj.Message)
+		} else {
+			t.Fatalf("bin_imports error: %s", errObj.Inspect())
 		}
-		t.Fatalf("bin_imports error: %s", errObj.Inspect())
-	}
-	importsHash, ok := importsPayload.(*object.Hash)
-	if !ok {
-		t.Fatalf("bin_imports payload invalid")
-	}
-	importsObj := mustHashValue(t, importsHash, "imports")
-	if _, ok := importsObj.(*object.Array); !ok {
-		t.Fatalf("imports field is not ARRAY")
+	} else {
+		importsHash, ok := importsPayload.(*object.Hash)
+		if !ok {
+			t.Fatalf("bin_imports payload invalid")
+		}
+		importsObj := mustHashValue(t, importsHash, "imports")
+		if _, ok := importsObj.(*object.Array); !ok {
+			t.Fatalf("imports field is not ARRAY")
+		}
 	}
 
 	sectionsPayload, errObj := unwrapPair(t, BinSections(stringObj(exe)))
