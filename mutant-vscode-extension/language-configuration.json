@@ -51,5 +51,25 @@
       "\"",
       "\""
     ]
-  ]
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*//\\s*#?region\\b",
+      "end": "^\\s*//\\s*#?endregion\\b"
+    }
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "^.*\\{[^}\"']*$",
+    "decreaseIndentPattern": "^\\s*\\}"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*//.*$",
+      "action": {
+        "indent": "none",
+        "appendText": "// "
+      }
+    }
+  ],
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*"
 }

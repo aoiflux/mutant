@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.0
+
+New this release:
+
+- **Snippets** — `fn`, `let`, `letr` (multi-value bind), `guard`, `if`/`ife`,
+  `for`, `struct`/`structlit`, `enum`, `macro`, and `putln`/`putf`.
+- **Richer editor configuration** — folding via `// region` / `// endregion`
+  markers, indentation rules, comment-continuation on Enter, and a Mutant-aware
+  word pattern.
+- **Grammar** — macro declarations (`let NAME = macro(...)`) and capitalized
+  type-usage sites (`Point { … }`, `Color.Green`) are now scoped.
+- **Mutant tasks** — a task provider wrapping the real CLI: `gen` (compile a
+  `.mut` to `.mu`), run a compiled `.mu`, and `release` (standalone build). The
+  CLI is resolved from the new `mutant.cli.path` setting (default `mutant`).
+- **Language server upgrades** (bundled `mlsp`): member/dot completion
+  (`x.field`, `Enum.Variant`), folding ranges, parameter-name inlay hints,
+  semantic-token range + delta requests, richer code-action/rename capabilities,
+  and workspace-wide indexing so go-to-definition, references, and rename work
+  across files you have not opened.
+- **Packaging** — the extension now bundles with esbuild and publishes
+  per-platform `.vsix` packages (each carrying only its own `mlsp` binary),
+  replacing the single ~250 MB all-platforms package.
+
 ## 0.0.6
 
 New this release:

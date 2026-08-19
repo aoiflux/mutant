@@ -91,6 +91,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await formatActiveDocument();
     })
   );
+
+  context.subscriptions.push(
+    vscode.tasks.registerTaskProvider(MUTANT_TASK_TYPE, new MutantTaskProvider())
+  );
 }
 
 // formatActiveDocument backs the "Mutant: Format Document" command. It
@@ -394,6 +398,104 @@ async function executeTaskAndWait(task: vscode.Task): Promise<number | undefined
       resolveExitCode(event.exitCode);
     });
   });
+}
+
+const MUTANT_TASK_TYPE = "mutant";
+
+interface MutantTaskDefinition extends vscode.TaskDefinition {
+  command: "gen" | "run" | "release";
+  src?: string;
+  os?: string;
+  arch?: string;
+  mutation?: number;
+  password?: string;
+  args?: string[];
+}
+
+function mutantCliPath(): string {
+  const configured = vscode.workspace.getConfiguration("mutant").get<string>("cli.path", "mutant");
+  return configured && configured.trim().length > 0 ? configured.trim() : "mutant";
+}
+
+function mutantTaskArgs(def: MutantTaskDefinition, srcFallback: string): string[] {
+  const src = def.src && def.src.length > 0 ? def.src : srcFallback;
+  const args: string[] = [];
+  switch (def.command) {
+    case "gen":
+      args.push("gen");
+      if (src) {
+        args.push("--src", src);
+      }
+      break;
+    case "run":
+      if (src) {
+        args.push(src);
+      }
+      break;
+    case "release":
+      args.push("release");
+      if (src) {
+        args.push("--src", src);
+      }
+      if (def.os) {
+        args.push("--os", def.os);
+      }
+      if (def.arch) {
+        args.push("--arch", def.arch);
+      }
+      if (typeof def.mutation === "number") {
+        args.push("--mutation", String(def.mutation));
+      }
+      if (def.password) {
+        args.push("--password", def.password);
+      }
+      break;
+  }
+  if (Array.isArray(def.args)) {
+    args.push(...def.args);
+  }
+  return args;
+}
+
+function makeMutantTask(def: MutantTaskDefinition, name: string, srcFallback: string): vscode.Task {
+  const task = new vscode.Task(
+    def,
+    vscode.TaskScope.Workspace,
+    name,
+    MUTANT_TASK_TYPE,
+    new vscode.ShellExecution(mutantCliPath(), mutantTaskArgs(def, srcFallback)),
+    []
+  );
+  if (def.command === "gen" || def.command === "release") {
+    task.group = vscode.TaskGroup.Build;
+  }
+  return task;
+}
+
+// MutantTaskProvider surfaces build/run/release tasks that wrap the real `mutant`
+// CLI (separate from the bundled language server). The CLI is resolved from the
+// `mutant.cli.path` setting (default: `mutant` on PATH).
+class MutantTaskProvider implements vscode.TaskProvider {
+  provideTasks(): vscode.Task[] {
+    const file = vscode.window.activeTextEditor?.document.fileName ?? "";
+    const tasks: vscode.Task[] = [];
+    if (file.endsWith(".mut")) {
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "gen", src: file }, "gen (compile active file)", file));
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "release", src: file }, "release (host target)", file));
+    } else if (file.endsWith(".mu")) {
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "run", src: file }, "run compiled (.mu)", file));
+    }
+    return tasks;
+  }
+
+  resolveTask(task: vscode.Task): vscode.Task | undefined {
+    const def = task.definition as MutantTaskDefinition;
+    if (def.type !== MUTANT_TASK_TYPE || !def.command) {
+      return undefined;
+    }
+    const srcFallback = vscode.window.activeTextEditor?.document.fileName ?? "";
+    return makeMutantTask(def, task.name || def.command, srcFallback);
+  }
 }
 
 async function showLspStatus(): Promise<void> {

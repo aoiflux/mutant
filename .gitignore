@@ -10,5 +10,6 @@ mutant-vscode-extension/.vscode-test/
 mutant-vscode-extension/bin/
 releaseassets/data/
 dist/
+plans/
 
 !releaseassets/data/placeholder.bin

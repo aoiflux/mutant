@@ -42,6 +42,26 @@ type Server struct {
 	strictFormatting       bool
 	shutdown               bool
 	semanticFallbackWarned bool
+
+	// semanticPrev caches the last full semantic-token result per document so
+	// the client can request a delta against it. semanticSeq generates the
+	// monotonically increasing result ids. Both are guarded by mu.
+	semanticPrev map[lsp.DocumentUri]semanticResult
+	semanticSeq  uint64
+
+	// roots holds the workspace filesystem roots captured at initialize, scanned
+	// in the background so cross-file features work across unopened files.
+	// scanned maps a file's canonical path to the URI its disk-indexed entry was
+	// stored under, so an editor opening the same file under a different URI can
+	// evict the stale entry. Both are guarded by mu.
+	roots   []string
+	scanned map[string]lsp.DocumentUri
+}
+
+// semanticResult is a cached full semantic-token response keyed by its result id.
+type semanticResult struct {
+	id   string
+	data []lsp.UInteger
 }
 
 func New(debug bool) *Server {
@@ -51,8 +71,10 @@ func New(debug bool) *Server {
 		documents:  workspace.NewStore(),
 		symbols:    workspace.NewSymbolIndex(),
 		analyzer:   analyzer.New(),
-		snapshots:  make(map[lsp.DocumentUri]*analyzer.Snapshot),
-		lintConfig: analyzer.DefaultLintConfig(),
+		snapshots:    make(map[lsp.DocumentUri]*analyzer.Snapshot),
+		semanticPrev: make(map[lsp.DocumentUri]semanticResult),
+		scanned:      make(map[string]lsp.DocumentUri),
+		lintConfig:   analyzer.DefaultLintConfig(),
 		// Strict formatting is the default; opting out is explicit.
 		strictFormatting: true,
 	}
@@ -61,6 +83,7 @@ func New(debug bool) *Server {
 	handler.Initialize = s.initialize
 	handler.Initialized = s.initialized
 	handler.WorkspaceDidChangeConfiguration = s.didChangeConfiguration
+	handler.WorkspaceDidChangeWatchedFiles = s.didChangeWatchedFiles
 	handler.Shutdown = s.shutdownRequest
 	handler.Exit = s.exit
 	handler.TextDocumentDidOpen = s.didOpen
@@ -78,52 +101,88 @@ func New(debug bool) *Server {
 	handler.TextDocumentPrepareRename = s.prepareRename
 	handler.TextDocumentRename = s.rename
 	handler.TextDocumentSemanticTokensFull = s.semanticTokensFull
+	handler.TextDocumentSemanticTokensRange = s.semanticTokensRange
+	handler.TextDocumentSemanticTokensFullDelta = s.semanticTokensFullDelta
 	handler.TextDocumentFormatting = s.formatting
 	handler.TextDocumentRangeFormatting = s.rangeFormatting
 	handler.TextDocumentOnTypeFormatting = s.onTypeFormatting
+	handler.TextDocumentFoldingRange = s.foldingRanges
 	handler.WorkspaceSymbol = s.workspaceSymbols
 
 	return s
 }
 
 func (s *Server) Run() error {
-	return runOverStdio(s.handler)
+	// Wrap the glsp handler so we can dispatch textDocument/inlayHint, which the
+	// pinned glsp (protocol 3.16) has no typed hook for.
+	return runOverStdio(&methodRouter{base: s.handler, srv: s})
 }
 
-func (s *Server) initialize(_ *glsp.Context, _ *lsp.InitializeParams) (any, error) {
+func (s *Server) inlayHints(params *localprotocol.InlayHintParams) (hints []localprotocol.InlayHint) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logRecoveredPanic("textDocument/inlayHint", params.TextDocument.URI, recovered)
+			hints = nil
+		}
+	}()
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok {
+		return nil
+	}
+	return snapshot.InlayHints(params.Range)
+}
+
+func (s *Server) initialize(_ *glsp.Context, params *lsp.InitializeParams) (any, error) {
+	s.captureWorkspaceRoots(params)
+
 	syncKind := lsp.TextDocumentSyncKindIncremental
 	openClose := true
 	hover := true
 	docSymbols := true
+	prepareRename := true
 	completion := &lsp.CompletionOptions{TriggerCharacters: []string{".", ":"}}
 	signatureHelp := &lsp.SignatureHelpOptions{TriggerCharacters: []string{"(", ","}, RetriggerCharacters: []string{","}}
 	onTypeFormatting := &lsp.DocumentOnTypeFormattingOptions{FirstTriggerCharacter: "}", MoreTriggerCharacter: []string{";", "\n"}}
+	// Advertise the concrete kinds/options rather than a bare `true`, so clients
+	// know we only offer quick fixes and that a prepareRename handler exists.
+	codeAction := &lsp.CodeActionOptions{CodeActionKinds: []lsp.CodeActionKind{lsp.CodeActionKindQuickFix}}
+	rename := &lsp.RenameOptions{PrepareProvider: &prepareRename}
+	semanticDelta := true
 	semanticTokens := &lsp.SemanticTokensOptions{
 		Legend: analyzer.SemanticTokenLegend(),
-		Full:   true,
+		Full:   &lsp.SemanticDelta{Delta: &semanticDelta},
+		Range:  true,
 	}
 
-	result := &lsp.InitializeResult{
-		Capabilities: lsp.ServerCapabilities{
-			TextDocumentSync: &lsp.TextDocumentSyncOptions{
-				OpenClose: &openClose,
-				Change:    &syncKind,
+	result := &initializeResult{
+		Capabilities: capabilitiesWithInlay{
+			ServerCapabilities: lsp.ServerCapabilities{
+				TextDocumentSync: &lsp.TextDocumentSyncOptions{
+					OpenClose: &openClose,
+					Change:    &syncKind,
+				},
+				HoverProvider:                    hover,
+				CompletionProvider:               completion,
+				SignatureHelpProvider:            signatureHelp,
+				CodeActionProvider:               codeAction,
+				DocumentHighlightProvider:        true,
+				WorkspaceSymbolProvider:          true,
+				DefinitionProvider:               true,
+				TypeDefinitionProvider:           true,
+				ReferencesProvider:               true,
+				RenameProvider:                   rename,
+				DocumentSymbolProvider:           docSymbols,
+				SemanticTokensProvider:           semanticTokens,
+				DocumentFormattingProvider:       true,
+				DocumentRangeFormattingProvider:  true,
+				DocumentOnTypeFormattingProvider: onTypeFormatting,
+				FoldingRangeProvider:             true,
 			},
-			HoverProvider:                    hover,
-			CompletionProvider:               completion,
-			SignatureHelpProvider:            signatureHelp,
-			CodeActionProvider:               true,
-			DocumentHighlightProvider:        true,
-			WorkspaceSymbolProvider:          true,
-			DefinitionProvider:               true,
-			TypeDefinitionProvider:           true,
-			ReferencesProvider:               true,
-			RenameProvider:                   true,
-			DocumentSymbolProvider:           docSymbols,
-			SemanticTokensProvider:           semanticTokens,
-			DocumentFormattingProvider:       true,
-			DocumentRangeFormattingProvider:  true,
-			DocumentOnTypeFormattingProvider: onTypeFormatting,
+			// inlayHintProvider is not part of protocol 3.16's ServerCapabilities,
+			// so it is injected as a sibling field here and dispatched by the
+			// methodRouter. Safe because ServerCapabilities has no custom
+			// MarshalJSON (its fields marshal inline alongside this one).
+			InlayHintProvider: true,
 		},
 		ServerInfo: &lsp.InitializeResultServerInfo{
 			Name:    serverName,
@@ -134,7 +193,93 @@ func (s *Server) initialize(_ *glsp.Context, _ *lsp.InitializeParams) (any, erro
 	return result, nil
 }
 
-func (s *Server) initialized(_ *glsp.Context, _ *lsp.InitializedParams) error {
+func (s *Server) initialized(ctx *glsp.Context, _ *lsp.InitializedParams) error {
+	// Ask the client to notify us of *.mut file changes so the disk index stays
+	// fresh. Best-effort: clients that lack dynamic registration simply ignore it.
+	s.registerFileWatchers(ctx)
+	// Crawl the workspace in the background; a large tree must not block startup.
+	go s.scanWorkspace()
+	return nil
+}
+
+// captureWorkspaceRoots records the filesystem roots from the initialize params
+// (workspaceFolders first, then rootUri/rootPath).
+func (s *Server) captureWorkspaceRoots(params *lsp.InitializeParams) {
+	if params == nil {
+		return
+	}
+	var roots []string
+	seen := make(map[string]struct{})
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		key := canonicalPath(p)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		roots = append(roots, p)
+	}
+
+	for _, folder := range params.WorkspaceFolders {
+		if p, ok := uriToPath(lsp.DocumentUri(folder.URI)); ok {
+			add(p)
+		}
+	}
+	if params.RootURI != nil {
+		if p, ok := uriToPath(*params.RootURI); ok {
+			add(p)
+		}
+	}
+	if len(roots) == 0 && params.RootPath != nil {
+		add(*params.RootPath)
+	}
+
+	s.mu.Lock()
+	s.roots = roots
+	s.mu.Unlock()
+}
+
+// registerFileWatchers asks the client to watch **/*.mut via dynamic
+// registration. It is a no-op when the request channel is unavailable (e.g. in
+// tests) or the client does not support it.
+func (s *Server) registerFileWatchers(ctx *glsp.Context) {
+	if ctx == nil || ctx.Call == nil {
+		return
+	}
+	ctx.Call(string(lsp.ServerClientRegisterCapability), lsp.RegistrationParams{
+		Registrations: []lsp.Registration{{
+			ID:     "mutant-watch-mut",
+			Method: string(lsp.MethodWorkspaceDidChangeWatchedFiles),
+			RegisterOptions: lsp.DidChangeWatchedFilesRegistrationOptions{
+				Watchers: []lsp.FileSystemWatcher{{GlobPattern: "**/*.mut"}},
+			},
+		}},
+	}, nil)
+}
+
+// didChangeWatchedFiles keeps the disk index in sync with external file changes.
+func (s *Server) didChangeWatchedFiles(_ *glsp.Context, params *lsp.DidChangeWatchedFilesParams) error {
+	for _, change := range params.Changes {
+		path, ok := uriToPath(change.URI)
+		if !ok {
+			continue
+		}
+		switch change.Type {
+		case lsp.FileChangeTypeDeleted:
+			s.safeSymbolDelete(change.URI)
+			s.mu.Lock()
+			delete(s.scanned, canonicalPath(path))
+			s.mu.Unlock()
+		case lsp.FileChangeTypeCreated, lsp.FileChangeTypeChanged:
+			// Skip if an editor has the document open; its snapshot is authoritative.
+			if _, open := s.documents.Snapshot(change.URI); open {
+				continue
+			}
+			s.indexFileFromDisk(path)
+		}
+	}
 	return nil
 }
 
@@ -158,6 +303,9 @@ func (s *Server) exit(_ *glsp.Context) error {
 
 func (s *Server) didOpen(ctx *glsp.Context, params *lsp.DidOpenTextDocumentParams) error {
 	doc := s.documents.Open(params.TextDocument.URI, lsp.UInteger(params.TextDocument.Version), params.TextDocument.Text)
+	// Drop any disk-indexed copy of this file so the open document is the single
+	// authority (prevents ambiguous duplicate cross-file symbols).
+	s.evictScannedEntryFor(doc.URI)
 	snapshot := s.analyzer.Analyze(doc.Text)
 	s.setSnapshot(doc.URI, snapshot)
 	s.publishDiagnostics(ctx, doc.URI, doc.Version, snapshot)
@@ -182,9 +330,16 @@ func (s *Server) didClose(ctx *glsp.Context, params *lsp.DidCloseTextDocumentPar
 	s.documents.Close(params.TextDocument.URI)
 	s.mu.Lock()
 	delete(s.snapshots, params.TextDocument.URI)
+	delete(s.semanticPrev, params.TextDocument.URI)
 	s.mu.Unlock()
 	s.safeSymbolDelete(params.TextDocument.URI)
 	s.publishDiagnostics(ctx, params.TextDocument.URI, 0, &analyzer.Snapshot{})
+
+	// Keep cross-file navigation working after the tab closes: if the file still
+	// exists on disk, re-index it from disk under its own URI.
+	if path, ok := uriToPath(params.TextDocument.URI); ok {
+		s.indexFileFromDisk(path)
+	}
 	return nil
 }
 
@@ -207,6 +362,11 @@ func (s *Server) completion(_ *glsp.Context, params *lsp.CompletionParams) (any,
 	snapshot, _ := s.snapshot(params.TextDocument.URI)
 	items := analyzer.New().Analyze("").CompletionItems()
 	if snapshot != nil {
+		// Member access (`receiver.`) yields the receiver's fields/variants and
+		// suppresses the general list; otherwise fall back to ordinary completion.
+		if members, ok := snapshot.MemberCompletionsAt(params.Position); ok {
+			return &lsp.CompletionList{IsIncomplete: false, Items: members}, nil
+		}
 		items = snapshot.CompletionItemsAt(params.Position)
 	}
 	return &lsp.CompletionList{IsIncomplete: false, Items: items}, nil
@@ -638,6 +798,14 @@ func (s *Server) documentSymbols(_ *glsp.Context, params *lsp.DocumentSymbolPara
 	return snapshot.DocumentSymbols(), nil
 }
 
+func (s *Server) foldingRanges(_ *glsp.Context, params *lsp.FoldingRangeParams) ([]lsp.FoldingRange, error) {
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	return snapshot.FoldingRanges(), nil
+}
+
 func (s *Server) definition(_ *glsp.Context, params *lsp.DefinitionParams) (any, error) {
 	snapshot, ok := s.snapshot(params.TextDocument.URI)
 	if !ok {
@@ -782,10 +950,110 @@ func (s *Server) semanticTokensFull(ctx *glsp.Context, params *lsp.SemanticToken
 		return nil, nil
 	}
 	data := snapshot.SemanticTokensData()
+	id := s.recordSemanticResult(params.TextDocument.URI, data)
+	if len(data) == 0 {
+		return &lsp.SemanticTokens{ResultID: &id, Data: []lsp.UInteger{}}, nil
+	}
+	return &lsp.SemanticTokens{ResultID: &id, Data: data}, nil
+}
+
+// recordSemanticResult stores data as the latest full result for uri under a
+// fresh monotonic id and returns that id.
+func (s *Server) recordSemanticResult(uri lsp.DocumentUri, data []lsp.UInteger) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.semanticSeq++
+	id := fmt.Sprintf("%d", s.semanticSeq)
+	if s.semanticPrev == nil {
+		s.semanticPrev = make(map[lsp.DocumentUri]semanticResult)
+	}
+	s.semanticPrev[uri] = semanticResult{id: id, data: data}
+	return id
+}
+
+func (s *Server) previousSemanticResult(uri lsp.DocumentUri) (semanticResult, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	res, ok := s.semanticPrev[uri]
+	return res, ok
+}
+
+func (s *Server) semanticTokensRange(ctx *glsp.Context, params *lsp.SemanticTokensRangeParams) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logRecoveredPanic("textDocument/semanticTokens/range", params.TextDocument.URI, recovered)
+			result = &lsp.SemanticTokens{Data: []lsp.UInteger{}}
+			err = nil
+		}
+	}()
+
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	data := snapshot.SemanticTokensRangeData(params.Range)
 	if len(data) == 0 {
 		return &lsp.SemanticTokens{Data: []lsp.UInteger{}}, nil
 	}
 	return &lsp.SemanticTokens{Data: data}, nil
+}
+
+func (s *Server) semanticTokensFullDelta(ctx *glsp.Context, params *lsp.SemanticTokensDeltaParams) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logRecoveredPanic("textDocument/semanticTokens/full/delta", params.TextDocument.URI, recovered)
+			result = &lsp.SemanticTokens{Data: []lsp.UInteger{}}
+			err = nil
+		}
+	}()
+
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+
+	// Read the cached previous result BEFORE recording the new one.
+	prev, hasPrev := s.previousSemanticResult(params.TextDocument.URI)
+	newData := snapshot.SemanticTokensData()
+	newID := s.recordSemanticResult(params.TextDocument.URI, newData)
+
+	// If we no longer hold the client's previous result, fall back to a full
+	// response (the client adopts the new id).
+	if !hasPrev || prev.id != params.PreviousResultID {
+		return &lsp.SemanticTokens{ResultID: &newID, Data: newData}, nil
+	}
+
+	return &lsp.SemanticTokensDelta{
+		ResultId: &newID,
+		Edits:    semanticTokenEdits(prev.data, newData),
+	}, nil
+}
+
+// semanticTokenEdits produces the minimal single-splice edit that transforms old
+// into new: it trims the common prefix and suffix and replaces the differing
+// middle. This is the standard, correct-for-any-input semantic-token delta.
+func semanticTokenEdits(old, next []lsp.UInteger) []lsp.SemanticTokensEdit {
+	prefix := 0
+	for prefix < len(old) && prefix < len(next) && old[prefix] == next[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(old)-prefix && suffix < len(next)-prefix &&
+		old[len(old)-1-suffix] == next[len(next)-1-suffix] {
+		suffix++
+	}
+	deleteCount := len(old) - prefix - suffix
+	inserted := next[prefix : len(next)-suffix]
+	if deleteCount == 0 && len(inserted) == 0 {
+		return []lsp.SemanticTokensEdit{} // identical
+	}
+	// Copy the inserted slice so it does not alias the cached new data.
+	data := append([]lsp.UInteger(nil), inserted...)
+	return []lsp.SemanticTokensEdit{{
+		Start:       lsp.UInteger(prefix),
+		DeleteCount: lsp.UInteger(deleteCount),
+		Data:        data,
+	}}
 }
 
 func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParams) ([]lsp.TextEdit, error) {

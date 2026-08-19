@@ -2,7 +2,7 @@
     "name": "mutant-language-tools",
     "displayName": "Mutant Language Tools",
     "description": "Language tools for Mutant, powered by a dedicated language server: strict canonical formatting, rich diagnostics (OS-aware platform warnings, unreachable code, unused/undefined/duplicate checks, semicolons), hover with capability categories, completion, semantic highlighting, go-to-definition, references, and rename.",
-    "version": "0.0.6",
+    "version": "0.1.0",
     "publisher": "aoiflux",
     "icon": "images/icon-128.png",
     "license": "AGPL-3.0-only",
@@ -49,6 +49,67 @@
                 "language": "mutant",
                 "scopeName": "source.mutant",
                 "path": "./syntaxes/mutant.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "mutant",
+                "path": "./snippets/mutant.json"
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "type": "mutant",
+                "required": [
+                    "command"
+                ],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": [
+                            "gen",
+                            "run",
+                            "release"
+                        ],
+                        "description": "gen = compile a .mut to encrypted .mu bytecode; run = execute a compiled .mu; release = build a standalone executable."
+                    },
+                    "src": {
+                        "type": "string",
+                        "description": "Source (.mut) or bytecode (.mu) file. Defaults to the active editor file."
+                    },
+                    "os": {
+                        "type": "string",
+                        "enum": [
+                            "windows",
+                            "linux",
+                            "darwin"
+                        ],
+                        "description": "release only: target operating system."
+                    },
+                    "arch": {
+                        "type": "string",
+                        "enum": [
+                            "amd64",
+                            "arm64"
+                        ],
+                        "description": "release only: target architecture."
+                    },
+                    "mutation": {
+                        "type": "number",
+                        "description": "Polymorphic mutation level (0-10)."
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Optional encryption/decryption password."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Additional raw CLI arguments appended to the command."
+                    }
+                }
             }
         ],
         "commands": [
@@ -103,6 +164,11 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "mutant.cli.path": {
+                    "type": "string",
+                    "default": "mutant",
+                    "description": "Path or command name for the Mutant CLI, used by the Mutant build/run/release tasks. The CLI is separate from the bundled language server and is expected on PATH by default."
                 },
                 "mutant.strictFormatting": {
                     "type": "boolean",
@@ -209,12 +275,16 @@
     },
     "scripts": {
         "prepare:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs",
+        "check:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs --check",
+        "esbuild": "node ./esbuild.mjs",
+        "compile": "node ./esbuild.mjs --production",
+        "watch": "node ./esbuild.mjs --watch",
+        "compile-tests": "tsc -p ./",
         "vscode:prepublish": "npm run prepare:lsp-bins && npm run compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
         "lint": "eslint src --ext ts",
-        "pretest": "npm run compile && npm run lint",
-        "test": "node ./out/test/runTest.js"
+        "pretest": "npm run compile-tests && npm run lint",
+        "test": "node ./out/test/runTest.js",
+        "package": "node ./scripts/package-targets.mjs"
     },
     "devDependencies": {
         "@types/mocha": "^10.0.10",
@@ -222,10 +292,12 @@
         "@types/vscode": "^1.90.0",
         "@typescript-eslint/eslint-plugin": "^8.2.0",
         "@typescript-eslint/parser": "^8.2.0",
+        "@vscode/test-electron": "^2.5.2",
+        "@vscode/vsce": "^3.2.0",
+        "esbuild": "^0.24.0",
         "eslint": "^9.8.0",
         "glob": "^11.0.3",
         "mocha": "^11.7.4",
-        "@vscode/test-electron": "^2.5.2",
         "typescript": "^5.5.4"
     },
     "dependencies": {

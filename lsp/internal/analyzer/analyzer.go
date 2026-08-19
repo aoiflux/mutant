@@ -583,7 +583,10 @@ func SemanticTokenLegend() lsp.SemanticTokensLegend {
 	return lsp.SemanticTokensLegend{TokenTypes: semanticTokenTypes, TokenModifiers: semanticTokenModifiers}
 }
 
-func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
+// semanticTokenList returns the document's semantic tokens, sorted in reading
+// order and de-duplicated. It is the shared basis for full, range, and delta
+// encodings.
+func (s *Snapshot) semanticTokenList() []semanticToken {
 	if s == nil || s.Program == nil || s.Program.NodePositions == nil {
 		return nil
 	}
@@ -644,7 +647,37 @@ func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
 		}
 		compact = append(compact, tok)
 	}
+	return compact
+}
 
+// SemanticTokensData returns the LSP delta-encoded token stream for the whole
+// document.
+func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
+	return encodeSemanticTokens(s.semanticTokenList())
+}
+
+// SemanticTokensRangeData returns the delta-encoded token stream limited to the
+// lines within rng (inclusive). Deltas restart from the filtered set.
+func (s *Snapshot) SemanticTokensRangeData(rng lsp.Range) []lsp.UInteger {
+	all := s.semanticTokenList()
+	if len(all) == 0 {
+		return nil
+	}
+	filtered := make([]semanticToken, 0, len(all))
+	for _, tok := range all {
+		if tok.line >= uint32(rng.Start.Line) && tok.line <= uint32(rng.End.Line) {
+			filtered = append(filtered, tok)
+		}
+	}
+	return encodeSemanticTokens(filtered)
+}
+
+// encodeSemanticTokens applies the LSP relative (delta) encoding to an ordered,
+// de-duplicated token list.
+func encodeSemanticTokens(compact []semanticToken) []lsp.UInteger {
+	if len(compact) == 0 {
+		return nil
+	}
 	data := make([]lsp.UInteger, 0, len(compact)*5)
 	var prevLine uint32
 	var prevStart uint32

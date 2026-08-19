@@ -24,9 +24,12 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
 
-	result, ok := resultAny.(*lsp.InitializeResult)
+	result, ok := resultAny.(*initializeResult)
 	if !ok {
-		t.Fatalf("initialize result type = %T, want *protocol.InitializeResult", resultAny)
+		t.Fatalf("initialize result type = %T, want *initializeResult", resultAny)
+	}
+	if provider, ok := result.Capabilities.InlayHintProvider.(bool); !ok || !provider {
+		t.Fatalf("InlayHintProvider = %#v, want true", result.Capabilities.InlayHintProvider)
 	}
 
 	if result.ServerInfo == nil || result.ServerInfo.Name != serverName {
@@ -58,8 +61,8 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 	if provider, ok := result.Capabilities.ReferencesProvider.(bool); !ok || !provider {
 		t.Fatalf("ReferencesProvider = %#v, want true", result.Capabilities.ReferencesProvider)
 	}
-	if provider, ok := result.Capabilities.RenameProvider.(bool); !ok || !provider {
-		t.Fatalf("RenameProvider = %#v, want true", result.Capabilities.RenameProvider)
+	if renameOpts, ok := result.Capabilities.RenameProvider.(*lsp.RenameOptions); !ok || renameOpts.PrepareProvider == nil || !*renameOpts.PrepareProvider {
+		t.Fatalf("RenameProvider = %#v, want *RenameOptions{PrepareProvider:true}", result.Capabilities.RenameProvider)
 	}
 	if result.Capabilities.CompletionProvider == nil {
 		t.Fatal("CompletionProvider is nil")
@@ -74,11 +77,14 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 	if !containsString(sigOpts.TriggerCharacters, ",") {
 		t.Fatalf("signature help trigger chars missing ',': %#v", sigOpts.TriggerCharacters)
 	}
-	if provider, ok := result.Capabilities.CodeActionProvider.(bool); !ok || !provider {
-		t.Fatalf("CodeActionProvider = %#v, want true", result.Capabilities.CodeActionProvider)
+	if caOpts, ok := result.Capabilities.CodeActionProvider.(*lsp.CodeActionOptions); !ok || len(caOpts.CodeActionKinds) == 0 || caOpts.CodeActionKinds[0] != lsp.CodeActionKindQuickFix {
+		t.Fatalf("CodeActionProvider = %#v, want *CodeActionOptions{quickfix}", result.Capabilities.CodeActionProvider)
 	}
 	if provider, ok := result.Capabilities.DocumentHighlightProvider.(bool); !ok || !provider {
 		t.Fatalf("DocumentHighlightProvider = %#v, want true", result.Capabilities.DocumentHighlightProvider)
+	}
+	if provider, ok := result.Capabilities.FoldingRangeProvider.(bool); !ok || !provider {
+		t.Fatalf("FoldingRangeProvider = %#v, want true", result.Capabilities.FoldingRangeProvider)
 	}
 	if provider, ok := result.Capabilities.WorkspaceSymbolProvider.(bool); !ok || !provider {
 		t.Fatalf("WorkspaceSymbolProvider = %#v, want true", result.Capabilities.WorkspaceSymbolProvider)
@@ -1446,7 +1452,7 @@ func TestSemanticTokensClassifyParameterAndProperty(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
@@ -1510,7 +1516,7 @@ func TestSemanticTokensClassifyBuiltinAsDefaultLibraryFunction(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
@@ -1572,7 +1578,7 @@ func TestSemanticTokensClassifyOperatorAndPunctuation(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
