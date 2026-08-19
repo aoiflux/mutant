@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.6
+
+New this release:
+
+- **Compound assignment and increment/decrement** (`+= -= *= /= %=`, postfix `++` /
+  `--`) are now lexed, parsed, formatted, and syntax-highlighted. The formatter
+  preserves the compact spelling (`i += 1`, `i++`) instead of expanding it, and
+  the bundled language server understands the operators everywhere.
+
 ## 0.0.5
 
 New this release:
