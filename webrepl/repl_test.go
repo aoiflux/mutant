@@ -146,6 +146,30 @@ func TestEvalFunctionStructEnumAndFloatParity(t *testing.T) {
 	})
 }
 
+// TestEvalOperatorParity covers operators previously missing from the WASM REPL
+// (`%`, `<=`, `>=`) on integer, float, and mixed operands.
+func TestEvalOperatorParity(t *testing.T) {
+	repl := New()
+	cases := map[string]string{
+		"7 % 3":      "1",
+		"10 % 5":     "0",
+		"2 <= 2":     "true",
+		"3 <= 2":     "false",
+		"3 >= 3":     "true",
+		"2 >= 3":     "false",
+		"5.5 % 2.0":  "1.500000",
+		"1.5 <= 1.5": "true",
+		"2.5 >= 3.0": "false",
+		"7 / 2.0":    "3.500000", // mixed int/float
+		"2 < 2.5":    "true",     // mixed comparison
+	}
+	for in, want := range cases {
+		if got := evalInput(t, repl, in); got != want {
+			t.Errorf("Eval(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestEvalPrintBuiltins(t *testing.T) {
 	repl := New()
 

@@ -3,7 +3,6 @@ package webrepl
 import (
 	"errors"
 	"fmt"
-	"math"
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/lexer"
@@ -628,10 +627,10 @@ func evalPrefix(op string, right object.Object) object.Object {
 
 func evalInfix(op string, left, right object.Object) object.Object {
 	switch {
-	case left.Type() == object.INTEGER_OBJ && right.Type() == object.INTEGER_OBJ:
-		return evalIntInfix(op, left.(*object.Integer).Value, right.(*object.Integer).Value)
-	case isNumberObject(left) && isNumberObject(right):
-		return evalNumericInfix(op, numberValue(left), numberValue(right))
+	case object.IsNumeric(left) && object.IsNumeric(right):
+		// Numeric arithmetic/comparison is shared with the tree-walking evaluator
+		// via object.NumericInfix so the two interpreters can't drift apart.
+		return object.NumericInfix(op, left, right)
 	case left.Type() == object.STRING_OBJ && right.Type() == object.STRING_OBJ:
 		if op == "+" {
 			return &object.String{Value: left.(*object.String).Value + right.(*object.String).Value}
@@ -654,82 +653,6 @@ func evalInfix(op string, left, right object.Object) object.Object {
 	}
 }
 
-func evalIntInfix(op string, left, right int64) object.Object {
-	switch op {
-	case "+":
-		return &object.Integer{Value: left + right}
-	case "-":
-		return &object.Integer{Value: left - right}
-	case "*":
-		return &object.Integer{Value: left * right}
-	case "/":
-		if right == 0 {
-			return newError("division by zero")
-		}
-		return &object.Integer{Value: left / right}
-	case "<":
-		return nativeBool(left < right)
-	case ">":
-		return nativeBool(left > right)
-	case "==":
-		return nativeBool(left == right)
-	case "!=":
-		return nativeBool(left != right)
-	default:
-		return newError("unknown operator: INTEGER %s INTEGER", op)
-	}
-}
-
-func isNumberObject(obj object.Object) bool {
-	if obj == nil {
-		return false
-	}
-	return obj.Type() == object.INTEGER_OBJ || obj.Type() == object.FLOAT_OBJ
-}
-
-func numberValue(obj object.Object) float64 {
-	switch value := obj.(type) {
-	case *object.Integer:
-		return float64(value.Value)
-	case *object.Float:
-		return value.Value
-	default:
-		return 0
-	}
-}
-
-func evalNumericInfix(op string, left, right float64) object.Object {
-	switch op {
-	case "+":
-		return numericResult(left + right)
-	case "-":
-		return numericResult(left - right)
-	case "*":
-		return numericResult(left * right)
-	case "/":
-		if right == 0 {
-			return newError("division by zero")
-		}
-		return numericResult(left / right)
-	case "<":
-		return nativeBool(left < right)
-	case ">":
-		return nativeBool(left > right)
-	case "==":
-		return nativeBool(left == right)
-	case "!=":
-		return nativeBool(left != right)
-	default:
-		return newError("unknown operator: NUMBER %s NUMBER", op)
-	}
-}
-
-func numericResult(value float64) object.Object {
-	if math.Mod(value, 1.0) == 0 {
-		return &object.Integer{Value: int64(value)}
-	}
-	return &object.Float{Value: value}
-}
 
 func evalExpressions(repl *REPL, expressions []ast.Expression, env *object.Environment) []object.Object {
 	out := make([]object.Object, 0, len(expressions))

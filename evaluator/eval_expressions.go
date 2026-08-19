@@ -44,17 +44,22 @@ func evalBangOperatorExpression(right object.Object) object.Object {
 }
 
 func evalMinusPrefixOperatorExpression(right object.Object) object.Object {
-	if right.Type() != object.INTEGER_OBJ {
+	switch right.Type() {
+	case object.INTEGER_OBJ:
+		return &object.Integer{Value: -right.(*object.Integer).Value}
+	case object.FLOAT_OBJ:
+		return &object.Float{Value: -right.(*object.Float).Value}
+	default:
 		return newError("unknown operator: -%s", right.Type())
 	}
-	value := right.(*object.Integer).Value
-	return &object.Integer{Value: -value}
 }
 
 func evalInfixExpression(operator string, left, right object.Object) object.Object {
 	switch {
-	case left.Type() == object.INTEGER_OBJ && right.Type() == object.INTEGER_OBJ:
-		return evalIntegerInfixExpression(operator, left, right)
+	case object.IsNumeric(left) && object.IsNumeric(right):
+		// Numeric arithmetic/comparison is shared with the WASM REPL via
+		// object.NumericInfix so the two tree-walking interpreters can't drift.
+		return object.NumericInfix(operator, left, right)
 	case operator == "==":
 		return nativeBoolToBoolObject(left.Inspect() == right.Inspect())
 	case operator == "!=":
@@ -63,32 +68,6 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 		return newError("type mismatch: %s%s%s", left.Type(), operator, right.Type())
 	case (left.Type() == object.STRING_OBJ) && (right.Type() == object.STRING_OBJ):
 		return evalStringInfixExpression(operator, left, right)
-	default:
-		return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
-	}
-}
-
-func evalIntegerInfixExpression(operator string, left, right object.Object) object.Object {
-	leftVal := left.(*object.Integer).Value
-	rightVal := right.(*object.Integer).Value
-
-	switch operator {
-	case "+":
-		return &object.Integer{Value: leftVal + rightVal}
-	case "-":
-		return &object.Integer{Value: leftVal - rightVal}
-	case "*":
-		return &object.Integer{Value: leftVal * rightVal}
-	case "/":
-		return &object.Integer{Value: leftVal / rightVal}
-	case "<":
-		return nativeBoolToBoolObject(leftVal < rightVal)
-	case ">":
-		return nativeBoolToBoolObject(leftVal > rightVal)
-	case "==":
-		return nativeBoolToBoolObject(leftVal == rightVal)
-	case "!=":
-		return nativeBoolToBoolObject(leftVal != rightVal)
 	default:
 		return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
 	}
