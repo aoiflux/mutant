@@ -20,6 +20,7 @@ Mutant supports:
 - Compound literals: arrays, hashes, struct literals
 - Prefix operators: `!` and unary `-`
 - Infix operators: `+ - * / % < > <= >= == != && ||`
+- Assignment: `=`, compound assignment `+= -= *= /= %=`, and postfix `++` / `--`
 - Indexing and field access
 - Conditionals: `if` / `else`
 - Loops: `for`, with `break` and `continue`
@@ -85,6 +86,29 @@ comparisons bind tighter than `&&`, which binds tighter than `||`.
 // The right side is skipped when the left decides the outcome.
 let has_both = si_frac == 0 && fn_frac > 0;   // both conditions must hold
 let ready = configured || force;               // either is enough
+```
+
+### Compound assignment and increment/decrement
+
+`+= -= *= /= %=` update a variable in place using its current value, and postfix
+`++` / `--` add or subtract one. They are pure syntactic sugar: `x += y` is exactly
+`x = x + y`, and `x++` is exactly `x = x + 1`, so they follow the same operator
+semantics (integer vs. float promotion, `+=` concatenating strings, integer
+division/modulo-by-zero errors). The target must be an assignable lvalue — a
+variable, field, or index — and, like any `=`, the whole expression evaluates to
+the newly stored value.
+
+```mutant
+let total = 0;
+for (let i = 0; i < 5; i++) {   // i++ in the loop's post section
+    total += i * 2;             // total = total + i * 2
+};
+
+let name = "mut";
+name += "ant";                  // string concatenation -> "mutant"
+
+let n = 100;
+n -= 30;   n /= 2;   n %= 9;    // chained: 100 -> 70 -> 35 -> 8
 ```
 
 ### Notes

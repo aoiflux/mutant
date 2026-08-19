@@ -62,17 +62,55 @@ func (l *Lexer) NextToken() token.Token {
 			tok = newToken(token.ASSIGN, l.ch)
 		}
 	case '+':
-		tok = newToken(token.PLUS, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.PLUS_ASSIGN, Literal: ch + string(l.ch)}
+		} else if l.peekRune() == '+' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.INCREMENT, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.PLUS, l.ch)
+		}
 	case '-':
-		tok = newToken(token.MINUS, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.MINUS_ASSIGN, Literal: ch + string(l.ch)}
+		} else if l.peekRune() == '-' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.DECREMENT, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.MINUS, l.ch)
+		}
 	case '*':
-		tok = newToken(token.ASTERISK, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.ASTERISK_ASSIGN, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.ASTERISK, l.ch)
+		}
 	case '/':
-		tok = newToken(token.FSLASH, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.SLASH_ASSIGN, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.FSLASH, l.ch)
+		}
 	case '\\':
 		tok = newToken(token.FSLASH, l.ch)
 	case '%':
-		tok = newToken(token.MODULO, l.ch)
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.MODULO_ASSIGN, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.MODULO, l.ch)
+		}
 	case '<':
 		if l.peekRune() == '=' {
 			ch := string(l.ch)

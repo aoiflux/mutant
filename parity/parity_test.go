@@ -112,6 +112,15 @@ func TestEvaluatorVMOperatorParity(t *testing.T) {
 		`"ab" + "cd"`, `"x" == "x"`, `"x" != "y"`,
 		// boolean logic (short-circuit operators)
 		"true && false", "true || false", "false && true", "2 < 3 && 3 < 4",
+		// compound assignment desugars identically in both engines
+		"let i = 5; i += 3; i", "let i = 5; i -= 2; i", "let i = 4; i *= 3; i",
+		"let i = 20; i /= 4; i", "let i = 17; i %= 5; i",
+		"let s = \"ab\"; s += \"cd\"; s",
+		"let x = 1.5; x += 2.0; x", "let x = 3.0; x *= 2.0; x",
+		// postfix increment / decrement
+		"let i = 0; i++; i", "let i = 0; i++; i++; i", "let i = 10; i--; i",
+		// used as the tail expression value (assignment yields the stored value)
+		"let i = 5; i += 1",
 	}
 
 	for _, input := range inputs {

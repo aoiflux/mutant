@@ -3,6 +3,42 @@
 > A summary of new capabilities, changes, and upgrades for this release. For the
 > full builtin catalog see the [Capability Reference](CAPABILITY_REFERENCE.md).
 
+## v2.4.0
+
+- **Compound assignment and increment/decrement.** `+= -= *= /= %=` update a
+  variable in place, and postfix `++` / `--` add or subtract one — so loop bodies
+  and counters read `total += x` and `i++` instead of `total = total + x` and
+  `i = i + 1`. They are pure sugar (`x += y` ≡ `x = x + y`, `x++` ≡ `x = x + 1`),
+  so they inherit the existing operator semantics: integer/float promotion, `+=`
+  concatenates strings, and integer division/modulo by zero still errors. The
+  target must be an assignable lvalue (variable, field, or index), and the
+  expression evaluates to the newly stored value. Implemented once in the parser
+  and shared across all three engines (compiler+VM, evaluator, web REPL); the
+  language server lexes, parses, and formats the new operators (the formatter
+  preserves the compact spelling rather than expanding it).
+
+## v2.3.1 (patch)
+
+Correctness patch that makes Mutant's three execution engines agree on every
+documented operator.
+
+- **Operator parity across engines.** The tree-walking evaluator (used by CLI
+  `--macros` mode) and the WASM web REPL were missing `%`, `<=`, and `>=`, and the
+  evaluator did not evaluate float literals or perform float arithmetic at all —
+  so expressions that worked in the compiler+VM silently misbehaved in the other
+  two engines. All three now implement identical semantics for `+ - * / % < >
+  <= >= == !=` over integers and floats (integer division/modulo by zero error;
+  a float operand promotes both operands to float). Whole-valued float results
+  now stay floats (e.g. `2.0 * 3.0` is `6.000000`, no longer collapsed to `6`),
+  matching the VM.
+- **Shared operator core (anti-drift).** The evaluator and web REPL now route all
+  numeric infix operators through a single implementation (`object.NumericInfix`)
+  instead of three hand-maintained switch statements, so the engines can no longer
+  diverge. A new cross-engine golden test (`parity/`) pins the evaluator and the
+  VM to identical results for a table of expressions.
+
+## v2.3.0
+
 ## Highlights
 
 - **The standard library roughly doubled — now 399 builtins across 32 capability

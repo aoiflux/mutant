@@ -103,6 +103,17 @@ const (
 	OR         = "||"
 	COLON      = ":"
 
+	// Compound assignment and increment/decrement. These are pure syntactic
+	// sugar: the parser desugars each to a plain assignment over the matching
+	// binary operator (e.g. `x += 1` -> `x = x + 1`, `x++` -> `x = x + 1`).
+	PLUS_ASSIGN     = "+="
+	MINUS_ASSIGN    = "-="
+	ASTERISK_ASSIGN = "*="
+	SLASH_ASSIGN    = "/="
+	MODULO_ASSIGN   = "%="
+	INCREMENT       = "++"
+	DECREMENT       = "--"
+
 	// Delimiters
 	COMMA     = ","
 	SEMICOLON = ";"

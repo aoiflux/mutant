@@ -246,6 +246,12 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 	case *mast.InfixExpression:
 		return "(" + p.expression(node.Left, level) + " " + node.Operator + " " + p.expression(node.Right, level) + ")"
 	case *mast.AssignExpression:
+		if node.Postfix != "" {
+			return p.expression(node.Left, level) + node.Postfix
+		}
+		if node.Operator != "" {
+			return p.expression(node.Left, level) + " " + node.Operator + "= " + p.expression(node.Value, level)
+		}
 		return p.expression(node.Left, level) + " = " + p.expression(node.Value, level)
 	case *mast.CallExpression:
 		return p.expression(node.Function, level) + "(" + p.expressionList(node.Arguments, level) + ")"

@@ -26,7 +26,7 @@ const (
 	GENCMD     = "gen"
 	RUNCMD     = "run"
 	HELPCMD    = "help"
-	VERSION    = "Version: 2.3.1"
+	VERSION    = "Version: 2.4.0"
 )
 
 type cliRuntime struct {

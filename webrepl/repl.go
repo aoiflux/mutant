@@ -495,6 +495,19 @@ func evalAssignExpression(repl *REPL, node *ast.AssignExpression, env *object.En
 		return value
 	}
 
+	// Compound assignment (x += v, x++): fold the current value of the target
+	// with the right-hand side using the base operator before storing.
+	if node.Operator != "" {
+		current := evalNode(repl, node.Left, env)
+		if isError(current) {
+			return current
+		}
+		value = evalInfix(node.Operator, current, value)
+		if isError(value) {
+			return value
+		}
+	}
+
 	ident, ok := node.Left.(*ast.Identifier)
 	if ok {
 		if _, updated := env.Update(ident.Value, value); !updated {

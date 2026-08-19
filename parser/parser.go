@@ -24,24 +24,31 @@ const (
 )
 
 var precedences = map[token.TokenType]int{
-	token.ASSIGN:     ASSIGNMENT,
-	token.OR:         LOGIC_OR,
-	token.AND:        LOGIC_AND,
-	token.EQUALITY:   EQUALS,
-	token.INEQUALITY: EQUALS,
-	token.LT:         LESSGREATER,
-	token.GT:         LESSGREATER,
-	token.LTE:        LESSGREATER,
-	token.GTE:        LESSGREATER,
-	token.PLUS:       SUM,
-	token.MINUS:      SUM,
-	token.FSLASH:     PRODUCT,
-	token.ASTERISK:   PRODUCT,
-	token.MODULO:     PRODUCT,
-	token.LPAREN:     CALL,
-	token.LSQUARE:    INDEX,
-	token.DOT:        FIELD,
-	token.LBRACE:     CALL,
+	token.ASSIGN:          ASSIGNMENT,
+	token.PLUS_ASSIGN:     ASSIGNMENT,
+	token.MINUS_ASSIGN:    ASSIGNMENT,
+	token.ASTERISK_ASSIGN: ASSIGNMENT,
+	token.SLASH_ASSIGN:    ASSIGNMENT,
+	token.MODULO_ASSIGN:   ASSIGNMENT,
+	token.OR:              LOGIC_OR,
+	token.AND:             LOGIC_AND,
+	token.EQUALITY:        EQUALS,
+	token.INEQUALITY:      EQUALS,
+	token.LT:              LESSGREATER,
+	token.GT:              LESSGREATER,
+	token.LTE:             LESSGREATER,
+	token.GTE:             LESSGREATER,
+	token.PLUS:            SUM,
+	token.MINUS:           SUM,
+	token.FSLASH:          PRODUCT,
+	token.ASTERISK:        PRODUCT,
+	token.MODULO:          PRODUCT,
+	token.INCREMENT:       CALL,
+	token.DECREMENT:       CALL,
+	token.LPAREN:          CALL,
+	token.LSQUARE:         INDEX,
+	token.DOT:             FIELD,
+	token.LBRACE:          CALL,
 }
 
 type (
@@ -132,6 +139,13 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.AND, p.parseInfixExpression)
 	p.registerInfix(token.OR, p.parseInfixExpression)
 	p.registerInfix(token.ASSIGN, p.parseAssignExpression)
+	p.registerInfix(token.PLUS_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.MINUS_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.ASTERISK_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.SLASH_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.MODULO_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.INCREMENT, p.parsePostfixIncDecExpression)
+	p.registerInfix(token.DECREMENT, p.parsePostfixIncDecExpression)
 	p.registerInfix(token.LPAREN, p.parseCallExpression)
 	p.registerInfix(token.LSQUARE, p.parseIndexExpression)
 	p.registerInfix(token.DOT, p.parseFieldExpression)

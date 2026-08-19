@@ -699,9 +699,23 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 }
 
 func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
+	// Compound assignment (x += v, x++) desugars to `x = x <op> v`: the value to
+	// store is the base operator applied to the target's current value and the
+	// right-hand side. Every store path below compiles valueExpr, so this is the
+	// single point where the fold is introduced.
+	valueExpr := node.Value
+	if node.Operator != "" {
+		valueExpr = &ast.InfixExpression{
+			Token:    node.Token,
+			Left:     node.Left,
+			Operator: node.Operator,
+			Right:    node.Value,
+		}
+	}
+
 	// Handle identifier assignment: x = value
 	if ident, ok := node.Left.(*ast.Identifier); ok {
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
@@ -729,7 +743,7 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 
 		fieldNameIndex := c.addConstant(&object.String{Value: fieldExpr.Field.Value})
 
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
@@ -762,7 +776,7 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 		if err := c.Compile(idxExpr.Index); err != nil {
 			return err
 		}
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 		c.emit(code.OpSetIndex)
