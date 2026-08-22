@@ -244,14 +244,27 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		}
 		return AnyType
 	case *mast.CallExpression:
-		inf.expr(n.Function, env)
-		for _, a := range n.Arguments {
-			inf.expr(a, env)
+		ft := inf.expr(n.Function, env)
+		argTypes := make([]Type, len(n.Arguments))
+		for i, a := range n.Arguments {
+			argTypes[i] = inf.expr(a, env)
 		}
 		if id, ok := n.Function.(*mast.Identifier); ok {
+			// Builtins whose result depends on their argument types
+			// (element-preserving array ops, map's mapper return, numeric
+			// kind-preservers) refine what the fixed builtinReturnTypes table —
+			// which can only name a bare `array` — is able to express.
+			if t, ok := argAwareCallType(id.Value, argTypes); ok {
+				return t
+			}
 			if sig, ok := builtinReturnType(id.Value); ok {
 				return sig.ret
 			}
+		}
+		// Calling a value with a known function type (a user function, or an
+		// IIFE) yields that function's inferred return type.
+		if ft.Kind == TypeFunction && ft.Ret != nil && ft.Ret.IsKnown() {
+			return *ft.Ret
 		}
 		return AnyType
 	case *mast.AssignExpression:
@@ -276,10 +289,102 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		if n.Body != nil {
 			inf.stmt(n.Body, child)
 		}
-		return Type{Kind: TypeFunction}
+		ret := inf.functionReturnType(n.Body)
+		return Type{Kind: TypeFunction, Ret: &ret}
 	default:
 		return AnyType
 	}
+}
+
+// functionReturnType infers a user function's return type by joining the types
+// of everything it can yield: each explicit single-value `return`, plus the
+// body's trailing expression (Mutant functions implicitly return their last
+// expression). Any disagreement, a multi-value return, or an unknown collapses
+// to Any. It reads types recorded by the preceding body walk, so it must run
+// after inf.stmt has visited the body.
+func (inf *typeInferer) functionReturnType(body *mast.BlockStatement) Type {
+	if body == nil {
+		return AnyType
+	}
+
+	var results []mast.Expression
+	for _, s := range body.Statements {
+		inf.collectReturnExprs(s, &results)
+	}
+	// Implicit trailing return: the last statement, when it is a bare value
+	// expression. An `if` in tail position is control flow, not a value here — its
+	// contribution already came from its branch returns above, and the `if` node
+	// itself types as Any, so appending it would only poison the join.
+	if n := len(body.Statements); n > 0 {
+		if es, ok := body.Statements[n-1].(*mast.ExpressionStatement); ok && es.Expression != nil {
+			if _, isIf := es.Expression.(*mast.IfExpression); !isIf {
+				results = append(results, es.Expression)
+			}
+		}
+	}
+	if len(results) == 0 {
+		return AnyType
+	}
+
+	joined := AnyType
+	for i, e := range results {
+		t := inf.recordedType(e)
+		if i == 0 {
+			joined = t
+		} else {
+			joined = joinTypes(joined, t)
+		}
+		if !joined.IsKnown() {
+			return AnyType
+		}
+	}
+	return joined
+}
+
+// collectReturnExprs gathers the value expressions of explicit `return`s reached
+// from stmt without crossing into a nested function (whose returns belong to it).
+// A multi-value return contributes a nil, which forces the join to Any.
+func (inf *typeInferer) collectReturnExprs(stmt mast.Statement, out *[]mast.Expression) {
+	switch n := stmt.(type) {
+	case *mast.ReturnStatement:
+		switch {
+		case len(n.ReturnValues) == 1:
+			*out = append(*out, n.ReturnValues[0])
+		case len(n.ReturnValues) == 0 && n.ReturnValue != nil:
+			*out = append(*out, n.ReturnValue)
+		default:
+			*out = append(*out, nil) // multi-value: ambiguous scalar type
+		}
+	case *mast.BlockStatement:
+		for _, s := range n.Statements {
+			inf.collectReturnExprs(s, out)
+		}
+	case *mast.ExpressionStatement:
+		if ie, ok := n.Expression.(*mast.IfExpression); ok {
+			if ie.Consequence != nil {
+				inf.collectReturnExprs(ie.Consequence, out)
+			}
+			if ie.Alternative != nil {
+				inf.collectReturnExprs(ie.Alternative, out)
+			}
+		}
+	case *mast.ForStatement:
+		if n.Body != nil {
+			inf.collectReturnExprs(n.Body, out)
+		}
+	}
+}
+
+// recordedType returns the type recorded for an expression during the inference
+// walk (nil or unrecorded expressions are Any).
+func (inf *typeInferer) recordedType(e mast.Expression) Type {
+	if e == nil {
+		return AnyType
+	}
+	if t, ok := inf.nodeTypes[e]; ok {
+		return t
+	}
+	return AnyType
 }
 
 func isNumericType(t Type) bool {
@@ -317,4 +422,90 @@ func numericResultType(lt, rt Type) Type {
 		return tInt
 	}
 	return AnyType
+}
+
+// argAwareCallType types builtin calls whose result depends on the argument
+// types — something the fixed builtinReturnTypes table, which can only name a
+// bare `array`, cannot express. Element-preserving array ops carry the input's
+// element type through; `map` takes the mapper's return type; `first`/`last`
+// yield the element itself; and the numeric ops preserve int-vs-float. It returns
+// (type, true) only when it produced something more precise than the table would;
+// otherwise the caller falls back to the table. Every branch is conservative — an
+// unknown element type or a disagreement yields (Any, false), never a wrong type,
+// preserving the zero-false-positive contract.
+func argAwareCallType(name string, argTypes []Type) (Type, bool) {
+	arg := func(i int) Type {
+		if i >= 0 && i < len(argTypes) {
+			return argTypes[i]
+		}
+		return AnyType
+	}
+	// elemOf returns the known element type of an array-typed value.
+	elemOf := func(t Type) (Type, bool) {
+		if t.Kind == TypeArray && t.Elem != nil && t.Elem.IsKnown() {
+			return *t.Elem, true
+		}
+		return AnyType, false
+	}
+
+	switch name {
+	// first/last return an element, not an array.
+	case "first", "last":
+		if el, ok := elemOf(arg(0)); ok {
+			return el, true
+		}
+	// Element-preserving array ops: the result's element type equals arg 0's.
+	case "sort", "reverse", "unique", "rest", "pop", "slice", "sort_by", "filter":
+		if el, ok := elemOf(arg(0)); ok {
+			return arrayOf(el), true
+		}
+	case "push":
+		// push(arr, elem): the element type survives only if the pushed value agrees.
+		if el, ok := elemOf(arg(0)); ok {
+			if j := joinTypes(el, arg(1)); j.IsKnown() {
+				return arrayOf(j), true
+			}
+		}
+	case "concat":
+		// concat(a, b): survives only when both arrays share an element type.
+		if ea, oka := elemOf(arg(0)); oka {
+			if eb, okb := elemOf(arg(1)); okb {
+				if j := joinTypes(ea, eb); j.IsKnown() {
+					return arrayOf(j), true
+				}
+			}
+		}
+	case "map":
+		// map(arr, fn): the result's element type is the mapper's return type.
+		if fn := arg(1); fn.Kind == TypeFunction && fn.Ret != nil && fn.Ret.IsKnown() {
+			return arrayOf(*fn.Ret), true
+		}
+	case "sum":
+		// sum([]int) -> int, sum([]float) -> float.
+		if el, ok := elemOf(arg(0)); ok && isNumericType(el) {
+			return el, true
+		}
+	case "abs":
+		// abs preserves its argument's numeric kind.
+		if a := arg(0); isNumericType(a) {
+			return a, true
+		}
+	case "min", "max", "clamp":
+		// Preserve the numeric kind when every argument agrees (all int, all float).
+		if len(argTypes) == 0 {
+			return AnyType, false
+		}
+		j := arg(0)
+		for i := 1; i < len(argTypes); i++ {
+			j = joinTypes(j, arg(i))
+		}
+		if isNumericType(j) {
+			return j, true
+		}
+	case "mod":
+		if r := numericResultType(arg(0), arg(1)); isNumericType(r) {
+			return r, true
+		}
+	}
+	return AnyType, false
 }

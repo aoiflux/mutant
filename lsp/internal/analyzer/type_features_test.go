@@ -41,6 +41,17 @@ func TestHoverNoTypeForUnknown(t *testing.T) {
 	}
 }
 
+func TestHoverShowsFunctionReturnType(t *testing.T) {
+	s := New().Analyze("let f = fn() { return 42; };\nf;\n")
+	text, _, ok := s.HoverText(lsp.Position{Line: 1, Character: 0})
+	if !ok {
+		t.Fatal("expected hover text")
+	}
+	if !strings.Contains(text, "-> int") {
+		t.Fatalf("hover = %q, want it to contain '-> int'", text)
+	}
+}
+
 func TestCompletionDetailCarriesType(t *testing.T) {
 	s := New().Analyze("let total = 42;\n\n")
 	items := s.CompletionItemsAt(lsp.Position{Line: 1, Character: 0})

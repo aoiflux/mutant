@@ -24,11 +24,13 @@ const (
 )
 
 // Type is a static type in the lattice. Name carries the struct/enum name;
-// Elem carries an array's element type (optional).
+// Elem carries an array's element type (optional); Ret carries a function's
+// inferred return type (optional, only for Kind == TypeFunction).
 type Type struct {
 	Kind TypeKind
 	Name string
 	Elem *Type
+	Ret  *Type
 }
 
 // AnyType is the shared gradual-unknown value.
@@ -53,6 +55,9 @@ func (t Type) String() string {
 	case TypeHash:
 		return "hash"
 	case TypeFunction:
+		if t.Ret != nil && t.Ret.IsKnown() {
+			return "fn -> " + t.Ret.String()
+		}
 		return "fn"
 	case TypeError:
 		return "error"

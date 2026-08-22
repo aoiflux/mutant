@@ -75,6 +75,9 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 				if literal, ok := s.functionLiteralForBindingIdent(resolved.ident); ok {
 					name := n.Value
 					display := functionLiteralSignature(literal, functionDisplayName(name, literal.Name)).Label
+					if ty, ok := s.TypeOf(resolved.ident); ok && ty.Kind == TypeFunction && ty.Ret != nil && ty.Ret.IsKnown() {
+						display += " -> " + ty.Ret.String()
+					}
 					params := parameterNames(literal.Parameters)
 					doc := s.leadingLineCommentForIdentifier(resolved.ident)
 

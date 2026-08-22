@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"testing"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -111,5 +112,163 @@ func TestInferIdentifierUsageType(t *testing.T) {
 	src := "let count = 5;\ncount;\n"
 	if got := typeAt(t, src, 1, 0); got != "int" {
 		t.Fatalf("usage of count = %q, want int", got)
+	}
+}
+
+func TestInferUserFunctionReturnType(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"explicit-return",
+			"let f = fn() { return 42; };\nlet y = f();\n",
+			"int",
+		},
+		{
+			"implicit-trailing-return",
+			"let f = fn() { 3.14 };\nlet y = f();\n",
+			"float",
+		},
+		{
+			"return-through-if",
+			"let f = fn(b) { if (b) { return 1; } else { return 2; } };\nlet y = f(true);\n",
+			"int",
+		},
+		{
+			"conflicting-returns-any",
+			"let f = fn(b) { if (b) { return 1; } else { return \"x\"; } };\nlet y = f(true);\n",
+			"", // disagreement collapses to Any (absent)
+		},
+		{
+			"iife",
+			"let y = fn() { return len(\"hi\"); }();\n",
+			"int",
+		},
+		{
+			"struct-return",
+			"struct Point { x; };\nlet mk = fn() { return Point{x: 1}; };\nlet p = mk();\n",
+			"Point",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The `let y`/`let p` binding is always the last line, name at column 4.
+			line := uint32(strings.Count(c.src, "\n") - 1)
+			if got := typeAt(t, c.src, line, 4); got != c.want {
+				t.Fatalf("%s: type = %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+func TestInferFunctionValueShowsReturn(t *testing.T) {
+	// The function binding itself carries `fn -> T` when the return is known.
+	src := "let f = fn() { return 42; };\nf;\n"
+	if got := typeAt(t, src, 1, 0); got != "fn -> int" {
+		t.Fatalf("f type = %q, want \"fn -> int\"", got)
+	}
+}
+
+func TestInferElementTypesThroughCalls(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"sort-preserves-elem", "let x = sort([1, 2, 3]);", "[]int"},
+		{"reverse-preserves-elem", "let x = reverse([1, 2, 3]);", "[]int"},
+		{"unique-preserves-elem", "let x = unique([1, 2, 3]);", "[]int"},
+		{"rest-preserves-elem", "let x = rest([1, 2, 3]);", "[]int"},
+		{"pop-preserves-elem", "let x = pop([1, 2, 3]);", "[]int"},
+		{"slice-preserves-elem", "let x = slice([1, 2, 3], 0, 2);", "[]int"},
+		{"filter-preserves-elem", "let x = filter([1, 2, 3], fn(n) { n > 1 });", "[]int"},
+		{"sort_by-preserves-elem", "let x = sort_by([\"b\", \"a\"], fn(s) { s });", "[]string"},
+		{"first-yields-elem", "let x = first([1, 2, 3]);", "int"},
+		{"last-yields-elem", "let x = last([\"a\", \"b\"]);", "string"},
+		{"map-uses-mapper-ret", "let x = map([1, 2, 3], fn(n) { to_string(n) });", "[]string"},
+		{"push-same-type", "let x = push([1, 2], 3);", "[]int"},
+		{"push-mixed-type-bare", "let x = push([1, 2], \"a\");", "array"},
+		{"concat-same-type", "let x = concat([1, 2], [3, 4]);", "[]int"},
+		{"concat-mixed-type-bare", "let x = concat([1], [\"a\"]);", "array"},
+		{"element-through-binding", "let a = [1, 2, 3];\nlet b = sort(a);", "[]int"},
+		{"unknown-array-stays-bare", "let a = read_stuff();\nlet b = sort(a);", "array"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The bound name is always at column 4 on the source's last line.
+			line := uint32(strings.Count(c.src, "\n"))
+			if got := typeAt(t, c.src, line, 4); got != c.want {
+				t.Fatalf("%s: type = %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+func TestInferNumericKindPreservingCalls(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"let x = abs(-5);", "int"},
+		{"let x = abs(-3.14);", "float"},
+		{"let x = sum([1, 2, 3]);", "int"},
+		{"let x = sum([1.0, 2.0]);", "float"},
+		{"let x = min(1, 2, 3);", "int"},
+		{"let x = max(1.0, 2.0);", "float"},
+		{"let x = mod(10, 3);", "int"},
+		{"let x = mod(10.0, 3);", "float"},
+		{"let x = min(1, 2.0);", ""}, // mixed int/float -> ambiguous -> absent
+	}
+	for _, c := range cases {
+		if got := typeAt(t, c.src, 0, 4); got != c.want {
+			t.Fatalf("%q: type = %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
+func TestInferBroadenedBuiltinTable(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"let x = pow(2, 3);", "float"},
+		{"let x = sqrt(4);", "float"},
+		{"let x = floor(3.7);", "int"},
+		{"let x = round(3.4);", "int"},
+		{"let x = avg([1, 2, 3]);", "float"},
+		{"let x = rand_int(1, 10);", "int"},
+		{"let x = has_key({\"a\": 1}, \"a\");", "bool"},
+		{"let x = is_null(1);", "bool"},
+		{"let x = time_unix();", "int"},
+		{"let x = time_format(0, \"2006\");", "string"},
+		{"let x = base32_encode(\"hi\");", "string"},
+		{"let x = uuid_v7();", "string"},
+		{"let x = to_base(255, 16);", "string"},
+	}
+	for _, c := range cases {
+		if got := typeAt(t, c.src, 0, 4); got != c.want {
+			t.Fatalf("%q: type = %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
+func TestInferMultiBindNewFallibles(t *testing.T) {
+	// parse_int -> (int, error)
+	src := "let n, err = parse_int(\"5\", 10);"
+	if got := typeAt(t, src, 0, 4); got != "int" {
+		t.Fatalf("n type = %q, want int", got)
+	}
+	if got := typeAt(t, src, 0, 7); got != "error" {
+		t.Fatalf("err type = %q, want error", got)
+	}
+	// base32_decode -> (string, error)
+	src = "let v, err = base32_decode(\"aa\");"
+	if got := typeAt(t, src, 0, 4); got != "string" {
+		t.Fatalf("v type = %q, want string", got)
+	}
+	if got := typeAt(t, src, 0, 7); got != "error" {
+		t.Fatalf("err type = %q, want error", got)
 	}
 }
