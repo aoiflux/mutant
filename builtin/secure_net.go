@@ -187,6 +187,9 @@ func NetTLSConnect(args ...object.Object) object.Object {
 
 	var options object.Object
 	if len(args) == 3 {
+		if errObj := requireOptionsArg("net_tls_connect", args[2], 3); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		options = args[2]
 	}
 
@@ -401,6 +404,9 @@ func NetTLSListen(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 4 {
+		if errObj := requireOptionsArg("net_tls_listen", args[3], 4); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		options = args[3]
 	}
 
@@ -535,6 +541,9 @@ func NetTLSUpgradeServer(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 4 {
+		if errObj := requireOptionsArg("net_tls_upgrade_server", args[3], 4); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		options = args[3]
 	}
 
@@ -576,6 +585,9 @@ func NetTLSUpgradeClient(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 2 {
+		if errObj := requireOptionsArg("net_tls_upgrade_client", args[1], 2); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		options = args[1]
 	}
 
@@ -656,6 +668,9 @@ func TLSGenerateCA(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 	options := optionsArg(args)
+	if errObj := requireOptionsArg("tls_generate_ca", options, 1); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	commonName := optString(options, "common_name", "Mutant Dev CA")
 	org := optString(options, "organization", "Mutant")
 	days := optInt(options, "days", 3650)
@@ -707,6 +722,9 @@ func TLSGenerateCert(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 	options := optionsArg(args)
+	if errObj := requireOptionsArg("tls_generate_cert", options, 1); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	template, errObj := leafTemplate("tls_generate_cert", options)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -752,6 +770,9 @@ func TLSSignCert(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 3 {
+		if errObj := requireOptionsArg("tls_sign_cert", args[2], 3); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		options = args[2]
 	}
 
@@ -818,6 +839,27 @@ func optionsArg(args []object.Object) object.Object {
 		return args[0]
 	}
 	return nil
+}
+
+// requireOptionsArg checks an options bag is something objField can actually
+// read, and reports the position when it is not.
+//
+// Every optString/optBool/optInt below falls back silently when a field is
+// missing, and objField reports "not found" for anything that is not a HASH or
+// a STRUCT. Together that meant `tls_generate_ca("Acme")` returned a
+// certificate for "Mutant Dev CA" and said nothing: the argument was accepted,
+// ignored, and every option in it lost.
+//
+// It also made the contract undeclarable. The metadata rule is that a kind may
+// only be declared where the implementation rejects the others, so a parameter
+// that rejects nothing can carry no contract — which is why these positions were
+// the last ones in the standard library with no declared kinds.
+func requireOptionsArg(op string, arg object.Object, position int) *object.Error {
+	switch arg.(type) {
+	case nil, *object.Null, *object.Hash, *object.Struct:
+		return nil
+	}
+	return newError("argument %d to `%s` must be HASH or STRUCT, got %s", position, op, arg.Type())
 }
 
 func objField(obj object.Object, key string) (object.Object, bool) {

@@ -112,6 +112,11 @@ func TestParamKindForTypeDeclinesWhatItCannotName(t *testing.T) {
 		TypeHash:     builtin.ParamHash,
 		TypeFunction: builtin.ParamFn,
 		TypeNull:     builtin.ParamNull,
+		// Structs and enums moved from the declined list to this one when the
+		// kind vocabulary gained them. That is what closed the last fifteen
+		// undeclared parameter positions, all of which take a struct or an enum.
+		TypeStruct: builtin.ParamStruct,
+		TypeEnum:   builtin.ParamEnum,
 	}
 	for kind, want := range expressible {
 		got, ok := paramKindForType(Type{Kind: kind})
@@ -120,7 +125,11 @@ func TestParamKindForTypeDeclinesWhatItCannotName(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []TypeKind{TypeAny, TypeStruct, TypeEnum, TypeError} {
+	// What is left cannot be named at all: Any carries no information, an error
+	// is not a value a parameter accepts, and a (value, err) pair is two values.
+	// Declining them is what keeps the argument-type diagnostic from judging an
+	// argument against a kind it was never compared to.
+	for _, kind := range []TypeKind{TypeAny, TypeError, TypeMulti} {
 		if _, ok := paramKindForType(Type{Kind: kind}); ok {
 			t.Errorf("paramKindForType(%v) claimed a kind; it must decline what it cannot name", kind)
 		}

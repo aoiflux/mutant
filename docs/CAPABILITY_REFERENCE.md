@@ -299,15 +299,15 @@ Sockets and TLS sessions, an in-process X.509 CA, HTTP-message inspection, liste
 | `net_serve(listener: INTEGER, handler_path: STRING, arg?) -> (NULL, ERROR)` | all | Accept loop that dispatches each connection to a fresh VM running handler_path; handler reads its connection via serve_conn() and shared arg via serve_arg(). Concurrent. |
 | `net_spawn(handler_path: STRING, arg?) -> (BOOLEAN, ERROR)` | all | Runs handler_path on a new goroutine with no connection (serve_conn()->0) and arg via serve_arg(). For auxiliary workers, e.g. a WebSocket reverse pump. |
 | `net_syn_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan. |
-| `net_tls_connect(address: STRING, timeoutMs: INTEGER, options?) -> (INTEGER, ERROR)` | all | Opens a TLS (secure) client connection and returns a connection handle. |
+| `net_tls_connect(address: STRING, timeoutMs: INTEGER, options?: HASH\|STRUCT) -> (INTEGER, ERROR)` | all | Opens a TLS (secure) client connection and returns a connection handle. |
 | `net_tls_fingerprint(address: STRING, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Collects TLS certificate and handshake fingerprint metadata. |
-| `net_tls_listen(address: STRING, certPem: STRING, keyPem: STRING, options?) -> (INTEGER, ERROR)` | all | Opens a TLS-terminating listener from a PEM cert/key pair. |
-| `net_tls_upgrade_client(handle: INTEGER, options?) -> (HASH, ERROR)` | all | Upgrades an open connection to client-side TLS (STARTTLS / upstream leg). |
-| `net_tls_upgrade_server(handle: INTEGER, certPem: STRING, keyPem: STRING, options?) -> (HASH, ERROR)` | all | Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept). |
+| `net_tls_listen(address: STRING, certPem: STRING, keyPem: STRING, options?: HASH\|STRUCT) -> (INTEGER, ERROR)` | all | Opens a TLS-terminating listener from a PEM cert/key pair. |
+| `net_tls_upgrade_client(handle: INTEGER, options?: HASH\|STRUCT) -> (HASH, ERROR)` | all | Upgrades an open connection to client-side TLS (STARTTLS / upstream leg). |
+| `net_tls_upgrade_server(handle: INTEGER, certPem: STRING, keyPem: STRING, options?: HASH\|STRUCT) -> (HASH, ERROR)` | all | Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept). |
 | `net_udp_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Scans a UDP port range on a host. |
-| `tls_generate_ca(options?) -> (HASH, ERROR)` | all | Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}. |
-| `tls_generate_cert(options?) -> (HASH, ERROR)` | all | Creates a self-signed leaf/server certificate and key. |
-| `tls_sign_cert(caCertPem: STRING, caKeyPem: STRING, options?) -> (HASH, ERROR)` | all | Issues a leaf certificate signed by a CA (per-host interception cert). |
+| `tls_generate_ca(options?: HASH\|STRUCT) -> (HASH, ERROR)` | all | Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}. |
+| `tls_generate_cert(options?: HASH\|STRUCT) -> (HASH, ERROR)` | all | Creates a self-signed leaf/server certificate and key. |
+| `tls_sign_cert(caCertPem: STRING, caKeyPem: STRING, options?: HASH\|STRUCT) -> (HASH, ERROR)` | all | Issues a leaf certificate signed by a CA (per-host interception cert). |
 | `ws_accept_key(client_key: STRING) -> (STRING, ERROR)` | all | Computes the Sec-WebSocket-Accept value for an RFC 6455 101 handshake response. |
 | `ws_read_frame(handle: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads one WebSocket frame (unmasked); returns {fin, opcode, payload, masked, length, is_control}. |
 | `ws_write_frame(handle: INTEGER, opcode: INTEGER, payload: STRING, mask: BOOLEAN, timeout_ms?: INTEGER) -> (INTEGER, ERROR)` | all | Writes one WebSocket frame; mask=true for client->server, false for server->client. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write. |
@@ -318,8 +318,8 @@ HTTP client requests and low-level request/response parsing and building for pro
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `http_build_request(request) -> (STRING, ERROR)` | all | Serialises a request hash into HTTP wire bytes. |
-| `http_build_response(response) -> (STRING, ERROR)` | all | Serialises a response hash into HTTP wire bytes (adds Content-Length). |
+| `http_build_request(request: HASH\|STRUCT) -> (STRING, ERROR)` | all | Serialises a request hash into HTTP wire bytes. |
+| `http_build_response(response: HASH\|STRUCT) -> (STRING, ERROR)` | all | Serialises a response hash into HTTP wire bytes (adds Content-Length). |
 | `http_conn_read_request(handle: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads exactly one HTTP request from a connection handle. |
 | `http_conn_read_request_head(handle: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked. |
 | `http_conn_read_response(handle: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads exactly one HTTP response from a connection handle. |
@@ -327,8 +327,8 @@ HTTP client requests and low-level request/response parsing and building for pro
 | `http_get(url: STRING) -> (HASH, ERROR)` | all | Performs an HTTP GET request. |
 | `http_parse_request(raw: STRING) -> (HASH, ERROR)` | all | Parses a raw HTTP request into {method, url, path, host, proto, query, headers, body}. |
 | `http_parse_response(raw: STRING) -> (HASH, ERROR)` | all | Parses a raw HTTP response into {status, status_text, proto, headers, body}. |
-| `http_post(url: STRING, body, contentType?: STRING) -> (HASH, ERROR)` | all | Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted. |
-| `http_request(method: STRING, url: STRING, body, headers) -> (HASH, ERROR)` | all | Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable). |
+| `http_post(url: STRING, body: STRING\|HASH\|STRUCT, contentType?: STRING) -> (HASH, ERROR)` | all | Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted. |
+| `http_request(method: STRING, url: STRING, body: STRING\|HASH\|STRUCT, headers: HASH\|STRUCT) -> (HASH, ERROR)` | all | Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable). |
 
 ## Graph Database (14)
 
@@ -337,8 +337,8 @@ Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifa
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `db_add_artifact(db: INTEGER, type: STRING, attrs?: HASH) -> (HASH, ERROR)` | all | Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed. |
-| `db_add_edge(db: INTEGER, from: INTEGER, to: INTEGER, edgeType?) -> (INTEGER, ERROR)` | all | Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported. |
-| `db_add_node(db: INTEGER, nodeType?) -> (INTEGER, ERROR)` | all | Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported. |
+| `db_add_edge(db: INTEGER, from: INTEGER, to: INTEGER, edgeType?: INTEGER\|ENUM_VALUE) -> (INTEGER, ERROR)` | all | Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported. |
+| `db_add_node(db: INTEGER, nodeType?: INTEGER\|ENUM_VALUE) -> (INTEGER, ERROR)` | all | Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported. |
 | `db_add_relation(db: INTEGER, from: INTEGER, to: INTEGER, relation: STRING) -> (HASH, ERROR)` | all | Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported. |
 | `db_bfs(db: INTEGER, origin: INTEGER, depth: INTEGER, direction: STRING) -> (HASH, ERROR)` | all | Breadth-first traversal from origin up to depth. direction is "in", "out", or "both". All four arguments are required. |
 | `db_close(db: INTEGER) -> (BOOLEAN, ERROR)` | all | Closes a graph database handle and flushes pending state. |
@@ -346,7 +346,7 @@ Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifa
 | `db_open() -> (INTEGER, ERROR)` | all | Creates an in-memory graph database handle. |
 | `db_open_disk(path: STRING) -> (INTEGER, ERROR)` | all | Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open. |
 | `db_query(db: INTEGER) -> ([]INTEGER, ERROR)` | all | Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language. |
-| `db_query_nodes(db: INTEGER, nodeType?) -> ([]INTEGER, ERROR)` | all | Returns node IDs, optionally filtered to a single node type (integer/enum). |
+| `db_query_nodes(db: INTEGER, nodeType?: INTEGER\|ENUM_VALUE) -> ([]INTEGER, ERROR)` | all | Returns node IDs, optionally filtered to a single node type (integer/enum). |
 | `db_shortest_path(db: INTEGER, from: INTEGER, to: INTEGER) -> ([]INTEGER, ERROR)` | all | Computes shortest path between two graph nodes. |
 | `db_stats(db: INTEGER) -> (HASH, ERROR)` | all | Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction. |
 | `db_timeline(db: INTEGER) -> (ARRAY, ERROR)` | all | Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument). |

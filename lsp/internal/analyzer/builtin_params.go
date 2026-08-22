@@ -68,10 +68,15 @@ func paramDocumentation(p builtin.BuiltinParamDoc) string {
 // paramKindForType translates an inferred type into the kind vocabulary the
 // parameter contracts are written in.
 //
-// It reports false for anything the vocabulary cannot name — Any, structs,
-// enums, and errors. That is the translation's whole safety property: a type it
-// cannot express becomes "no opinion", never a wrong opinion, so the argument
+// It reports false for anything the vocabulary cannot name — Any, errors, and
+// the (value, err) pair. That is the translation's whole safety property: a type
+// it cannot express becomes "no opinion", never a wrong opinion, so the argument
 // is left unchecked rather than judged against a kind it was never compared to.
+//
+// Structs and enums used to sit in that list. They no longer do: the two kinds
+// exist now, which is what lets a struct passed to `json_stringify` — which
+// serialises scalars, arrays and hashes and errors on everything else — be
+// caught before the program runs.
 func paramKindForType(t Type) (builtin.ParamKind, bool) {
 	switch t.Kind {
 	case TypeInt:
@@ -90,6 +95,10 @@ func paramKindForType(t Type) (builtin.ParamKind, bool) {
 		return builtin.ParamFn, true
 	case TypeNull:
 		return builtin.ParamNull, true
+	case TypeStruct:
+		return builtin.ParamStruct, true
+	case TypeEnum:
+		return builtin.ParamEnum, true
 	default:
 		return "", false
 	}

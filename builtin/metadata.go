@@ -25,6 +25,21 @@ const (
 	ParamHash   ParamKind = "HASH"
 	ParamFn     ParamKind = "FUNCTION"
 	ParamNull   ParamKind = "NULL"
+	// ParamStruct and ParamEnum name the two user-declared value types.
+	//
+	// They arrived late because nothing needed them: the parameters that accept
+	// them all read a field or a tag off the value, and the rest of the standard
+	// library never sees one. Their absence was the reason fifteen positions
+	// stayed undeclared — a parameter documented as "a hash or struct" could
+	// only be described by half its contract, and declaring the half would have
+	// flagged the struct calls that work.
+	//
+	// ParamEnum is spelled ENUM_VALUE rather than ENUM because that is what
+	// `type_of` returns and what the runtime's own errors say ("node type must
+	// be INTEGER or ENUM_VALUE"). The kind names exist to let a diagnostic speak
+	// the language's words, so they follow the language rather than tidiness.
+	ParamStruct ParamKind = "STRUCT"
+	ParamEnum   ParamKind = "ENUM_VALUE"
 )
 
 // BuiltinParamDoc is the exported view of one builtin parameter.
@@ -351,8 +366,8 @@ var builtinDocs = map[string]builtinDoc{
 		params:  []builtinParamDoc{param("path", "Path to check.", ParamString)},
 		returns: pairRet("whether a file or directory exists", ParamBool)},
 	BuiltinNameHttpGet:     {signature: "http_get(url)", summary: "Performs an HTTP GET request.", params: []builtinParamDoc{param("url", "Absolute request URL.", ParamString)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
-	BuiltinNameHttpPost:    {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{param("url", "Absolute request URL.", ParamString), {name: "body", doc: "Request body value."}, param("contentType?", "Optional Content-Type header (default application/octet-stream).", ParamString)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
-	BuiltinNameHttpRequest: {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{param("method", "HTTP verb (GET/POST/etc).", ParamString), param("url", "Absolute request URL.", ParamString), {name: "body", doc: "Request body value (\"\" for none)."}, {name: "headers", doc: "Hash of request headers."}}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
+	BuiltinNameHttpPost:    {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{param("url", "Absolute request URL.", ParamString), param("body", "Request body: STRING sent as-is, HASH or STRUCT encoded as JSON.", ParamString, ParamHash, ParamStruct), param("contentType?", "Optional Content-Type header (default application/octet-stream).", ParamString)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
+	BuiltinNameHttpRequest: {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{param("method", "HTTP verb (GET/POST/etc).", ParamString), param("url", "Absolute request URL.", ParamString), param("body", "Request body: STRING sent as-is, HASH or STRUCT encoded as JSON.", ParamString, ParamHash, ParamStruct), param("headers", "Request headers as a hash or struct.", ParamHash, ParamStruct)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
 	BuiltinNameJsonParse: {
 		signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.",
 		params:  []builtinParamDoc{param("text", "JSON string input.", ParamString)},
@@ -1404,12 +1419,12 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameDbOpen:        {signature: "db_open()", summary: "Creates an in-memory graph database handle.", returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
 	BuiltinNameDbOpenDisk:    {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open.", params: []builtinParamDoc{param("path", "Database file path.", ParamString)}, returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
 	BuiltinNameDbClose:       {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("true once the handle has been closed and pending state flushed", ParamBool)},
-	BuiltinNameDbAddNode:     {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), {name: "nodeType?", doc: "Optional integer/enum node type (0–127)."}}, returns: pairRet("the new node's ID", ParamInt)},
-	BuiltinNameDbAddEdge:     {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt), {name: "edgeType?", doc: "Optional integer/enum edge type."}}, returns: pairRet("the new edge's ID", ParamInt)},
+	BuiltinNameDbAddNode:     {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeType?", "Optional integer/enum node type (0–127).", ParamInt, ParamEnum)}, returns: pairRet("the new node's ID", ParamInt)},
+	BuiltinNameDbAddEdge:     {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt), param("edgeType?", "Optional integer/enum edge type.", ParamInt, ParamEnum)}, returns: pairRet("the new edge's ID", ParamInt)},
 	BuiltinNameDbAddArtifact: {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("type", "Artifact type string.", ParamString), param("attrs?", "Optional attributes hash (indexed).", ParamHash)}, returns: pairRet("the new artifact node", ParamHash)},
 	BuiltinNameDbAddRelation: {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source entity ID.", ParamInt), param("to", "Destination entity ID.", ParamInt), param("relation", "Relation type string.", ParamString)}, returns: pairRet("the new relation edge", ParamHash)},
 	BuiltinNameDbIndexProp:   {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeID", "Node ID to index.", ParamInt), param("key", "Property key.", ParamString), param("value", "Property value.", ParamString)}, returns: pairRet("true once the property has been indexed", ParamBool)},
-	BuiltinNameDbQueryNodes:  {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), {name: "nodeType?", doc: "Optional integer/enum node type filter."}}, returns: pairRet("node IDs, optionally filtered to a single node type (integer/enum)", ParamArray).ofElem(ParamInt)},
+	BuiltinNameDbQueryNodes:  {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeType?", "Optional integer/enum node type filter.", ParamInt, ParamEnum)}, returns: pairRet("node IDs, optionally filtered to a single node type (integer/enum)", ParamArray).ofElem(ParamInt)},
 	// db_query delegates straight to DbQueryNodes, which requires an INTEGER
 	// handle (db.go); the handle kind is not visible in db_query's own body.
 	BuiltinNameDbQuery:        {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("all DATA-type node IDs (an alias for db_query_nodes with no type filter)", ParamArray).ofElem(ParamInt)},
@@ -1583,7 +1598,7 @@ var builtinDocs = map[string]builtinDoc{
 		params: []builtinParamDoc{
 			param("address", "host:port endpoint.", ParamString),
 			param("timeoutMs", "Dial timeout in milliseconds.", ParamInt),
-			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key."},
+			param("options?", "Hash or struct: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key.", ParamHash, ParamStruct),
 		},
 		returns: pairRet("a connection handle; close it with net_conn_close", ParamInt)},
 	BuiltinNameNetConnWrite: {
@@ -1606,7 +1621,7 @@ var builtinDocs = map[string]builtinDoc{
 			param("address", "host:port to bind.", ParamString),
 			param("certPem", "Server certificate chain (PEM).", ParamString),
 			param("keyPem", "Server private key (PEM).", ParamString),
-			{name: "options?", doc: "Hash: alpn, min_version, client_ca (mutual TLS)."},
+			param("options?", "Hash or struct: alpn, min_version, client_ca (mutual TLS).", ParamHash, ParamStruct),
 		},
 		returns: pairRet("a listener handle; close it with net_listen_close", ParamInt)},
 	BuiltinNameNetAccept:      {signature: "net_accept(listener, timeoutMs)", summary: "Accepts one connection; returns {ok, handle, remote_addr, timeout, error}.", returns: pairRet("the accepted connection's handle and peer address", ParamHash), params: []builtinParamDoc{param("listener", "Listener handle from net_listen or net_tls_listen.", ParamInt), param("timeoutMs", "How long to wait for a connection, in milliseconds.", ParamInt)}},
@@ -1627,7 +1642,7 @@ var builtinDocs = map[string]builtinDoc{
 			param("handle", "Connection handle to upgrade.", ParamInt),
 			param("certPem", "Leaf certificate (PEM), e.g. issued by tls_sign_cert.", ParamString),
 			param("keyPem", "Leaf private key (PEM).", ParamString),
-			{name: "options?", doc: "Hash: alpn, min_version, handshake_timeout_ms, client_ca."},
+			param("options?", "Hash or struct: alpn, min_version, handshake_timeout_ms, client_ca.", ParamHash, ParamStruct),
 		},
 		returns: pairRet("the negotiated TLS parameters", ParamHash)},
 	BuiltinNameNetTlsUpgradeClient: {
@@ -1635,18 +1650,18 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Upgrades an open connection to client-side TLS (STARTTLS / upstream leg).",
 		params: []builtinParamDoc{
 			param("handle", "Connection handle to upgrade.", ParamInt),
-			{name: "options?", doc: "Hash: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key, handshake_timeout_ms."},
+			param("options?", "Hash or struct: server_name, insecure, alpn, min_version, ca_cert, client_cert, client_key, handshake_timeout_ms.", ParamHash, ParamStruct),
 		},
 		returns: pairRet("the negotiated TLS parameters", ParamHash)},
 	BuiltinNameTlsGenerateCa: {
 		signature: "tls_generate_ca(options?)",
 		summary:   "Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}.",
-		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, days."}},
+		params:    []builtinParamDoc{param("options?", "Hash or struct: common_name, organization, days.", ParamHash, ParamStruct)},
 		returns:   pairRet("the CA certificate and its private key, both PEM-encoded", ParamHash).withFields("cert_pem", "key_pem", "serial")},
 	BuiltinNameTlsGenerateCert: {
 		signature: "tls_generate_cert(options?)",
 		summary:   "Creates a self-signed leaf/server certificate and key.",
-		params:    []builtinParamDoc{{name: "options?", doc: "Hash: common_name, organization, dns_names, ip_addresses, days."}},
+		params:    []builtinParamDoc{param("options?", "Hash or struct: common_name, organization, dns_names, ip_addresses, days.", ParamHash, ParamStruct)},
 		returns:   pairRet("the certificate and its private key, both PEM-encoded", ParamHash).withFields("cert_pem", "key_pem", "serial")},
 	BuiltinNameTlsSignCert: {
 		signature: "tls_sign_cert(caCertPem, caKeyPem, options?)",
@@ -1654,13 +1669,13 @@ var builtinDocs = map[string]builtinDoc{
 		params: []builtinParamDoc{
 			param("caCertPem", "CA certificate (PEM).", ParamString),
 			param("caKeyPem", "CA private key (PEM).", ParamString),
-			{name: "options?", doc: "Hash: common_name, dns_names, ip_addresses, days."},
+			param("options?", "Hash or struct: common_name, dns_names, ip_addresses, days.", ParamHash, ParamStruct),
 		},
 		returns: pairRet("the signed leaf certificate and its private key, both PEM-encoded", ParamHash).withFields("cert_pem", "key_pem", "serial")},
 	BuiltinNameHttpParseRequest:         {signature: "http_parse_request(raw)", summary: "Parses a raw HTTP request into {method, url, path, host, proto, query, headers, body}.", returns: pairRet("the request's method, target, headers, and body", ParamHash), params: []builtinParamDoc{param("raw", "Raw HTTP request bytes.", ParamString)}},
 	BuiltinNameHttpParseResponse:        {signature: "http_parse_response(raw)", summary: "Parses a raw HTTP response into {status, status_text, proto, headers, body}.", returns: pairRet("the response's status, headers, and body", ParamHash), params: []builtinParamDoc{param("raw", "Raw HTTP response bytes.", ParamString)}},
-	BuiltinNameHttpBuildRequest:         {signature: "http_build_request(request)", summary: "Serialises a request hash into HTTP wire bytes.", returns: pairRet("the request serialised to HTTP wire bytes", ParamString), params: []builtinParamDoc{param("request", "Request as a hash or struct, with the fields http_parse_request produces.")}},
-	BuiltinNameHttpBuildResponse:        {signature: "http_build_response(response)", summary: "Serialises a response hash into HTTP wire bytes (adds Content-Length).", returns: pairRet("the response serialised to HTTP wire bytes, with Content-Length added", ParamString), params: []builtinParamDoc{param("response", "Response as a hash or struct, with the fields http_parse_response produces.")}},
+	BuiltinNameHttpBuildRequest:         {signature: "http_build_request(request)", summary: "Serialises a request hash into HTTP wire bytes.", returns: pairRet("the request serialised to HTTP wire bytes", ParamString), params: []builtinParamDoc{param("request", "Request as a hash or struct, with the fields http_parse_request produces.", ParamHash, ParamStruct)}},
+	BuiltinNameHttpBuildResponse:        {signature: "http_build_response(response)", summary: "Serialises a response hash into HTTP wire bytes (adds Content-Length).", returns: pairRet("the response serialised to HTTP wire bytes, with Content-Length added", ParamString), params: []builtinParamDoc{param("response", "Response as a hash or struct, with the fields http_parse_response produces.", ParamHash, ParamStruct)}},
 	BuiltinNameHttpConnReadRequest:      {signature: "http_conn_read_request(handle, timeoutMs)", summary: "Reads exactly one HTTP request from a connection handle.", returns: pairRet("the request's method, target, headers, and body", ParamHash), params: []builtinParamDoc{param("handle", "Connection handle from net_connect, net_accept, or a TLS upgrade.", ParamInt), param("timeoutMs", "Read deadline in milliseconds.", ParamInt)}},
 	BuiltinNameHttpConnReadResponse:     {signature: "http_conn_read_response(handle, timeoutMs)", summary: "Reads exactly one HTTP response from a connection handle.", returns: pairRet("the response's status, headers, and body", ParamHash), params: []builtinParamDoc{param("handle", "Connection handle from net_connect, net_accept, or a TLS upgrade.", ParamInt), param("timeoutMs", "Read deadline in milliseconds.", ParamInt)}},
 	BuiltinNameHttpConnReadRequestHead:  {signature: "http_conn_read_request_head(handle, timeoutMs)", summary: "Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked.", returns: pairRet("the request line and headers, with the body left on the connection", ParamHash).withFields("chunked", "content_length", "headers", "host", "method", "path", "proto", "query", "url"), params: []builtinParamDoc{param("handle", "Connection handle from net_connect, net_accept, or a TLS upgrade.", ParamInt), param("timeoutMs", "Read deadline in milliseconds.", ParamInt)}},

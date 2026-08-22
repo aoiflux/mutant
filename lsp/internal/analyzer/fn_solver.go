@@ -39,10 +39,12 @@ const (
 	ksHash
 	ksFn
 	ksNull
+	ksStruct
+	ksEnum
 )
 
 // ksAny is the top of the lattice: a parameter nothing has constrained.
-const ksAny = ksString | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull
+const ksAny = ksString | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum
 
 // The operand domains below are read off the VM, not assumed.
 //
@@ -70,6 +72,8 @@ var kindBits = map[builtin.ParamKind]kindSet{
 	builtin.ParamHash:   ksHash,
 	builtin.ParamFn:     ksFn,
 	builtin.ParamNull:   ksNull,
+	builtin.ParamStruct: ksStruct,
+	builtin.ParamEnum:   ksEnum,
 }
 
 // kindSetFor converts a declared kind list into a set. An empty list, or one
@@ -104,6 +108,7 @@ func (s kindSet) names() []string {
 		{ksString, "STRING"}, {ksInt, "INTEGER"}, {ksFloat, "FLOAT"},
 		{ksBool, "BOOLEAN"}, {ksArray, "ARRAY"}, {ksHash, "HASH"},
 		{ksFn, "FUNCTION"}, {ksNull, "NULL"},
+		{ksStruct, "STRUCT"}, {ksEnum, "ENUM_VALUE"},
 	}
 	out := make([]string, 0, len(ordered))
 	for _, entry := range ordered {

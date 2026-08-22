@@ -183,3 +183,66 @@ func TestBuiltinArgTypeAnchorsOnTheArgument(t *testing.T) {
 	}
 	t.Fatal("expected a builtinArgType diagnostic for str_repeat")
 }
+
+// TestBuiltinArgTypeCatchesStructsAndEnums covers what the two new kinds bought.
+//
+// STRUCT and ENUM_VALUE did not exist in the kind vocabulary until the last
+// fifteen undeclared parameter positions needed them, and while they were
+// missing paramKindForType declined both — so a struct handed to a builtin that
+// cannot serialise one was simply never judged.
+func TestBuiltinArgTypeCatchesStructsAndEnums(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			// builtin/json.go objectToJSONValue handles scalars, null, arrays
+			// and hashes, and errors on anything else — structs included.
+			name: "a struct where JSON expects a serialisable value",
+			src:  "struct Point { x; };\nlet p = Point{x: 1};\njson_stringify(p);\n",
+			want: "argument 1 to `json_stringify` must be STRING, INTEGER, FLOAT, BOOLEAN, NULL, ARRAY, or HASH, got STRUCT",
+		},
+		{
+			// builtin/db.go dbNodeTypeFromObject: "must be INTEGER or ENUM_VALUE".
+			name: "a string where a node type expects an integer or enum",
+			src:  "let t = \"data\";\ndb_add_node(1, t);\n",
+			want: "argument 2 to `db_add_node` must be INTEGER or ENUM_VALUE, got STRING",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := argTypeMessages(t, tc.src)
+			for _, message := range got {
+				if message == tc.want {
+					return
+				}
+			}
+			t.Errorf("diagnostics = %q, want one of them to be %q", got, tc.want)
+		})
+	}
+}
+
+// TestBuiltinArgTypeAcceptsStructsWhereTheyAreTaken is the other half. The
+// positions that gained STRUCT accept one, and must stay silent on it — the
+// whole reason they could not be declared before is that declaring only HASH
+// would have flagged the struct calls that work.
+func TestBuiltinArgTypeAcceptsStructsWhereTheyAreTaken(t *testing.T) {
+	cases := []string{
+		// mitm_http.go: "must be HASH or STRUCT".
+		"struct Req { method; };\nlet r = Req{method: \"GET\"};\nhttp_build_request(r);\n",
+		// http.go httpBodyString / httpHeaderMap take either container.
+		"struct Body { a; };\nlet b = Body{a: 1};\nhttp_post(\"http://x\", b);\n",
+		// secure_net.go requireOptionsArg accepts a struct as an options bag.
+		"struct Opts { days; };\nlet o = Opts{days: 30};\ntls_generate_ca(o);\n",
+		// An enum variant is what db_add_node's type argument is for.
+		"enum NodeKind { Data, File };\ndb_add_node(1, NodeKind.File);\n",
+	}
+
+	for _, src := range cases {
+		if got := argTypeMessages(t, src); len(got) > 0 {
+			t.Errorf("flagged a call that works:\n%s\ndiagnostics: %q", src, got)
+		}
+	}
+}

@@ -86,17 +86,21 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 			if _, ok := s.ReferenceLocations("", pos, true); ok {
 				switch resolved.kind {
 				case lsp.CompletionItemKindField:
-					label := fmt.Sprintf("field `%s`", n.Value)
-					if ty, ok := s.TypeOf(n); ok {
-						label += fmt.Sprintf(" : %s", ty)
-					}
-					return label, rng, true
+					// Rendered as the struct card renders the same field, and
+					// naming the struct it belongs to — which the bare
+					// "field `x`" line never said.
+					return fieldHoverText(s, n, n.Value), rng, true
 				case lsp.CompletionItemKindEnumMember:
 					return fmt.Sprintf("enum member `%s`", n.Value), rng, true
 				}
 			}
 		}
 		if text, ok := builtinHoverText(n.Value); ok {
+			return text, rng, true
+		}
+		// A struct or enum name used anywhere — a literal's type, an annotation
+		// in prose, a bare mention — reaches the same card as its declaration.
+		if text, ok := declaredTypeCard(s, n.Value); ok {
 			return text, rng, true
 		}
 		if text, ok := macroSpecialFormHoverText(n.Value); ok {
@@ -139,15 +143,18 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		}
 	case *mast.StructStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("struct"); ok {
-				return fmt.Sprintf("struct `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `struct`\n\n")), rng, true
+			// The card lists the declared fields with the types the document's
+			// initializers imply. A struct declaration carries only names, so
+			// that inference is the only place a field type can come from.
+			if text, ok := declaredTypeCard(s, n.Name.Value); ok {
+				return text, rng, true
 			}
 			return fmt.Sprintf("struct `%s`", n.Name.Value), rng, true
 		}
 	case *mast.EnumStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("enum"); ok {
-				return fmt.Sprintf("enum `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `enum`\n\n")), rng, true
+			if text, ok := declaredTypeCard(s, n.Name.Value); ok {
+				return text, rng, true
 			}
 			return fmt.Sprintf("enum `%s`", n.Name.Value), rng, true
 		}

@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strconv"
 	"strings"
 
 	mast "mutant/ast"
@@ -152,6 +153,185 @@ func quotedList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
+// typeCard is the card for a declared type: a struct and its fields, or an enum
+// and its variants.
+//
+// It is a sibling of callableCard rather than the same type because the sections
+// genuinely differ — a struct has no return and an enum has no parameters — but
+// it renders its members through the same bullet, so a field and a builtin
+// parameter look alike wherever they appear.
+type typeCard struct {
+	kindWord    string
+	name        string
+	sectionName string
+	members     []cardParam
+	footer      []string
+}
+
+func (c typeCard) render() string {
+	var b strings.Builder
+
+	b.WriteString(c.kindWord)
+	b.WriteString(" `")
+	b.WriteString(c.name)
+	b.WriteString("`")
+
+	b.WriteString("\n\n**")
+	b.WriteString(c.sectionName)
+	b.WriteString("**\n")
+	if len(c.members) == 0 {
+		b.WriteString("- _none_")
+	} else {
+		for i, m := range c.members {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(m.render())
+		}
+	}
+
+	for _, line := range c.footer {
+		b.WriteString("\n\n")
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// structCard lists a struct's declared fields with whatever type each one could
+// be inferred from the document's initializers.
+//
+// A struct declaration names its fields and nothing else — `struct Finding { path;
+// score; }` — so a field's type is only knowable from how the program builds one.
+// That is why every type here is marked inferred, and why a field the file never
+// initialises honestly shows none.
+func structCard(s *Snapshot, name string) (typeCard, bool) {
+	fields, ok := s.structFieldNames(name)
+	if !ok {
+		return typeCard{}, false
+	}
+
+	card := typeCard{kindWord: "struct", name: name, sectionName: "Fields"}
+	typed := 0
+	for _, field := range fields {
+		member := cardParam{name: field, note: "not inferred"}
+		if ty, ok := s.StructFieldType(name, field); ok {
+			if text := kindTextForType(ty); text != "" {
+				member.types, member.note = text, "inferred"
+				typed++
+			}
+		}
+		card.members = append(card.members, member)
+	}
+
+	switch {
+	case len(fields) == 0:
+	case typed == 0:
+		card.footer = append(card.footer,
+			"_No initializer for this struct in this file, so no field types could be inferred._")
+	default:
+		card.footer = append(card.footer,
+			"_Field types are inferred from this file's struct initializers._")
+	}
+	return card, true
+}
+
+// enumCard lists an enum's variants with the ordinal each one carries.
+//
+// The ordinal is declaration order — both engines assign it that way (vm.go's
+// enum lookup and evaluator.go's variant loop) — and it is the value that
+// actually travels, so a builtin taking an ENUM_VALUE receives this number.
+// db_add_node's 0..127 range is a real constraint on it.
+func enumCard(s *Snapshot, name string) (typeCard, bool) {
+	variants, ok := s.enumVariantNames(name)
+	if !ok {
+		return typeCard{}, false
+	}
+
+	card := typeCard{kindWord: "enum", name: name, sectionName: "Variants"}
+	for i, variant := range variants {
+		card.members = append(card.members, cardParam{
+			name:  variant,
+			types: strconv.Itoa(i),
+		})
+	}
+	if len(variants) > 0 {
+		card.footer = append(card.footer, "_Ordinals are assigned by declaration order._")
+	}
+	return card, true
+}
+
+// declaredTypeCard renders whichever kind of type declaration the name refers
+// to, so hovering a type name anywhere reaches the same card.
+func declaredTypeCard(s *Snapshot, name string) (string, bool) {
+	if s == nil || s.Program == nil || name == "" {
+		return "", false
+	}
+	if card, ok := structCard(s, name); ok {
+		return card.render(), true
+	}
+	if card, ok := enumCard(s, name); ok {
+		return card.render(), true
+	}
+	return "", false
+}
+
+// structOwningField names the struct that declares a field, when exactly one
+// does. With two structs sharing a field name there is no way to tell from the
+// name alone which one is meant, and guessing would put the wrong type on the
+// card.
+func structOwningField(s *Snapshot, field string) (string, bool) {
+	if s == nil || s.Program == nil || field == "" {
+		return "", false
+	}
+	owner := ""
+	for _, stmt := range s.Program.Statements {
+		st, ok := stmt.(*mast.StructStatement)
+		if !ok || st.Name == nil {
+			continue
+		}
+		for _, declared := range st.Fields {
+			if declared == nil || declared.Value != field {
+				continue
+			}
+			if owner != "" && owner != st.Name.Value {
+				return "", false
+			}
+			owner = st.Name.Value
+		}
+	}
+	return owner, owner != ""
+}
+
+// fieldHoverText renders one struct field, in the same shape the struct card
+// gives it, plus the struct it belongs to.
+func fieldHoverText(s *Snapshot, node mast.Node, field string) string {
+	member := cardParam{name: field, note: "not inferred"}
+
+	owner, hasOwner := structOwningField(s, field)
+	if hasOwner {
+		if ty, ok := s.StructFieldType(owner, field); ok {
+			if text := kindTextForType(ty); text != "" {
+				member.types, member.note = text, "inferred"
+			}
+		}
+	}
+	// A field reached through a typed receiver carries its own recorded type,
+	// which is the more specific answer when the owner could not be resolved.
+	if member.types == "" {
+		if ty, ok := s.TypeOf(node); ok {
+			if text := kindTextForType(ty); text != "" {
+				member.types, member.note = text, "inferred"
+			}
+		}
+	}
+
+	text := "field " + strings.TrimPrefix(member.render(), "- ")
+	if hasOwner {
+		text += "\n\nField of struct `" + owner + "`."
+	}
+	return text
+}
+
 // builtinCard fills the card from a builtin's declared contracts. Every one of
 // the 399 has a signature, a summary, a return, and a parameter list that may be
 // empty, so this never has to decide whether a section is worth showing.
@@ -275,6 +455,16 @@ func observedText(fn *solvedFunction, index int) string {
 // builtin cards use, so the two kinds of card read alike. A struct or enum keeps
 // its own name, which is more useful than any kind word would be.
 func kindTextForType(t Type) string {
+	// A named struct or enum is checked before the kind vocabulary, not after.
+	// Both have kinds now, so paramKindForType would answer STRUCT or
+	// ENUM_VALUE — true, and much less use to a reader than `Finding`.
+	switch t.Kind {
+	case TypeStruct, TypeEnum:
+		if t.Name != "" {
+			return t.Name
+		}
+	}
+
 	if kind, ok := paramKindForType(t); ok {
 		if t.Kind == TypeArray && t.Elem != nil && t.Elem.IsKnown() {
 			if elem, ok := paramKindForType(*t.Elem); ok {
@@ -284,10 +474,6 @@ func kindTextForType(t Type) string {
 		return string(kind)
 	}
 	switch t.Kind {
-	case TypeStruct, TypeEnum:
-		if t.Name != "" {
-			return t.Name
-		}
 	case TypeError:
 		return "ERROR"
 	case TypeMulti:

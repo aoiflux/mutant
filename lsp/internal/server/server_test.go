@@ -3282,7 +3282,8 @@ func TestHoverOnResolvedStructFieldUsageShowsField(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if contents.Value != "field `x` : int" {
+	// The field renders as the struct card renders it, and names its struct.
+	if contents.Value != "field `x` · `INTEGER` _(inferred)_\n\nField of struct `Point`." {
 		t.Fatalf("hover contents = %q, want typed field hover for resolved struct field usage", contents.Value)
 	}
 }
