@@ -14,6 +14,7 @@ let lspState: "starting" | "running" | "failed" | "stopped" = "stopped";
 let lspLastError = "";
 let lspCommand = "";
 let lspOutput: vscode.OutputChannel | undefined;
+let lspStatusItem: vscode.StatusBarItem | undefined;
 let extensionInstallPath = "";
 const maxBufferedLogLines = 1000;
 const lspLogBuffer: string[] = [];
@@ -36,6 +37,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionInstallPath = context.extensionPath;
   lspOutput = vscode.window.createOutputChannel("Mutant LSP");
   context.subscriptions.push(lspOutput);
+
+  lspStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  lspStatusItem.command = "mutant.restartLsp";
+  context.subscriptions.push(lspStatusItem);
+  updateLspStatusBar();
+
+  // Bridge command backing the codeLens reference lenses: converts the LSP
+  // arguments the server sends into VS Code types and opens the references peek.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "mutant.showReferences",
+      (uri: string, position: { line: number; character: number }, locations: Array<{ uri: string; range: unknown }>) => {
+        const targetUri = vscode.Uri.parse(uri);
+        const targetPosition = new vscode.Position(position.line, position.character);
+        const peekLocations = (locations ?? []).map((loc) => {
+          const r = loc.range as { start: { line: number; character: number }; end: { line: number; character: number } };
+          return new vscode.Location(
+            vscode.Uri.parse(loc.uri),
+            new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character)
+          );
+        });
+        void vscode.commands.executeCommand("editor.action.showReferences", targetUri, targetPosition, peekLocations);
+      }
+    )
+  );
 
   applyMutantFormattingPreferences();
 
@@ -137,7 +163,7 @@ function applyMutantFormattingPreferences(): void {
 
 export async function deactivate(): Promise<void> {
   await stopLspClient();
-  lspState = "stopped";
+  setLspState("stopped");
   logLsp("Extension deactivated.");
 }
 
@@ -498,6 +524,37 @@ class MutantTaskProvider implements vscode.TaskProvider {
   }
 }
 
+// setLspState updates the language-server state and keeps the status bar in sync.
+function setLspState(next: "starting" | "running" | "failed" | "stopped"): void {
+  lspState = next;
+  updateLspStatusBar();
+}
+
+function updateLspStatusBar(): void {
+  if (!lspStatusItem) {
+    return;
+  }
+  switch (lspState) {
+    case "running":
+      lspStatusItem.text = "$(check) Mutant";
+      lspStatusItem.tooltip = `Mutant LSP is running (${lspCommand}). Click to restart.`;
+      break;
+    case "starting":
+      lspStatusItem.text = "$(sync~spin) Mutant";
+      lspStatusItem.tooltip = "Mutant LSP is starting. Click to restart.";
+      break;
+    case "failed":
+      lspStatusItem.text = "$(error) Mutant";
+      lspStatusItem.tooltip = `Mutant LSP failed to start${lspLastError ? `: ${lspLastError}` : ""}. Click to restart.`;
+      break;
+    default:
+      lspStatusItem.text = "$(circle-slash) Mutant";
+      lspStatusItem.tooltip = "Mutant LSP is stopped. Click to restart.";
+      break;
+  }
+  lspStatusItem.show();
+}
+
 async function showLspStatus(): Promise<void> {
   if (lspState === "running") {
     void vscode.window.showInformationMessage(`Mutant LSP is running (command: ${lspCommand}).`);
@@ -533,7 +590,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
   const args = config.get<string[]>("languageServer.args", []);
 
   lspCommand = command;
-  lspState = "starting";
+  setLspState("starting");
   lspLastError = "";
 
   if (process.platform !== "win32" && isAbsolute(command) && existsSync(command)) {
@@ -575,7 +632,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
       closed: () => {
         const status = recordCrashAndGetStatus(Date.now());
         if (status.blocked) {
-          lspState = "failed";
+          setLspState("failed");
           lspLastError = status.warningMessage;
           logLsp(status.warningMessage);
           void vscode.window.showWarningMessage(status.warningMessage);
@@ -600,7 +657,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
 
     await nextClient.start();
     client = nextClient;
-    lspState = "running";
+    setLspState("running");
     logLsp("Language server started successfully.");
     if (showStartedMessage) {
       void vscode.window.showInformationMessage(`Mutant LSP started (command: ${command}).`);
@@ -610,7 +667,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
     }
   } catch (err) {
     client = undefined;
-    lspState = "failed";
+    setLspState("failed");
     const message = err instanceof Error ? err.message : String(err);
     lspLastError = message;
     logLsp(`Language server failed to start: ${message}`);
@@ -622,7 +679,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
 
 async function stopLspClient(): Promise<void> {
   if (!client) {
-    lspState = "stopped";
+    setLspState("stopped");
     logLsp("Stop requested with no active language client.");
     return;
   }
@@ -635,7 +692,7 @@ async function stopLspClient(): Promise<void> {
     logLsp(`Language server stop failed: ${message}`);
   } finally {
     client = undefined;
-    lspState = "stopped";
+    setLspState("stopped");
   }
 }
 
@@ -715,7 +772,7 @@ function recordCrashAndGetStatus(now: number): CrashWindowStatus {
 export const __test = {
   resetCrashTracking(): void {
     lspCrashTimestamps.length = 0;
-    lspState = "stopped";
+    setLspState("stopped");
     lspLastError = "";
   },
 

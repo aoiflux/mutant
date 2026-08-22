@@ -3,6 +3,23 @@
 > A summary of new capabilities, changes, and upgrades for this release. For the
 > full builtin catalog see the [Capability Reference](CAPABILITY_REFERENCE.md).
 
+## v2.5.0
+
+- **Developer-tooling CLIs**: three new `mutant` subcommands, sharing the exact
+  formatter and analyzer the language server uses (via a new `mutant/lsp/api`
+  facade), so command-line and editor results always agree.
+  - `mutant fmt [--check] [--stdout] <file-or-dir>...` — rewrites Mutant source in
+    the canonical style in place; `--check` reports files that are not formatted
+    (exit 1) without writing; `--stdout` prints the result. Idempotent.
+  - `mutant lint [--strict] <file-or-dir>...` — prints diagnostics as
+    `file:line:col: severity: message [source]` and exits non-zero on any error
+    (or, with `--strict`, any warning). Same rule set as the LSP.
+  - `mutant test [file-or-dir]...` — runs every `*_test.mut` file; a test passes
+    unless running it errors (parse/compile/runtime) or its final value is
+    `false`. No new language surface — a test file is just a program.
+  Directory arguments are walked (skipping `.git`/`node_modules`/`vendor`), making
+  all three CLIs suitable for CI over `examples/` and user projects.
+
 ## v2.4.0
 
 - **Compound assignment and increment/decrement.** `+= -= *= /= %=` update a

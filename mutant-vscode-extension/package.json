@@ -271,7 +271,30 @@
                 "editor.formatOnSave": true,
                 "editor.formatOnType": false
             }
-        }
+        },
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "mutant.formatDocument",
+                    "when": "editorLangId == mutant"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "mutant.formatDocument",
+                    "when": "editorLangId == mutant",
+                    "group": "1_modification"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "command": "mutant.restartLsp",
+                "key": "ctrl+alt+r",
+                "mac": "cmd+alt+r",
+                "when": "editorLangId == mutant"
+            }
+        ]
     },
     "scripts": {
         "prepare:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs",

@@ -26,7 +26,10 @@ const (
 	GENCMD     = "gen"
 	RUNCMD     = "run"
 	HELPCMD    = "help"
-	VERSION    = "Version: 2.4.0"
+	FMTCMD     = "fmt"
+	LINTCMD    = "lint"
+	TESTCMD    = "test"
+	VERSION    = "Version: 2.5.0"
 )
 
 type cliRuntime struct {
@@ -53,6 +56,9 @@ var commandHandlers = map[string]func([]string) int{
 	GENCMD:     handleGenCommand,
 	RUNCMD:     handleGenCommand,
 	RELEASECMD: handleReleaseCommand,
+	FMTCMD:     handleFmtCommand,
+	LINTCMD:    handleLintCommand,
+	TESTCMD:    handleTestCommand,
 }
 
 func main() {
@@ -153,7 +159,7 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 
 	for _, arg := range args[1:] {
 		switch arg {
-		case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
 			return false
 		}
 
@@ -260,7 +266,7 @@ func handleFileInvocation(args []string) bool {
 
 func isBuiltinCommand(arg string) bool {
 	switch arg {
-	case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
 		return true
 	default:
 		return false
@@ -404,12 +410,18 @@ Usage:
   mutant gen [options] --src <file.mut>
   mutant gen assets [options]
   mutant release [options] --src <file.mut>
+  mutant fmt [--check] [--stdout] <file-or-dir>...
+  mutant lint [--strict] <file-or-dir>...
+  mutant test [file-or-dir]...
   mutant help [command]
 
 Commands:
   gen        Compile source into encrypted bytecode.
   gen assets Generate embedded runtime assets for release packaging.
   release    Build a standalone executable for a target OS/ARCH.
+  fmt        Format Mutant source in place (or --check / --stdout).
+  lint       Report diagnostics for Mutant source (--strict fails on warnings).
+  test       Run *_test.mut files (fail on error or a false result).
   help       Show general or command-specific help.
 
 Global options:
@@ -437,6 +449,10 @@ Examples:
   mutant gen --src hello.mut --password "My$tr0ngPass!"
   mutant gen assets --out ./releaseassets
   mutant release --src hello.mut --os windows --arch amd64 --mutation 5
+  mutant fmt examples/
+  mutant fmt --check hello.mut
+  mutant lint --strict examples/
+  mutant test examples/
 
 Use "mutant help gen", "mutant help gen assets", or "mutant help release" for more detail.
 `, VERSION)

@@ -23,6 +23,47 @@ func (s *Snapshot) InlayHints(rng lsp.Range) []localprotocol.InlayHint {
 	padRight := true
 
 	var hints []localprotocol.InlayHint
+
+	// Type hints: `let count`‸`: int` after each `let` binding name whose type is
+	// confidently inferred. Absent (Any) types produce no hint, so they stay
+	// noise-free.
+	for node := range s.Program.NodePositions {
+		let, ok := node.(*mast.LetStatement)
+		if !ok || let == nil {
+			continue
+		}
+		names := let.Names
+		if len(names) == 0 && let.Name != nil {
+			names = []*mast.Identifier{let.Name}
+		}
+		for _, name := range names {
+			if name == nil {
+				continue
+			}
+			ty, ok := s.TypeOf(name)
+			if !ok {
+				continue
+			}
+			nameRange, ok := s.Program.RangeOf(name)
+			if !ok || !nameRange.IsValid() {
+				continue
+			}
+			pos := lsp.Position{
+				Line:      lsp.UInteger(nameRange.End.Line - 1),
+				Character: lsp.UInteger(nameRange.End.Column - 1),
+			}
+			if pos.Line < rng.Start.Line || pos.Line > rng.End.Line {
+				continue
+			}
+			tk := localprotocol.InlayHintKindType
+			hints = append(hints, localprotocol.InlayHint{
+				Position: pos,
+				Label:    ": " + ty.String(),
+				Kind:     &tk,
+			})
+		}
+	}
+
 	for node := range s.Program.NodePositions {
 		call, ok := node.(*mast.CallExpression)
 		if !ok || call == nil || len(call.Arguments) == 0 {

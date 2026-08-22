@@ -10,8 +10,11 @@ import lsp "github.com/tliron/glsp/protocol_3_16"
 // MethodTextDocumentInlayHint is the LSP request method for inlay hints.
 const MethodTextDocumentInlayHint = "textDocument/inlayHint"
 
-// InlayHintKindParameter marks a hint as a parameter-name annotation.
-const InlayHintKindParameter lsp.UInteger = 2
+// Inlay hint kinds (LSP: Type = 1, Parameter = 2).
+const (
+	InlayHintKindType      lsp.UInteger = 1
+	InlayHintKindParameter lsp.UInteger = 2
+)
 
 // InlayHintParams is the request payload: hints are requested for a range.
 type InlayHintParams struct {

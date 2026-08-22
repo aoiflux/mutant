@@ -219,6 +219,32 @@ let run = fn() {
 run();
 ```
 
+## Command-line tooling
+
+Beyond compiling and running, the `mutant` CLI exposes the same formatter and
+analyzer the language server uses, so editor and command-line results agree:
+
+- `mutant fmt [--check] [--stdout] <file-or-dir>...` — rewrite source in the
+  canonical style in place. `--check` lists files that are not already formatted
+  and exits non-zero (for CI) without writing; `--stdout` prints the formatted
+  result instead of editing. Formatting is idempotent.
+- `mutant lint [--strict] <file-or-dir>...` — print diagnostics as
+  `file:line:col: severity: message [source]`; exits non-zero on any error, or on
+  any warning with `--strict`.
+- `mutant test [file-or-dir]...` — run every `*_test.mut` file. A test file is an
+  ordinary program: it **passes** unless running it errors (parse, compile, or
+  runtime) or its final value is `false`. With no path it tests the current
+  directory.
+
+Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
+`vendor`).
+
+```mutant
+// math_test.mut  -> `mutant test .`
+let add = fn(a, b) { return a + b; };
+add(2, 3) == 5 && add(-1, -1) == -2;   // final value must be true to pass
+```
+
 ## Maintenance
 
 When adding or changing language keywords or builtins, update the source definitions first

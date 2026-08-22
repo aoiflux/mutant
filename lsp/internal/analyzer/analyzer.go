@@ -113,7 +113,11 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := macroSpecialFormHoverText(n.Value); ok {
 			return text, rng, true
 		}
-		return fmt.Sprintf("identifier `%s`", n.Value), rng, true
+		label := fmt.Sprintf("identifier `%s`", n.Value)
+		if ty, ok := s.TypeOf(n); ok {
+			label += fmt.Sprintf(" : %s", ty)
+		}
+		return label, rng, true
 	case *mast.IntegerLiteral:
 		return fmt.Sprintf("integer `%d`", n.Value), rng, true
 	case *mast.FloatLiteral:
@@ -135,10 +139,14 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		return fmt.Sprintf("function `fn(%s)`", joinIdentifiers(n.Parameters)), rng, true
 	case *mast.LetStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("let"); ok {
-				return fmt.Sprintf("binding `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `let`\n\n")), rng, true
+			binding := fmt.Sprintf("binding `%s`", n.Name.Value)
+			if ty, ok := s.TypeOf(n.Name); ok {
+				binding += fmt.Sprintf(" : %s", ty)
 			}
-			return fmt.Sprintf("binding `%s`", n.Name.Value), rng, true
+			if text, ok := keywordHoverText("let"); ok {
+				return fmt.Sprintf("%s\n\n%s", binding, strings.TrimPrefix(text, "keyword `let`\n\n")), rng, true
+			}
+			return binding, rng, true
 		}
 	case *mast.StructStatement:
 		if n.Name != nil {
@@ -253,7 +261,12 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 			continue
 		}
 		kind := bind.kind
-		items = append(items, lsp.CompletionItem{Label: bind.ident.Value, Kind: &kind})
+		item := lsp.CompletionItem{Label: bind.ident.Value, Kind: &kind}
+		if ty, ok := s.TypeOf(bind.ident); ok {
+			detail := ty.String()
+			item.Detail = &detail
+		}
+		items = append(items, item)
 		seen[bind.ident.Value] = struct{}{}
 	}
 

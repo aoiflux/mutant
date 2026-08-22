@@ -31,6 +31,13 @@ const (
 // happens naturally: terminators are emitted from Statement.RequiresSemicolon
 // rather than copied from the source, and stray semicolons never reach the
 // tree in the first place.
+// FormatSource returns the canonical formatting of Mutant source. It is the
+// exported entry point used by the `mutant fmt` CLI (via lsp/api); on a hard
+// parse error it degrades to whitespace normalization rather than mangling.
+func FormatSource(src string) string {
+	return formatSnapshotText(analyzer.New().Analyze(src))
+}
+
 func formatSnapshotText(snapshot *analyzer.Snapshot) string {
 	if snapshot == nil {
 		return ""

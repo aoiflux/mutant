@@ -107,6 +107,8 @@ func New(debug bool) *Server {
 	handler.TextDocumentRangeFormatting = s.rangeFormatting
 	handler.TextDocumentOnTypeFormatting = s.onTypeFormatting
 	handler.TextDocumentFoldingRange = s.foldingRanges
+	handler.TextDocumentCodeLens = s.codeLens
+	handler.TextDocumentDocumentLink = s.documentLinks
 	handler.WorkspaceSymbol = s.workspaceSymbols
 
 	return s
@@ -177,6 +179,8 @@ func (s *Server) initialize(_ *glsp.Context, params *lsp.InitializeParams) (any,
 				DocumentRangeFormattingProvider:  true,
 				DocumentOnTypeFormattingProvider: onTypeFormatting,
 				FoldingRangeProvider:             true,
+				CodeLensProvider:                 &lsp.CodeLensOptions{},
+				DocumentLinkProvider:             &lsp.DocumentLinkOptions{},
 			},
 			// inlayHintProvider is not part of protocol 3.16's ServerCapabilities,
 			// so it is injected as a sibling field here and dispatched by the
@@ -244,11 +248,19 @@ func (s *Server) captureWorkspaceRoots(params *lsp.InitializeParams) {
 // registerFileWatchers asks the client to watch **/*.mut via dynamic
 // registration. It is a no-op when the request channel is unavailable (e.g. in
 // tests) or the client does not support it.
+//
+// The Call MUST run in its own goroutine. Inbound requests are dispatched
+// synchronously on jsonrpc2's single reader goroutine, so a blocking outbound
+// Call made directly from this handler would stall that goroutine forever — it
+// would be waiting for a reply that only it can read. Registration is
+// best-effort and its result is unused, so fire it off and let the handler
+// return immediately.
 func (s *Server) registerFileWatchers(ctx *glsp.Context) {
 	if ctx == nil || ctx.Call == nil {
 		return
 	}
-	ctx.Call(string(lsp.ServerClientRegisterCapability), lsp.RegistrationParams{
+	call := ctx.Call
+	go call(string(lsp.ServerClientRegisterCapability), lsp.RegistrationParams{
 		Registrations: []lsp.Registration{{
 			ID:     "mutant-watch-mut",
 			Method: string(lsp.MethodWorkspaceDidChangeWatchedFiles),
@@ -804,6 +816,43 @@ func (s *Server) foldingRanges(_ *glsp.Context, params *lsp.FoldingRangeParams) 
 		return nil, nil
 	}
 	return snapshot.FoldingRanges(), nil
+}
+
+// codeLens places a reference-count lens above each top-level declaration.
+// Clicking a lens opens the references peek via the client-side
+// mutant.showReferences bridge command (registered by the extension).
+func (s *Server) codeLens(_ *glsp.Context, params *lsp.CodeLensParams) ([]lsp.CodeLens, error) {
+	snapshot, ok := s.snapshot(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	uri := params.TextDocument.URI
+
+	var lenses []lsp.CodeLens
+	for _, sym := range snapshot.DocumentSymbols() {
+		pos := sym.SelectionRange.Start
+		declaration := &lsp.Location{URI: uri, Range: sym.SelectionRange}
+
+		locations, _ := snapshot.ReferenceLocations(uri, pos, false)
+		locations = append(locations, s.workspaceReferenceLocations(sym.Name, declaration, false)...)
+		locations = dedupeLocations(locations)
+
+		count := len(locations)
+		title := fmt.Sprintf("%d reference", count)
+		if count != 1 {
+			title += "s"
+		}
+
+		lenses = append(lenses, lsp.CodeLens{
+			Range: sym.SelectionRange,
+			Command: &lsp.Command{
+				Title:     title,
+				Command:   "mutant.showReferences",
+				Arguments: []any{string(uri), pos, locations},
+			},
+		})
+	}
+	return lenses, nil
 }
 
 func (s *Server) definition(_ *glsp.Context, params *lsp.DefinitionParams) (any, error) {

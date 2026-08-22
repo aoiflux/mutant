@@ -19,6 +19,19 @@ New this release:
   semantic-token range + delta requests, richer code-action/rename capabilities,
   and workspace-wide indexing so go-to-definition, references, and rename work
   across files you have not opened.
+- **Type-aware editor smarts** — the language server now infers best-effort types
+  (from literals, `let` bindings, struct/enum, and a curated builtin table) and
+  surfaces them in hover (`count : int`), completion detail, and inlay type hints
+  on `let` bindings. Purely informational — no annotations, no type errors, no
+  runtime effect; anything uncertain simply shows nothing.
+- **Reference codeLens** — a clickable "N references" lens above every top-level
+  declaration (opens the references peek).
+- **Document links** — string literals that name an existing file (e.g.
+  `fs_read("evidence/$MFT")`) become ctrl-clickable links that open the file.
+- **Status bar indicator** — shows Mutant LSP state (running / starting / failed /
+  stopped); click to restart.
+- **Menus + keybindings** — "Mutant: Format Document" in the editor context menu
+  for `.mut` files, and `Ctrl+Alt+R` (`Cmd+Alt+R` on macOS) to restart the LSP.
 - **Packaging** — the extension now bundles with esbuild and publishes
   per-platform `.vsix` packages (each carrying only its own `mlsp` binary),
   replacing the single ~250 MB all-platforms package.

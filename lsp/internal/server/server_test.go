@@ -86,6 +86,12 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 	if provider, ok := result.Capabilities.FoldingRangeProvider.(bool); !ok || !provider {
 		t.Fatalf("FoldingRangeProvider = %#v, want true", result.Capabilities.FoldingRangeProvider)
 	}
+	if result.Capabilities.CodeLensProvider == nil {
+		t.Fatal("CodeLensProvider is nil, want *CodeLensOptions")
+	}
+	if result.Capabilities.DocumentLinkProvider == nil {
+		t.Fatal("DocumentLinkProvider is nil, want *DocumentLinkOptions")
+	}
 	if provider, ok := result.Capabilities.WorkspaceSymbolProvider.(bool); !ok || !provider {
 		t.Fatalf("WorkspaceSymbolProvider = %#v, want true", result.Capabilities.WorkspaceSymbolProvider)
 	}
