@@ -1717,14 +1717,21 @@ func TestSignatureHelpForBuiltinCall(t *testing.T) {
 	if len(help.Signatures) != 1 {
 		t.Fatalf("signature count = %d, want 1", len(help.Signatures))
 	}
-	if help.Signatures[0].Label != "len(value)" {
-		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, "len(value)")
+	// The label carries the kinds len accepts, and the parameter is addressed
+	// by offsets into that label rather than by a substring of it.
+	wantLabel := "len(value: STRING|ARRAY|HASH)"
+	if help.Signatures[0].Label != wantLabel {
+		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
 	if len(help.Signatures[0].Parameters) != 1 {
 		t.Fatalf("signature params = %d, want 1", len(help.Signatures[0].Parameters))
 	}
-	if paramLabel, ok := help.Signatures[0].Parameters[0].Label.(string); !ok || paramLabel != "value" {
-		t.Fatalf("signature param label = %#v, want %q", help.Signatures[0].Parameters[0].Label, "value")
+	span, ok := help.Signatures[0].Parameters[0].Label.([2]lsp.UInteger)
+	if !ok {
+		t.Fatalf("signature param label = %#v, want an offset pair", help.Signatures[0].Parameters[0].Label)
+	}
+	if got := wantLabel[span[0]:span[1]]; got != "value: STRING|ARRAY|HASH" {
+		t.Fatalf("signature param span %v covers %q, want the whole parameter", span, got)
 	}
 	if doc, ok := help.Signatures[0].Documentation.(lsp.MarkupContent); !ok || !strings.Contains(doc.Value, "Returns the length") {
 		t.Fatalf("signature documentation = %#v, want builtin summary", help.Signatures[0].Documentation)
@@ -3375,7 +3382,7 @@ func TestHoverOnBuiltinIdentifierIncludesTeachingInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "builtin `len(value)`") {
+	if !strings.Contains(contents.Value, "builtin `len(value: STRING|ARRAY|HASH)`") {
 		t.Fatalf("hover contents = %q, want builtin signature", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Returns the length") {

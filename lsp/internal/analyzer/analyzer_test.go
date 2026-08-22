@@ -3,9 +3,23 @@ package analyzer
 import (
 	mast "mutant/ast"
 	"mutant/builtin"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// kindAnnotation matches the `: STRING` / `: STRING|ARRAY|HASH` suffixes that
+// builtinSignatureLabel adds to a parameter that declares its accepted kinds.
+// Kind names are uppercase constants, so this can never eat a parameter name.
+var kindAnnotation = regexp.MustCompile(`:\s[A-Z|]+`)
+
+// untypedSignatureLabel recovers the plain `name(a, b)` spelling from a typed
+// signature label. The coverage tests below assert the parameter *shape* of a
+// builtin, which is fixed; the kind population beside it grows a category at a
+// time, and should not drag those assertions along with it.
+func untypedSignatureLabel(label string) string {
+	return kindAnnotation.ReplaceAllString(label, "")
+}
 
 func TestSemanticTokensDataHandlesTypedNilStatements(t *testing.T) {
 	var typedNilInit *mast.ExpressionStatement
@@ -202,8 +216,8 @@ func TestBuiltinRichTeachingForNewerBuiltins(t *testing.T) {
 		if !ok {
 			t.Fatalf("builtin %q missing signature coverage", tc.name)
 		}
-		if sig.Label != tc.wantSignature {
-			t.Fatalf("builtin %q signature label = %q, want %q", tc.name, sig.Label, tc.wantSignature)
+		if got := untypedSignatureLabel(sig.Label); got != tc.wantSignature {
+			t.Fatalf("builtin %q signature label = %q (untyped %q), want %q", tc.name, sig.Label, got, tc.wantSignature)
 		}
 	}
 }
@@ -244,8 +258,8 @@ func TestBuiltinRichTeachingCoverageExpansion(t *testing.T) {
 		if !ok {
 			t.Fatalf("builtin %q missing signature coverage", tc.name)
 		}
-		if sig.Label != tc.wantSignature {
-			t.Fatalf("builtin %q signature label = %q, want %q", tc.name, sig.Label, tc.wantSignature)
+		if got := untypedSignatureLabel(sig.Label); got != tc.wantSignature {
+			t.Fatalf("builtin %q signature label = %q (untyped %q), want %q", tc.name, sig.Label, got, tc.wantSignature)
 		}
 	}
 }
@@ -285,8 +299,8 @@ func TestBuiltinBytesScalarTeachingCoverage(t *testing.T) {
 		if !ok {
 			t.Fatalf("builtin %q missing signature coverage", tc.name)
 		}
-		if sig.Label != tc.wantSignature {
-			t.Fatalf("builtin %q signature label = %q, want %q", tc.name, sig.Label, tc.wantSignature)
+		if got := untypedSignatureLabel(sig.Label); got != tc.wantSignature {
+			t.Fatalf("builtin %q signature label = %q (untyped %q), want %q", tc.name, sig.Label, got, tc.wantSignature)
 		}
 	}
 }

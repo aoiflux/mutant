@@ -65,11 +65,14 @@ func builtinHoverText(name string) (string, bool) {
 			return fmt.Sprintf("builtin `%s`\n\n%s%s", signature, summary, suffix), true
 		}
 
+		// The heading carries each parameter's accepted kinds, so the bullets
+		// stay prose — repeating the kinds there would only add noise.
+		label, _, _ := builtinSignatureLabel(name)
 		parts := make([]string, 0, len(params))
 		for _, p := range params {
 			parts = append(parts, fmt.Sprintf("- `%s`: %s", p.Name, p.Doc))
 		}
-		return fmt.Sprintf("builtin `%s`\n\n%s\n\n%s%s", signature, summary, strings.Join(parts, "\n"), suffix), true
+		return fmt.Sprintf("builtin `%s`\n\n%s\n\n%s%s", label, summary, strings.Join(parts, "\n"), suffix), true
 	}
 
 	if summary, ok := builtin.TeachingFamilySummary(name); ok {
@@ -213,18 +216,23 @@ func languageSnippetCompletionItems() []lsp.CompletionItem {
 }
 
 func builtinSignatureInformation(name string) (lsp.SignatureInformation, bool) {
-	if signature, summary, params, ok := builtin.TeachingDoc(name); ok {
-		sig := lsp.SignatureInformation{Label: signature}
+	if _, summary, params, ok := builtin.TeachingDoc(name); ok {
+		label, spans, _ := builtinSignatureLabel(name)
+		sig := lsp.SignatureInformation{Label: label}
 		sig.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: summary}
 		if len(params) == 0 {
 			return sig, true
 		}
 
+		// Parameters are addressed by offset rather than by name. A string
+		// label has to be a substring of the signature label and is matched by
+		// first occurrence, which the type annotations would make ambiguous;
+		// the offset pair says exactly which span to highlight.
 		paramInfos := make([]lsp.ParameterInformation, 0, len(params))
-		for _, p := range params {
-			param := lsp.ParameterInformation{Label: p.Name}
-			if p.Doc != "" {
-				param.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: p.Doc}
+		for i, p := range params {
+			param := lsp.ParameterInformation{Label: spans[i]}
+			if doc := paramDocumentation(p); doc != "" {
+				param.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
 			}
 			paramInfos = append(paramInfos, param)
 		}

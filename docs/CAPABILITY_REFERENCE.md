@@ -1,15 +1,16 @@
 # Mutant Capability Reference
 
 > Generated from the builtin metadata (`builtin/metadata.go`) — the source of truth.
-> To refresh after adding or changing builtins, iterate `builtin.Builtins` and read
-> each entry's `TeachingDoc`, `PlatformSupport`, and `CapabilityCategory`. Prefer
-> regenerating over hand-editing the tables so signatures and counts never drift.
+> Regenerate with `go run ./cmd/gendocs`; check for drift with `go run ./cmd/gendocs -check`.
+> Do not hand-edit the tables below: signatures, parameter types, platforms, and
+> counts are all read from the metadata, and edits here are overwritten.
 
 This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **399 registered builtins** across **32 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
 - **Fallible builtins return a `(value, err)` pair**, matching the language idiom `let value, err = some_call(...);`. Check `err` before using `value`. Infallible helpers return a bare value.
+- **Parameter types are shown inline** in each signature, e.g. `str_repeat(s: STRING, n: INTEGER)`. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the `builtinArgType` diagnostic), and the same words the runtime uses when a call fails. Note that a "bytes" value is a `STRING`: Mutant carries byte buffers in strings and has no separate bytes type.
 - **The Platforms column** lists the operating systems a builtin actually works on. `all` means it is pure-Go and cross-platform (it operates on captured artifacts, so it runs on any host). A restricted set (e.g. `windows/linux`) means the builtin fails honestly elsewhere — and the language server will flag such a call when you are editing on an unsupported OS (the `platformSupport` diagnostic).
 - **Pure-Go, no cgo.** The entire standard library builds and runs with `CGO_ENABLED=0` on Windows, Linux, and macOS.
 
@@ -22,7 +23,7 @@ Almost every builtin is cross-platform. The exceptions:
 | `process_memory_scan` | windows, linux | fails honestly on other platforms |
 | `process_modules` | windows, linux | fails honestly on other platforms |
 
-`reg_open` and `process_kill` work on all platforms but have Windows-specific behavior in one path; hover in the editor shows the note.
+`process_kill` and `reg_open` work on all platforms but have platform-specific behavior in one path; hover in the editor shows the note.
 
 ---
 
@@ -32,60 +33,60 @@ Core language primitives: collection and hash operations, first-class higher-ord
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `abs(x)` | all | Absolute value (preserves INTEGER/FLOAT type). |
-| `avg(array)` | all | Arithmetic mean of a numeric array (FLOAT); errors on empty. |
-| `ceil(x)` | all | Smallest integer >= x (INTEGER). |
-| `clamp(x, lo, hi)` | all | Constrains x to the range [lo, hi]. |
-| `concat(a, b)` | all | Returns a new array with the elements of a followed by b. |
-| `contains(array, value)` | all | Returns whether array contains value (by value equality). |
+| `abs(x: INTEGER\|FLOAT)` | all | Absolute value (preserves INTEGER/FLOAT type). |
+| `avg(array: ARRAY)` | all | Arithmetic mean of a numeric array (FLOAT); errors on empty. |
+| `ceil(x: INTEGER\|FLOAT)` | all | Smallest integer >= x (INTEGER). |
+| `clamp(x: INTEGER\|FLOAT, lo: INTEGER\|FLOAT, hi: INTEGER\|FLOAT)` | all | Constrains x to the range [lo, hi]. |
+| `concat(a: ARRAY, b: ARRAY)` | all | Returns a new array with the elements of a followed by b. |
+| `contains(array: ARRAY, value)` | all | Returns whether array contains value (by value equality). |
 | `debug_status()` | all | Returns runtime/debugger status information. |
-| `delete(hash, key)` | all | Returns a new hash with key removed. |
-| `each(array, fn)` | all | Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index). |
-| `entries(hash)` | all | Returns the hash as an array of [key, value] pairs (sorted by key). |
-| `filter(array, fn)` | all | Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index). |
-| `first(array)` | all | Returns the first element of an array. |
-| `flatten(array)` | all | Flattens one level of nested arrays. |
-| `floor(x)` | all | Largest integer <= x (INTEGER). |
-| `get(hash, key, default)` | all | Returns hash[key], or default when the key is absent. |
+| `delete(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN)` | all | Returns a new hash with key removed. |
+| `each(array: ARRAY, fn: FUNCTION)` | all | Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index). |
+| `entries(hash: HASH)` | all | Returns the hash as an array of [key, value] pairs (sorted by key). |
+| `filter(array: ARRAY, fn: FUNCTION)` | all | Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index). |
+| `first(array: ARRAY)` | all | Returns the first element of an array. |
+| `flatten(array: ARRAY)` | all | Flattens one level of nested arrays. |
+| `floor(x: INTEGER\|FLOAT)` | all | Largest integer <= x (INTEGER). |
+| `get(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN, default)` | all | Returns hash[key], or default when the key is absent. |
 | `gets()` | all | Reads a full line of input from stdin and returns it as a STRING (newline trimmed). Use to_int/to_float/parse_int to convert. |
-| `has_key(hash, key)` | all | Returns whether hash contains key. |
-| `help(topic?, mode?)` | all | Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name. |
-| `index_of(array, value)` | all | Returns the first index of value in array, or -1. |
+| `has_key(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN)` | all | Returns whether hash contains key. |
+| `help(topic?: STRING, mode?: STRING)` | all | Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name. |
+| `index_of(array: ARRAY, value)` | all | Returns the first index of value in array, or -1. |
 | `int_to_ip(n)` | all | Converts a 32-bit integer to an IPv4 dotted-quad string. |
 | `is_null(v)` | all | Returns whether v is NULL. |
-| `keys(hash)` | all | Returns the hash keys as an array (sorted for determinism). |
-| `last(array)` | all | Returns the last element of an array. |
-| `len(value)` | all | Returns the length of a string, array, hash, or bytes value. |
-| `map(array, fn)` | all | Returns a new array of fn applied to each element. fn takes (element) or (element, index). |
-| `max(...values)` | all | Returns the largest of the numeric arguments (original type preserved). |
-| `merge(a, b)` | all | Returns a new hash combining a and b (b wins on key conflicts). |
-| `min(...values)` | all | Returns the smallest of the numeric arguments (original type preserved). |
-| `mod(a, b)` | all | Returns a modulo b; errors on b=0. Integer mod when both are INTEGER. |
-| `pop(array)` | all | Returns a new array without the last element. |
-| `pow(x, y)` | all | Returns x raised to the power y (FLOAT). |
-| `push(array, value)` | all | Returns a new array with value appended. |
+| `keys(hash: HASH)` | all | Returns the hash keys as an array (sorted for determinism). |
+| `last(array: ARRAY)` | all | Returns the last element of an array. |
+| `len(value: STRING\|ARRAY\|HASH)` | all | Returns the length of a string, array, hash, or bytes value. |
+| `map(array: ARRAY, fn: FUNCTION)` | all | Returns a new array of fn applied to each element. fn takes (element) or (element, index). |
+| `max(value: INTEGER\|FLOAT, ...values: INTEGER\|FLOAT)` | all | Returns the largest of the numeric arguments (original type preserved). |
+| `merge(a: HASH, b: HASH)` | all | Returns a new hash combining a and b (b wins on key conflicts). |
+| `min(value: INTEGER\|FLOAT, ...values: INTEGER\|FLOAT)` | all | Returns the smallest of the numeric arguments (original type preserved). |
+| `mod(a: INTEGER\|FLOAT, b: INTEGER\|FLOAT)` | all | Returns a modulo b; errors on b=0. Integer mod when both are INTEGER. |
+| `pop(array: ARRAY)` | all | Returns a new array without the last element. |
+| `pow(x: INTEGER\|FLOAT, y: INTEGER\|FLOAT)` | all | Returns x raised to the power y (FLOAT). |
+| `push(array: ARRAY, value)` | all | Returns a new array with value appended. |
 | `putf(format, ...values)` | all | Formats and prints values using a format string. |
-| `putln(value)` | all | Prints a value followed by a newline. |
-| `range(start, end, step?)` | all | Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1. |
-| `reduce(array, fn, initial)` | all | Folds the array to a single value: fn(accumulator, element) starting from initial. |
-| `rest(array)` | all | Returns a new array without the first element. |
-| `reverse(array)` | all | Returns a reversed copy of an array. |
-| `round(x)` | all | Nearest integer to x (INTEGER). |
+| `putln(...values)` | all | Prints values separated by spaces, followed by a newline. |
+| `range(start: INTEGER, end: INTEGER, step?: INTEGER)` | all | Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1. |
+| `reduce(array: ARRAY, fn: FUNCTION, initial)` | all | Folds the array to a single value: fn(accumulator, element) starting from initial. |
+| `rest(array: ARRAY)` | all | Returns a new array without the first element. |
+| `reverse(array: ARRAY)` | all | Returns a reversed copy of an array. |
+| `round(x: INTEGER\|FLOAT)` | all | Nearest integer to x (INTEGER). |
 | `sandbox_status()` | all | Returns sandbox-detection status information. |
 | `security_diagnostics()` | all | Returns security diagnostics for the current runtime. |
 | `serve_arg()` | all | Inside a net_serve handler, returns the shared arg passed to net_serve; null otherwise. |
 | `serve_conn()` | all | Inside a net_serve handler, returns the connection handle (INTEGER); null otherwise. |
-| `set(hash, key, value)` | all | Returns a new hash with key set to value (original unchanged). |
+| `set(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN, value)` | all | Returns a new hash with key set to value (original unchanged). |
 | `sleep_ms(ms)` | all | Blocks the current handler for ms milliseconds. |
-| `slice(array, start, end)` | all | Returns the sub-array array[start:end] (bounds-clamped). |
-| `sort(array)` | all | Returns a sorted copy of an array (all numbers or all strings). |
-| `sort_by(array, fn)` | all | Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys). |
-| `sqrt(x)` | all | Returns the square root of x (FLOAT); errors on negative x. |
-| `sum(array)` | all | Sum of a numeric array (INTEGER if all elements are integers). |
+| `slice(array: ARRAY, start: INTEGER, end: INTEGER)` | all | Returns the sub-array array[start:end] (bounds-clamped). |
+| `sort(array: ARRAY)` | all | Returns a sorted copy of an array (all numbers or all strings). |
+| `sort_by(array: ARRAY, fn: FUNCTION)` | all | Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys). |
+| `sqrt(x: INTEGER\|FLOAT)` | all | Returns the square root of x (FLOAT); errors on negative x. |
+| `sum(array: ARRAY)` | all | Sum of a numeric array (INTEGER if all elements are integers). |
 | `type_of(v)` | all | Returns the object type name of v (e.g. INTEGER, STRING, ARRAY). |
-| `unique(array)` | all | Returns a new array with duplicate values removed (order preserved). |
-| `values(hash)` | all | Returns the hash values as an array (ordered by sorted key). |
-| `zip(a, b)` | all | Returns an array of [a[i], b[i]] pairs up to the shorter length. |
+| `unique(array: ARRAY)` | all | Returns a new array with duplicate values removed (order preserved). |
+| `values(hash: HASH)` | all | Returns the hash values as an array (ordered by sorted key). |
+| `zip(a: ARRAY, b: ARRAY)` | all | Returns an array of [a[i], b[i]] pairs up to the shorter length. |
 
 ## Strings (18)
 
@@ -93,24 +94,24 @@ Rune-aware string manipulation: case, trimming, padding, slicing, joining, and f
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `str_char_at(s, index)` | all | Returns the rune at index as a string. |
-| `str_ends_with(s, suffix)` | all | Returns whether s ends with suffix. |
-| `str_format(format, ...values)` | all | Returns a printf-style formatted string (like putf but returns instead of printing). |
-| `str_join(array, sep)` | all | Joins an array of strings with sep (inverse of text_split). |
-| `str_lower(s)` | all | Returns s with all letters lower-cased. |
-| `str_pad_left(s, width, pad)` | all | Left-pads s with pad until it reaches width runes. |
-| `str_pad_right(s, width, pad)` | all | Right-pads s with pad until it reaches width runes. |
-| `str_repeat(s, n)` | all | Returns s repeated n times. |
-| `str_reverse(s)` | all | Returns s reversed (rune-aware). |
-| `str_starts_with(s, prefix)` | all | Returns whether s begins with prefix. |
-| `str_substr(s, start, length)` | all | Returns length runes of s starting at rune index start (clamped to bounds). |
-| `str_title(s)` | all | Upper-cases the first letter of each word in s. |
-| `str_trim(s)` | all | Returns s with leading and trailing whitespace removed. |
-| `str_trim_left(s, cutset)` | all | Trims any leading characters in cutset from s. |
-| `str_trim_prefix(s, prefix)` | all | Removes prefix from s if present. |
-| `str_trim_right(s, cutset)` | all | Trims any trailing characters in cutset from s. |
-| `str_trim_suffix(s, suffix)` | all | Removes suffix from s if present. |
-| `str_upper(s)` | all | Returns s with all letters upper-cased. |
+| `str_char_at(s: STRING, index: INTEGER)` | all | Returns the rune at index as a string. |
+| `str_ends_with(s: STRING, suffix: STRING)` | all | Returns whether s ends with suffix. |
+| `str_format(format: STRING, ...values)` | all | Returns a printf-style formatted string (like putf but returns instead of printing). |
+| `str_join(array: ARRAY, sep: STRING)` | all | Joins an array of strings with sep (inverse of text_split). |
+| `str_lower(s: STRING)` | all | Returns s with all letters lower-cased. |
+| `str_pad_left(s: STRING, width: INTEGER, pad: STRING)` | all | Left-pads s with pad until it reaches width runes. |
+| `str_pad_right(s: STRING, width: INTEGER, pad: STRING)` | all | Right-pads s with pad until it reaches width runes. |
+| `str_repeat(s: STRING, n: INTEGER)` | all | Returns s repeated n times. |
+| `str_reverse(s: STRING)` | all | Returns s reversed (rune-aware). |
+| `str_starts_with(s: STRING, prefix: STRING)` | all | Returns whether s begins with prefix. |
+| `str_substr(s: STRING, start: INTEGER, length: INTEGER)` | all | Returns length runes of s starting at rune index start (clamped to bounds). |
+| `str_title(s: STRING)` | all | Upper-cases the first letter of each word in s. |
+| `str_trim(s: STRING)` | all | Returns s with leading and trailing whitespace removed. |
+| `str_trim_left(s: STRING, cutset: STRING)` | all | Trims any leading characters in cutset from s. |
+| `str_trim_prefix(s: STRING, prefix: STRING)` | all | Removes prefix from s if present. |
+| `str_trim_right(s: STRING, cutset: STRING)` | all | Trims any trailing characters in cutset from s. |
+| `str_trim_suffix(s: STRING, suffix: STRING)` | all | Removes suffix from s if present. |
+| `str_upper(s: STRING)` | all | Returns s with all letters upper-cased. |
 
 ## Text Analysis (14)
 
@@ -118,20 +119,20 @@ Substring search, splitting/replacing, regular expressions, and fuzzy matching (
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `regex_capture_groups(pattern, input)` | all | Returns full regex capture array (full match plus groups). |
-| `regex_find(pattern, input)` | all | Finds the first regex match in input. |
-| `regex_find_all(pattern, input, limit?)` | all | Finds all regex matches with optional result limit. |
-| `regex_match(pattern, input)` | all | Returns whether regex pattern matches input. |
-| `regex_replace(pattern, input, replacement)` | all | Replaces all regex matches in input with replacement text. |
-| `text_contains(haystack, needle)` | all | Returns whether a string contains a substring. |
-| `text_count(haystack, needle)` | all | Counts non-overlapping substring occurrences. |
-| `text_fuzzy_find(query, candidates, maxDistance?)` | all | Finds the closest fuzzy match in an array of candidate strings. |
-| `text_index(haystack, needle)` | all | Returns the first index of substring occurrence, or -1. |
-| `text_jaro_winkler(left, right)` | all | Computes Jaro-Winkler string similarity score. |
-| `text_levenshtein(left, right)` | all | Computes Levenshtein edit distance between two strings. |
-| `text_replace(text, old, new)` | all | Replaces substring occurrences in text. |
-| `text_similarity(left, right)` | all | Computes normalized Levenshtein similarity between two strings. |
-| `text_split(text, sep)` | all | Splits text by separator and returns an array of parts. |
+| `regex_capture_groups(pattern: STRING, input: STRING)` | all | Returns full regex capture array (full match plus groups). |
+| `regex_find(pattern: STRING, input: STRING)` | all | Finds the first regex match in input. |
+| `regex_find_all(pattern: STRING, input: STRING, limit?: INTEGER)` | all | Finds all regex matches with optional result limit. |
+| `regex_match(pattern: STRING, input: STRING)` | all | Returns whether regex pattern matches input. |
+| `regex_replace(pattern: STRING, input: STRING, replacement: STRING)` | all | Replaces all regex matches in input with replacement text. |
+| `text_contains(haystack: STRING, needle: STRING)` | all | Returns whether a string contains a substring. |
+| `text_count(haystack: STRING, needle: STRING)` | all | Counts non-overlapping substring occurrences. |
+| `text_fuzzy_find(query: STRING, candidates: ARRAY, maxDistance?: INTEGER)` | all | Finds the closest fuzzy match in an array of candidate strings. |
+| `text_index(haystack: STRING, needle: STRING)` | all | Returns the first index of substring occurrence, or -1. |
+| `text_jaro_winkler(left: STRING, right: STRING)` | all | Computes Jaro-Winkler string similarity score. |
+| `text_levenshtein(left: STRING, right: STRING)` | all | Computes Levenshtein edit distance between two strings. |
+| `text_replace(text: STRING, old: STRING, new: STRING, count?: INTEGER)` | all | Replaces substring occurrences in text; count limits how many (all by default). |
+| `text_similarity(left: STRING, right: STRING)` | all | Computes normalized Levenshtein similarity between two strings. |
+| `text_split(text: STRING, sep: STRING)` | all | Splits text by separator and returns an array of parts. |
 
 ## Structured Data (25)
 
@@ -139,31 +140,31 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `base32_decode(s)` | all | Decodes standard base32; returns (bytes, err). |
-| `base32_encode(s)` | all | Standard base32-encodes s. |
-| `base64_decode(s)` | all | Decodes standard base64; returns (bytes, err). |
-| `base64_encode(s)` | all | Standard base64-encodes s. |
-| `base64url_decode(s)` | all | Decodes URL-safe base64; returns (bytes, err). |
-| `base64url_encode(s)` | all | URL-safe base64-encodes s. |
-| `from_base(s, base)` | all | Parses s as an integer in the given base (2–36); returns (int, err). |
-| `gunzip(s)` | all | Gzip-decompresses s; returns (bytes, err). |
-| `gzip(s)` | all | Gzip-compresses s (returns a byte string). |
-| `hex_decode(s)` | all | Decodes a hex string to bytes; returns (bytes, err). |
-| `hex_encode(s)` | all | Hex-encodes a byte string to lowercase hex. |
-| `json_parse(text)` | all | Parses JSON text into Mutant values. |
-| `json_stringify(value)` | all | Serializes Mutant values into JSON text. |
-| `parse_float(s)` | all | Parses s as a float; returns (float, err). |
-| `parse_int(s, base)` | all | Parses s as an integer in base (0 auto-detects); returns (int, err). |
+| `base32_decode(s: STRING)` | all | Decodes standard base32; returns (bytes, err). |
+| `base32_encode(s: STRING)` | all | Standard base32-encodes s. |
+| `base64_decode(s: STRING)` | all | Decodes standard base64; returns (bytes, err). |
+| `base64_encode(s: STRING)` | all | Standard base64-encodes s. |
+| `base64url_decode(s: STRING)` | all | Decodes URL-safe base64; returns (bytes, err). |
+| `base64url_encode(s: STRING)` | all | URL-safe base64-encodes s. |
+| `from_base(s: STRING, base: INTEGER)` | all | Parses s as an integer in the given base (2–36); returns (int, err). |
+| `gunzip(s: STRING)` | all | Gzip-decompresses s; returns (bytes, err). |
+| `gzip(s: STRING)` | all | Gzip-compresses s (returns a byte string). |
+| `hex_decode(s: STRING)` | all | Decodes a hex string to bytes; returns (bytes, err). |
+| `hex_encode(s: STRING)` | all | Hex-encodes a byte string to lowercase hex. |
+| `json_parse(text: STRING)` | all | Parses JSON text into Mutant values. |
+| `json_stringify(value: STRING\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH)` | all | Serializes Mutant values into JSON text. |
+| `parse_float(s: STRING)` | all | Parses s as a float; returns (float, err). |
+| `parse_int(s: STRING, base: INTEGER)` | all | Parses s as an integer in base (0 auto-detects); returns (int, err). |
 | `plist_parse(path)` | all | Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err). |
-| `to_base(n, base)` | all | Formats integer n in the given base (2–36). |
-| `to_bool(v)` | all | Converts a bool/number/string to BOOLEAN; returns (bool, err). |
-| `to_float(v)` | all | Converts a number/bool/string to FLOAT; returns (float, err). |
-| `to_int(v)` | all | Converts a number/bool/string to INTEGER; returns (int, err). |
+| `to_base(n: INTEGER, base: INTEGER)` | all | Formats integer n in the given base (2–36). |
+| `to_bool(v: BOOLEAN\|INTEGER\|FLOAT\|STRING)` | all | Converts a bool/number/string to BOOLEAN; returns (bool, err). |
+| `to_float(v: INTEGER\|FLOAT\|BOOLEAN\|STRING)` | all | Converts a number/bool/string to FLOAT; returns (float, err). |
+| `to_int(v: INTEGER\|FLOAT\|BOOLEAN\|STRING)` | all | Converts a number/bool/string to INTEGER; returns (int, err). |
 | `to_string(v)` | all | Converts any value to its STRING representation. |
-| `url_decode(s)` | all | URL query-unescapes s; returns (value, err). |
-| `url_encode(s)` | all | URL query-escapes s. |
-| `zlib_compress(s)` | all | Zlib-compresses s (returns a byte string). |
-| `zlib_decompress(s)` | all | Zlib-decompresses s; returns (bytes, err). |
+| `url_decode(s: STRING)` | all | URL query-unescapes s; returns (value, err). |
+| `url_encode(s: STRING)` | all | URL query-escapes s. |
+| `zlib_compress(s: STRING)` | all | Zlib-compresses s (returns a byte string). |
+| `zlib_decompress(s: STRING)` | all | Zlib-decompresses s; returns (bytes, err). |
 
 ## Math (5)
 
@@ -174,8 +175,8 @@ Numeric constants and random-number helpers (cryptographically-random bytes via 
 | `math_e()` | all | Returns the constant e. |
 | `math_pi()` | all | Returns the constant pi. |
 | `rand()` | all | Returns a random FLOAT in [0, 1). |
-| `rand_bytes(n)` | all | Returns n cryptographically-random bytes (as a byte string). |
-| `rand_int(lo, hi)` | all | Returns a random INTEGER in [lo, hi). |
+| `rand_bytes(n: INTEGER)` | all | Returns n cryptographically-random bytes (as a byte string). |
+| `rand_int(lo: INTEGER, hi: INTEGER)` | all | Returns a random INTEGER in [lo, hi). |
 
 ## Hashing (11)
 
@@ -183,15 +184,15 @@ Cryptographic and checksum digests (MD5/SHA-1/SHA-256/SHA-512/CRC-32/BLAKE2), HM
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `hash_blake2(s)` | all | Returns the lowercase hex BLAKE2b-256 digest of s. |
-| `hash_crc32(s)` | all | Returns the CRC-32 (IEEE) checksum of s as 8 hex chars. |
-| `hash_md5(s)` | all | Returns the lowercase hex MD5 digest of s. |
-| `hash_sha1(s)` | all | Returns the lowercase hex SHA-1 digest of s. |
-| `hash_sha256(s)` | all | Returns the lowercase hex SHA-256 digest of s. |
-| `hash_sha512(s)` | all | Returns the lowercase hex SHA-512 digest of s. |
-| `hmac(key, message, algo)` | all | Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512. |
-| `nanoid(n)` | all | Returns a URL-safe random identifier of length n. |
-| `random_hex(n)` | all | Returns n cryptographically-random bytes as a 2n-char hex string. |
+| `hash_blake2(s: STRING)` | all | Returns the lowercase hex BLAKE2b-256 digest of s. |
+| `hash_crc32(s: STRING)` | all | Returns the CRC-32 (IEEE) checksum of s as 8 hex chars. |
+| `hash_md5(s: STRING)` | all | Returns the lowercase hex MD5 digest of s. |
+| `hash_sha1(s: STRING)` | all | Returns the lowercase hex SHA-1 digest of s. |
+| `hash_sha256(s: STRING)` | all | Returns the lowercase hex SHA-256 digest of s. |
+| `hash_sha512(s: STRING)` | all | Returns the lowercase hex SHA-512 digest of s. |
+| `hmac(key: STRING, message: STRING, algo: STRING)` | all | Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512. |
+| `nanoid(n: INTEGER)` | all | Returns a URL-safe random identifier of length n. |
+| `random_hex(n: INTEGER)` | all | Returns n cryptographically-random bytes as a 2n-char hex string. |
 | `uuid_v4()` | all | Returns a random (v4) UUID string. |
 | `uuid_v7()` | all | Returns a time-ordered (v7) UUID string. |
 
@@ -201,12 +202,12 @@ Unix timestamps, formatting, parsing, and arithmetic (UTC).
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `time_add(unix, seconds)` | all | Returns the Unix timestamp shifted by seconds. |
-| `time_diff(a, b)` | all | Returns a - b in seconds (both Unix timestamps). |
-| `time_format(unix, layout)` | all | Formats a Unix timestamp (UTC) using a Go reference layout. |
+| `time_add(unix: INTEGER, seconds: INTEGER)` | all | Returns the Unix timestamp shifted by seconds. |
+| `time_diff(a: INTEGER, b: INTEGER)` | all | Returns a - b in seconds (both Unix timestamps). |
+| `time_format(unix: INTEGER, layout: STRING)` | all | Formats a Unix timestamp (UTC) using a Go reference layout. |
 | `time_ms()` | all | Returns the current Unix time in milliseconds. |
 | `time_now()` | all | Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}. |
-| `time_parse(value, layout)` | all | Parses value with a Go reference layout; returns (unixSeconds, err). |
+| `time_parse(value: STRING, layout: STRING)` | all | Parses value with a Go reference layout; returns (unixSeconds, err). |
 | `time_unix()` | all | Returns the current Unix time in seconds. |
 
 ## Bytes (30)
@@ -215,36 +216,36 @@ Binary buffer inspection and construction: fixed-width integer reads/writes (LE/
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `bytes_char_from_int(value)` | all | Converts an integer byte value to a single-character string. |
-| `bytes_cstr_at(data, offset)` | all | Reads null-terminated string from bytes at offset. |
-| `bytes_cursor_eof(cursor)` | all | Returns whether cursor is at end-of-buffer. |
-| `bytes_cursor_new(data)` | all | Creates a cursor for structured byte parsing. |
-| `bytes_cursor_read_u16_be(cursor)` | all | Reads unsigned 16-bit big-endian integer from cursor. |
-| `bytes_cursor_read_u16_le(cursor)` | all | Reads unsigned 16-bit little-endian integer from cursor. |
-| `bytes_cursor_read_u32_be(cursor)` | all | Reads unsigned 32-bit big-endian integer from cursor. |
-| `bytes_cursor_read_u32_le(cursor)` | all | Reads unsigned 32-bit little-endian integer from cursor. |
-| `bytes_cursor_read_u64_be(cursor)` | all | Reads unsigned 64-bit big-endian integer from cursor. |
-| `bytes_cursor_read_u64_le(cursor)` | all | Reads unsigned 64-bit little-endian integer from cursor. |
-| `bytes_cursor_read_u8(cursor)` | all | Reads one unsigned byte from cursor. |
-| `bytes_cursor_seek(cursor, offset)` | all | Moves cursor to an absolute offset. |
-| `bytes_cursor_tell(cursor)` | all | Returns current cursor position. |
-| `bytes_get(data, index)` | all | Reads one byte at index as integer. |
-| `bytes_hex(value, width)` | all | Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> "0x00001234"). This formats a number; it does not hex-encode a byte string. |
-| `bytes_int_from_char(char)` | all | Converts a single-character string to its integer byte value. |
-| `bytes_len(data)` | all | Returns length of a bytes value. |
-| `bytes_read_u16_be(data, offset)` | all | Reads unsigned 16-bit big-endian integer from bytes at offset. |
-| `bytes_read_u16_le(data, offset)` | all | Reads unsigned 16-bit little-endian integer from bytes at offset. |
-| `bytes_read_u32_be(data, offset)` | all | Reads unsigned 32-bit big-endian integer from bytes at offset. |
-| `bytes_read_u32_le(data, offset)` | all | Reads unsigned 32-bit little-endian integer from bytes at offset. |
-| `bytes_read_u64_be(data, offset)` | all | Reads unsigned 64-bit big-endian integer from bytes at offset. |
-| `bytes_read_u64_le(data, offset)` | all | Reads unsigned 64-bit little-endian integer from bytes at offset. |
-| `bytes_slice(data, start, length)` | all | Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]). |
-| `bytes_write_u16_be(data, offset, value)` | all | Writes unsigned 16-bit big-endian integer into bytes at offset. |
-| `bytes_write_u16_le(data, offset, value)` | all | Writes unsigned 16-bit little-endian integer into bytes at offset. |
-| `bytes_write_u32_be(data, offset, value)` | all | Writes unsigned 32-bit big-endian integer into bytes at offset. |
-| `bytes_write_u32_le(data, offset, value)` | all | Writes unsigned 32-bit little-endian integer into bytes at offset. |
-| `bytes_write_u64_be(data, offset, value)` | all | Writes unsigned 64-bit big-endian integer into bytes at offset. |
-| `bytes_write_u64_le(data, offset, value)` | all | Writes unsigned 64-bit little-endian integer into bytes at offset. |
+| `bytes_char_from_int(value: INTEGER)` | all | Converts an integer byte value to a single-character string. |
+| `bytes_cstr_at(data: STRING, offset: INTEGER)` | all | Reads null-terminated string from bytes at offset. |
+| `bytes_cursor_eof(cursor: HASH)` | all | Returns whether cursor is at end-of-buffer. |
+| `bytes_cursor_new(data: STRING)` | all | Creates a cursor for structured byte parsing. |
+| `bytes_cursor_read_u16_be(cursor: HASH)` | all | Reads unsigned 16-bit big-endian integer from cursor. |
+| `bytes_cursor_read_u16_le(cursor: HASH)` | all | Reads unsigned 16-bit little-endian integer from cursor. |
+| `bytes_cursor_read_u32_be(cursor: HASH)` | all | Reads unsigned 32-bit big-endian integer from cursor. |
+| `bytes_cursor_read_u32_le(cursor: HASH)` | all | Reads unsigned 32-bit little-endian integer from cursor. |
+| `bytes_cursor_read_u64_be(cursor: HASH)` | all | Reads unsigned 64-bit big-endian integer from cursor. |
+| `bytes_cursor_read_u64_le(cursor: HASH)` | all | Reads unsigned 64-bit little-endian integer from cursor. |
+| `bytes_cursor_read_u8(cursor: HASH)` | all | Reads one unsigned byte from cursor. |
+| `bytes_cursor_seek(cursor: HASH, offset: INTEGER)` | all | Moves cursor to an absolute offset. |
+| `bytes_cursor_tell(cursor: HASH)` | all | Returns current cursor position. |
+| `bytes_get(data: STRING, index: INTEGER)` | all | Reads one byte at index as integer. |
+| `bytes_hex(value: INTEGER, width: INTEGER)` | all | Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> "0x00001234"). This formats a number; it does not hex-encode a byte string. |
+| `bytes_int_from_char(char: STRING)` | all | Converts a single-character string to its integer byte value. |
+| `bytes_len(data: STRING)` | all | Returns length of a bytes value. |
+| `bytes_read_u16_be(data: STRING, offset: INTEGER)` | all | Reads unsigned 16-bit big-endian integer from bytes at offset. |
+| `bytes_read_u16_le(data: STRING, offset: INTEGER)` | all | Reads unsigned 16-bit little-endian integer from bytes at offset. |
+| `bytes_read_u32_be(data: STRING, offset: INTEGER)` | all | Reads unsigned 32-bit big-endian integer from bytes at offset. |
+| `bytes_read_u32_le(data: STRING, offset: INTEGER)` | all | Reads unsigned 32-bit little-endian integer from bytes at offset. |
+| `bytes_read_u64_be(data: STRING, offset: INTEGER)` | all | Reads unsigned 64-bit big-endian integer from bytes at offset. |
+| `bytes_read_u64_le(data: STRING, offset: INTEGER)` | all | Reads unsigned 64-bit little-endian integer from bytes at offset. |
+| `bytes_slice(data: STRING, start: INTEGER, length: INTEGER)` | all | Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]). |
+| `bytes_write_u16_be(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 16-bit big-endian integer into bytes at offset. |
+| `bytes_write_u16_le(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 16-bit little-endian integer into bytes at offset. |
+| `bytes_write_u32_be(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 32-bit big-endian integer into bytes at offset. |
+| `bytes_write_u32_le(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 32-bit little-endian integer into bytes at offset. |
+| `bytes_write_u64_be(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 64-bit big-endian integer into bytes at offset. |
+| `bytes_write_u64_le(data: STRING, offset: INTEGER, value: INTEGER)` | all | Writes unsigned 64-bit little-endian integer into bytes at offset. |
 
 ## Filesystem (19)
 
@@ -252,25 +253,25 @@ Read/write/manage files and directories, plus file-level forensics: hashing, ent
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `fs_append(path, data)` | all | Appends data to the end of a file. |
+| `fs_append(path: STRING, data: STRING)` | all | Appends data to the end of a file. |
 | `fs_carve(path, type)` | all | Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length. |
-| `fs_copy(src, dst)` | all | Copies a file from source path to destination path. |
-| `fs_delete(path)` | all | Deletes a file from disk. |
+| `fs_copy(src: STRING, dst: STRING)` | all | Copies a file from source path to destination path. |
+| `fs_delete(path: STRING)` | all | Deletes a file from disk. |
 | `fs_deleted(path)` | all | Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
 | `fs_diff(leftPath, rightPath)` | all | Compares two files (not directories) and reports differences. |
 | `fs_entropy(path)` | all | Computes file entropy for packed/encrypted artifact detection. |
-| `fs_exists(path)` | all | Returns whether a file or directory exists. |
+| `fs_exists(path: STRING)` | all | Returns whether a file or directory exists. |
 | `fs_extract_strings(path, minLen?)` | all | Extracts printable strings from a file. |
 | `fs_hash(path)` | all | Computes hash digests for a file. |
-| `fs_list(path)` | all | Lists directory entries for a path. |
+| `fs_list(path: STRING)` | all | Lists directory entries for a path. |
 | `fs_magic(path)` | all | Infers file type/magic from a file's header against a ~40-signature database (executables PE/ELF/Mach-O, images, archives, documents, SQLite/registry/EVTX/pcap, media, and forensic artifacts like lnk/prefetch). Returns {path, type, mime, signature}. |
 | `fs_metadata(path)` | all | Returns detailed filesystem metadata for a path. |
-| `fs_mkdir(path)` | all | Creates a directory path. |
-| `fs_move(src, dst)` | all | Moves or renames a file or directory. |
-| `fs_read(path)` | all | Reads file contents from disk. |
-| `fs_stat(path)` | all | Returns file metadata such as size and timestamps. |
+| `fs_mkdir(path: STRING)` | all | Creates a directory path. |
+| `fs_move(src: STRING, dst: STRING)` | all | Moves or renames a file or directory. |
+| `fs_read(path: STRING)` | all | Reads file contents from disk. |
+| `fs_stat(path: STRING)` | all | Returns file metadata such as size and timestamps. |
 | `fs_walk(root)` | all | Walks a directory tree and returns discovered paths. |
-| `fs_write(path, data)` | all | Writes data to a file, replacing existing contents. |
+| `fs_write(path: STRING, data: STRING)` | all | Writes data to a file, replacing existing contents. |
 
 ## Network (32)
 
@@ -459,7 +460,7 @@ Live process inspection: enumeration, tree, environment, open files, threads, mo
 | --- | --- | --- |
 | `process_env(pid?)` | all | Returns environment variables for a process (cross-platform; other processes may require privileges). |
 | `process_hash(pid?)` | all | Computes SHA-256 hash metadata for a process executable. |
-| `process_kill(pid, signal?)` | all | Sends a signal to a process (default SIGKILL semantics). (On Windows only SIGKILL semantics are honored; other signal numbers are ignored.) |
+| `process_kill(pid, signal?)` | all | Sends a signal to a process (default SIGKILL semantics). |
 | `process_list()` | all | Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS. |
 | `process_memory_scan(pid, pattern)` | windows, linux | Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS. |
 | `process_modules(pid?)` | windows, linux | Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). |
@@ -519,7 +520,7 @@ Windows registry across three sources via one polymorphic API (regf hive file, h
 | `reg_enum_keys(handle, keyPath?)` | all | Enumerates subkeys under a key. For hive/live sources keyPath is relative to the opened key (default root); for JSON it is the absolute path. Returns (array, err). |
 | `reg_enum_values(handle, keyPath?)` | all | Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Works across JSON/hive-file/live sources. Returns (array, err). |
 | `reg_get_value(handle, keyPath, valueName)` | all | Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Returns (result, err). |
-| `reg_open(source)` | all | Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\SOFTWARE\...) -> live registry (Windows only). Returns (result, err). (The live-registry path (HKLM\..., HKCU\..., etc.) is Windows-only; captured hive files and hive-JSON inputs are parsed on all platforms.) |
+| `reg_open(source)` | all | Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\SOFTWARE\...) -> live registry (Windows only). Returns (result, err). |
 | `reg_timeline(handle)` | all | Returns timeline entries. Populated only for the JSON source (its timeline field); empty for real hive files and live registry. |
 | `shimcache_parse(path)` | all | Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err). |
 
@@ -648,4 +649,3 @@ NSRL-style known-file hash sets for include/exclude filtering.
 | `hashset_close(handle)` | all | Frees a loaded hash set. Returns (bool, err). |
 | `hashset_contains(handle, hash)` | all | Returns whether a hash is in a loaded set (case-insensitive). Returns (bool, err). |
 | `hashset_load(path)` | all | Loads a file of hashes (one per line, or CSV/NSRL where the hash is the first field) into an in-memory set. Skips headers/comments/non-hex. Returns {handle, count}. Returns (result, err). |
-

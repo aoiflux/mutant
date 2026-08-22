@@ -44,6 +44,7 @@ type LintConfig struct {
 	UnreachableCode              LintSeverity
 	PlatformSupport              LintSeverity
 	BuiltinArity                 LintSeverity
+	BuiltinArgType               LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -66,6 +67,9 @@ func DefaultLintConfig() LintConfig {
 		// runtime error, but it still parses/compiles, so warning (matching the
 		// platformSupport family) rather than error.
 		BuiltinArity: LintSeverityWarning,
+		// Passing a kind a builtin's parameter cannot accept is likewise a
+		// guaranteed runtime error that still compiles.
+		BuiltinArgType: LintSeverityWarning,
 	}
 }
 
@@ -88,6 +92,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.PlatformSupport
 	case "builtinArity":
 		severityName = c.BuiltinArity
+	case "builtinArgType":
+		severityName = c.BuiltinArgType
 	default:
 		return nil, false
 	}
@@ -141,7 +147,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUnreachableCode(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
-	diagnostics = append(diagnostics, lintBuiltinArity(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
@@ -1226,20 +1232,34 @@ func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *
 	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet, topLevel: current.depth == 0})
 }
 
-// lintBuiltinArity flags a call to a builtin whose fixed argument-count contract
-// the call cannot satisfy (e.g. `abs(1, 2)` or `clamp(x)`). It is deliberately
-// conservative and fires only when the callee (1) is not shadowed by an in-scope
-// binding, (2) is a live builtin in builtin.Builtins, and (3) has a verified
-// arity in the curated builtinArities table. A wrong-arity call to such a builtin
-// is a guaranteed runtime error, so this rule has no false positives.
-func lintBuiltinArity(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+// lintBuiltinCalls checks calls to builtins against the two contracts the
+// metadata makes machine-readable: how many arguments a builtin takes
+// (`builtinArity`, e.g. `abs(1, 2)` or `clamp(x)`) and what kinds each of its
+// parameters accepts (`builtinArgType`, e.g. `str_upper(42)`).
+//
+// Both are deliberately conservative and share the guards that make them
+// false-positive-free: the callee must not be shadowed by an in-scope binding,
+// must be live in builtin.Builtins, and must carry a verified contract — an
+// entry in builtinArities for the count, declared kinds in builtin/metadata.go
+// for the types. Anything unverified is simply never checked.
+//
+// One walk serves both rules; the severity of each is read independently, so
+// either can be turned off without disturbing the other.
+func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil {
 		return nil
 	}
 
-	severity, ok := lintConfig.severityForRule("builtinArity")
-	if !ok {
+	aritySeverity, arityEnabled := lintConfig.severityForRule("builtinArity")
+	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
+	if !arityEnabled && !argTypeEnabled {
 		return nil
+	}
+	if !arityEnabled {
+		aritySeverity = nil
+	}
+	if !argTypeEnabled {
+		argTypeSeverity = nil
 	}
 
 	source := "mutant-lint"
@@ -1251,12 +1271,14 @@ func lintBuiltinArity(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		knownBuiltins[def.Name] = struct{}{}
 	}
 
-	collector := &arityCollector{
-		snapshot: snapshot,
-		severity: severity,
-		source:   &source,
-		builtins: knownBuiltins,
-		result:   make([]lsp.Diagnostic, 0, 2),
+	collector := &builtinCallCollector{
+		snapshot:        snapshot,
+		aritySeverity:   aritySeverity,
+		argTypeSeverity: argTypeSeverity,
+		source:          &source,
+		builtins:        knownBuiltins,
+		reassigned:      reassignedNames(snapshot),
+		result:          make([]lsp.Diagnostic, 0, 2),
 	}
 
 	root := newDeclarationScope(nil, 0)
@@ -1267,19 +1289,25 @@ func lintBuiltinArity(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	return collector.result
 }
 
-// arityCollector walks the program tracking lexical scope so it can tell a real
-// builtin call from a shadowed name, and checks fixed-arity builtin calls against
-// builtinArities. It mirrors undefinedCollector's scope walk; the only leaf action
-// is the arity check at an identifier-callee CallExpression.
-type arityCollector struct {
-	snapshot *Snapshot
-	severity *lsp.DiagnosticSeverity
-	source   *string
-	builtins map[string]struct{}
-	result   []lsp.Diagnostic
+// builtinCallCollector walks the program tracking lexical scope so it can tell a
+// real builtin call from a shadowed name, then checks each such call against the
+// arity table and the declared parameter kinds. It mirrors undefinedCollector's
+// scope walk; the only leaf action is checkCall at an identifier-callee
+// CallExpression.
+//
+// A nil severity means that rule is switched off. The walk still runs, because
+// the other rule may be on.
+type builtinCallCollector struct {
+	snapshot        *Snapshot
+	aritySeverity   *lsp.DiagnosticSeverity
+	argTypeSeverity *lsp.DiagnosticSeverity
+	source          *string
+	builtins        map[string]struct{}
+	reassigned      map[string]struct{}
+	result          []lsp.Diagnostic
 }
 
-func (c *arityCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
+func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
 	if c == nil || c.snapshot == nil || current == nil || stmt == nil {
 		return
 	}
@@ -1339,7 +1367,7 @@ func (c *arityCollector) collectStatement(stmt mast.Statement, current *declarat
 	}
 }
 
-func (c *arityCollector) collectExpression(expr mast.Expression, current *declarationScope) {
+func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *declarationScope) {
 	if c == nil || c.snapshot == nil || current == nil || expr == nil {
 		return
 	}
@@ -1381,7 +1409,7 @@ func (c *arityCollector) collectExpression(expr mast.Expression, current *declar
 				}
 				return
 			}
-			c.checkArity(ident, len(node.Arguments), current)
+			c.checkCall(ident, node.Arguments, current)
 		}
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
@@ -1440,9 +1468,14 @@ func (c *arityCollector) collectExpression(expr mast.Expression, current *declar
 	}
 }
 
-// checkArity emits a diagnostic when ident names a fixed-arity builtin that is not
-// shadowed in scope and argCount cannot satisfy its contract.
-func (c *arityCollector) checkArity(ident *mast.Identifier, argCount int, current *declarationScope) {
+// checkCall runs both builtin-call rules at one call site: the argument count
+// against the curated arity table, then each argument's type against the
+// parameter kinds declared in builtin/metadata.go.
+//
+// A call that fails the arity check is not type-checked. Its arguments cannot be
+// mapped onto parameters with any confidence, and one clear complaint per call
+// beats a cascade of consequential ones.
+func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Expression, current *declarationScope) {
 	if ident == nil || ident.Value == "" {
 		return
 	}
@@ -1454,23 +1487,83 @@ func (c *arityCollector) checkArity(ident *mast.Identifier, argCount int, curren
 	if _, ok := c.builtins[ident.Value]; !ok {
 		return
 	}
-	arity, ok := builtinArityFor(ident.Value)
-	if !ok || arity.accepts(argCount) {
+
+	if arity, ok := builtinArityFor(ident.Value); ok && !arity.accepts(len(args)) {
+		// The count is wrong whether or not the rule that reports it is on, so
+		// the type check is suppressed either way.
+		if c.aritySeverity != nil {
+			if rng, ok := c.snapshot.Program.RangeOf(ident); ok {
+				c.result = append(c.result, lsp.Diagnostic{
+					Range:    localprotocol.ToLSPRange(rng),
+					Severity: c.aritySeverity,
+					Source:   c.source,
+					Message:  arity.message(ident.Value, len(args)),
+				})
+			}
+		}
 		return
 	}
-	rng, ok := c.snapshot.Program.RangeOf(ident)
-	if !ok {
-		return
-	}
-	c.result = append(c.result, lsp.Diagnostic{
-		Range:    localprotocol.ToLSPRange(rng),
-		Severity: c.severity,
-		Source:   c.source,
-		Message:  arity.message(ident.Value, argCount),
-	})
+
+	c.checkArgumentTypes(ident, args)
 }
 
-func (c *arityCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
+// checkArgumentTypes flags an argument whose kind the parameter in that position
+// cannot accept.
+//
+// It fires only where every one of these holds, which together are what make the
+// rule false-positive-free:
+//
+//  1. the builtin documents its parameters and the call's argument count fits
+//     them, so positions map to parameters unambiguously;
+//  2. the parameter declares a non-empty kind set — an undeclared parameter, or
+//     one verified to accept anything, is never checked;
+//  3. the argument's type is certain rather than merely inferred
+//     (argumentTypeIsCertain);
+//  4. that type is expressible as a kind — structs, enums, and errors have no
+//     kind to compare against and are skipped.
+func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args []mast.Expression) {
+	if c.argTypeSeverity == nil || len(args) == 0 {
+		return
+	}
+
+	params, ok := builtin.ParamSpecs(ident.Value)
+	if !ok || len(params) == 0 || !argumentCountFitsParams(params, len(args)) {
+		return
+	}
+
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		param, ok := paramForArgument(params, i)
+		if !ok || param.AcceptsAnyKind() {
+			continue
+		}
+		if !argumentTypeIsCertain(arg, c.reassigned) {
+			continue
+		}
+		argType, ok := c.snapshot.TypeOf(arg)
+		if !ok || !argType.IsKnown() {
+			continue
+		}
+		kind, ok := paramKindForType(argType)
+		if !ok || param.Accepts(kind) {
+			continue
+		}
+		rng, ok := c.snapshot.Program.RangeOf(arg)
+		if !ok {
+			continue
+		}
+		c.result = append(c.result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: c.argTypeSeverity,
+			Source:   c.source,
+			Message:  argTypeMessage(ident.Value, i+1, param, kind),
+		})
+	}
+}
+
+func (c *builtinCallCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
 	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
 		return
 	}

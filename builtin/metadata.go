@@ -2,9 +2,78 @@ package builtin
 
 import "strings"
 
+// ParamKind names a value type a builtin parameter accepts. The values are
+// deliberately the object type names the language already shows users through
+// `type_of` (INTEGER, STRING, ARRAY, ...) so a diagnostic can say "expects
+// STRING, got INTEGER" in the same words the runtime does.
+//
+// Note there is no BYTES kind: Mutant represents byte buffers as STRING values
+// (see requireBytesStringArg in bytes.go), so a "bytes" parameter declares
+// ParamString and explains itself in prose.
+type ParamKind string
+
+const (
+	// ParamAny records that a parameter genuinely accepts any value — a
+	// verified fact, distinct from a parameter whose kinds are simply not
+	// declared yet (an empty set). Consumers must never type-check against it.
+	ParamAny    ParamKind = "ANY"
+	ParamInt    ParamKind = "INTEGER"
+	ParamFloat  ParamKind = "FLOAT"
+	ParamString ParamKind = "STRING"
+	ParamBool   ParamKind = "BOOLEAN"
+	ParamArray  ParamKind = "ARRAY"
+	ParamHash   ParamKind = "HASH"
+	ParamFn     ParamKind = "FUNCTION"
+	ParamNull   ParamKind = "NULL"
+)
+
+// BuiltinParamDoc is the exported view of one builtin parameter.
+//
+// Name keeps the decorated spelling used in the signature (`topic?`,
+// `...values`) because hover and signature help render it directly; Optional
+// and Variadic carry the same information in structured form, derived from that
+// spelling so the two can never disagree.
+//
+// Kinds is the set of value types the parameter accepts — a union, because
+// plenty of builtins take more than one (`len` accepts STRING, ARRAY, or HASH).
+// An empty set means the parameter's types have not been declared yet and it
+// must not be type-checked; that is what keeps the argument-type diagnostic
+// free of false positives as coverage grows.
 type BuiltinParamDoc struct {
-	Name string
-	Doc  string
+	Name     string
+	Doc      string
+	Kinds    []ParamKind
+	Optional bool
+	Variadic bool
+	Elem     *ParamKind
+}
+
+// AcceptsAnyKind reports whether the parameter must be left unchecked: either
+// its kinds are undeclared, or it is declared to accept anything.
+func (p BuiltinParamDoc) AcceptsAnyKind() bool {
+	if len(p.Kinds) == 0 {
+		return true
+	}
+	for _, kind := range p.Kinds {
+		if kind == ParamAny {
+			return true
+		}
+	}
+	return false
+}
+
+// Accepts reports whether a value of the given kind satisfies the parameter.
+// It is true for any kind when the parameter is unchecked.
+func (p BuiltinParamDoc) Accepts(kind ParamKind) bool {
+	if p.AcceptsAnyKind() {
+		return true
+	}
+	for _, allowed := range p.Kinds {
+		if allowed == kind {
+			return true
+		}
+	}
+	return false
 }
 
 type builtinFamilyDoc struct {
@@ -26,150 +95,555 @@ type builtinDoc struct {
 	platformNote string
 }
 
+// builtinParamDoc is the internal, hand-authored form of one parameter.
+//
+// name keeps the signature's spelling (`topic?`, `...values`); optional and
+// variadic are derived from it at export time rather than stored, so there is
+// nothing to keep in sync. kinds is the union of accepted value types — leave
+// it nil until the parameter has been verified against the builtin's
+// implementation, because an undeclared parameter is simply never checked.
 type builtinParamDoc struct {
-	name string
-	doc  string
+	name  string
+	doc   string
+	kinds []ParamKind
+	// elem is the element kind of an ARRAY parameter. It is recorded where
+	// known but no consumer reads it yet.
+	elem *ParamKind
+}
+
+// hashableKinds is the set of kinds that implement object.Hashable, and so the
+// only kinds a hash key may be — see hashableKey in collections_builtins.go,
+// which rejects everything else with "must be a hashable type".
+var hashableKinds = []ParamKind{ParamString, ParamInt, ParamFloat, ParamBool}
+
+// param builds one parameter contract: the spelling used in the signature, the
+// prose shown in hover, and the set of value kinds the builtin accepts there.
+//
+// Pass no kinds when the parameter has not been verified against the builtin's
+// implementation yet — an undeclared parameter is simply never type-checked.
+// Pass ParamAny to record the verified fact that it accepts anything.
+func param(name, doc string, kinds ...ParamKind) builtinParamDoc {
+	return builtinParamDoc{name: name, doc: doc, kinds: kinds}
+}
+
+// arrayParam builds an ARRAY parameter that additionally records its element
+// kind. No consumer reads the element kind yet; it is captured while the
+// implementation is in front of us.
+func arrayParam(name, doc string, elem ParamKind) builtinParamDoc {
+	return builtinParamDoc{name: name, doc: doc, kinds: []ParamKind{ParamArray}, elem: &elem}
+}
+
+// The twelve bytes_read_* / bytes_write_* builtins are generated from two
+// helpers in builtin/bytes.go and share one argument shape apiece. Spelling
+// that shape once keeps the twelve entries from drifting apart.
+
+func bytesReadParams() []builtinParamDoc {
+	return []builtinParamDoc{
+		param("data", "Source byte string.", ParamString),
+		param("offset", "Offset to read from.", ParamInt),
+	}
+}
+
+func bytesWriteParams() []builtinParamDoc {
+	return []builtinParamDoc{
+		param("data", "Byte string to write into; a modified copy is returned.", ParamString),
+		param("offset", "Offset to write at.", ParamInt),
+		param("value", "Unsigned integer to encode; must fit the field width.", ParamInt),
+	}
+}
+
+// cursorParam is the cursor argument the bytes_cursor_* builtins share — a HASH
+// carrying `data` and `offset`, as built by bytes_cursor_new and validated by
+// requireBytesCursor.
+func cursorParam() builtinParamDoc {
+	return param("cursor", "Cursor hash from bytes_cursor_new, with `data` and `offset` fields.", ParamHash)
 }
 
 var builtinDocs = map[string]builtinDoc{
 	BuiltinNameLen: {
 		signature: "len(value)",
-		summary:   "Returns the length of a string, array, hash, or bytes value.",
-		params:    []builtinParamDoc{{name: "value", doc: "String, array, hash, or bytes value to measure."}},
+		// Verified against builtin/len.go: the switch accepts Array, String,
+		// and Hash. "bytes" is not a separate kind — Mutant carries byte
+		// buffers in STRING values.
+		summary: "Returns the length of a string, array, hash, or bytes value.",
+		params:  []builtinParamDoc{param("value", "String, array, hash, or bytes value to measure.", ParamString, ParamArray, ParamHash)},
 	},
-	BuiltinNameHelp:  {signature: "help(topic?, mode?)", summary: "Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name.", params: []builtinParamDoc{{name: "topic?", doc: "Optional topic or builtin name."}, {name: "mode?", doc: "Optional rendering mode."}}},
-	BuiltinNamePutln: {signature: "putln(value)", summary: "Prints a value followed by a newline."},
+	BuiltinNameHelp: {signature: "help(topic?, mode?)", summary: "Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name.", params: []builtinParamDoc{param("topic?", "Optional topic or builtin name.", ParamString), param("mode?", "Optional rendering mode.", ParamString)}},
+	// putln takes no arity check at all and prints each argument separated by a
+	// space (builtin/putln.go) — the `putln(value)` spelling it carried before
+	// contradicted the 400+ multi-argument calls in examples/.
+	BuiltinNamePutln: {signature: "putln(...values)", summary: "Prints values separated by spaces, followed by a newline.", params: []builtinParamDoc{param("...values", "Values to print; any type is accepted.", ParamAny)}},
 	BuiltinNamePutf: {
 		signature: "putf(format, ...values)",
 		summary:   "Formats and prints values using a format string.",
+		// Unlike str_format, putf does not require a STRING format: it calls
+		// Inspect() on whatever it is given (builtin/putf.go).
 		params: []builtinParamDoc{
-			{name: "format", doc: "Printf-style format string."},
-			{name: "...values", doc: "Values interpolated into format."},
+			param("format", "Printf-style format string; any value is accepted and inspected.", ParamAny),
+			param("...values", "Values interpolated into format; any type is accepted.", ParamAny),
 		},
 	},
-	BuiltinNameGets:          {signature: "gets()", summary: "Reads a full line of input from stdin and returns it as a STRING (newline trimmed). Use to_int/to_float/parse_int to convert."},
-	BuiltinNameFirst:         {signature: "first(array)", summary: "Returns the first element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
-	BuiltinNameLast:          {signature: "last(array)", summary: "Returns the last element of an array.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
-	BuiltinNameRest:          {signature: "rest(array)", summary: "Returns a new array without the first element.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
-	BuiltinNamePush:          {signature: "push(array, value)", summary: "Returns a new array with value appended.", params: []builtinParamDoc{{name: "array", doc: "Source array."}, {name: "value", doc: "Element to append."}}},
-	BuiltinNamePop:           {signature: "pop(array)", summary: "Returns a new array without the last element.", params: []builtinParamDoc{{name: "array", doc: "Source array."}}},
-	BuiltinNameFsRead:        {signature: "fs_read(path)", summary: "Reads file contents from disk.", params: []builtinParamDoc{{name: "path", doc: "Path to file."}}},
-	BuiltinNameFsWrite:       {signature: "fs_write(path, data)", summary: "Writes data to a file, replacing existing contents.", params: []builtinParamDoc{{name: "path", doc: "Path to file."}, {name: "data", doc: "String/bytes payload."}}},
-	BuiltinNameFsAppend:      {signature: "fs_append(path, data)", summary: "Appends data to the end of a file.", params: []builtinParamDoc{{name: "path", doc: "Path to file."}, {name: "data", doc: "String/bytes payload."}}},
-	BuiltinNameFsExists:      {signature: "fs_exists(path)", summary: "Returns whether a file or directory exists.", params: []builtinParamDoc{{name: "path", doc: "Path to check."}}},
-	BuiltinNameHttpGet:       {signature: "http_get(url)", summary: "Performs an HTTP GET request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}}},
-	BuiltinNameHttpPost:      {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}, {name: "contentType?", doc: "Optional Content-Type header (default application/octet-stream)."}}},
-	BuiltinNameHttpRequest:   {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value (\"\" for none)."}, {name: "headers", doc: "Hash of request headers."}}},
-	BuiltinNameJsonParse:     {signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.", params: []builtinParamDoc{{name: "text", doc: "JSON string input."}}},
-	BuiltinNameJsonStringify: {signature: "json_stringify(value)", summary: "Serializes Mutant values into JSON text.", params: []builtinParamDoc{{name: "value", doc: "Value to serialize."}}},
-	BuiltinNameLuaRunString:  {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string."},
-	BuiltinNameLuaRunFile:    {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file."},
-	BuiltinNameLuaRunHttp:    {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries)."},
-	BuiltinNameStrUpper:      {signature: "str_upper(s)", summary: "Returns s with all letters upper-cased."},
-	BuiltinNameStrLower:      {signature: "str_lower(s)", summary: "Returns s with all letters lower-cased."},
-	BuiltinNameStrTrim:       {signature: "str_trim(s)", summary: "Returns s with leading and trailing whitespace removed."},
-	BuiltinNameStrTrimLeft:   {signature: "str_trim_left(s, cutset)", summary: "Trims any leading characters in cutset from s."},
-	BuiltinNameStrTrimRight:  {signature: "str_trim_right(s, cutset)", summary: "Trims any trailing characters in cutset from s."},
-	BuiltinNameStrTrimPrefix: {signature: "str_trim_prefix(s, prefix)", summary: "Removes prefix from s if present."},
-	BuiltinNameStrTrimSuffix: {signature: "str_trim_suffix(s, suffix)", summary: "Removes suffix from s if present."},
-	BuiltinNameStrStartsWith: {signature: "str_starts_with(s, prefix)", summary: "Returns whether s begins with prefix."},
-	BuiltinNameStrEndsWith:   {signature: "str_ends_with(s, suffix)", summary: "Returns whether s ends with suffix."},
-	BuiltinNameStrJoin:       {signature: "str_join(array, sep)", summary: "Joins an array of strings with sep (inverse of text_split)."},
-	BuiltinNameStrRepeat:     {signature: "str_repeat(s, n)", summary: "Returns s repeated n times."},
-	BuiltinNameStrPadLeft:    {signature: "str_pad_left(s, width, pad)", summary: "Left-pads s with pad until it reaches width runes."},
-	BuiltinNameStrPadRight:   {signature: "str_pad_right(s, width, pad)", summary: "Right-pads s with pad until it reaches width runes."},
-	BuiltinNameStrReverse:    {signature: "str_reverse(s)", summary: "Returns s reversed (rune-aware)."},
-	BuiltinNameStrSubstr:     {signature: "str_substr(s, start, length)", summary: "Returns length runes of s starting at rune index start (clamped to bounds)."},
-	BuiltinNameStrCharAt:     {signature: "str_char_at(s, index)", summary: "Returns the rune at index as a string."},
-	BuiltinNameStrFormat:     {signature: "str_format(format, ...values)", summary: "Returns a printf-style formatted string (like putf but returns instead of printing)."},
-	BuiltinNameStrTitle:      {signature: "str_title(s)", summary: "Upper-cases the first letter of each word in s."},
+	BuiltinNameGets:  {signature: "gets()", summary: "Reads a full line of input from stdin and returns it as a STRING (newline trimmed). Use to_int/to_float/parse_int to convert."},
+	BuiltinNameFirst: {signature: "first(array)", summary: "Returns the first element of an array.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}},
+	BuiltinNameLast:  {signature: "last(array)", summary: "Returns the last element of an array.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}},
+	BuiltinNameRest:  {signature: "rest(array)", summary: "Returns a new array without the first element.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}},
+	BuiltinNamePush:  {signature: "push(array, value)", summary: "Returns a new array with value appended.", params: []builtinParamDoc{param("array", "Source array.", ParamArray), param("value", "Element to append; any type is accepted.", ParamAny)}},
+	BuiltinNamePop:   {signature: "pop(array)", summary: "Returns a new array without the last element.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}},
+	// Every fs_* argument is asserted to *object.String in builtin/fs.go —
+	// paths and payloads alike, since byte payloads travel as STRING values.
+	BuiltinNameFsRead: {
+		signature: "fs_read(path)", summary: "Reads file contents from disk.",
+		params: []builtinParamDoc{param("path", "Path to file.", ParamString)},
+	},
+	BuiltinNameFsWrite: {
+		signature: "fs_write(path, data)", summary: "Writes data to a file, replacing existing contents.",
+		params: []builtinParamDoc{
+			param("path", "Path to file.", ParamString),
+			param("data", "String/bytes payload.", ParamString),
+		},
+	},
+	BuiltinNameFsAppend: {
+		signature: "fs_append(path, data)", summary: "Appends data to the end of a file.",
+		params: []builtinParamDoc{
+			param("path", "Path to file.", ParamString),
+			param("data", "String/bytes payload.", ParamString),
+		},
+	},
+	BuiltinNameFsExists: {
+		signature: "fs_exists(path)", summary: "Returns whether a file or directory exists.",
+		params: []builtinParamDoc{param("path", "Path to check.", ParamString)},
+	},
+	BuiltinNameHttpGet:     {signature: "http_get(url)", summary: "Performs an HTTP GET request.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}}},
+	BuiltinNameHttpPost:    {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{{name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value."}, {name: "contentType?", doc: "Optional Content-Type header (default application/octet-stream)."}}},
+	BuiltinNameHttpRequest: {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{{name: "method", doc: "HTTP verb (GET/POST/etc)."}, {name: "url", doc: "Absolute request URL."}, {name: "body", doc: "Request body value (\"\" for none)."}, {name: "headers", doc: "Hash of request headers."}}},
+	BuiltinNameJsonParse: {
+		signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.",
+		params: []builtinParamDoc{param("text", "JSON string input.", ParamString)},
+	},
+	// objectToJSONValue (builtin/json.go) handles scalars, null, arrays, and
+	// hashes and errors on anything else — functions included — so the union
+	// below is every kind it can serialize.
+	BuiltinNameJsonStringify: {
+		signature: "json_stringify(value)", summary: "Serializes Mutant values into JSON text.",
+		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, null, array, or hash with string keys.",
+			ParamString, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash)},
+	},
+	BuiltinNameLuaRunString: {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string."},
+	BuiltinNameLuaRunFile:   {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file."},
+	BuiltinNameLuaRunHttp:   {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries)."},
+	// Parameter kinds below are verified against builtin/strings_builtins.go:
+	// the whole family routes through requireStringArg/requireIntArg, so every
+	// parameter is strictly typed. str_format is the one exception — its
+	// variadic tail formats any value (the default branch calls Inspect()).
+	BuiltinNameStrUpper:      {signature: "str_upper(s)", summary: "Returns s with all letters upper-cased.", params: []builtinParamDoc{param("s", "Source string.", ParamString)}},
+	BuiltinNameStrLower:      {signature: "str_lower(s)", summary: "Returns s with all letters lower-cased.", params: []builtinParamDoc{param("s", "Source string.", ParamString)}},
+	BuiltinNameStrTrim:       {signature: "str_trim(s)", summary: "Returns s with leading and trailing whitespace removed.", params: []builtinParamDoc{param("s", "Source string.", ParamString)}},
+	BuiltinNameStrTrimLeft:   {signature: "str_trim_left(s, cutset)", summary: "Trims any leading characters in cutset from s.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("cutset", "Characters to trim from the left.", ParamString)}},
+	BuiltinNameStrTrimRight:  {signature: "str_trim_right(s, cutset)", summary: "Trims any trailing characters in cutset from s.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("cutset", "Characters to trim from the right.", ParamString)}},
+	BuiltinNameStrTrimPrefix: {signature: "str_trim_prefix(s, prefix)", summary: "Removes prefix from s if present.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("prefix", "Prefix to remove.", ParamString)}},
+	BuiltinNameStrTrimSuffix: {signature: "str_trim_suffix(s, suffix)", summary: "Removes suffix from s if present.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("suffix", "Suffix to remove.", ParamString)}},
+	BuiltinNameStrStartsWith: {signature: "str_starts_with(s, prefix)", summary: "Returns whether s begins with prefix.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("prefix", "Prefix to test for.", ParamString)}},
+	BuiltinNameStrEndsWith:   {signature: "str_ends_with(s, suffix)", summary: "Returns whether s ends with suffix.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("suffix", "Suffix to test for.", ParamString)}},
+	BuiltinNameStrJoin:       {signature: "str_join(array, sep)", summary: "Joins an array of strings with sep (inverse of text_split).", params: []builtinParamDoc{arrayParam("array", "Array of STRING elements to join; a non-string element is an error.", ParamString), param("sep", "Separator placed between elements.", ParamString)}},
+	BuiltinNameStrRepeat:     {signature: "str_repeat(s, n)", summary: "Returns s repeated n times.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("n", "Repeat count; must be non-negative.", ParamInt)}},
+	BuiltinNameStrPadLeft:    {signature: "str_pad_left(s, width, pad)", summary: "Left-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}},
+	BuiltinNameStrPadRight:   {signature: "str_pad_right(s, width, pad)", summary: "Right-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}},
+	BuiltinNameStrReverse:    {signature: "str_reverse(s)", summary: "Returns s reversed (rune-aware).", params: []builtinParamDoc{param("s", "Source string.", ParamString)}},
+	BuiltinNameStrSubstr:     {signature: "str_substr(s, start, length)", summary: "Returns length runes of s starting at rune index start (clamped to bounds).", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("start", "Starting rune index; must be non-negative.", ParamInt), param("length", "Number of runes to take; must be non-negative.", ParamInt)}},
+	BuiltinNameStrCharAt:     {signature: "str_char_at(s, index)", summary: "Returns the rune at index as a string.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("index", "Rune index; must be within the string.", ParamInt)}},
+	BuiltinNameStrFormat:     {signature: "str_format(format, ...values)", summary: "Returns a printf-style formatted string (like putf but returns instead of printing).", params: []builtinParamDoc{param("format", "Printf-style format string.", ParamString), param("...values", "Values interpolated into format; any type is accepted.", ParamAny)}},
+	BuiltinNameStrTitle:      {signature: "str_title(s)", summary: "Upper-cases the first letter of each word in s.", params: []builtinParamDoc{param("s", "Source string.", ParamString)}},
 	// generic: hashing & IDs
-	BuiltinNameHashMD5:    {signature: "hash_md5(s)", summary: "Returns the lowercase hex MD5 digest of s."},
-	BuiltinNameHashSHA1:   {signature: "hash_sha1(s)", summary: "Returns the lowercase hex SHA-1 digest of s."},
-	BuiltinNameHashSHA256: {signature: "hash_sha256(s)", summary: "Returns the lowercase hex SHA-256 digest of s."},
-	BuiltinNameHashSHA512: {signature: "hash_sha512(s)", summary: "Returns the lowercase hex SHA-512 digest of s."},
-	BuiltinNameHashCRC32:  {signature: "hash_crc32(s)", summary: "Returns the CRC-32 (IEEE) checksum of s as 8 hex chars."},
-	BuiltinNameHashBlake2: {signature: "hash_blake2(s)", summary: "Returns the lowercase hex BLAKE2b-256 digest of s."},
-	BuiltinNameHMAC:       {signature: "hmac(key, message, algo)", summary: "Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512.", params: []builtinParamDoc{{name: "key", doc: "Secret key."}, {name: "message", doc: "Message to authenticate."}, {name: "algo", doc: "Hash algorithm: md5/sha1/sha256/sha512."}}},
-	BuiltinNameUUIDv4:     {signature: "uuid_v4()", summary: "Returns a random (v4) UUID string."},
-	BuiltinNameUUIDv7:     {signature: "uuid_v7()", summary: "Returns a time-ordered (v7) UUID string."},
-	BuiltinNameRandomHex:  {signature: "random_hex(n)", summary: "Returns n cryptographically-random bytes as a 2n-char hex string."},
-	BuiltinNameNanoID:     {signature: "nanoid(n)", summary: "Returns a URL-safe random identifier of length n."},
+	// Every digest builtin funnels through hashOneString → requireStringArg, so
+	// they all take exactly one STRING. Byte buffers are STRING values in
+	// Mutant, so hashing bytes needs no separate kind.
+	BuiltinNameHashMD5: {
+		signature: "hash_md5(s)", summary: "Returns the lowercase hex MD5 digest of s.",
+		params: []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+	},
+	BuiltinNameHashSHA1: {
+		signature: "hash_sha1(s)", summary: "Returns the lowercase hex SHA-1 digest of s.",
+		params: []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+	},
+	BuiltinNameHashSHA256: {
+		signature: "hash_sha256(s)", summary: "Returns the lowercase hex SHA-256 digest of s.",
+		params: []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+	},
+	BuiltinNameHashSHA512: {
+		signature: "hash_sha512(s)", summary: "Returns the lowercase hex SHA-512 digest of s.",
+		params: []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+	},
+	BuiltinNameHashCRC32: {
+		signature: "hash_crc32(s)", summary: "Returns the CRC-32 (IEEE) checksum of s as 8 hex chars.",
+		params: []builtinParamDoc{param("s", "String or bytes to checksum.", ParamString)},
+	},
+	BuiltinNameHashBlake2: {
+		signature: "hash_blake2(s)", summary: "Returns the lowercase hex BLAKE2b-256 digest of s.",
+		params: []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+	},
+	BuiltinNameHMAC: {
+		signature: "hmac(key, message, algo)", summary: "Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512.",
+		params: []builtinParamDoc{
+			param("key", "Secret key.", ParamString),
+			param("message", "Message to authenticate.", ParamString),
+			param("algo", "Hash algorithm: md5/sha1/sha256/sha512.", ParamString),
+		},
+	},
+	BuiltinNameUUIDv4: {signature: "uuid_v4()", summary: "Returns a random (v4) UUID string."},
+	BuiltinNameUUIDv7: {signature: "uuid_v7()", summary: "Returns a time-ordered (v7) UUID string."},
+	BuiltinNameRandomHex: {
+		signature: "random_hex(n)", summary: "Returns n cryptographically-random bytes as a 2n-char hex string.",
+		params: []builtinParamDoc{param("n", "Number of random bytes.", ParamInt)},
+	},
+	BuiltinNameNanoID: {
+		signature: "nanoid(n)", summary: "Returns a URL-safe random identifier of length n.",
+		params: []builtinParamDoc{param("n", "Identifier length in characters.", ParamInt)},
+	},
 	// generic: math
-	BuiltinNameAbs:       {signature: "abs(x)", summary: "Absolute value (preserves INTEGER/FLOAT type)."},
-	BuiltinNameMin:       {signature: "min(...values)", summary: "Returns the smallest of the numeric arguments (original type preserved)."},
-	BuiltinNameMax:       {signature: "max(...values)", summary: "Returns the largest of the numeric arguments (original type preserved)."},
-	BuiltinNameClamp:     {signature: "clamp(x, lo, hi)", summary: "Constrains x to the range [lo, hi]."},
-	BuiltinNamePow:       {signature: "pow(x, y)", summary: "Returns x raised to the power y (FLOAT)."},
-	BuiltinNameSqrt:      {signature: "sqrt(x)", summary: "Returns the square root of x (FLOAT); errors on negative x."},
-	BuiltinNameMod:       {signature: "mod(a, b)", summary: "Returns a modulo b; errors on b=0. Integer mod when both are INTEGER."},
-	BuiltinNameFloor:     {signature: "floor(x)", summary: "Largest integer <= x (INTEGER)."},
-	BuiltinNameCeil:      {signature: "ceil(x)", summary: "Smallest integer >= x (INTEGER)."},
-	BuiltinNameRound:     {signature: "round(x)", summary: "Nearest integer to x (INTEGER)."},
-	BuiltinNameSum:       {signature: "sum(array)", summary: "Sum of a numeric array (INTEGER if all elements are integers)."},
-	BuiltinNameAvg:       {signature: "avg(array)", summary: "Arithmetic mean of a numeric array (FLOAT); errors on empty."},
-	BuiltinNameRand:      {signature: "rand()", summary: "Returns a random FLOAT in [0, 1)."},
-	BuiltinNameRandInt:   {signature: "rand_int(lo, hi)", summary: "Returns a random INTEGER in [lo, hi)."},
-	BuiltinNameRandBytes: {signature: "rand_bytes(n)", summary: "Returns n cryptographically-random bytes (as a byte string)."},
-	BuiltinNameMathPi:    {signature: "math_pi()", summary: "Returns the constant pi."},
-	BuiltinNameMathE:     {signature: "math_e()", summary: "Returns the constant e."},
+	// The math builtins take their operands through requireNumericArg, which
+	// accepts INTEGER and FLOAT and rejects everything else
+	// (builtin/math_builtins.go). rand_int / rand_bytes are the exceptions:
+	// they require whole INTEGERs.
+	BuiltinNameAbs: {
+		signature: "abs(x)", summary: "Absolute value (preserves INTEGER/FLOAT type).",
+		params: []builtinParamDoc{param("x", "Number to take the magnitude of.", ParamInt, ParamFloat)},
+	},
+	// The leading `value` is not decoration: min/max reject a zero-argument
+	// call, and `...values` alone would read as "zero or more".
+	BuiltinNameMin: {
+		signature: "min(value, ...values)", summary: "Returns the smallest of the numeric arguments (original type preserved).",
+		params: []builtinParamDoc{
+			param("value", "First number to compare.", ParamInt, ParamFloat),
+			param("...values", "Further numbers to compare.", ParamInt, ParamFloat),
+		},
+	},
+	BuiltinNameMax: {
+		signature: "max(value, ...values)", summary: "Returns the largest of the numeric arguments (original type preserved).",
+		params: []builtinParamDoc{
+			param("value", "First number to compare.", ParamInt, ParamFloat),
+			param("...values", "Further numbers to compare.", ParamInt, ParamFloat),
+		},
+	},
+	BuiltinNameClamp: {
+		signature: "clamp(x, lo, hi)", summary: "Constrains x to the range [lo, hi].",
+		params: []builtinParamDoc{
+			param("x", "Number to constrain.", ParamInt, ParamFloat),
+			param("lo", "Lower bound; must not exceed hi.", ParamInt, ParamFloat),
+			param("hi", "Upper bound.", ParamInt, ParamFloat),
+		},
+	},
+	BuiltinNamePow: {
+		signature: "pow(x, y)", summary: "Returns x raised to the power y (FLOAT).",
+		params: []builtinParamDoc{
+			param("x", "Base.", ParamInt, ParamFloat),
+			param("y", "Exponent.", ParamInt, ParamFloat),
+		},
+	},
+	BuiltinNameSqrt: {
+		signature: "sqrt(x)", summary: "Returns the square root of x (FLOAT); errors on negative x.",
+		params: []builtinParamDoc{param("x", "Non-negative number.", ParamInt, ParamFloat)},
+	},
+	BuiltinNameMod: {
+		signature: "mod(a, b)", summary: "Returns a modulo b; errors on b=0. Integer mod when both are INTEGER.",
+		params: []builtinParamDoc{
+			param("a", "Dividend.", ParamInt, ParamFloat),
+			param("b", "Divisor; must not be zero.", ParamInt, ParamFloat),
+		},
+	},
+	BuiltinNameFloor: {
+		signature: "floor(x)", summary: "Largest integer <= x (INTEGER).",
+		params: []builtinParamDoc{param("x", "Number to round down.", ParamInt, ParamFloat)},
+	},
+	BuiltinNameCeil: {
+		signature: "ceil(x)", summary: "Smallest integer >= x (INTEGER).",
+		params: []builtinParamDoc{param("x", "Number to round up.", ParamInt, ParamFloat)},
+	},
+	BuiltinNameRound: {
+		signature: "round(x)", summary: "Nearest integer to x (INTEGER).",
+		params: []builtinParamDoc{param("x", "Number to round.", ParamInt, ParamFloat)},
+	},
+	BuiltinNameSum: {
+		signature: "sum(array)", summary: "Sum of a numeric array (INTEGER if all elements are integers).",
+		params: []builtinParamDoc{param("array", "Array whose elements are all numbers.", ParamArray)},
+	},
+	BuiltinNameAvg: {
+		signature: "avg(array)", summary: "Arithmetic mean of a numeric array (FLOAT); errors on empty.",
+		params: []builtinParamDoc{param("array", "Non-empty array whose elements are all numbers.", ParamArray)},
+	},
+	BuiltinNameRand: {signature: "rand()", summary: "Returns a random FLOAT in [0, 1)."},
+	BuiltinNameRandInt: {
+		signature: "rand_int(lo, hi)", summary: "Returns a random INTEGER in [lo, hi).",
+		params: []builtinParamDoc{
+			param("lo", "Inclusive lower bound.", ParamInt),
+			param("hi", "Exclusive upper bound; must be greater than lo.", ParamInt),
+		},
+	},
+	BuiltinNameRandBytes: {
+		signature: "rand_bytes(n)", summary: "Returns n cryptographically-random bytes (as a byte string).",
+		params: []builtinParamDoc{param("n", "Number of random bytes.", ParamInt)},
+	},
+	BuiltinNameMathPi: {signature: "math_pi()", summary: "Returns the constant pi."},
+	BuiltinNameMathE:  {signature: "math_e()", summary: "Returns the constant e."},
 	// generic: encoding (decoders return (value, err))
-	BuiltinNameBase64Encode:    {signature: "base64_encode(s)", summary: "Standard base64-encodes s."},
-	BuiltinNameBase64Decode:    {signature: "base64_decode(s)", summary: "Decodes standard base64; returns (bytes, err)."},
-	BuiltinNameBase64URLEncode: {signature: "base64url_encode(s)", summary: "URL-safe base64-encodes s."},
-	BuiltinNameBase64URLDecode: {signature: "base64url_decode(s)", summary: "Decodes URL-safe base64; returns (bytes, err)."},
-	BuiltinNameBase32Encode:    {signature: "base32_encode(s)", summary: "Standard base32-encodes s."},
-	BuiltinNameBase32Decode:    {signature: "base32_decode(s)", summary: "Decodes standard base32; returns (bytes, err)."},
-	BuiltinNameHexEncode:       {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex."},
-	BuiltinNameHexDecode:       {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err)."},
-	BuiltinNameURLEncode:       {signature: "url_encode(s)", summary: "URL query-escapes s."},
-	BuiltinNameURLDecode:       {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err)."},
-	BuiltinNameGzip:            {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string)."},
-	BuiltinNameGunzip:          {signature: "gunzip(s)", summary: "Gzip-decompresses s; returns (bytes, err)."},
-	BuiltinNameZlibCompress:    {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string)."},
-	BuiltinNameZlibDecompress:  {signature: "zlib_decompress(s)", summary: "Zlib-decompresses s; returns (bytes, err)."},
-	BuiltinNameToBase:          {signature: "to_base(n, base)", summary: "Formats integer n in the given base (2–36)."},
-	BuiltinNameFromBase:        {signature: "from_base(s, base)", summary: "Parses s as an integer in the given base (2–36); returns (int, err)."},
+	// The codecs all take one STRING (encOneString / requireStringArg in
+	// builtin/encoding_builtins.go). Encoded bytes are STRING values too, so
+	// the decoders' inputs are STRING as well.
+	BuiltinNameBase64Encode:    {signature: "base64_encode(s)", summary: "Standard base64-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}},
+	BuiltinNameBase64Decode:    {signature: "base64_decode(s)", summary: "Decodes standard base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base64 text.", ParamString)}},
+	BuiltinNameBase64URLEncode: {signature: "base64url_encode(s)", summary: "URL-safe base64-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}},
+	BuiltinNameBase64URLDecode: {signature: "base64url_decode(s)", summary: "Decodes URL-safe base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "URL-safe base64 text.", ParamString)}},
+	BuiltinNameBase32Encode:    {signature: "base32_encode(s)", summary: "Standard base32-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}},
+	BuiltinNameBase32Decode:    {signature: "base32_decode(s)", summary: "Decodes standard base32; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base32 text.", ParamString)}},
+	BuiltinNameHexEncode:       {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}},
+	BuiltinNameHexDecode:       {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}},
+	BuiltinNameURLEncode:       {signature: "url_encode(s)", summary: "URL query-escapes s.", params: []builtinParamDoc{param("s", "Text to escape.", ParamString)}},
+	BuiltinNameURLDecode:       {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err).", params: []builtinParamDoc{param("s", "Escaped text to unescape.", ParamString)}},
+	BuiltinNameGzip:            {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "String or bytes to compress.", ParamString)}},
+	BuiltinNameGunzip:          {signature: "gunzip(s)", summary: "Gzip-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Gzip-compressed bytes.", ParamString)}},
+	BuiltinNameZlibCompress:    {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "String or bytes to compress.", ParamString)}},
+	BuiltinNameZlibDecompress:  {signature: "zlib_decompress(s)", summary: "Zlib-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Zlib-compressed bytes.", ParamString)}},
+	BuiltinNameToBase: {
+		signature: "to_base(n, base)", summary: "Formats integer n in the given base (2–36).",
+		params: []builtinParamDoc{
+			param("n", "Integer to format.", ParamInt),
+			param("base", "Radix between 2 and 36.", ParamInt),
+		},
+	},
+	BuiltinNameFromBase: {
+		signature: "from_base(s, base)", summary: "Parses s as an integer in the given base (2–36); returns (int, err).",
+		params: []builtinParamDoc{
+			param("s", "Digits to parse.", ParamString),
+			param("base", "Radix between 2 and 36.", ParamInt),
+		},
+	},
 	// generic: type conversion & introspection
-	BuiltinNameToInt:      {signature: "to_int(v)", summary: "Converts a number/bool/string to INTEGER; returns (int, err)."},
-	BuiltinNameToFloat:    {signature: "to_float(v)", summary: "Converts a number/bool/string to FLOAT; returns (float, err)."},
-	BuiltinNameToString:   {signature: "to_string(v)", summary: "Converts any value to its STRING representation."},
-	BuiltinNameToBool:     {signature: "to_bool(v)", summary: "Converts a bool/number/string to BOOLEAN; returns (bool, err)."},
-	BuiltinNameParseInt:   {signature: "parse_int(s, base)", summary: "Parses s as an integer in base (0 auto-detects); returns (int, err)."},
-	BuiltinNameParseFloat: {signature: "parse_float(s)", summary: "Parses s as a float; returns (float, err)."},
-	BuiltinNameTypeOf:     {signature: "type_of(v)", summary: "Returns the object type name of v (e.g. INTEGER, STRING, ARRAY)."},
-	BuiltinNameIsNull:     {signature: "is_null(v)", summary: "Returns whether v is NULL."},
+	//
+	// The to_* conversions switch on the concrete object type and error on
+	// anything outside their case list (builtin/convert_builtins.go), so their
+	// accepted sets are exact. to_string is the exception: its default branch
+	// falls back to Inspect(), so it genuinely accepts every value.
+	BuiltinNameToInt: {
+		signature: "to_int(v)", summary: "Converts a number/bool/string to INTEGER; returns (int, err).",
+		params: []builtinParamDoc{param("v", "Value to convert; numbers, booleans, and numeric strings are accepted.", ParamInt, ParamFloat, ParamBool, ParamString)},
+	},
+	BuiltinNameToFloat: {
+		signature: "to_float(v)", summary: "Converts a number/bool/string to FLOAT; returns (float, err).",
+		params: []builtinParamDoc{param("v", "Value to convert; numbers, booleans, and numeric strings are accepted.", ParamInt, ParamFloat, ParamBool, ParamString)},
+	},
+	BuiltinNameToString: {
+		signature: "to_string(v)", summary: "Converts any value to its STRING representation.",
+		params: []builtinParamDoc{param("v", "Value to render; any type is accepted.", ParamAny)},
+	},
+	BuiltinNameToBool: {
+		signature: "to_bool(v)", summary: "Converts a bool/number/string to BOOLEAN; returns (bool, err).",
+		params: []builtinParamDoc{param("v", "Value to convert; booleans, numbers, and \"true\"/\"false\" strings are accepted.", ParamBool, ParamInt, ParamFloat, ParamString)},
+	},
+	BuiltinNameParseInt: {
+		signature: "parse_int(s, base)", summary: "Parses s as an integer in base (0 auto-detects); returns (int, err).",
+		params: []builtinParamDoc{
+			param("s", "Text to parse.", ParamString),
+			param("base", "Radix: 0 to auto-detect, otherwise 2 to 36.", ParamInt),
+		},
+	},
+	BuiltinNameParseFloat: {
+		signature: "parse_float(s)", summary: "Parses s as a float; returns (float, err).",
+		params: []builtinParamDoc{param("s", "Text to parse.", ParamString)},
+	},
+	BuiltinNameTypeOf: {
+		signature: "type_of(v)", summary: "Returns the object type name of v (e.g. INTEGER, STRING, ARRAY).",
+		params: []builtinParamDoc{param("v", "Value to inspect; any type is accepted.", ParamAny)},
+	},
+	BuiltinNameIsNull: {
+		signature: "is_null(v)", summary: "Returns whether v is NULL.",
+		params: []builtinParamDoc{param("v", "Value to test; any type is accepted.", ParamAny)},
+	},
 	// generic: time & date (epoch seconds; Go reference layout, e.g. \"2006-01-02 15:04:05\")
-	BuiltinNameTimeNow:    {signature: "time_now()", summary: "Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}."},
-	BuiltinNameTimeUnix:   {signature: "time_unix()", summary: "Returns the current Unix time in seconds."},
-	BuiltinNameTimeFormat: {signature: "time_format(unix, layout)", summary: "Formats a Unix timestamp (UTC) using a Go reference layout."},
-	BuiltinNameTimeParse:  {signature: "time_parse(value, layout)", summary: "Parses value with a Go reference layout; returns (unixSeconds, err)."},
-	BuiltinNameTimeDiff:   {signature: "time_diff(a, b)", summary: "Returns a - b in seconds (both Unix timestamps)."},
-	BuiltinNameTimeAdd:    {signature: "time_add(unix, seconds)", summary: "Returns the Unix timestamp shifted by seconds."},
+	BuiltinNameTimeNow:  {signature: "time_now()", summary: "Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}."},
+	BuiltinNameTimeUnix: {signature: "time_unix()", summary: "Returns the current Unix time in seconds."},
+	// Unix timestamps are whole seconds: requireIntArg, not requireNumericArg.
+	BuiltinNameTimeFormat: {
+		signature: "time_format(unix, layout)", summary: "Formats a Unix timestamp (UTC) using a Go reference layout.",
+		params: []builtinParamDoc{
+			param("unix", "Unix timestamp in seconds.", ParamInt),
+			param("layout", "Go reference layout, e.g. \"2006-01-02 15:04:05\".", ParamString),
+		},
+	},
+	BuiltinNameTimeParse: {
+		signature: "time_parse(value, layout)", summary: "Parses value with a Go reference layout; returns (unixSeconds, err).",
+		params: []builtinParamDoc{
+			param("value", "Timestamp text to parse.", ParamString),
+			param("layout", "Go reference layout the value is written in.", ParamString),
+		},
+	},
+	BuiltinNameTimeDiff: {
+		signature: "time_diff(a, b)", summary: "Returns a - b in seconds (both Unix timestamps).",
+		params: []builtinParamDoc{
+			param("a", "Later Unix timestamp in seconds.", ParamInt),
+			param("b", "Earlier Unix timestamp in seconds.", ParamInt),
+		},
+	},
+	BuiltinNameTimeAdd: {
+		signature: "time_add(unix, seconds)", summary: "Returns the Unix timestamp shifted by seconds.",
+		params: []builtinParamDoc{
+			param("unix", "Unix timestamp in seconds.", ParamInt),
+			param("seconds", "Offset in seconds; may be negative.", ParamInt),
+		},
+	},
 	// generic: collections (array + hash operations; return new values, never mutate)
-	BuiltinNameSort:         {signature: "sort(array)", summary: "Returns a sorted copy of an array (all numbers or all strings)."},
-	BuiltinNameReverseArray: {signature: "reverse(array)", summary: "Returns a reversed copy of an array."},
-	BuiltinNameContains:     {signature: "contains(array, value)", summary: "Returns whether array contains value (by value equality)."},
-	BuiltinNameIndexOf:      {signature: "index_of(array, value)", summary: "Returns the first index of value in array, or -1."},
-	BuiltinNameSlice:        {signature: "slice(array, start, end)", summary: "Returns the sub-array array[start:end] (bounds-clamped)."},
-	BuiltinNameConcat:       {signature: "concat(a, b)", summary: "Returns a new array with the elements of a followed by b."},
-	BuiltinNameFlatten:      {signature: "flatten(array)", summary: "Flattens one level of nested arrays."},
-	BuiltinNameUnique:       {signature: "unique(array)", summary: "Returns a new array with duplicate values removed (order preserved)."},
-	BuiltinNameRange:        {signature: "range(start, end, step?)", summary: "Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1."},
-	BuiltinNameZip:          {signature: "zip(a, b)", summary: "Returns an array of [a[i], b[i]] pairs up to the shorter length."},
-	BuiltinNameMap:          {signature: "map(array, fn)", summary: "Returns a new array of fn applied to each element. fn takes (element) or (element, index)."},
-	BuiltinNameFilter:       {signature: "filter(array, fn)", summary: "Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index)."},
-	BuiltinNameReduce:       {signature: "reduce(array, fn, initial)", summary: "Folds the array to a single value: fn(accumulator, element) starting from initial."},
-	BuiltinNameEach:         {signature: "each(array, fn)", summary: "Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index)."},
-	BuiltinNameSortBy:       {signature: "sort_by(array, fn)", summary: "Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys)."},
-	BuiltinNameKeys:         {signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism)."},
-	BuiltinNameValues:       {signature: "values(hash)", summary: "Returns the hash values as an array (ordered by sorted key)."},
-	BuiltinNameEntries:      {signature: "entries(hash)", summary: "Returns the hash as an array of [key, value] pairs (sorted by key)."},
-	BuiltinNameHasKey:       {signature: "has_key(hash, key)", summary: "Returns whether hash contains key."},
-	BuiltinNameGet:          {signature: "get(hash, key, default)", summary: "Returns hash[key], or default when the key is absent."},
-	BuiltinNameSet:          {signature: "set(hash, key, value)", summary: "Returns a new hash with key set to value (original unchanged)."},
-	BuiltinNameMerge:        {signature: "merge(a, b)", summary: "Returns a new hash combining a and b (b wins on key conflicts)."},
-	BuiltinNameDelete:       {signature: "delete(hash, key)", summary: "Returns a new hash with key removed."},
+	//
+	// The array operations all run their first argument through
+	// requireArrayArg and the hash operations through requireHashArg, so ARRAY
+	// and HASH here are exact. Element and key/value parameters compared with
+	// objectsEqual accept anything.
+	BuiltinNameSort: {
+		signature: "sort(array)", summary: "Returns a sorted copy of an array (all numbers or all strings).",
+		params: []builtinParamDoc{param("array", "Array of numbers or array of strings.", ParamArray)},
+	},
+	BuiltinNameReverseArray: {
+		signature: "reverse(array)", summary: "Returns a reversed copy of an array.",
+		params: []builtinParamDoc{param("array", "Array to reverse.", ParamArray)},
+	},
+	BuiltinNameContains: {
+		signature: "contains(array, value)", summary: "Returns whether array contains value (by value equality).",
+		params: []builtinParamDoc{
+			param("array", "Array to search.", ParamArray),
+			param("value", "Value to look for; any type is accepted.", ParamAny),
+		},
+	},
+	BuiltinNameIndexOf: {
+		signature: "index_of(array, value)", summary: "Returns the first index of value in array, or -1.",
+		params: []builtinParamDoc{
+			param("array", "Array to search.", ParamArray),
+			param("value", "Value to look for; any type is accepted.", ParamAny),
+		},
+	},
+	BuiltinNameSlice: {
+		signature: "slice(array, start, end)", summary: "Returns the sub-array array[start:end] (bounds-clamped).",
+		params: []builtinParamDoc{
+			param("array", "Array to slice.", ParamArray),
+			param("start", "Start index, inclusive.", ParamInt),
+			param("end", "End index, exclusive.", ParamInt),
+		},
+	},
+	BuiltinNameConcat: {
+		signature: "concat(a, b)", summary: "Returns a new array with the elements of a followed by b.",
+		params: []builtinParamDoc{
+			param("a", "First array.", ParamArray),
+			param("b", "Second array.", ParamArray),
+		},
+	},
+	BuiltinNameFlatten: {
+		signature: "flatten(array)", summary: "Flattens one level of nested arrays.",
+		params: []builtinParamDoc{param("array", "Array whose nested arrays are spliced in.", ParamArray)},
+	},
+	BuiltinNameUnique: {
+		signature: "unique(array)", summary: "Returns a new array with duplicate values removed (order preserved).",
+		params: []builtinParamDoc{param("array", "Array to de-duplicate.", ParamArray)},
+	},
+	BuiltinNameRange: {
+		signature: "range(start, end, step?)", summary: "Returns an array of integers from start (inclusive) to end (exclusive); step defaults to 1.",
+		params: []builtinParamDoc{
+			param("start", "First value, inclusive.", ParamInt),
+			param("end", "Stop value, exclusive.", ParamInt),
+			param("step?", "Increment; defaults to 1 and must not be zero.", ParamInt),
+		},
+	},
+	BuiltinNameZip: {
+		signature: "zip(a, b)", summary: "Returns an array of [a[i], b[i]] pairs up to the shorter length.",
+		params: []builtinParamDoc{
+			param("a", "First array.", ParamArray),
+			param("b", "Second array.", ParamArray),
+		},
+	},
+	// map/filter/reduce/each/sort_by are intercepted by the executor rather
+	// than run as ordinary builtins; both the VM (vm/higher_order.go) and the
+	// evaluator (evaluator/higher_order.go) require an ARRAY and a callable.
+	// The callback's own arity stays prose — it is not modelled here.
+	BuiltinNameMap: {
+		signature: "map(array, fn)", summary: "Returns a new array of fn applied to each element. fn takes (element) or (element, index).",
+		params: []builtinParamDoc{
+			param("array", "Array to transform.", ParamArray),
+			param("fn", "Function called per element: (element) or (element, index).", ParamFn),
+		},
+	},
+	BuiltinNameFilter: {
+		signature: "filter(array, fn)", summary: "Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index).",
+		params: []builtinParamDoc{
+			param("array", "Array to filter.", ParamArray),
+			param("fn", "Predicate called per element: (element) or (element, index).", ParamFn),
+		},
+	},
+	BuiltinNameReduce: {
+		signature: "reduce(array, fn, initial)", summary: "Folds the array to a single value: fn(accumulator, element) starting from initial.",
+		params: []builtinParamDoc{
+			param("array", "Array to fold.", ParamArray),
+			param("fn", "Reducer called as (accumulator, element).", ParamFn),
+			param("initial", "Starting accumulator; any type is accepted.", ParamAny),
+		},
+	},
+	BuiltinNameEach: {
+		signature: "each(array, fn)", summary: "Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index).",
+		params: []builtinParamDoc{
+			param("array", "Array to iterate.", ParamArray),
+			param("fn", "Function called per element: (element) or (element, index).", ParamFn),
+		},
+	},
+	BuiltinNameSortBy: {
+		signature: "sort_by(array, fn)", summary: "Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys).",
+		params: []builtinParamDoc{
+			param("array", "Array to sort.", ParamArray),
+			param("fn", "Key function called per element: (element) or (element, index).", ParamFn),
+		},
+	},
+	BuiltinNameKeys: {
+		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
+		params: []builtinParamDoc{param("hash", "Hash to read keys from.", ParamHash)},
+	},
+	BuiltinNameValues: {
+		signature: "values(hash)", summary: "Returns the hash values as an array (ordered by sorted key).",
+		params: []builtinParamDoc{param("hash", "Hash to read values from.", ParamHash)},
+	},
+	BuiltinNameEntries: {
+		signature: "entries(hash)", summary: "Returns the hash as an array of [key, value] pairs (sorted by key).",
+		params: []builtinParamDoc{param("hash", "Hash to enumerate.", ParamHash)},
+	},
+	BuiltinNameHasKey: {
+		signature: "has_key(hash, key)", summary: "Returns whether hash contains key.",
+		params: []builtinParamDoc{
+			param("hash", "Hash to test.", ParamHash),
+			param("key", "Hashable key: string, integer, float, or boolean.", hashableKinds...),
+		},
+	},
+	BuiltinNameGet: {
+		signature: "get(hash, key, default)", summary: "Returns hash[key], or default when the key is absent.",
+		params: []builtinParamDoc{
+			param("hash", "Hash to read from.", ParamHash),
+			param("key", "Hashable key: string, integer, float, or boolean.", hashableKinds...),
+			param("default", "Value returned when the key is absent; any type is accepted.", ParamAny),
+		},
+	},
+	BuiltinNameSet: {
+		signature: "set(hash, key, value)", summary: "Returns a new hash with key set to value (original unchanged).",
+		params: []builtinParamDoc{
+			param("hash", "Hash to copy.", ParamHash),
+			param("key", "Hashable key: string, integer, float, or boolean.", hashableKinds...),
+			param("value", "Value to store; any type is accepted.", ParamAny),
+		},
+	},
+	BuiltinNameMerge: {
+		signature: "merge(a, b)", summary: "Returns a new hash combining a and b (b wins on key conflicts).",
+		params: []builtinParamDoc{
+			param("a", "Base hash.", ParamHash),
+			param("b", "Overriding hash.", ParamHash),
+		},
+	},
+	BuiltinNameDelete: {
+		signature: "delete(hash, key)", summary: "Returns a new hash with key removed.",
+		params: []builtinParamDoc{
+			param("hash", "Hash to copy.", ParamHash),
+			param("key", "Hashable key: string, integer, float, or boolean.", hashableKinds...),
+		},
+	},
 	// security: Go binary analysis (GoReSym) — parses PE/ELF/Mach-O Go binaries
 	BuiltinNameGoBuildInfo: {signature: "go_buildinfo(path)", summary: "Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary (PE/ELF/Mach-O)."}}},
 	BuiltinNameGoBuildID:   {signature: "go_build_id(path)", summary: "Extracts the Go build ID from a binary. Returns (build_id, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Go-compiled binary."}}},
@@ -199,24 +673,24 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameTimelineMerge:      {signature: "timeline_merge(sources, field?)", summary: "Flattens an array of event arrays into one supertimeline sorted by a numeric timestamp field (default \"ts\")."},
 	BuiltinNameBodyfileParse:      {signature: "bodyfile_parse(path)", summary: "Parses a Sleuth Kit bodyfile (MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime) into an array of entry hashes. Returns (entries, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a TSK bodyfile."}}},
 	BuiltinNamePlistParse:         {signature: "plist_parse(path)", summary: "Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .plist file (binary or XML)."}}},
-	BuiltinNameHiveOpen:       {signature: "hive_open(path)", summary: "Opens a real Windows registry hive (regf binary format — SOFTWARE/SYSTEM/NTUSER.DAT, etc.) and returns {handle, path}. Distinct from the JSON-fixture reg_* family. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a registry hive file."}}},
-	BuiltinNameHiveClose:      {signature: "hive_close(handle)", summary: "Closes a hive handle. Returns (bool, err)."},
-	BuiltinNameHiveKeyInfo:    {signature: "hive_key_info(handle, keypath?)", summary: "Returns {name, last_write, last_write_iso, subkey_count, value_count} for a key (keypath is backslash-separated under the root; default root). Returns (result, err)."},
-	BuiltinNameHiveListKeys:   {signature: "hive_list_keys(handle, keypath?)", summary: "Returns the subkey names under a key (default root) as an array. Returns (array, err)."},
-	BuiltinNameHiveListValues: {signature: "hive_list_values(handle, keypath?)", summary: "Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Returns (array, err)."},
-	BuiltinNameHiveGetValue:   {signature: "hive_get_value(handle, keypath, name)", summary: "Returns {name, type, data} for a single value under keypath. Returns (result, err)."},
-	BuiltinNameShimcacheParse: {signature: "shimcache_parse(path)", summary: "Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "SYSTEM hive file or raw AppCompatCache blob."}}},
-	BuiltinNameAmcacheParse:   {signature: "amcache_parse(path)", summary: "Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\\File layouts. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to an Amcache.hve hive file."}}},
-	BuiltinNamePrefetchParse:  {signature: "prefetch_parse(path)", summary: "Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .pf prefetch file (compressed or raw SCCA)."}}},
-	BuiltinNameMftParse:       {signature: "mft_parse(path)", summary: "Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
-	BuiltinNameEvtxParse:      {signature: "evtx_parse(path)", summary: "Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .evtx Windows Event Log file."}}},
-	BuiltinNameJumplistParse:  {signature: "jumplist_parse(path)", summary: "Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .automaticDestinations-ms or .customDestinations-ms jump list."}}},
-	BuiltinNameSyslogParse:    {signature: "syslog_parse(path)", summary: "Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a syslog text file (RFC 3164 or RFC 5424)."}}},
-	BuiltinNameSqliteQuery:    {signature: "sqlite_query(path, sql, params?)", summary: "Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a SQLite database file."}, {name: "sql", doc: "SQL query to run."}, {name: "params?", doc: "Optional ARRAY of bind parameters."}}},
-	BuiltinNameBrowserHistory:   {signature: "browser_history(path)", summary: "Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
-	BuiltinNameBrowserCookies:   {signature: "browser_cookies(path)", summary: "Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium Cookies or Firefox cookies.sqlite database."}}},
-	BuiltinNameBrowserDownloads: {signature: "browser_downloads(path)", summary: "Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
-	BuiltinNameFsDeleted:      {signature: "fs_deleted(path)", summary: "Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
+	BuiltinNameHiveOpen:           {signature: "hive_open(path)", summary: "Opens a real Windows registry hive (regf binary format — SOFTWARE/SYSTEM/NTUSER.DAT, etc.) and returns {handle, path}. Distinct from the JSON-fixture reg_* family. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a registry hive file."}}},
+	BuiltinNameHiveClose:          {signature: "hive_close(handle)", summary: "Closes a hive handle. Returns (bool, err)."},
+	BuiltinNameHiveKeyInfo:        {signature: "hive_key_info(handle, keypath?)", summary: "Returns {name, last_write, last_write_iso, subkey_count, value_count} for a key (keypath is backslash-separated under the root; default root). Returns (result, err)."},
+	BuiltinNameHiveListKeys:       {signature: "hive_list_keys(handle, keypath?)", summary: "Returns the subkey names under a key (default root) as an array. Returns (array, err)."},
+	BuiltinNameHiveListValues:     {signature: "hive_list_values(handle, keypath?)", summary: "Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Returns (array, err)."},
+	BuiltinNameHiveGetValue:       {signature: "hive_get_value(handle, keypath, name)", summary: "Returns {name, type, data} for a single value under keypath. Returns (result, err)."},
+	BuiltinNameShimcacheParse:     {signature: "shimcache_parse(path)", summary: "Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "SYSTEM hive file or raw AppCompatCache blob."}}},
+	BuiltinNameAmcacheParse:       {signature: "amcache_parse(path)", summary: "Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\\File layouts. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to an Amcache.hve hive file."}}},
+	BuiltinNamePrefetchParse:      {signature: "prefetch_parse(path)", summary: "Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .pf prefetch file (compressed or raw SCCA)."}}},
+	BuiltinNameMftParse:           {signature: "mft_parse(path)", summary: "Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
+	BuiltinNameEvtxParse:          {signature: "evtx_parse(path)", summary: "Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .evtx Windows Event Log file."}}},
+	BuiltinNameJumplistParse:      {signature: "jumplist_parse(path)", summary: "Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .automaticDestinations-ms or .customDestinations-ms jump list."}}},
+	BuiltinNameSyslogParse:        {signature: "syslog_parse(path)", summary: "Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a syslog text file (RFC 3164 or RFC 5424)."}}},
+	BuiltinNameSqliteQuery:        {signature: "sqlite_query(path, sql, params?)", summary: "Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a SQLite database file."}, {name: "sql", doc: "SQL query to run."}, {name: "params?", doc: "Optional ARRAY of bind parameters."}}},
+	BuiltinNameBrowserHistory:     {signature: "browser_history(path)", summary: "Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
+	BuiltinNameBrowserCookies:     {signature: "browser_cookies(path)", summary: "Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium Cookies or Firefox cookies.sqlite database."}}},
+	BuiltinNameBrowserDownloads:   {signature: "browser_downloads(path)", summary: "Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a Chromium History or Firefox places.sqlite database."}}},
+	BuiltinNameFsDeleted:          {signature: "fs_deleted(path)", summary: "Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a standalone $MFT file or an NTFS volume image."}}},
 	BuiltinNameLnkParse:           {signature: "lnk_parse(path)", summary: "Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err).", params: []builtinParamDoc{{name: "path", doc: "Path to a .lnk shell link file."}}},
 	BuiltinNameMactime:            {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge)."},
 	// security: fingerprinting
@@ -230,49 +704,119 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameAESEncrypt: {signature: "aes_encrypt(key, plaintext)", summary: "AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err).", params: []builtinParamDoc{{name: "key", doc: "16/24/32-byte key (AES-128/192/256)."}, {name: "plaintext", doc: "Data to encrypt."}}},
 	BuiltinNameAESDecrypt: {signature: "aes_decrypt(key, ciphertext)", summary: "AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering.", params: []builtinParamDoc{{name: "key", doc: "16/24/32-byte key."}, {name: "ciphertext", doc: "Nonce-prefixed AES-GCM ciphertext."}}},
 	BuiltinNamePEMDecode:  {signature: "pem_decode(s)", summary: "Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err)."},
-	BuiltinNameTextContains:  {signature: "text_contains(haystack, needle)", summary: "Returns whether a string contains a substring."},
-	BuiltinNameTextIndex:     {signature: "text_index(haystack, needle)", summary: "Returns the first index of substring occurrence, or -1."},
-	BuiltinNameTextCount:     {signature: "text_count(haystack, needle)", summary: "Counts non-overlapping substring occurrences."},
-	BuiltinNameTextSplit:     {signature: "text_split(text, sep)", summary: "Splits text by separator and returns an array of parts."},
-	BuiltinNameTextReplace:   {signature: "text_replace(text, old, new)", summary: "Replaces substring occurrences in text."},
+	BuiltinNameTextContains: {
+		signature: "text_contains(haystack, needle)", summary: "Returns whether a string contains a substring.",
+		params: []builtinParamDoc{
+			param("haystack", "String to search in.", ParamString),
+			param("needle", "Substring to search for.", ParamString),
+		},
+	},
+	BuiltinNameTextIndex: {
+		signature: "text_index(haystack, needle)", summary: "Returns the first index of substring occurrence, or -1.",
+		params: []builtinParamDoc{
+			param("haystack", "String to search in.", ParamString),
+			param("needle", "Substring to search for.", ParamString),
+		},
+	},
+	BuiltinNameTextCount: {
+		signature: "text_count(haystack, needle)", summary: "Counts non-overlapping substring occurrences.",
+		params: []builtinParamDoc{
+			param("haystack", "String to search in.", ParamString),
+			param("needle", "Substring to count.", ParamString),
+		},
+	},
+	BuiltinNameTextSplit: {
+		signature: "text_split(text, sep)", summary: "Splits text by separator and returns an array of parts.",
+		params: []builtinParamDoc{
+			param("text", "String to split.", ParamString),
+			param("sep", "Separator to split on.", ParamString),
+		},
+	},
+	// TextReplace accepts 3 or 4 arguments (builtin/text_matching.go); the
+	// signature previously omitted the optional replacement count.
+	BuiltinNameTextReplace: {
+		signature: "text_replace(text, old, new, count?)", summary: "Replaces substring occurrences in text; count limits how many (all by default).",
+		params: []builtinParamDoc{
+			param("text", "String to rewrite.", ParamString),
+			param("old", "Substring to replace.", ParamString),
+			param("new", "Replacement substring.", ParamString),
+			param("count?", "Maximum replacements; all occurrences when omitted.", ParamInt),
+		},
+	},
 	BuiltinNameTextLevenshtein: {
 		signature: "text_levenshtein(left, right)",
 		summary:   "Computes Levenshtein edit distance between two strings.",
+		params: []builtinParamDoc{
+			param("left", "First string to compare.", ParamString),
+			param("right", "Second string to compare.", ParamString),
+		},
 	},
 	BuiltinNameTextSimilarity: {
 		signature: "text_similarity(left, right)",
 		summary:   "Computes normalized Levenshtein similarity between two strings.",
 		params: []builtinParamDoc{
-			{name: "left", doc: "First string to compare."},
-			{name: "right", doc: "Second string to compare."},
+			param("left", "First string to compare.", ParamString),
+			param("right", "Second string to compare.", ParamString),
 		},
 	},
 	BuiltinNameTextFuzzyFind: {
 		signature: "text_fuzzy_find(query, candidates, maxDistance?)",
 		summary:   "Finds the closest fuzzy match in an array of candidate strings.",
+		params: []builtinParamDoc{
+			param("query", "String to match against the candidates.", ParamString),
+			arrayParam("candidates", "Array of candidate strings.", ParamString),
+			param("maxDistance?", "Largest edit distance still considered a match.", ParamInt),
+		},
 	},
 	BuiltinNameTextJaroWinkler: {
 		signature: "text_jaro_winkler(left, right)",
 		summary:   "Computes Jaro-Winkler string similarity score.",
+		params: []builtinParamDoc{
+			param("left", "First string to compare.", ParamString),
+			param("right", "Second string to compare.", ParamString),
+		},
 	},
-	BuiltinNameRegexMatch: {signature: "regex_match(pattern, input)", summary: "Returns whether regex pattern matches input."},
-	BuiltinNameRegexFind:  {signature: "regex_find(pattern, input)", summary: "Finds the first regex match in input."},
+	// Every regex builtin takes its pattern and input through
+	// regexPatternAndInput, which requires two STRINGs (builtin/regex.go).
+	BuiltinNameRegexMatch: {
+		signature: "regex_match(pattern, input)", summary: "Returns whether regex pattern matches input.",
+		params: []builtinParamDoc{
+			param("pattern", "Regular expression pattern.", ParamString),
+			param("input", "Input string to test.", ParamString),
+		},
+	},
+	BuiltinNameRegexFind: {
+		signature: "regex_find(pattern, input)", summary: "Finds the first regex match in input.",
+		params: []builtinParamDoc{
+			param("pattern", "Regular expression pattern.", ParamString),
+			param("input", "Input string to search.", ParamString),
+		},
+	},
 	BuiltinNameRegexFindAll: {
 		signature: "regex_find_all(pattern, input, limit?)",
 		summary:   "Finds all regex matches with optional result limit.",
+		params: []builtinParamDoc{
+			param("pattern", "Regular expression pattern.", ParamString),
+			param("input", "Input string to search.", ParamString),
+			param("limit?", "Maximum matches to return; all matches when omitted.", ParamInt),
+		},
 	},
 	BuiltinNameRegexReplace: {
 		signature: "regex_replace(pattern, input, replacement)",
 		summary:   "Replaces all regex matches in input with replacement text.",
 		params: []builtinParamDoc{
-			{name: "pattern", doc: "Regular expression pattern."},
-			{name: "input", doc: "Input string to transform."},
-			{name: "replacement", doc: "Replacement text for each match."},
+			param("pattern", "Regular expression pattern.", ParamString),
+			param("input", "Input string to transform.", ParamString),
+			param("replacement", "Replacement text for each match.", ParamString),
 		},
 	},
 	BuiltinNameRegexCaptureGroups: {
 		signature: "regex_capture_groups(pattern, input)",
 		summary:   "Returns full regex capture array (full match plus groups).",
+		params: []builtinParamDoc{
+			param("pattern", "Regular expression pattern with capture groups.", ParamString),
+			param("input", "Input string to match against.", ParamString),
+		},
 	},
 	BuiltinNamePolicyLoad: {
 		signature: "policy_load(name, source)",
@@ -418,14 +962,38 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Executes a composed command and returns run output metadata.",
 		params:    []builtinParamDoc{{name: "builder", doc: "Builder hash containing shell and command lines."}},
 	},
-	BuiltinNameFsDelete: {signature: "fs_delete(path)", summary: "Deletes a file from disk."},
-	BuiltinNameFsStat:   {signature: "fs_stat(path)", summary: "Returns file metadata such as size and timestamps."},
-	BuiltinNameFsList:   {signature: "fs_list(path)", summary: "Lists directory entries for a path."},
-	BuiltinNameFsMkdir:  {signature: "fs_mkdir(path)", summary: "Creates a directory path."},
-	BuiltinNameFsCopy:   {signature: "fs_copy(src, dst)", summary: "Copies a file from source path to destination path."},
-	BuiltinNameFsMove:   {signature: "fs_move(src, dst)", summary: "Moves or renames a file or directory."},
-	BuiltinNameFsHash:   {signature: "fs_hash(path)", summary: "Computes hash digests for a file."},
-	BuiltinNameFsWalk:   {signature: "fs_walk(root)", summary: "Walks a directory tree and returns discovered paths."},
+	BuiltinNameFsDelete: {
+		signature: "fs_delete(path)", summary: "Deletes a file from disk.",
+		params: []builtinParamDoc{param("path", "Path to the file to delete.", ParamString)},
+	},
+	BuiltinNameFsStat: {
+		signature: "fs_stat(path)", summary: "Returns file metadata such as size and timestamps.",
+		params: []builtinParamDoc{param("path", "Path to inspect.", ParamString)},
+	},
+	BuiltinNameFsList: {
+		signature: "fs_list(path)", summary: "Lists directory entries for a path.",
+		params: []builtinParamDoc{param("path", "Directory to list.", ParamString)},
+	},
+	BuiltinNameFsMkdir: {
+		signature: "fs_mkdir(path)", summary: "Creates a directory path.",
+		params: []builtinParamDoc{param("path", "Directory path to create.", ParamString)},
+	},
+	BuiltinNameFsCopy: {
+		signature: "fs_copy(src, dst)", summary: "Copies a file from source path to destination path.",
+		params: []builtinParamDoc{
+			param("src", "Source file path.", ParamString),
+			param("dst", "Destination file path.", ParamString),
+		},
+	},
+	BuiltinNameFsMove: {
+		signature: "fs_move(src, dst)", summary: "Moves or renames a file or directory.",
+		params: []builtinParamDoc{
+			param("src", "Source path.", ParamString),
+			param("dst", "Destination path.", ParamString),
+		},
+	},
+	BuiltinNameFsHash: {signature: "fs_hash(path)", summary: "Computes hash digests for a file."},
+	BuiltinNameFsWalk: {signature: "fs_walk(root)", summary: "Walks a directory tree and returns discovered paths."},
 	BuiltinNameFsMetadata: {
 		signature: "fs_metadata(path)",
 		summary:   "Returns detailed filesystem metadata for a path.",
@@ -501,10 +1069,10 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 	},
-	BuiltinNameNetSynScan: {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
+	BuiltinNameNetSynScan:     {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
 	BuiltinNameNetConnectScan: {signature: "net_connect_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges).", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port connect timeout in ms."}}},
-	BuiltinNameNetUdpScan: {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port timeout in ms."}}},
-	BuiltinNameNetBanner:  {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Read timeout in ms."}}},
+	BuiltinNameNetUdpScan:     {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{{name: "host", doc: "Target host."}, {name: "startPort", doc: "First port (inclusive)."}, {name: "endPort", doc: "Last port (inclusive)."}, {name: "timeoutMs", doc: "Per-port timeout in ms."}}},
+	BuiltinNameNetBanner:      {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Read timeout in ms."}}},
 	BuiltinNameNetTlsFingerprint: {
 		signature: "net_tls_fingerprint(address, timeoutMs)",
 		summary:   "Collects TLS certificate and handshake fingerprint metadata.",
@@ -543,9 +1111,9 @@ var builtinDocs = map[string]builtinDoc{
 		},
 	},
 	BuiltinNameRegOpen: {
-		signature: "reg_open(source)",
-		summary:   "Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\\SOFTWARE\\...) -> live registry (Windows only). Returns (result, err).",
-		params:    []builtinParamDoc{{name: "source", doc: "regf hive file, hive-JSON file, or live registry key path (HKLM/HKCU/HKCR/HKU/HKCC)."}},
+		signature:    "reg_open(source)",
+		summary:      "Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\\SOFTWARE\\...) -> live registry (Windows only). Returns (result, err).",
+		params:       []builtinParamDoc{{name: "source", doc: "regf hive file, hive-JSON file, or live registry key path (HKLM/HKCU/HKCR/HKU/HKCC)."}},
 		platformNote: "The live-registry path (HKLM\\..., HKCU\\..., etc.) is Windows-only; captured hive files and hive-JSON inputs are parsed on all platforms.",
 	},
 	BuiltinNameRegEnumKeys: {
@@ -670,69 +1238,168 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
 		params:    []builtinParamDoc{{name: "paths", doc: "Array of filesystem paths to inspect."}},
 	},
-	BuiltinNameNetResolve:        {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses."},
-	BuiltinNameNetDial:           {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in ms."}}},
-	BuiltinNameDbOpen:            {signature: "db_open()", summary: "Creates an in-memory graph database handle."},
-	BuiltinNameDbOpenDisk:        {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open.", params: []builtinParamDoc{{name: "path", doc: "Database file path."}}},
-	BuiltinNameDbClose:           {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameDbAddNode:         {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type (0–127)."}}},
-	BuiltinNameDbAddEdge:         {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "edgeType?", doc: "Optional integer/enum edge type."}}},
-	BuiltinNameDbAddArtifact:     {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "type", doc: "Artifact type string."}, {name: "attrs?", doc: "Optional attributes hash (indexed)."}}},
-	BuiltinNameDbAddRelation:     {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}}},
-	BuiltinNameDbIndexProp:       {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeID", doc: "Node ID to index."}, {name: "key", doc: "Property key."}, {name: "value", doc: "Property value."}}},
-	BuiltinNameDbQueryNodes:      {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type filter."}}},
-	BuiltinNameDbQuery:           {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameDbBfs:             {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first traversal from origin up to depth. direction is \"in\", \"out\", or \"both\". All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "origin", doc: "Origin node ID."}, {name: "depth", doc: "Maximum traversal depth."}, {name: "direction", doc: "Edge direction: \"in\", \"out\", or \"both\"."}}},
-	BuiltinNameDbShortestPath:    {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}}},
-	BuiltinNameDbTimeline:        {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameDbStats:           {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
-	BuiltinNameBytesLen:          {signature: "bytes_len(data)", summary: "Returns length of a bytes value."},
-	BuiltinNameBytesGet:          {signature: "bytes_get(data, index)", summary: "Reads one byte at index as integer."},
-	BuiltinNameBytesSlice:        {signature: "bytes_slice(data, start, length)", summary: "Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]).", params: []builtinParamDoc{{name: "data", doc: "Source byte string."}, {name: "start", doc: "Start offset."}, {name: "length", doc: "Number of bytes to take."}}},
-	BuiltinNameBytesHex:          {signature: "bytes_hex(value, width)", summary: "Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> \"0x00001234\"). This formats a number; it does not hex-encode a byte string.", params: []builtinParamDoc{{name: "value", doc: "Integer value to format."}, {name: "width", doc: "Minimum hex digit width (zero-padded)."}}},
-	BuiltinNameBytesCstrAt:       {signature: "bytes_cstr_at(data, offset)", summary: "Reads null-terminated string from bytes at offset."},
-	BuiltinNameBytesCharFromInt:  {signature: "bytes_char_from_int(value)", summary: "Converts an integer byte value to a single-character string."},
-	BuiltinNameBytesIntFromChar:  {signature: "bytes_int_from_char(char)", summary: "Converts a single-character string to its integer byte value."},
-	BuiltinNameBytesReadU16Le:    {signature: "bytes_read_u16_le(data, offset)", summary: "Reads unsigned 16-bit little-endian integer from bytes at offset."},
-	BuiltinNameBytesReadU16Be:    {signature: "bytes_read_u16_be(data, offset)", summary: "Reads unsigned 16-bit big-endian integer from bytes at offset."},
-	BuiltinNameBytesReadU32Le:    {signature: "bytes_read_u32_le(data, offset)", summary: "Reads unsigned 32-bit little-endian integer from bytes at offset."},
-	BuiltinNameBytesReadU32Be:    {signature: "bytes_read_u32_be(data, offset)", summary: "Reads unsigned 32-bit big-endian integer from bytes at offset."},
-	BuiltinNameBytesReadU64Le:    {signature: "bytes_read_u64_le(data, offset)", summary: "Reads unsigned 64-bit little-endian integer from bytes at offset."},
-	BuiltinNameBytesReadU64Be:    {signature: "bytes_read_u64_be(data, offset)", summary: "Reads unsigned 64-bit big-endian integer from bytes at offset."},
-	BuiltinNameBytesWriteU16Le:   {signature: "bytes_write_u16_le(data, offset, value)", summary: "Writes unsigned 16-bit little-endian integer into bytes at offset."},
-	BuiltinNameBytesWriteU16Be:   {signature: "bytes_write_u16_be(data, offset, value)", summary: "Writes unsigned 16-bit big-endian integer into bytes at offset."},
-	BuiltinNameBytesWriteU32Le:   {signature: "bytes_write_u32_le(data, offset, value)", summary: "Writes unsigned 32-bit little-endian integer into bytes at offset."},
-	BuiltinNameBytesWriteU32Be:   {signature: "bytes_write_u32_be(data, offset, value)", summary: "Writes unsigned 32-bit big-endian integer into bytes at offset."},
-	BuiltinNameBytesWriteU64Le:   {signature: "bytes_write_u64_le(data, offset, value)", summary: "Writes unsigned 64-bit little-endian integer into bytes at offset."},
-	BuiltinNameBytesWriteU64Be:   {signature: "bytes_write_u64_be(data, offset, value)", summary: "Writes unsigned 64-bit big-endian integer into bytes at offset."},
-	BuiltinNameBytesCursorNew:    {signature: "bytes_cursor_new(data)", summary: "Creates a cursor for structured byte parsing."},
-	BuiltinNameBytesCursorTell:   {signature: "bytes_cursor_tell(cursor)", summary: "Returns current cursor position."},
-	BuiltinNameBytesCursorSeek:   {signature: "bytes_cursor_seek(cursor, offset)", summary: "Moves cursor to an absolute offset."},
-	BuiltinNameBytesCursorEof:    {signature: "bytes_cursor_eof(cursor)", summary: "Returns whether cursor is at end-of-buffer."},
-	BuiltinNameBytesCursorReadU8: {signature: "bytes_cursor_read_u8(cursor)", summary: "Reads one unsigned byte from cursor."},
+	BuiltinNameNetResolve:     {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses."},
+	BuiltinNameNetDial:        {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{{name: "address", doc: "host:port endpoint."}, {name: "timeoutMs", doc: "Dial timeout in ms."}}},
+	BuiltinNameDbOpen:         {signature: "db_open()", summary: "Creates an in-memory graph database handle."},
+	BuiltinNameDbOpenDisk:     {signature: "db_open_disk(path)", summary: "Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open.", params: []builtinParamDoc{{name: "path", doc: "Database file path."}}},
+	BuiltinNameDbClose:        {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbAddNode:      {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type (0–127)."}}},
+	BuiltinNameDbAddEdge:      {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}, {name: "edgeType?", doc: "Optional integer/enum edge type."}}},
+	BuiltinNameDbAddArtifact:  {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "type", doc: "Artifact type string."}, {name: "attrs?", doc: "Optional attributes hash (indexed)."}}},
+	BuiltinNameDbAddRelation:  {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source entity ID."}, {name: "to", doc: "Destination entity ID."}, {name: "relation", doc: "Relation type string."}}},
+	BuiltinNameDbIndexProp:    {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeID", doc: "Node ID to index."}, {name: "key", doc: "Property key."}, {name: "value", doc: "Property value."}}},
+	BuiltinNameDbQueryNodes:   {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "nodeType?", doc: "Optional integer/enum node type filter."}}},
+	BuiltinNameDbQuery:        {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbBfs:          {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first traversal from origin up to depth. direction is \"in\", \"out\", or \"both\". All four arguments are required.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "origin", doc: "Origin node ID."}, {name: "depth", doc: "Maximum traversal depth."}, {name: "direction", doc: "Edge direction: \"in\", \"out\", or \"both\"."}}},
+	BuiltinNameDbShortestPath: {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}, {name: "from", doc: "Source node ID."}, {name: "to", doc: "Destination node ID."}}},
+	BuiltinNameDbTimeline:     {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	BuiltinNameDbStats:        {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{{name: "db", doc: "Database handle."}}},
+	// A "bytes value" is a STRING: requireBytesStringArg (builtin/bytes.go)
+	// asserts *object.String and there is no separate byte-buffer object type.
+	// Offsets and widths go through requireNonNegativeOffset /
+	// requireIntegerWithinRange, both of which require INTEGER. A cursor is a
+	// HASH with `data` and `offset` fields (requireBytesCursor).
+	BuiltinNameBytesLen: {
+		signature: "bytes_len(data)", summary: "Returns length of a bytes value.",
+		params: []builtinParamDoc{param("data", "Byte string to measure.", ParamString)},
+	},
+	BuiltinNameBytesGet: {
+		signature: "bytes_get(data, index)", summary: "Reads one byte at index as integer.",
+		params: []builtinParamDoc{
+			param("data", "Source byte string.", ParamString),
+			param("index", "Zero-based byte offset.", ParamInt),
+		},
+	},
+	BuiltinNameBytesSlice: {
+		signature: "bytes_slice(data, start, length)", summary: "Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]).",
+		params: []builtinParamDoc{
+			param("data", "Source byte string.", ParamString),
+			param("start", "Start offset.", ParamInt),
+			param("length", "Number of bytes to take.", ParamInt),
+		},
+	},
+	BuiltinNameBytesHex: {
+		signature: "bytes_hex(value, width)", summary: "Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> \"0x00001234\"). This formats a number; it does not hex-encode a byte string.",
+		params: []builtinParamDoc{
+			param("value", "Integer value to format.", ParamInt),
+			param("width", "Minimum hex digit width (zero-padded), 1 to 16.", ParamInt),
+		},
+	},
+	BuiltinNameBytesCstrAt: {
+		signature: "bytes_cstr_at(data, offset)", summary: "Reads null-terminated string from bytes at offset.",
+		params: []builtinParamDoc{
+			param("data", "Source byte string.", ParamString),
+			param("offset", "Offset the string starts at.", ParamInt),
+		},
+	},
+	BuiltinNameBytesCharFromInt: {
+		signature: "bytes_char_from_int(value)", summary: "Converts an integer byte value to a single-character string.",
+		params: []builtinParamDoc{param("value", "Byte value between 0 and 255.", ParamInt)},
+	},
+	BuiltinNameBytesIntFromChar: {
+		signature: "bytes_int_from_char(char)", summary: "Converts a single-character string to its integer byte value.",
+		params: []builtinParamDoc{param("char", "Non-empty string; its first byte is used.", ParamString)},
+	},
+	BuiltinNameBytesReadU16Le: {
+		signature: "bytes_read_u16_le(data, offset)", summary: "Reads unsigned 16-bit little-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesReadU16Be: {
+		signature: "bytes_read_u16_be(data, offset)", summary: "Reads unsigned 16-bit big-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesReadU32Le: {
+		signature: "bytes_read_u32_le(data, offset)", summary: "Reads unsigned 32-bit little-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesReadU32Be: {
+		signature: "bytes_read_u32_be(data, offset)", summary: "Reads unsigned 32-bit big-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesReadU64Le: {
+		signature: "bytes_read_u64_le(data, offset)", summary: "Reads unsigned 64-bit little-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesReadU64Be: {
+		signature: "bytes_read_u64_be(data, offset)", summary: "Reads unsigned 64-bit big-endian integer from bytes at offset.",
+		params: bytesReadParams(),
+	},
+	BuiltinNameBytesWriteU16Le: {
+		signature: "bytes_write_u16_le(data, offset, value)", summary: "Writes unsigned 16-bit little-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesWriteU16Be: {
+		signature: "bytes_write_u16_be(data, offset, value)", summary: "Writes unsigned 16-bit big-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesWriteU32Le: {
+		signature: "bytes_write_u32_le(data, offset, value)", summary: "Writes unsigned 32-bit little-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesWriteU32Be: {
+		signature: "bytes_write_u32_be(data, offset, value)", summary: "Writes unsigned 32-bit big-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesWriteU64Le: {
+		signature: "bytes_write_u64_le(data, offset, value)", summary: "Writes unsigned 64-bit little-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesWriteU64Be: {
+		signature: "bytes_write_u64_be(data, offset, value)", summary: "Writes unsigned 64-bit big-endian integer into bytes at offset.",
+		params: bytesWriteParams(),
+	},
+	BuiltinNameBytesCursorNew: {
+		signature: "bytes_cursor_new(data)", summary: "Creates a cursor for structured byte parsing.",
+		params: []builtinParamDoc{param("data", "Byte string to read through.", ParamString)},
+	},
+	BuiltinNameBytesCursorTell: {
+		signature: "bytes_cursor_tell(cursor)", summary: "Returns current cursor position.",
+		params: []builtinParamDoc{cursorParam()},
+	},
+	BuiltinNameBytesCursorSeek: {
+		signature: "bytes_cursor_seek(cursor, offset)", summary: "Moves cursor to an absolute offset.",
+		params: []builtinParamDoc{
+			cursorParam(),
+			param("offset", "Absolute offset to move to.", ParamInt),
+		},
+	},
+	BuiltinNameBytesCursorEof: {
+		signature: "bytes_cursor_eof(cursor)", summary: "Returns whether cursor is at end-of-buffer.",
+		params: []builtinParamDoc{cursorParam()},
+	},
+	BuiltinNameBytesCursorReadU8: {
+		signature: "bytes_cursor_read_u8(cursor)", summary: "Reads one unsigned byte from cursor.",
+		params: []builtinParamDoc{cursorParam()},
+	},
 	BuiltinNameBytesCursorReadU16Le: {
 		signature: "bytes_cursor_read_u16_le(cursor)",
 		summary:   "Reads unsigned 16-bit little-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameBytesCursorReadU16Be: {
 		signature: "bytes_cursor_read_u16_be(cursor)",
 		summary:   "Reads unsigned 16-bit big-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameBytesCursorReadU32Le: {
 		signature: "bytes_cursor_read_u32_le(cursor)",
 		summary:   "Reads unsigned 32-bit little-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameBytesCursorReadU32Be: {
 		signature: "bytes_cursor_read_u32_be(cursor)",
 		summary:   "Reads unsigned 32-bit big-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameBytesCursorReadU64Le: {
 		signature: "bytes_cursor_read_u64_le(cursor)",
 		summary:   "Reads unsigned 64-bit little-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameBytesCursorReadU64Be: {
 		signature: "bytes_cursor_read_u64_be(cursor)",
 		summary:   "Reads unsigned 64-bit big-endian integer from cursor.",
+		params:    []builtinParamDoc{cursorParam()},
 	},
 	BuiltinNameSecurityDiagnostics: {signature: "security_diagnostics()", summary: "Returns security diagnostics for the current runtime."},
 	BuiltinNameSandboxStatus:       {signature: "sandbox_status()", summary: "Returns sandbox-detection status information."},
@@ -755,7 +1422,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameNetConnWrite: {
 		signature: "net_conn_write(handle, data, timeout_ms?)",
 		summary:   "Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write.",
-		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}, {name: "timeout_ms", doc: "Optional write timeout in ms (default 30000; <=0 = block indefinitely)."}},
+		params:    []builtinParamDoc{{name: "handle", doc: "Connection handle."}, {name: "data", doc: "Bytes to send (STRING)."}, {name: "timeout_ms?", doc: "Optional write timeout in ms (default 30000; <=0 = block indefinitely)."}},
 	},
 	BuiltinNameNetConnRead: {
 		signature: "net_conn_read(handle, maxBytes, timeoutMs)",
@@ -942,12 +1609,46 @@ func TeachingDoc(name string) (string, string, []BuiltinParamDoc, bool) {
 		return "", "", nil, false
 	}
 
-	params := make([]BuiltinParamDoc, 0, len(doc.params))
-	for _, p := range doc.params {
-		params = append(params, BuiltinParamDoc{Name: p.name, Doc: p.doc})
-	}
+	return doc.signature, doc.summary, exportParams(doc.params), true
+}
 
-	return doc.signature, doc.summary, params, true
+// ParamSpecs returns the parameter contracts for a builtin, or false when the
+// builtin has no teaching doc.
+//
+// It is the same data TeachingDoc carries, exposed on its own for callers that
+// want only the contracts — notably the language server's argument-type
+// diagnostic, which visits every call site in a document and has no use for the
+// signature and summary strings.
+func ParamSpecs(name string) ([]BuiltinParamDoc, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return nil, false
+	}
+	return exportParams(doc.params), true
+}
+
+// exportParams converts the internal parameter docs to their exported form,
+// deriving Optional and Variadic from the parameter's spelling.
+func exportParams(params []builtinParamDoc) []BuiltinParamDoc {
+	exported := make([]BuiltinParamDoc, 0, len(params))
+	for _, p := range params {
+		shape, ok := parseSignatureParam(p.name)
+		if !ok {
+			// An unparseable spelling loses only the derived flags; the
+			// parameter still documents itself. metadata_param_test.go fails on
+			// this, so it cannot reach a release.
+			shape = SignatureParam{Name: p.name}
+		}
+		exported = append(exported, BuiltinParamDoc{
+			Name:     p.name,
+			Doc:      p.doc,
+			Kinds:    p.kinds,
+			Optional: shape.Optional,
+			Variadic: shape.Variadic,
+			Elem:     p.elem,
+		})
+	}
+	return exported
 }
 
 func TeachingFamilySummary(name string) (string, bool) {

@@ -9,7 +9,7 @@ Source of truth:
 - Builtin teaching metadata/signatures: builtin/metadata.go
 
 Related references:
-- [Capability Reference](CAPABILITY_REFERENCE.md) — the full, category-grouped catalog of every builtin (generated from the metadata above).
+- [Capability Reference](CAPABILITY_REFERENCE.md) — the full, category-grouped catalog of every builtin, with parameter types (generated from the metadata above by `cmd/gendocs`).
 - Deep-dive guides: [Secure Networking](SECURE_NETWORKING.md), [Graph Database](GRAPH_DATABASE.md), [Runtime Integration](RUNTIME_INTEGRATION.md), [Structured Data](STRUCTURED_DATA.md).
 
 ## Language Features
@@ -135,7 +135,7 @@ n -= 30;   n /= 2;   n %= 9;    // chained: 100 -> 70 -> 35 -> 8
 
 **Total builtins currently registered: 399**, across 32 capability categories.
 
-The complete catalog — every builtin with its signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` so it never goes stale. The categories are indexed below; each links into that reference.
+The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
 | Category | Count | What it covers |
 | --- | --- | --- |
