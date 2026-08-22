@@ -104,7 +104,11 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 			if _, ok := s.ReferenceLocations("", pos, true); ok {
 				switch resolved.kind {
 				case lsp.CompletionItemKindField:
-					return fmt.Sprintf("field `%s`", n.Value), rng, true
+					label := fmt.Sprintf("field `%s`", n.Value)
+					if ty, ok := s.TypeOf(n); ok {
+						label += fmt.Sprintf(" : %s", ty)
+					}
+					return label, rng, true
 				case lsp.CompletionItemKindEnumMember:
 					return fmt.Sprintf("enum member `%s`", n.Value), rng, true
 				}

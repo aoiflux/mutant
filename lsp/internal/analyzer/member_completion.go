@@ -44,7 +44,7 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 		}
 		if typeName, ok := s.structTypeNameForBinding(b); ok {
 			if fields, ok := s.structFieldNames(typeName); ok {
-				return memberCompletionItems(fields, lsp.CompletionItemKindField, prefix, pos), true
+				return s.structFieldCompletionItems(typeName, fields, prefix, pos), true
 			}
 		}
 		break
@@ -152,6 +152,20 @@ func (s *Snapshot) structFieldNames(typeName string) ([]string, bool) {
 		return names, true
 	}
 	return nil, false
+}
+
+// structFieldCompletionItems builds the field completions for a struct-typed
+// receiver, decorating each with its inferred type (from struct initializers)
+// as the completion Detail when one is known.
+func (s *Snapshot) structFieldCompletionItems(typeName string, names []string, prefix string, pos lsp.Position) []lsp.CompletionItem {
+	items := memberCompletionItems(names, lsp.CompletionItemKindField, prefix, pos)
+	for i := range items {
+		if ty, ok := s.StructFieldType(typeName, items[i].Label); ok {
+			detail := ty.String()
+			items[i].Detail = &detail
+		}
+	}
+	return items
 }
 
 // memberCompletionItems builds prefix-filtered items that replace the typed

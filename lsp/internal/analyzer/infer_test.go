@@ -254,6 +254,63 @@ func TestInferBroadenedBuiltinTable(t *testing.T) {
 	}
 }
 
+func TestInferStructFieldTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		line uint32
+		char uint32
+		want string
+	}{
+		{
+			"int-field",
+			"struct Point { x; y; };\nlet p = Point{x: 1, y: 2.0};\np.x;\n",
+			2, 2, "int",
+		},
+		{
+			"float-field",
+			"struct Point { x; y; };\nlet p = Point{x: 1, y: 2.0};\np.y;\n",
+			2, 2, "float",
+		},
+		{
+			"string-field",
+			"struct User { name; };\nlet u = User{name: \"bob\"};\nu.name;\n",
+			2, 2, "string",
+		},
+		{
+			// The field type flows through a binding: q = p.x is an int.
+			"field-propagates-to-binding",
+			"struct Point { x; };\nlet p = Point{x: 1};\nlet q = p.x;\nq;\n",
+			3, 0, "int",
+		},
+		{
+			// Disagreeing initializers poison the field -> no type (safe).
+			"conflicting-initializers-absent",
+			"struct Box { v; };\nlet a = Box{v: 1};\nlet b = Box{v: \"s\"};\na.v;\n",
+			3, 2, "",
+		},
+		{
+			// A field never set in any initializer has no inferred type.
+			"uninitialized-field-absent",
+			"struct Point { x; y; };\nlet p = Point{x: 1};\np.y;\n",
+			2, 2, "",
+		},
+		{
+			// An unknown initializer value poisons the field (could be anything).
+			"unknown-initializer-value-absent",
+			"struct Point { x; };\nlet p = Point{x: mystery()};\np.x;\n",
+			2, 2, "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := typeAt(t, c.src, c.line, c.char); got != c.want {
+				t.Fatalf("%s: type = %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}
+
 func TestInferMultiBindNewFallibles(t *testing.T) {
 	// parse_int -> (int, error)
 	src := "let n, err = parse_int(\"5\", 10);"

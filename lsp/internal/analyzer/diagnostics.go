@@ -43,6 +43,7 @@ type LintConfig struct {
 	Semicolon                    LintSeverity
 	UnreachableCode              LintSeverity
 	PlatformSupport              LintSeverity
+	BuiltinArity                 LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -61,6 +62,10 @@ func DefaultLintConfig() LintConfig {
 		// the program may be authored on one platform to run on another, and the
 		// call still parses/compiles — it just fails at runtime on this host.
 		PlatformSupport: LintSeverityWarning,
+		// A wrong-argument-count call to a fixed-arity builtin is a guaranteed
+		// runtime error, but it still parses/compiles, so warning (matching the
+		// platformSupport family) rather than error.
+		BuiltinArity: LintSeverityWarning,
 	}
 }
 
@@ -81,6 +86,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.UnreachableCode
 	case "platformSupport":
 		severityName = c.PlatformSupport
+	case "builtinArity":
+		severityName = c.BuiltinArity
 	default:
 		return nil, false
 	}
@@ -134,6 +141,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUnreachableCode(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintBuiltinArity(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
@@ -1216,6 +1224,257 @@ func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *
 		return
 	}
 	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet, topLevel: current.depth == 0})
+}
+
+// lintBuiltinArity flags a call to a builtin whose fixed argument-count contract
+// the call cannot satisfy (e.g. `abs(1, 2)` or `clamp(x)`). It is deliberately
+// conservative and fires only when the callee (1) is not shadowed by an in-scope
+// binding, (2) is a live builtin in builtin.Builtins, and (3) has a verified
+// arity in the curated builtinArities table. A wrong-arity call to such a builtin
+// is a guaranteed runtime error, so this rule has no false positives.
+func lintBuiltinArity(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil || snapshot.Program == nil {
+		return nil
+	}
+
+	severity, ok := lintConfig.severityForRule("builtinArity")
+	if !ok {
+		return nil
+	}
+
+	source := "mutant-lint"
+	knownBuiltins := make(map[string]struct{}, len(builtin.Builtins))
+	for _, def := range builtin.Builtins {
+		if def.Name == "" {
+			continue
+		}
+		knownBuiltins[def.Name] = struct{}{}
+	}
+
+	collector := &arityCollector{
+		snapshot: snapshot,
+		severity: severity,
+		source:   &source,
+		builtins: knownBuiltins,
+		result:   make([]lsp.Diagnostic, 0, 2),
+	}
+
+	root := newDeclarationScope(nil, 0)
+	for _, stmt := range snapshot.Program.Statements {
+		collector.collectStatement(stmt, root)
+	}
+
+	return collector.result
+}
+
+// arityCollector walks the program tracking lexical scope so it can tell a real
+// builtin call from a shadowed name, and checks fixed-arity builtin calls against
+// builtinArities. It mirrors undefinedCollector's scope walk; the only leaf action
+// is the arity check at an identifier-callee CallExpression.
+type arityCollector struct {
+	snapshot *Snapshot
+	severity *lsp.DiagnosticSeverity
+	source   *string
+	builtins map[string]struct{}
+	result   []lsp.Diagnostic
+}
+
+func (c *arityCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || stmt == nil {
+		return
+	}
+
+	switch node := stmt.(type) {
+	case *mast.LetStatement:
+		names := node.Names
+		if len(names) == 0 && node.Name != nil {
+			names = []*mast.Identifier{node.Name}
+		}
+
+		if len(names) == 1 {
+			c.defineDeclaration(names[0], current)
+		}
+
+		if node.Value != nil {
+			c.collectExpression(node.Value, current)
+		}
+
+		if len(names) > 1 {
+			for _, ident := range names {
+				c.defineDeclaration(ident, current)
+			}
+		}
+	case *mast.ReturnStatement:
+		for _, expr := range node.ReturnValues {
+			c.collectExpression(expr, current)
+		}
+		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
+			c.collectExpression(node.ReturnValue, current)
+		}
+	case *mast.ExpressionStatement:
+		if node.Expression != nil {
+			c.collectExpression(node.Expression, current)
+		}
+	case *mast.BlockStatement:
+		for _, inner := range node.Statements {
+			c.collectStatement(inner, current)
+		}
+	case *mast.ForStatement:
+		if node.Init != nil {
+			c.collectStatement(node.Init, current)
+		}
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Post != nil {
+			c.collectExpression(node.Post, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.StructStatement:
+		c.defineDeclaration(node.Name, current)
+	case *mast.EnumStatement:
+		c.defineDeclaration(node.Name, current)
+	}
+}
+
+func (c *arityCollector) collectExpression(expr mast.Expression, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || expr == nil {
+		return
+	}
+
+	switch node := expr.(type) {
+	case *mast.FunctionLiteral:
+		child := newDeclarationScope(current, current.depth+1)
+		for _, param := range node.Parameters {
+			c.defineDeclaration(param, child)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, child)
+		}
+	case *mast.MacroLiteral:
+		child := newDeclarationScope(current, current.depth+1)
+		for _, param := range node.Parameters {
+			c.defineDeclaration(param, child)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, child)
+		}
+	case *mast.IfExpression:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Consequence != nil {
+			c.collectStatement(node.Consequence, current)
+		}
+		if node.Alternative != nil {
+			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.CallExpression:
+		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil {
+			// Macro special forms (quote/unquote/...) are not builtin calls; do
+			// not arity-check them, but still walk their arguments.
+			if isMacroSpecialFormName(ident.Value) {
+				for _, arg := range node.Arguments {
+					c.collectExpression(arg, current)
+				}
+				return
+			}
+			c.checkArity(ident, len(node.Arguments), current)
+		}
+		if node.Function != nil {
+			c.collectExpression(node.Function, current)
+		}
+		for _, arg := range node.Arguments {
+			c.collectExpression(arg, current)
+		}
+	case *mast.PrefixExpression:
+		if node.Right != nil {
+			c.collectExpression(node.Right, current)
+		}
+	case *mast.InfixExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Right != nil {
+			c.collectExpression(node.Right, current)
+		}
+	case *mast.IndexExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Index != nil {
+			c.collectExpression(node.Index, current)
+		}
+	case *mast.AssignExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Value != nil {
+			c.collectExpression(node.Value, current)
+		}
+	case *mast.FieldExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+	case *mast.StructLiteral:
+		if node.Name != nil {
+			c.collectExpression(node.Name, current)
+		}
+		for _, field := range node.Fields {
+			if field == nil || field.Value == nil {
+				continue
+			}
+			c.collectExpression(field.Value, current)
+		}
+	case *mast.ArrayLiteral:
+		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.HashLiteral:
+		for key, value := range node.Pairs {
+			c.collectExpression(key, current)
+			c.collectExpression(value, current)
+		}
+	}
+}
+
+// checkArity emits a diagnostic when ident names a fixed-arity builtin that is not
+// shadowed in scope and argCount cannot satisfy its contract.
+func (c *arityCollector) checkArity(ident *mast.Identifier, argCount int, current *declarationScope) {
+	if ident == nil || ident.Value == "" {
+		return
+	}
+	// A user/local binding of this name shadows the builtin — not a builtin call.
+	if _, ok := current.find(ident.Value); ok {
+		return
+	}
+	// Only real builtins; a stale table key is inert.
+	if _, ok := c.builtins[ident.Value]; !ok {
+		return
+	}
+	arity, ok := builtinArityFor(ident.Value)
+	if !ok || arity.accepts(argCount) {
+		return
+	}
+	rng, ok := c.snapshot.Program.RangeOf(ident)
+	if !ok {
+		return
+	}
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.severity,
+		Source:   c.source,
+		Message:  arity.message(ident.Value, argCount),
+	})
+}
+
+func (c *arityCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
+		return
+	}
+	current.define(ident.Value, declInfo{ident: ident, topLevel: current.depth == 0})
 }
 
 func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]struct{} {

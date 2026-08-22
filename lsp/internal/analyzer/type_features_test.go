@@ -69,6 +69,43 @@ func TestCompletionDetailCarriesType(t *testing.T) {
 	}
 }
 
+func TestHoverShowsStructFieldType(t *testing.T) {
+	s := New().Analyze("struct Point { x; };\nlet p = Point{x: 1};\np.x;\n")
+	// hover on the field accessor `x` in `p.x` (line 2, the `x` at column 2)
+	text, _, ok := s.HoverText(lsp.Position{Line: 2, Character: 2})
+	if !ok {
+		t.Fatal("expected hover text")
+	}
+	if !strings.Contains(text, ": int") {
+		t.Fatalf("hover = %q, want it to contain ': int'", text)
+	}
+}
+
+func TestMemberCompletionCarriesFieldType(t *testing.T) {
+	s := New().Analyze("struct Point { x; y; };\nlet p = Point{x: 1, y: 2.0};\np.\n")
+	items, ok := s.MemberCompletionsAt(lsp.Position{Line: 2, Character: 2})
+	if !ok {
+		t.Fatal("expected member completions after `p.`")
+	}
+	want := map[string]string{"x": "int", "y": "float"}
+	seen := map[string]bool{}
+	for _, it := range items {
+		exp, tracked := want[it.Label]
+		if !tracked {
+			continue
+		}
+		seen[it.Label] = true
+		if it.Detail == nil || *it.Detail != exp {
+			t.Fatalf("field %q detail = %v, want %q", it.Label, it.Detail, exp)
+		}
+	}
+	for field := range want {
+		if !seen[field] {
+			t.Fatalf("expected a member completion item for field %q", field)
+		}
+	}
+}
+
 func TestInlayTypeHintOnLetBinding(t *testing.T) {
 	s := New().Analyze("let count = 5;\nlet mystery = unknown_fn();\n")
 	hints := s.InlayHints(lsp.Range{

@@ -36,18 +36,23 @@ type typeInferer struct {
 	nodeTypes   map[mast.Node]Type
 	structNames map[string]bool
 	enumNames   map[string]bool
+	// structFields holds each struct's field types as seen in its initializers,
+	// keyed structName -> fieldName -> Type. See observeStructField.
+	structFields map[string]map[string]Type
 }
 
-// inferTypes returns a map of AST node -> inferred Type. Only confidently-typed
-// nodes are present; absence means Any.
-func inferTypes(s *Snapshot) map[mast.Node]Type {
+// inferTypes returns a map of AST node -> inferred Type (only confidently-typed
+// nodes are present; absence means Any) plus the struct field-type table keyed
+// structName -> fieldName -> Type.
+func inferTypes(s *Snapshot) (map[mast.Node]Type, map[string]map[string]Type) {
 	if s == nil || s.Program == nil {
-		return map[mast.Node]Type{}
+		return map[mast.Node]Type{}, map[string]map[string]Type{}
 	}
 	inf := &typeInferer{
-		nodeTypes:   make(map[mast.Node]Type),
-		structNames: make(map[string]bool),
-		enumNames:   make(map[string]bool),
+		nodeTypes:    make(map[mast.Node]Type),
+		structNames:  make(map[string]bool),
+		enumNames:    make(map[string]bool),
+		structFields: make(map[string]map[string]Type),
 	}
 	// Struct/enum type names are file-global; collect them first so a reference
 	// before the declaration still resolves.
@@ -68,7 +73,7 @@ func inferTypes(s *Snapshot) map[mast.Node]Type {
 	for _, stmt := range s.Program.Statements {
 		inf.stmt(stmt, root)
 	}
-	return inf.nodeTypes
+	return inf.nodeTypes, inf.structFields
 }
 
 func (inf *typeInferer) record(node mast.Node, t Type) {
@@ -197,9 +202,17 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		}
 		return tHash
 	case *mast.StructLiteral:
+		var name string
+		if n.Name != nil {
+			name = n.Name.Value
+		}
 		for _, f := range n.Fields {
-			if f != nil {
-				inf.expr(f.Value, env)
+			if f == nil {
+				continue
+			}
+			ft := inf.expr(f.Value, env)
+			if name != "" && f.Name != nil {
+				inf.observeStructField(name, f.Name.Value, ft)
 			}
 		}
 		if n.Name != nil {
@@ -241,6 +254,16 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		lt := inf.expr(n.Left, env)
 		if lt.Kind == TypeEnum {
 			return lt // `Color.Red` is a value of the enum
+		}
+		// A field access on a struct-typed value carries the field's type when it
+		// was seen consistently across the struct's initializers.
+		if lt.Kind == TypeStruct && lt.Name != "" && n.Field != nil {
+			if ft, ok := inf.structFieldType(lt.Name, n.Field.Value); ok {
+				// Record on the accessor identifier too, so hovering the field name
+				// (the node under the cursor) shows its type.
+				inf.record(n.Field, ft)
+				return ft
+			}
 		}
 		return AnyType
 	case *mast.CallExpression:
@@ -396,6 +419,39 @@ func joinTypes(a, b Type) Type {
 		return a
 	}
 	return AnyType
+}
+
+// observeStructField folds a field's initializer type into the file-global struct
+// field table. Types are joined across every initializer of the same struct, so a
+// field keeps a concrete type only while every observed initializer agrees on it;
+// any disagreement — or a single unknown initializer value — joins to Any and the
+// field stops being typed. That conservative merge is what keeps struct-field
+// types free of false positives.
+func (inf *typeInferer) observeStructField(structName, field string, t Type) {
+	if structName == "" || field == "" {
+		return
+	}
+	m := inf.structFields[structName]
+	if m == nil {
+		m = make(map[string]Type)
+		inf.structFields[structName] = m
+	}
+	if existing, ok := m[field]; ok {
+		m[field] = joinTypes(existing, t)
+	} else {
+		m[field] = t
+	}
+}
+
+// structFieldType returns a struct field's inferred type when every initializer
+// seen so far agreed on a single known type for it (Any is treated as unknown).
+func (inf *typeInferer) structFieldType(structName, field string) (Type, bool) {
+	if m, ok := inf.structFields[structName]; ok {
+		if t, ok := m[field]; ok && t.IsKnown() {
+			return t, true
+		}
+	}
+	return AnyType, false
 }
 
 func infixType(operator string, lt, rt Type) Type {

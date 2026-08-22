@@ -22,9 +22,12 @@ type Snapshot struct {
 
 	// typeMap is the lazily-built, best-effort type of each confidently-typed AST
 	// node (see infer.go). It powers hover/completion/inlay type info and has no
-	// runtime effect. Built once via typeOnce.
-	typeOnce sync.Once
-	typeMap  map[mast.Node]Type
+	// runtime effect. Built once via typeOnce. structFields (structName ->
+	// fieldName -> Type) is built in the same pass and backs struct field-type
+	// hover/completion detail.
+	typeOnce     sync.Once
+	typeMap      map[mast.Node]Type
+	structFields map[string]map[string]Type
 }
 
 // types returns the inferred type map, building it once on first use.
@@ -33,7 +36,7 @@ func (s *Snapshot) types() map[mast.Node]Type {
 		return nil
 	}
 	s.typeOnce.Do(func() {
-		s.typeMap = inferTypes(s)
+		s.typeMap, s.structFields = inferTypes(s)
 	})
 	return s.typeMap
 }
@@ -46,6 +49,25 @@ func (s *Snapshot) TypeOf(node mast.Node) (Type, bool) {
 	}
 	t, ok := m[node]
 	return t, ok
+}
+
+// StructFieldType returns a struct field's inferred type, present only when every
+// initializer of that struct in the document agreed on one known type for it. It
+// backs field-type detail in hover and member completion; zero runtime effect.
+func (s *Snapshot) StructFieldType(structName, field string) (Type, bool) {
+	if s == nil {
+		return AnyType, false
+	}
+	s.types() // ensure the inference pass has run and populated structFields
+	m, ok := s.structFields[structName]
+	if !ok {
+		return AnyType, false
+	}
+	t, ok := m[field]
+	if !ok || !t.IsKnown() {
+		return AnyType, false
+	}
+	return t, true
 }
 
 // SemicolonProblems returns the recoverable semicolon issues in source order.

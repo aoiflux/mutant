@@ -3271,8 +3271,8 @@ func TestHoverOnResolvedStructFieldUsageShowsField(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if contents.Value != "field `x`" {
-		t.Fatalf("hover contents = %q, want field hover for resolved struct field usage", contents.Value)
+	if contents.Value != "field `x` : int" {
+		t.Fatalf("hover contents = %q, want typed field hover for resolved struct field usage", contents.Value)
 	}
 }
 
