@@ -74,14 +74,18 @@ for (let i = 0; i < url_count; i = i + 1) {
     let extract_lua = "local u='" + url + "'; local d=string.match(u,'^https?://([^/]+)'); if not d then return '' end; return d";
     let extracted, err = lua_run_string(extract_lua);
     check_err(err, "lua_run_string extract");
-        let domain = extracted;
+    // lua_run_string wraps the script's return value in
+    // {ok, result, error, schema_version}; the extracted hostname is under
+    // "result". Using the whole hash concatenates a hash into the next script
+    // and hands db_index_prop a HASH where it wants a STRING.
+    let domain = extracted["result"];
 
     let listed_lua = "local data,err=mutant.read_file('" + feed_file_path + "'); if not data then return '0' end; local d='" + domain + "'; local pad='\\n'..data..'\\n'; if string.find(pad,'\\n'..d..'\\n',1,true) then return '1' end; return '0'";
     let listed_result, err = lua_run_string(listed_lua);
     check_err(err, "lua_run_string listed");
 
     let listed = false;
-    if (listed_result == "1") {
+    if (listed_result["result"] == "1") {
         listed = true;
     };
 

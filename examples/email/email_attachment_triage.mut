@@ -8,9 +8,8 @@ putln("email_parse:", parsed, "err:", err);
 let urls, err = email_urls(raw);
 putln("email_urls:", urls, "err:", err);
 
-let auth, err = email_spf_dkim({
-  "spf": "pass",
-  "dkim": "pass",
-  "dmarc": "pass"
-});
+// email_spf_dkim verifies the message itself — it fetches the DKIM public key
+// over DNS and reads the SPF result the receiving MTA recorded in the headers.
+// Handing it a hash of verdicts asks it to check conclusions instead of evidence.
+let auth, err = email_spf_dkim(raw);
 putln("email_spf_dkim:", auth, "err:", err);

@@ -67,8 +67,11 @@ if (err) {
     putln("go extraction failed");
 };
 
-let npm_deps, err = json_parse(npm_result);
-let go_deps, err = json_parse(go_result);
+// lua_run_string returns {ok, result, error, schema_version}; the script's own
+// return value is under "result". Passing the whole hash gives json_parse a
+// HASH where it wants JSON text.
+let npm_deps, err = json_parse(npm_result["result"]);
+let go_deps, err = json_parse(go_result["result"]);
 check_err(err, "json_parse go_deps");
 
 let NODE_DEP = 1;
