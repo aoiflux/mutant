@@ -67,10 +67,10 @@ type semanticResult struct {
 func New(debug bool) *Server {
 	handler := &lsp.Handler{}
 	s := &Server{
-		handler:    handler,
-		documents:  workspace.NewStore(),
-		symbols:    workspace.NewSymbolIndex(),
-		analyzer:   analyzer.New(),
+		handler:      handler,
+		documents:    workspace.NewStore(),
+		symbols:      workspace.NewSymbolIndex(),
+		analyzer:     analyzer.New(),
 		snapshots:    make(map[lsp.DocumentUri]*analyzer.Snapshot),
 		semanticPrev: make(map[lsp.DocumentUri]semanticResult),
 		scanned:      make(map[string]lsp.DocumentUri),
@@ -485,6 +485,10 @@ func quickFixesForDiagnostic(uri lsp.DocumentUri, text string, snapshot *analyze
 				return actions
 			}
 		}
+
+		if fixes := quickFixesForBuiltinArgType(uri, diagnostic); len(fixes) > 0 {
+			return fixes
+		}
 	}
 
 	if *diagnostic.Source == analyzer.DiagnosticSourceFormat {
@@ -554,6 +558,70 @@ func semicolonQuickFixes(uri lsp.DocumentUri, diagnostic lsp.Diagnostic) []lsp.C
 		IsPreferred: &preferred,
 		Edit: &lsp.WorkspaceEdit{Changes: map[lsp.DocumentUri][]lsp.TextEdit{
 			uri: {edit},
+		}},
+	}}
+}
+
+// stringifiableKinds are the argument kinds worth offering to_string for.
+//
+// to_string accepts anything — its default branch falls back to Inspect() — but
+// wrapping an array or a hash produces its debug rendering, which is almost
+// never what someone passing a collection where a string belongs meant. Limiting
+// the offer to the scalars keeps it to the case where the conversion is the
+// obvious repair.
+var stringifiableKinds = map[builtin.ParamKind]struct{}{
+	builtin.ParamInt:   {},
+	builtin.ParamFloat: {},
+	builtin.ParamBool:  {},
+}
+
+// quickFixesForBuiltinArgType offers `to_string(...)` around an argument a
+// builtin wanted as a STRING.
+//
+// Only to_string is offered, and that is a deliberate limit rather than an
+// unfinished one. The other three conversions follow the (value, err)
+// convention and return a MULTI_VALUE, so `str_repeat("ab", to_int("3"))` fails
+// at run time with "argument 2 to `str_repeat` must be INTEGER, got
+// MULTI_VALUE" — the fix would trade a warning for a runtime error. Repairing
+// those needs a second statement to destructure the pair, which is more than a
+// quick fix should do silently. to_string returns a bare value and is safe to
+// nest.
+func quickFixesForBuiltinArgType(uri lsp.DocumentUri, diagnostic lsp.Diagnostic) []lsp.CodeAction {
+	want, got, ok := analyzer.ArgTypeDiagnosticKinds(diagnostic.Data)
+	if !ok {
+		return nil
+	}
+	if _, convertible := stringifiableKinds[got]; !convertible {
+		return nil
+	}
+
+	acceptsString := false
+	for _, kind := range want {
+		if kind == builtin.ParamString {
+			acceptsString = true
+			break
+		}
+	}
+	if !acceptsString {
+		return nil
+	}
+
+	kind := lsp.CodeActionKindQuickFix
+	preferred := true
+
+	// Two zero-width inserts rather than a replacement: the argument's own text
+	// never has to be sliced out of the document, so the fix is indifferent to
+	// how the expression is written and to the encoding of anything inside it.
+	return []lsp.CodeAction{{
+		Title:       "Wrap in `to_string(...)`",
+		Kind:        &kind,
+		Diagnostics: []lsp.Diagnostic{diagnostic},
+		IsPreferred: &preferred,
+		Edit: &lsp.WorkspaceEdit{Changes: map[lsp.DocumentUri][]lsp.TextEdit{
+			uri: {
+				{Range: lsp.Range{Start: diagnostic.Range.Start, End: diagnostic.Range.Start}, NewText: "to_string("},
+				{Range: lsp.Range{Start: diagnostic.Range.End, End: diagnostic.Range.End}, NewText: ")"},
+			},
 		}},
 	}}
 }

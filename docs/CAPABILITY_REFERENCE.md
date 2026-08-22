@@ -155,7 +155,7 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `json_stringify(value: STRING\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH)` | all | Serializes Mutant values into JSON text. |
 | `parse_float(s: STRING)` | all | Parses s as a float; returns (float, err). |
 | `parse_int(s: STRING, base: INTEGER)` | all | Parses s as an integer in base (0 auto-detects); returns (int, err). |
-| `plist_parse(path)` | all | Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err). |
+| `plist_parse(path: STRING)` | all | Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err). |
 | `to_base(n: INTEGER, base: INTEGER)` | all | Formats integer n in the given base (2–36). |
 | `to_bool(v: BOOLEAN\|INTEGER\|FLOAT\|STRING)` | all | Converts a bool/number/string to BOOLEAN; returns (bool, err). |
 | `to_float(v: INTEGER\|FLOAT\|BOOLEAN\|STRING)` | all | Converts a number/bool/string to FLOAT; returns (float, err). |
@@ -217,7 +217,7 @@ Binary buffer inspection and construction: fixed-width integer reads/writes (LE/
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `bytes_char_from_int(value: INTEGER)` | all | Converts an integer byte value to a single-character string. |
-| `bytes_cstr_at(data: STRING, offset: INTEGER)` | all | Reads null-terminated string from bytes at offset. |
+| `bytes_cstr_at(data: STRING, offset: INTEGER, maxLength: INTEGER)` | all | Reads null-terminated string from bytes at offset. |
 | `bytes_cursor_eof(cursor: HASH)` | all | Returns whether cursor is at end-of-buffer. |
 | `bytes_cursor_new(data: STRING)` | all | Creates a cursor for structured byte parsing. |
 | `bytes_cursor_read_u16_be(cursor: HASH)` | all | Reads unsigned 16-bit big-endian integer from cursor. |
@@ -254,15 +254,15 @@ Read/write/manage files and directories, plus file-level forensics: hashing, ent
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `fs_append(path: STRING, data: STRING)` | all | Appends data to the end of a file. |
-| `fs_carve(path, type)` | all | Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length. |
+| `fs_carve(path: STRING, type: STRING)` | all | Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length. |
 | `fs_copy(src: STRING, dst: STRING)` | all | Copies a file from source path to destination path. |
 | `fs_delete(path: STRING)` | all | Deletes a file from disk. |
-| `fs_deleted(path)` | all | Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
+| `fs_deleted(path: STRING)` | all | Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
 | `fs_diff(leftPath, rightPath)` | all | Compares two files (not directories) and reports differences. |
 | `fs_entropy(path)` | all | Computes file entropy for packed/encrypted artifact detection. |
 | `fs_exists(path: STRING)` | all | Returns whether a file or directory exists. |
-| `fs_extract_strings(path, minLen?)` | all | Extracts printable strings from a file. |
-| `fs_hash(path)` | all | Computes hash digests for a file. |
+| `fs_extract_strings(path: STRING, minLen?: INTEGER)` | all | Extracts printable strings from a file. |
+| `fs_hash(path: STRING, algo?: STRING)` | all | Computes hash digests for a file. |
 | `fs_list(path: STRING)` | all | Lists directory entries for a path. |
 | `fs_magic(path)` | all | Infers file type/magic from a file's header against a ~40-signature database (executables PE/ELF/Mach-O, images, archives, documents, SQLite/registry/EVTX/pcap, media, and forensic artifacts like lnk/prefetch). Returns {path, type, mime, signature}. |
 | `fs_metadata(path)` | all | Returns detailed filesystem metadata for a path. |
@@ -270,7 +270,7 @@ Read/write/manage files and directories, plus file-level forensics: hashing, ent
 | `fs_move(src: STRING, dst: STRING)` | all | Moves or renames a file or directory. |
 | `fs_read(path: STRING)` | all | Reads file contents from disk. |
 | `fs_stat(path: STRING)` | all | Returns file metadata such as size and timestamps. |
-| `fs_walk(root)` | all | Walks a directory tree and returns discovered paths. |
+| `fs_walk(root: STRING, maxDepth?: INTEGER)` | all | Walks a directory tree and returns discovered paths. |
 | `fs_write(path: STRING, data: STRING)` | all | Writes data to a file, replacing existing contents. |
 
 ## Network (32)
@@ -280,34 +280,34 @@ Sockets and TLS sessions, an in-process X.509 CA, HTTP-message inspection, liste
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `net_accept(listener, timeoutMs)` | all | Accepts one connection; returns {ok, handle, remote_addr, timeout, error}. |
-| `net_banner(address, timeoutMs)` | all | Collects service banner text from a network endpoint. |
-| `net_capture_raw(pcap_path)` | all | Reads raw packets from an offline pcap file into a per-packet listing (live interface capture needs cgo/raw sockets and is unavailable; net_pcap_analyze gives the flow summary, this gives the packets). Returns {file, link_type, count, truncated, packets:[{index, ts, timestamp, length, src, dst, protocol, sport, dport}]}. Returns (result, err). |
+| `net_banner(address: STRING, timeoutMs: INTEGER)` | all | Collects service banner text from a network endpoint. |
+| `net_capture_raw(pcap_path: STRING)` | all | Reads raw packets from an offline pcap file into a per-packet listing (live interface capture needs cgo/raw sockets and is unavailable; net_pcap_analyze gives the flow summary, this gives the packets). Returns {file, link_type, count, truncated, packets:[{index, ts, timestamp, length, src, dst, protocol, sport, dport}]}. Returns (result, err). |
 | `net_conn_close(handle)` | all | Closes a connection and releases its handle. |
 | `net_conn_info(handle)` | all | Returns addressing and negotiated TLS session details for a connection. |
-| `net_conn_read(handle, maxBytes, timeoutMs)` | all | Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field. |
-| `net_conn_write(handle, data, timeout_ms?)` | all | Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write. |
-| `net_connect(address, timeoutMs)` | all | Opens a persistent TCP connection and returns a connection handle. |
-| `net_connect_scan(host, startPort, endPort, timeoutMs)` | all | Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges). |
-| `net_dial(address, timeoutMs)` | all | Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that). |
-| `net_dns_query(name, qtype)` | all | Queries DNS records for a hostname. |
-| `net_flow_reconstruct(packets)` | all | Reconstructs higher-level flows from packet records. |
+| `net_conn_read(handle: INTEGER, maxBytes: INTEGER, timeoutMs: INTEGER)` | all | Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field. |
+| `net_conn_write(handle: INTEGER, data: STRING, timeout_ms?: INTEGER)` | all | Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write. |
+| `net_connect(address: STRING, timeoutMs: INTEGER)` | all | Opens a persistent TCP connection and returns a connection handle. |
+| `net_connect_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER)` | all | Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges). |
+| `net_dial(address: STRING, timeoutMs: INTEGER)` | all | Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that). |
+| `net_dns_query(name: STRING, qtype: STRING)` | all | Queries DNS records for a hostname. |
+| `net_flow_reconstruct(packets: ARRAY)` | all | Reconstructs higher-level flows from packet records. |
 | `net_listen(address)` | all | Opens a plain TCP listener and returns a listener handle. |
 | `net_listen_close(handle)` | all | Closes a listener and releases its handle. |
-| `net_os_fingerprint(pcap_path)` | all | Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges. |
+| `net_os_fingerprint(pcap_path: STRING)` | all | Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges. |
 | `net_pcap_analyze(path)` | all | Analyzes PCAP captures and returns flow/session signals. |
 | `net_resolve(host)` | all | Resolves a host name to network addresses. |
 | `net_serve(listener, handler_path, arg?)` | all | Accept loop that dispatches each connection to a fresh VM running handler_path; handler reads its connection via serve_conn() and shared arg via serve_arg(). Concurrent. |
 | `net_spawn(handler_path, arg?)` | all | Runs handler_path on a new goroutine with no connection (serve_conn()->0) and arg via serve_arg(). For auxiliary workers, e.g. a WebSocket reverse pump. |
-| `net_syn_scan(host, startPort, endPort, timeoutMs)` | all | DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan. |
-| `net_tls_connect(address, timeoutMs, options?)` | all | Opens a TLS (secure) client connection and returns a connection handle. |
-| `net_tls_fingerprint(address, timeoutMs)` | all | Collects TLS certificate and handshake fingerprint metadata. |
-| `net_tls_listen(address, certPem, keyPem, options?)` | all | Opens a TLS-terminating listener from a PEM cert/key pair. |
-| `net_tls_upgrade_client(handle, options?)` | all | Upgrades an open connection to client-side TLS (STARTTLS / upstream leg). |
-| `net_tls_upgrade_server(handle, certPem, keyPem, options?)` | all | Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept). |
-| `net_udp_scan(host, startPort, endPort, timeoutMs)` | all | Scans a UDP port range on a host. |
+| `net_syn_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER)` | all | DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan. |
+| `net_tls_connect(address: STRING, timeoutMs: INTEGER, options?)` | all | Opens a TLS (secure) client connection and returns a connection handle. |
+| `net_tls_fingerprint(address: STRING, timeoutMs: INTEGER)` | all | Collects TLS certificate and handshake fingerprint metadata. |
+| `net_tls_listen(address: STRING, certPem: STRING, keyPem: STRING, options?)` | all | Opens a TLS-terminating listener from a PEM cert/key pair. |
+| `net_tls_upgrade_client(handle: INTEGER, options?)` | all | Upgrades an open connection to client-side TLS (STARTTLS / upstream leg). |
+| `net_tls_upgrade_server(handle: INTEGER, certPem: STRING, keyPem: STRING, options?)` | all | Upgrades an accepted connection to server-side TLS (completes a CONNECT intercept). |
+| `net_udp_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER)` | all | Scans a UDP port range on a host. |
 | `tls_generate_ca(options?)` | all | Creates a self-signed CA certificate and key; returns {cert_pem, key_pem, serial}. |
 | `tls_generate_cert(options?)` | all | Creates a self-signed leaf/server certificate and key. |
-| `tls_sign_cert(caCertPem, caKeyPem, options?)` | all | Issues a leaf certificate signed by a CA (per-host interception cert). |
+| `tls_sign_cert(caCertPem: STRING, caKeyPem: STRING, options?)` | all | Issues a leaf certificate signed by a CA (per-host interception cert). |
 | `ws_accept_key(client_key)` | all | Computes the Sec-WebSocket-Accept value for an RFC 6455 101 handshake response. |
 | `ws_read_frame(handle, timeoutMs)` | all | Reads one WebSocket frame (unmasked); returns {fin, opcode, payload, masked, length, is_control}. |
 | `ws_write_frame(handle, opcode, payload, mask, timeout_ms?)` | all | Writes one WebSocket frame; mask=true for client->server, false for server->client. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write. |
@@ -324,11 +324,11 @@ HTTP client requests and low-level request/response parsing and building for pro
 | `http_conn_read_request_head(handle, timeoutMs)` | all | Reads a request's line+headers without the body (stream it via net_conn_read); adds content_length, chunked. |
 | `http_conn_read_response(handle, timeoutMs)` | all | Reads exactly one HTTP response from a connection handle. |
 | `http_conn_read_response_head(handle, timeoutMs)` | all | Reads a response's status line+headers without the body (stream it via net_conn_read); adds content_length, chunked. |
-| `http_get(url)` | all | Performs an HTTP GET request. |
+| `http_get(url: STRING)` | all | Performs an HTTP GET request. |
 | `http_parse_request(raw)` | all | Parses a raw HTTP request into {method, url, path, host, proto, query, headers, body}. |
 | `http_parse_response(raw)` | all | Parses a raw HTTP response into {status, status_text, proto, headers, body}. |
-| `http_post(url, body, contentType?)` | all | Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted. |
-| `http_request(method, url, body, headers)` | all | Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable). |
+| `http_post(url: STRING, body, contentType?: STRING)` | all | Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted. |
+| `http_request(method: STRING, url: STRING, body, headers)` | all | Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable). |
 
 ## Graph Database (14)
 
@@ -336,20 +336,20 @@ Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifa
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `db_add_artifact(db, type, attrs?)` | all | Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed. |
-| `db_add_edge(db, from, to, edgeType?)` | all | Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported. |
-| `db_add_node(db, nodeType?)` | all | Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported. |
-| `db_add_relation(db, from, to, relation)` | all | Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported. |
-| `db_bfs(db, origin, depth, direction)` | all | Breadth-first traversal from origin up to depth. direction is "in", "out", or "both". All four arguments are required. |
-| `db_close(db)` | all | Closes a graph database handle and flushes pending state. |
-| `db_index_prop(db, nodeID, key, value)` | all | Indexes a property (key=value) on a node. All four arguments are required. |
+| `db_add_artifact(db: INTEGER, type: STRING, attrs?: HASH)` | all | Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed. |
+| `db_add_edge(db: INTEGER, from: INTEGER, to: INTEGER, edgeType?)` | all | Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported. |
+| `db_add_node(db: INTEGER, nodeType?)` | all | Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported. |
+| `db_add_relation(db: INTEGER, from: INTEGER, to: INTEGER, relation: STRING)` | all | Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported. |
+| `db_bfs(db: INTEGER, origin: INTEGER, depth: INTEGER, direction: STRING)` | all | Breadth-first traversal from origin up to depth. direction is "in", "out", or "both". All four arguments are required. |
+| `db_close(db: INTEGER)` | all | Closes a graph database handle and flushes pending state. |
+| `db_index_prop(db: INTEGER, nodeID: INTEGER, key: STRING, value: STRING)` | all | Indexes a property (key=value) on a node. All four arguments are required. |
 | `db_open()` | all | Creates an in-memory graph database handle. |
-| `db_open_disk(path)` | all | Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open. |
-| `db_query(db)` | all | Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language. |
-| `db_query_nodes(db, nodeType?)` | all | Returns node IDs, optionally filtered to a single node type (integer/enum). |
-| `db_shortest_path(db, from, to)` | all | Computes shortest path between two graph nodes. |
-| `db_stats(db)` | all | Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction. |
-| `db_timeline(db)` | all | Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument). |
+| `db_open_disk(path: STRING)` | all | Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open. |
+| `db_query(db: INTEGER)` | all | Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language. |
+| `db_query_nodes(db: INTEGER, nodeType?)` | all | Returns node IDs, optionally filtered to a single node type (integer/enum). |
+| `db_shortest_path(db: INTEGER, from: INTEGER, to: INTEGER)` | all | Computes shortest path between two graph nodes. |
+| `db_stats(db: INTEGER)` | all | Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction. |
+| `db_timeline(db: INTEGER)` | all | Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument). |
 
 ## Cache (8)
 
@@ -360,11 +360,11 @@ In-memory key/value cache with TTLs and hit/miss statistics.
 | `cache_clear(name)` | all | Clears all entries and resets relevant cache state. |
 | `cache_close(name)` | all | Closes a named cache and frees its entries and backend. |
 | `cache_delete(name, key)` | all | Deletes a key from cache and returns whether it existed. |
-| `cache_get(name, key)` | all | Reads a value from cache and returns found/value fields. |
+| `cache_get(name: STRING, key: STRING)` | all | Reads a value from cache and returns found/value fields. |
 | `cache_keys(name)` | all | Lists sorted cache keys for a cache namespace. |
-| `cache_open(name)` | all | Opens or creates a named in-memory cache store. |
-| `cache_put(name, key, value, ttlSeconds?)` | all | Stores a value in a named cache key with optional TTL. |
-| `cache_stats(name)` | all | Returns cache counters such as hits, misses, puts, deletes, and expires. |
+| `cache_open(name: STRING)` | all | Opens or creates a named in-memory cache store. |
+| `cache_put(name: STRING, key: STRING, value, ttlSeconds?: INTEGER)` | all | Stores a value in a named cache key with optional TTL. |
+| `cache_stats(name: STRING)` | all | Returns cache counters such as hits, misses, puts, deletes, and expires. |
 
 ## Policy (5)
 
@@ -373,10 +373,10 @@ Load and evaluate allow/deny policies with rule metadata and evaluation traces.
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `policy_allow(policy, input)` | all | Evaluates and returns allow/deny boolean for a policy. |
-| `policy_eval(policy, input)` | all | Evaluates a loaded policy and returns decision details. |
+| `policy_eval(policy: HASH\|STRING, input)` | all | Evaluates a loaded policy and returns decision details. |
 | `policy_load(name, source)` | all | Loads a policy module by name from source text or config hash. |
 | `policy_rules(policy)` | all | Returns rule metadata exported by a loaded policy. |
-| `policy_trace(policy, input)` | all | Runs policy evaluation with trace output for debugging rule flow. |
+| `policy_trace(policy: HASH\|STRING, input)` | all | Runs policy evaluation with trace output for debugging rule flow. |
 
 ## Runtime Integration (3)
 
@@ -394,10 +394,10 @@ Guarded execution of external commands, subject to the `command_exec` capability
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `cmd_add(builder, arg)` | all | Appends an argument to a command builder. |
-| `cmd_builder(shell?)` | all | Creates a command builder object for step-wise command composition. |
-| `cmd_run(builder)` | all | Executes a composed command and returns run output metadata. |
-| `exec_string(command, shell?)` | all | Executes a shell command string via security-guarded command execution. |
+| `cmd_add(builder: HASH, arg: STRING)` | all | Appends an argument to a command builder. |
+| `cmd_builder(shell?: STRING)` | all | Creates a command builder object for step-wise command composition. |
+| `cmd_run(builder: HASH)` | all | Executes a composed command and returns run output metadata. |
+| `exec_string(command: STRING, shell?: STRING)` | all | Executes a shell command string via security-guarded command execution. |
 
 ## Cryptography (5)
 
@@ -405,11 +405,11 @@ X.509 certificate parsing, JWT decoding, PEM decoding, and authenticated AES-GCM
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `aes_decrypt(key, ciphertext)` | all | AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering. |
-| `aes_encrypt(key, plaintext)` | all | AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err). |
-| `jwt_decode(token)` | all | Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err). |
+| `aes_decrypt(key: STRING, ciphertext: STRING)` | all | AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering. |
+| `aes_encrypt(key: STRING, plaintext: STRING)` | all | AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err). |
+| `jwt_decode(token: STRING)` | all | Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err). |
 | `pem_decode(s)` | all | Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err). |
-| `x509_parse(pem_or_der)` | all | Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err). |
+| `x509_parse(pem_or_der: STRING)` | all | Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err). |
 
 ## Fingerprinting (4)
 
@@ -417,8 +417,8 @@ Malware/host fingerprints: PE import hash (imphash), JA3 TLS-client fingerprint,
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `imphash(pe_path)` | all | Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err). |
-| `ja3(client_hello)` | all | Computes the JA3 TLS-client fingerprint from a ClientHello (raw bytes, with or without the TLS record layer). Hashes version,ciphers,extensions,curves,point_formats with GREASE (RFC 8701) removed. Returns {ja3, ja3_hash (md5), tls_version, ciphers[], extensions[], curves[], point_formats[]}. Returns (result, err). |
+| `imphash(pe_path: STRING)` | all | Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err). |
+| `ja3(client_hello: STRING)` | all | Computes the JA3 TLS-client fingerprint from a ClientHello (raw bytes, with or without the TLS record layer). Hashes version,ciphers,extensions,curves,point_formats with GREASE (RFC 8701) removed. Returns {ja3, ja3_hash (md5), tls_version, ciphers[], extensions[], curves[], point_formats[]}. Returns (result, err). |
 | `lm_hash(password)` | all | Returns the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex. Empty password -> aad3b435b51404eeaad3b435b51404ee. |
 | `nt_hash(password)` | all | Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use. |
 
@@ -432,7 +432,7 @@ IOC handling: defang/refang, IP/CIDR math, domain/eTLD+1 extraction, validation,
 | `defang(ioc)` | all | Defangs an indicator for safe display (http->hxxp, .->[.], @->[at]). |
 | `domain_extract(url)` | all | Extracts the lowercased hostname from a URL or host string. |
 | `extract_iocs(text)` | all | Extracts IOCs from text (refanged first): {ipv4, urls, domains, emails, md5, sha1, sha256}, each unique and sorted. |
-| `ip_in_cidr(ip, cidr)` | all | Returns whether an IP falls within a CIDR range. |
+| `ip_in_cidr(ip: STRING, cidr: STRING)` | all | Returns whether an IP falls within a CIDR range. |
 | `ip_is_private(ip)` | all | Returns whether an IP is private/loopback/link-local (RFC1918 etc.). |
 | `ip_to_int(ip)` | all | Converts an IPv4 address to its 32-bit integer form. |
 | `ip_version(ip)` | all | Returns 4, 6, or 0 (invalid) for an IP address. |
@@ -446,11 +446,11 @@ Heuristic detectors for code injection, C2 beaconing, persistence, privilege esc
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `detect_injection(facts)` | all | Scores probable code injection in a memory image using multiple PE headers plus weighted shellcode signatures (GetPC via fnstenv/call-pop, PEB walks, NOP sleds); returns score and matched_signatures. |
-| `detect_network_beacon(flows)` | all | Detects C2 beaconing by analyzing inter-arrival interval regularity (low coefficient of variation) and optional transfer-size consistency per destination; each flow may carry ts (epoch/RFC3339) and bytes. Returns per-dst score, interval_cv, and confidence. |
-| `detect_persistence(facts)` | all | Detects persistence indicators from host evidence facts. |
-| `detect_priv_esc(facts)` | all | Detects potential privilege-escalation indicators from host facts. |
-| `detect_suspicious_files(paths)` | all | Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe). |
+| `detect_injection(facts: HASH)` | all | Scores probable code injection in a memory image using multiple PE headers plus weighted shellcode signatures (GetPC via fnstenv/call-pop, PEB walks, NOP sleds); returns score and matched_signatures. |
+| `detect_network_beacon(flows: ARRAY)` | all | Detects C2 beaconing by analyzing inter-arrival interval regularity (low coefficient of variation) and optional transfer-size consistency per destination; each flow may carry ts (epoch/RFC3339) and bytes. Returns per-dst score, interval_cv, and confidence. |
+| `detect_persistence(facts: HASH)` | all | Detects persistence indicators from host evidence facts. |
+| `detect_priv_esc(facts: HASH)` | all | Detects potential privilege-escalation indicators from host facts. |
+| `detect_suspicious_files(paths: ARRAY)` | all | Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe). |
 
 ## Process Forensics (9)
 
@@ -458,15 +458,15 @@ Live process inspection: enumeration, tree, environment, open files, threads, mo
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `process_env(pid?)` | all | Returns environment variables for a process (cross-platform; other processes may require privileges). |
-| `process_hash(pid?)` | all | Computes SHA-256 hash metadata for a process executable. |
-| `process_kill(pid, signal?)` | all | Sends a signal to a process (default SIGKILL semantics). |
+| `process_env(pid?: INTEGER)` | all | Returns environment variables for a process (cross-platform; other processes may require privileges). |
+| `process_hash(pid?: INTEGER)` | all | Computes SHA-256 hash metadata for a process executable. |
+| `process_kill(pid: INTEGER, signal?: INTEGER)` | all | Sends a signal to a process (default SIGKILL semantics). |
 | `process_list()` | all | Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS. |
-| `process_memory_scan(pid, pattern)` | windows, linux | Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS. |
-| `process_modules(pid?)` | windows, linux | Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). |
-| `process_open_files(pid?)` | all | Lists open file paths for a process (cross-platform; may require privileges for other processes). |
-| `process_threads(pid?)` | all | Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux). |
-| `process_tree(rootPid?)` | all | Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. |
+| `process_memory_scan(pid: INTEGER, pattern: STRING)` | windows, linux | Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS. |
+| `process_modules(pid?: INTEGER)` | windows, linux | Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). |
+| `process_open_files(pid?: INTEGER)` | all | Lists open file paths for a process (cross-platform; may require privileges for other processes). |
+| `process_threads(pid?: INTEGER)` | all | Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux). |
+| `process_tree(rootPid?: INTEGER)` | all | Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. |
 
 ## Memory Forensics (6)
 
@@ -475,11 +475,11 @@ Memory-dump analysis: segmentation with entropy, string extraction, pattern scan
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `mem_find_pe(path)` | all | Finds PE headers in a memory image: carves each MZ marker and confirms real PEs by following e_lfanew to "PE\0\0". Returns {candidates, confirmed, headers:[{mz_offset, confirmed, pe_offset, machine}]}. |
-| `mem_find_shellcode(path)` | all | Scans a memory dump file for common shellcode byte signatures. |
+| `mem_find_shellcode(path: STRING)` | all | Scans a memory dump file for common shellcode byte signatures. |
 | `mem_map(path)` | all | Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported. |
-| `mem_read(path, offset, size)` | all | Reads a byte range from a memory image. |
-| `mem_scan(path, pattern)` | all | Scans a memory image for a string/byte pattern. |
-| `mem_strings(path, minLen?)` | all | Extracts printable strings from memory image data. |
+| `mem_read(path: STRING, offset: INTEGER, size: INTEGER)` | all | Reads a byte range from a memory image. |
+| `mem_scan(path: STRING, pattern: STRING)` | all | Scans a memory image for a string/byte pattern. |
+| `mem_strings(path: STRING, minLen?: INTEGER)` | all | Extracts printable strings from memory image data. |
 
 ## Binary Analysis (14)
 
@@ -491,16 +491,16 @@ PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signat
 | `bin_elf_parse(path)` | all | Parses ELF headers and returns core binary metadata. |
 | `bin_entropy(path)` | all | Computes binary entropy signal. |
 | `bin_imports(path)` | all | Returns imported symbols/libraries from a binary. |
-| `bin_is_go(path)` | all | Quick check whether a binary was produced by the Go toolchain, using three signals (build info blob, Go build ID, and a parseable pclntab — the one that survives stripping). Returns {is_go, go_version, has_buildinfo, has_build_id, has_pclntab}. Returns (result, err). |
-| `bin_macho_parse(path)` | all | Parses a Mach-O binary (macOS/iOS). Handles thin and fat/universal images. For a thin binary returns {format, fat, magic, cpu, type, flags, num_sections, num_commands, imported_libraries}; for a fat binary returns {format, fat, num_arches, architectures:[{cpu, type, offset, size, align}]}. Returns (result, err). |
-| `bin_pe_parse(path)` | all | Parses PE headers and returns core binary metadata. |
+| `bin_is_go(path: STRING)` | all | Quick check whether a binary was produced by the Go toolchain, using three signals (build info blob, Go build ID, and a parseable pclntab — the one that survives stripping). Returns {is_go, go_version, has_buildinfo, has_build_id, has_pclntab}. Returns (result, err). |
+| `bin_macho_parse(path: STRING)` | all | Parses a Mach-O binary (macOS/iOS). Handles thin and fat/universal images. For a thin binary returns {format, fat, magic, cpu, type, flags, num_sections, num_commands, imported_libraries}; for a fat binary returns {format, fat, num_arches, architectures:[{cpu, type, offset, size, align}]}. Returns (result, err). |
+| `bin_pe_parse(path: STRING)` | all | Parses PE headers and returns core binary metadata. |
 | `bin_sections(path)` | all | Returns binary section table information. |
 | `bin_strings(path, minLen?)` | all | Extracts printable strings from a binary. |
-| `bin_yara_scan(path, rules, caseInsensitive?)` | all | Literal multi-string scan of a file (NOT a real YARA engine — that needs cgo). Reports every offset of each rule string. Case-sensitive unless caseInsensitive is true. Returns {engine, matched, total_hits, hits:[{rule, count, offsets}]}. |
-| `go_build_id(path)` | all | Extracts the Go build ID from a binary. Returns (build_id, err). |
-| `go_buildinfo(path)` | all | Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err). |
-| `go_symbols(path, mode?)` | all | Recovers function symbols from a Go binary via the pclntab — works even on STRIPPED binaries. Returns {go_version, arch, os, pclntab_va, function_count, user_function_count, std_function_count, functions:[{name, package, start, end, stdlib}]}. mode is "all" (default), "user", or "std". Returns (result, err). |
-| `go_types(path)` | all | Recovers type and interface definitions from a Go binary via GoReSym typelink/itablink parsing, including reconstructed Go source for structs/interfaces where possible. Returns {go_version, type_count, itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}. Type recovery needs a parseable moduledata; GoReSym v1.7.1 supports it up to ~Go 1.24 and returns an honest error on newer toolchains. Returns (result, err). |
+| `bin_yara_scan(path: STRING, rules: ARRAY, caseInsensitive?: BOOLEAN)` | all | Literal multi-string scan of a file (NOT a real YARA engine — that needs cgo). Reports every offset of each rule string. Case-sensitive unless caseInsensitive is true. Returns {engine, matched, total_hits, hits:[{rule, count, offsets}]}. |
+| `go_build_id(path: STRING)` | all | Extracts the Go build ID from a binary. Returns (build_id, err). |
+| `go_buildinfo(path: STRING)` | all | Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err). |
+| `go_symbols(path: STRING, mode?: STRING)` | all | Recovers function symbols from a Go binary via the pclntab — works even on STRIPPED binaries. Returns {go_version, arch, os, pclntab_va, function_count, user_function_count, std_function_count, functions:[{name, package, start, end, stdlib}]}. mode is "all" (default), "user", or "std". Returns (result, err). |
+| `go_types(path: STRING)` | all | Recovers type and interface definitions from a Go binary via GoReSym typelink/itablink parsing, including reconstructed Go source for structs/interfaces where possible. Returns {go_version, type_count, itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}. Type recovery needs a parseable moduledata; GoReSym v1.7.1 supports it up to ~Go 1.24 and returns an honest error on newer toolchains. Returns (result, err). |
 
 ## Registry Forensics (15)
 
@@ -508,21 +508,21 @@ Windows registry across three sources via one polymorphic API (regf hive file, h
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `amcache_parse(path)` | all | Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\File layouts. Returns (result, err). |
+| `amcache_parse(path: STRING)` | all | Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\File layouts. Returns (result, err). |
 | `hive_close(handle)` | all | Closes a hive handle. Returns (bool, err). |
 | `hive_get_value(handle, keypath, name)` | all | Returns {name, type, data} for a single value under keypath. Returns (result, err). |
 | `hive_key_info(handle, keypath?)` | all | Returns {name, last_write, last_write_iso, subkey_count, value_count} for a key (keypath is backslash-separated under the root; default root). Returns (result, err). |
 | `hive_list_keys(handle, keypath?)` | all | Returns the subkey names under a key (default root) as an array. Returns (array, err). |
 | `hive_list_values(handle, keypath?)` | all | Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Returns (array, err). |
-| `hive_open(path)` | all | Opens a real Windows registry hive (regf binary format — SOFTWARE/SYSTEM/NTUSER.DAT, etc.) and returns {handle, path}. Distinct from the JSON-fixture reg_* family. Returns (result, err). |
+| `hive_open(path: STRING)` | all | Opens a real Windows registry hive (regf binary format — SOFTWARE/SYSTEM/NTUSER.DAT, etc.) and returns {handle, path}. Distinct from the JSON-fixture reg_* family. Returns (result, err). |
 | `reg_close(handle)` | all | Closes a registry-hive handle opened with reg_open. |
 | `reg_deleted_keys(handle)` | all | Lists deleted-key entries. Populated only for the JSON source (its deleted_keys field); empty for real hive files and live registry (no unallocated-cell carving). |
-| `reg_enum_keys(handle, keyPath?)` | all | Enumerates subkeys under a key. For hive/live sources keyPath is relative to the opened key (default root); for JSON it is the absolute path. Returns (array, err). |
-| `reg_enum_values(handle, keyPath?)` | all | Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Works across JSON/hive-file/live sources. Returns (array, err). |
-| `reg_get_value(handle, keyPath, valueName)` | all | Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Returns (result, err). |
-| `reg_open(source)` | all | Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\SOFTWARE\...) -> live registry (Windows only). Returns (result, err). |
-| `reg_timeline(handle)` | all | Returns timeline entries. Populated only for the JSON source (its timeline field); empty for real hive files and live registry. |
-| `shimcache_parse(path)` | all | Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err). |
+| `reg_enum_keys(handle: STRING, keyPath?: STRING)` | all | Enumerates subkeys under a key. For hive/live sources keyPath is relative to the opened key (default root); for JSON it is the absolute path. Returns (array, err). |
+| `reg_enum_values(handle: STRING, keyPath?: STRING)` | all | Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Works across JSON/hive-file/live sources. Returns (array, err). |
+| `reg_get_value(handle: STRING, keyPath: STRING, valueName: STRING)` | all | Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Returns (result, err). |
+| `reg_open(source: STRING)` | all | Opens a registry data source (polymorphic) and returns {handle, path, source_type, status}. Dispatch: a regf hive file (SOFTWARE/SYSTEM/NTUSER.DAT, …) -> real hive parse; a hive-JSON file -> JSON; otherwise a live Windows registry path (e.g. HKLM\SOFTWARE\...) -> live registry (Windows only). Returns (result, err). |
+| `reg_timeline(handle: STRING)` | all | Returns timeline entries. Populated only for the JSON source (its timeline field); empty for real hive files and live registry. |
+| `shimcache_parse(path: STRING)` | all | Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err). |
 
 ## Filesystem Forensics (31)
 
@@ -533,33 +533,33 @@ Read-only filesystem parsers for NTFS/FAT/exFAT/ext/HFS+/XFS images and standalo
 | `ext_close(handle)` | all | Closes an ext handle and releases its file. |
 | `ext_list_files(handle, dir)` | all | Lists entries under a directory in an opened ext image, with created_at/modified_at/accessed_at/changed_at and deleted. |
 | `ext_metadata(handle, path)` | all | Returns metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete). |
-| `ext_open(image)` | all | Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err). |
+| `ext_open(image: STRING)` | all | Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err). |
 | `ext_read_file(handle, path)` | all | Reads a file's bytes from an opened ext image. |
 | `fat_close(handle)` | all | Closes a FAT handle and releases its file. |
 | `fat_list_files(handle, dir)` | all | Lists entries under a directory in an opened FAT image. |
 | `fat_metadata(handle, path)` | all | Returns metadata for a path in an opened FAT image. |
-| `fat_open(image)` | all | Opens a FAT filesystem image and returns a handle. Returns (result, err). |
+| `fat_open(image: STRING)` | all | Opens a FAT filesystem image and returns a handle. Returns (result, err). |
 | `fat_read_file(handle, path)` | all | Reads a file's bytes from an opened FAT image. |
 | `hfs_close(handle)` | all | Closes an HFS+ handle and releases its file. |
 | `hfs_list_files(handle, dir)` | all | Lists entries under a directory in an opened HFS+ image. |
 | `hfs_metadata(handle, path)` | all | Returns metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size. |
-| `hfs_open(image)` | all | Opens an HFS+ filesystem image and returns a handle. Returns (result, err). |
+| `hfs_open(image: STRING)` | all | Opens an HFS+ filesystem image and returns a handle. Returns (result, err). |
 | `hfs_read_file(handle, path)` | all | Reads a file's bytes from an opened HFS+ image. |
-| `mft_parse(path)` | all | Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
+| `mft_parse(path: STRING)` | all | Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
 | `ntfs_close(handle)` | all | Closes an NTFS handle and releases its file. |
-| `ntfs_list_files(handle, dir)` | all | Lists entries under a directory in an opened NTFS image. |
-| `ntfs_metadata(handle, path)` | all | Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error). |
-| `ntfs_open(image)` | all | Opens an NTFS filesystem image and returns a handle. Returns (result, err). |
-| `ntfs_read_file(handle, path)` | all | Reads a file's bytes from an opened NTFS image. |
+| `ntfs_list_files(handle, dir: STRING)` | all | Lists entries under a directory in an opened NTFS image. |
+| `ntfs_metadata(handle, path: STRING)` | all | Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error). |
+| `ntfs_open(image: STRING)` | all | Opens an NTFS filesystem image and returns a handle. Returns (result, err). |
+| `ntfs_read_file(handle, path: STRING)` | all | Reads a file's bytes from an opened NTFS image. |
 | `xfat_close(handle)` | all | Closes an exFAT handle and releases its file. |
 | `xfat_list_files(handle, dir)` | all | Lists entries under a directory in an opened exFAT image, with created_at/modified_at/accessed_at, per-timestamp *_utc_offset_valid flags, attributes and valid_data_size. A nameless entry is reported as "(unnamed)". |
 | `xfat_metadata(handle, path)` | all | Returns metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack). |
-| `xfat_open(image)` | all | Opens an exFAT filesystem image and returns a handle. Returns (result, err). |
+| `xfat_open(image: STRING)` | all | Opens an exFAT filesystem image and returns a handle. Returns (result, err). |
 | `xfat_read_file(handle, path)` | all | Reads a file's bytes from an opened exFAT image. Content is staged through a temporary file because libxfat extracts to a path, so reads are capped at 32 MiB. |
 | `xfs_close(handle)` | all | Closes an XFS handle and releases its file. |
 | `xfs_list_files(handle, dir)` | all | Lists entries under a directory in an opened XFS image, with file_type from the directory record. A damaged inode no longer aborts the listing: that entry is reported with inode_error set and size 0. |
 | `xfs_metadata(handle, path)` | all | Returns metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion). |
-| `xfs_open(image)` | all | Opens an XFS filesystem image and returns a handle. Returns (result, err). |
+| `xfs_open(image: STRING)` | all | Opens an XFS filesystem image and returns a handle. Returns (result, err). |
 | `xfs_read_file(handle, path)` | all | Reads a file's bytes from an opened XFS image. |
 
 ## Disk Image Forensics (17)
@@ -570,20 +570,20 @@ Container and partition-table parsers: raw images, EWF/E01, VHD/VHDX (with diffe
 | --- | --- | --- |
 | `ewf_close(handle)` | all | Closes an EWF handle and its segment files. |
 | `ewf_metadata(handle)` | all | Returns EWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method). chunk_tables_invalid counts chunk-table groups that failed both their primary and backup checksum — their data decoded unverified and should be treated as suspect; chunk_tables_recovered, observed_chunk_count and acquisition_error_count report the rest of the integrity picture. |
-| `ewf_open(segments)` | all | Opens an EWF/E01 image (a segment path or an array of segment paths). Returns (result, err). |
+| `ewf_open(segments: STRING\|ARRAY)` | all | Opens an EWF/E01 image (a segment path or an array of segment paths). Returns (result, err). |
 | `ewf_read_at(handle, offset, length)` | all | Reads length bytes at an offset from an EWF image (length capped at 32 MiB). |
 | `raw_close(handle)` | all | Closes a raw image handle. |
 | `raw_metadata(handle)` | all | Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata). |
-| `raw_open(image)` | all | Opens a raw disk image and returns a handle. Returns (result, err). |
+| `raw_open(image: STRING)` | all | Opens a raw disk image and returns a handle. Returns (result, err). |
 | `raw_read_at(handle, offset, length)` | all | Reads length bytes at an offset from a raw image (length capped at 32 MiB). |
 | `table_close(handle)` | all | Closes a partition-table handle. |
 | `table_list_partitions(handle)` | all | Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset. |
-| `table_open(image)` | all | Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err). |
+| `table_open(image: STRING)` | all | Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err). |
 | `table_partition_info(handle, index)` | all | Returns details for a single partition by index, including absolute start_byte/length_byte. |
 | `vhdi_close(handle)` | all | Closes a VHD/VHDX handle. |
 | `vhdi_map_offset(handle, offset)` | all | Maps a virtual offset to a backing file offset. Returns {virtual_offset, mapped, file_offset}. |
 | `vhdi_metadata(handle)` | all | Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed). |
-| `vhdi_open(image)` | all | Opens a VHD/VHDX disk image and returns a handle. Returns (result, err). |
+| `vhdi_open(image: STRING)` | all | Opens a VHD/VHDX disk image and returns a handle. Returns (result, err). |
 | `vhdi_read_at(handle, offset, length)` | all | Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB). |
 
 ## Windows Artifacts (4)
@@ -592,10 +592,10 @@ Execution and shell-activity artifacts: Prefetch, Windows Event Logs (EVTX), she
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `evtx_parse(path)` | all | Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err). |
-| `jumplist_parse(path)` | all | Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err). |
-| `lnk_parse(path)` | all | Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err). |
-| `prefetch_parse(path)` | all | Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err). |
+| `evtx_parse(path: STRING)` | all | Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err). |
+| `jumplist_parse(path: STRING)` | all | Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err). |
+| `lnk_parse(path: STRING)` | all | Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err). |
+| `prefetch_parse(path: STRING)` | all | Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err). |
 
 ## Unix Artifacts (1)
 
@@ -603,7 +603,7 @@ Unix log artifacts: RFC 5424 / RFC 3164 syslog parsing.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `syslog_parse(path)` | all | Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err). |
+| `syslog_parse(path: STRING)` | all | Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err). |
 
 ## Browser Artifacts (4)
 
@@ -611,10 +611,10 @@ Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite 
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `browser_cookies(path)` | all | Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err). |
-| `browser_downloads(path)` | all | Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err). |
-| `browser_history(path)` | all | Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err). |
-| `sqlite_query(path, sql, params?)` | all | Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err). |
+| `browser_cookies(path: STRING)` | all | Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err). |
+| `browser_downloads(path: STRING)` | all | Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err). |
+| `browser_history(path: STRING)` | all | Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err). |
+| `sqlite_query(path: STRING, sql: STRING, params?: ARRAY)` | all | Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err). |
 
 ## Forensic Timeline (5)
 
@@ -622,11 +622,11 @@ Normalize timestamps across epochs and merge/sort artifact events into a single 
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `bodyfile_parse(path)` | all | Parses a Sleuth Kit bodyfile (MD5\|name\|inode\|mode\|UID\|GID\|size\|atime\|mtime\|ctime\|crtime) into an array of entry hashes. Returns (entries, err). |
+| `bodyfile_parse(path: STRING)` | all | Parses a Sleuth Kit bodyfile (MD5\|name\|inode\|mode\|UID\|GID\|size\|atime\|mtime\|ctime\|crtime) into an array of entry hashes. Returns (entries, err). |
 | `mactime(entries)` | all | Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, "." where absent), sorted by ts then name (ts field composes with timeline_merge). |
 | `timeline_merge(sources, field?)` | all | Flattens an array of event arrays into one supertimeline sorted by a numeric timestamp field (default "ts"). |
 | `timeline_sort(events, field?)` | all | Returns events (array of hashes) sorted ascending by a numeric timestamp field (default "ts"); events missing the field sort last. Stable. |
-| `timestamp_normalize(value, format?)` | all | Normalizes a timestamp to {unix, unix_ms, iso, format}. Formats: unix (s/ms/us/ns), filetime (Windows), webkit/chrome, dos (packed 32-bit), iso (RFC3339 string). Default "auto" detects unix magnitude or parses an ISO string. Returns (result, err). |
+| `timestamp_normalize(value, format?: STRING)` | all | Normalizes a timestamp to {unix, unix_ms, iso, format}. Formats: unix (s/ms/us/ns), filetime (Windows), webkit/chrome, dos (packed 32-bit), iso (RFC3339 string). Default "auto" detects unix magnitude or parses an ISO string. Returns (result, err). |
 
 ## Email Forensics (5)
 
@@ -634,11 +634,11 @@ Parse raw email into headers/body/attachments/URLs and cryptographically verify 
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `email_attachments(raw)` | all | Extracts attachment metadata/content details from raw email input. |
-| `email_headers(raw)` | all | Parses and returns message headers from raw email input. |
-| `email_parse(raw)` | all | Parses a raw email message into headers, body parts, and attachments. |
-| `email_spf_dkim(raw)` | all | Cryptographically verifies DKIM signatures (public key via DNS) and reports SPF/DMARC. SPF is reported as recorded by the receiving MTA; DMARC combines the reported result with DKIM alignment. |
-| `email_urls(raw)` | all | Extracts and normalizes URLs from email headers and body. |
+| `email_attachments(raw: STRING)` | all | Extracts attachment metadata/content details from raw email input. |
+| `email_headers(raw: STRING)` | all | Parses and returns message headers from raw email input. |
+| `email_parse(raw: STRING)` | all | Parses a raw email message into headers, body parts, and attachments. |
+| `email_spf_dkim(raw: STRING)` | all | Cryptographically verifies DKIM signatures (public key via DNS) and reports SPF/DMARC. SPF is reported as recorded by the receiving MTA; DMARC combines the reported result with DKIM alignment. |
+| `email_urls(raw: STRING)` | all | Extracts and normalizes URLs from email headers and body. |
 
 ## Hash-Set Forensics (3)
 
@@ -647,5 +647,5 @@ NSRL-style known-file hash sets for include/exclude filtering.
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `hashset_close(handle)` | all | Frees a loaded hash set. Returns (bool, err). |
-| `hashset_contains(handle, hash)` | all | Returns whether a hash is in a loaded set (case-insensitive). Returns (bool, err). |
-| `hashset_load(path)` | all | Loads a file of hashes (one per line, or CSV/NSRL where the hash is the first field) into an in-memory set. Skips headers/comments/non-hex. Returns {handle, count}. Returns (result, err). |
+| `hashset_contains(handle: STRING, hash: STRING)` | all | Returns whether a hash is in a loaded set (case-insensitive). Returns (bool, err). |
+| `hashset_load(path: STRING)` | all | Loads a file of hashes (one per line, or CSV/NSRL where the hash is the first field) into an in-memory set. Skips headers/comments/non-hex. Returns {handle, count}. Returns (result, err). |

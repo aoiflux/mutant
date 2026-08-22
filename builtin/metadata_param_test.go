@@ -105,9 +105,32 @@ func TestDeclaredParamKindsAreValid(t *testing.T) {
 				t.Errorf("builtin %q parameter %q: ParamAny cannot be combined with concrete kinds (%v)",
 					name, param.name, param.kinds)
 			}
-			if param.elem != nil {
-				if _, ok := validParamKinds[*param.elem]; !ok {
-					t.Errorf("builtin %q parameter %q: unknown elem kind %q", name, param.name, *param.elem)
+			// An element contract only means something on an ARRAY parameter,
+			// and the checker reads it only after the argument is known to be
+			// one — declaring elements on anything else would silently never
+			// fire.
+			if len(param.elem) > 0 {
+				seenElem := make(map[ParamKind]struct{}, len(param.elem))
+				for _, kind := range param.elem {
+					if _, ok := validParamKinds[kind]; !ok {
+						t.Errorf("builtin %q parameter %q: unknown elem kind %q", name, param.name, kind)
+					}
+					if _, dup := seenElem[kind]; dup {
+						t.Errorf("builtin %q parameter %q: duplicate elem kind %q", name, param.name, kind)
+					}
+					seenElem[kind] = struct{}{}
+				}
+
+				acceptsArray := false
+				for _, kind := range param.kinds {
+					if kind == ParamArray {
+						acceptsArray = true
+						break
+					}
+				}
+				if !acceptsArray {
+					t.Errorf("builtin %q parameter %q: declares elem kinds %v but does not accept ARRAY (%v)",
+						name, param.name, param.elem, param.kinds)
 				}
 			}
 		}

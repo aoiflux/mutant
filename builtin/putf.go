@@ -7,8 +7,14 @@ import (
 )
 
 func Putf(args ...object.Object) object.Object {
+	// `putf()` used to return nil and print nothing, which made it the one
+	// builtin that answered a wrong argument count with silence. It also put
+	// the implementation at odds with the `putf(format, ...values)` signature
+	// the language server derives its argument-count diagnostic from. Reporting
+	// the missing format the way every other builtin reports a missing argument
+	// keeps the two in agreement.
 	if len(args) == 0 {
-		return nil
+		return newError("wrong number of arguments. got=0, want=at least 1")
 	}
 
 	format := args[0].Inspect()

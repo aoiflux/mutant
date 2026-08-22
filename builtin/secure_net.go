@@ -647,6 +647,14 @@ func tlsHandshakeInfo(tlsConn *tls.Conn) *object.Hash {
 // tls_generate_ca(options HASH) -> HASH {cert_pem, key_pem, serial}
 // Options: common_name, organization, days (validity, default 3650).
 func TLSGenerateCA(args ...object.Object) object.Object {
+	// optionsArg only ever looks at args[0], so without this the builtin
+	// silently ignored any extra arguments while its signature documented at
+	// most one. Everything derived from that signature — the editor's
+	// argument-count diagnostic above all — would have flagged a call the
+	// runtime accepted.
+	if len(args) > 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
+	}
 	options := optionsArg(args)
 	commonName := optString(options, "common_name", "Mutant Dev CA")
 	org := optString(options, "organization", "Mutant")
@@ -693,6 +701,11 @@ func TLSGenerateCA(args ...object.Object) object.Object {
 // Options: common_name, organization, dns_names ([]STRING), ip_addresses
 // ([]STRING), days (default 825).
 func TLSGenerateCert(args ...object.Object) object.Object {
+	// See TLSGenerateCA: optionsArg reads only args[0], so extra arguments were
+	// accepted in silence and disagreed with the documented signature.
+	if len(args) > 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
+	}
 	options := optionsArg(args)
 	template, errObj := leafTemplate("tls_generate_cert", options)
 	if errObj != nil {

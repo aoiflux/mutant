@@ -1,17 +1,32 @@
 package analyzer
 
-import "fmt"
+import (
+	"fmt"
 
-// Curated, hand-authored argument-count contracts for a subset of builtins.
-// Mutant's builtin metadata carries no machine-readable arity — each builtin
-// validates len(args) imperatively in Go — so, exactly like builtin_types.go,
-// this is a high-confidence, hand-verified subset. A builtin appears here ONLY
-// when its arity was confirmed by reading its implementation; anything absent is
-// never arity-checked, so the diagnostic cannot produce a false positive.
+	"mutant/builtin"
+)
+
+// Argument-count contracts for the builtins, derived from the teaching
+// signatures in builtin/metadata.go.
 //
-// min is the smallest legal argument count; max is the largest, or -1 for an
-// unbounded/variadic tail. Grow this table over time; never add an entry you
-// have not verified against the builtin's source.
+// This used to be a hand-curated table of a couple of dozen entries, on the
+// grounds that arity was not machine-readable — each builtin validates
+// len(args) imperatively in Go, so the only trustworthy source was a human
+// reading the implementation. The signature strings turn out to carry the same
+// information: `?` marks an optional parameter and `...` a variadic tail, which
+// is exactly min and max. builtin.SignatureArity reads them.
+//
+// What makes deriving safe rather than merely convenient is that the
+// signatures are now checked against the implementations. TestSignatureArity-
+// MatchesImplementation in the builtin package calls every builtin with an
+// argument count its signature forbids and requires the builtin to refuse it,
+// and TestHigherOrderArityMatchesExecutor in the vm package covers the five
+// that the executors intercept. A signature narrower than its implementation —
+// the only kind of disagreement that could turn into a warning on correct code
+// — fails the suite. Those probes found four real bugs the curated table had no
+// way to catch: bytes_cstr_at documented two of its three required parameters,
+// fs_hash and fs_walk each omitted an optional one, and putf answered a missing
+// format argument with silence.
 
 type builtinArity struct {
 	min int
@@ -47,32 +62,31 @@ func pluralArguments(n int) string {
 	return "arguments"
 }
 
-var builtinArities = map[string]builtinArity{
-	// math (verified against builtin/math_builtins.go)
-	"abs":   {1, 1},
-	"sqrt":  {1, 1},
-	"pow":   {2, 2},
-	"mod":   {2, 2},
-	"clamp": {3, 3},
-	"floor": {1, 1},
-	"ceil":  {1, 1},
-	"round": {1, 1},
-	"min":   {1, -1},
-	"max":   {1, -1},
+// builtinArities is built once at init from the registry. A builtin whose
+// signature does not parse is simply absent, which keeps the original property
+// that anything unknown is never arity-checked.
+var builtinArities = deriveBuiltinArities()
 
-	// core / collections / conversion (verified against builtin/*.go)
-	"len":       {1, 1},
-	"first":     {1, 1},
-	"last":      {1, 1},
-	"push":      {2, 2},
-	"sort":      {1, 1},
-	"contains":  {2, 2},
-	"keys":      {1, 1},
-	"values":    {1, 1},
-	"to_int":    {1, 1},
-	"to_float":  {1, 1},
-	"to_string": {1, 1},
-	"type_of":   {1, 1},
+func deriveBuiltinArities() map[string]builtinArity {
+	arities := make(map[string]builtinArity, len(builtin.Builtins))
+
+	for _, def := range builtin.Builtins {
+		if def.Name == "" {
+			continue
+		}
+		signature, _, _, ok := builtin.TeachingDoc(def.Name)
+		if !ok {
+			continue
+		}
+		_, params, ok := builtin.ParseSignature(signature)
+		if !ok {
+			continue
+		}
+		minArgs, maxArgs := builtin.SignatureArity(params)
+		arities[def.Name] = builtinArity{min: minArgs, max: maxArgs}
+	}
+
+	return arities
 }
 
 func builtinArityFor(name string) (builtinArity, bool) {

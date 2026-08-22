@@ -1547,7 +1547,11 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			continue
 		}
 		kind, ok := paramKindForType(argType)
-		if !ok || param.Accepts(kind) {
+		if !ok {
+			continue
+		}
+		if param.Accepts(kind) {
+			c.checkArrayElements(ident, i, param, arg)
 			continue
 		}
 		rng, ok := c.snapshot.Program.RangeOf(arg)
@@ -1559,6 +1563,52 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
 			Message:  argTypeMessage(ident.Value, i+1, param, kind),
+			Data:     ArgTypeDiagnosticData(param, kind),
+		})
+	}
+}
+
+// checkArrayElements flags elements of an array literal that the parameter's
+// element contract rejects — `str_join([1, 2], ",")`, where every element has to
+// be a STRING.
+//
+// It only ever looks at an array *literal*. A name bound to an array would take
+// its element types from inference, and inference widens a mixed or unknown
+// element to Any rather than tracking it, so the literal is the only place the
+// elements are read straight off the syntax. Each element is then held to the
+// same certainty rule as a top-level argument, so an element that is itself a
+// call or an arithmetic expression is skipped rather than guessed at.
+func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
+	if len(param.Elem) == 0 {
+		return
+	}
+	literal, ok := arg.(*mast.ArrayLiteral)
+	if !ok || literal == nil {
+		return
+	}
+
+	for _, element := range literal.Elements {
+		if element == nil || !argumentTypeIsCertain(element, c.reassigned) {
+			continue
+		}
+		elementType, ok := c.snapshot.TypeOf(element)
+		if !ok || !elementType.IsKnown() {
+			continue
+		}
+		elementKind, ok := paramKindForType(elementType)
+		if !ok || param.AcceptsElement(elementKind) {
+			continue
+		}
+		rng, ok := c.snapshot.Program.RangeOf(element)
+		if !ok {
+			continue
+		}
+		c.result = append(c.result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: c.argTypeSeverity,
+			Source:   c.source,
+			Message:  elementTypeMessage(ident.Value, argIndex+1, param, elementKind),
+			Data:     ElementTypeDiagnosticData(param, elementKind),
 		})
 	}
 }

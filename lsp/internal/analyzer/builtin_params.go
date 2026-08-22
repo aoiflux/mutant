@@ -142,6 +142,81 @@ func argTypeMessage(name string, position int, p builtin.BuiltinParamDoc, got bu
 	return fmt.Sprintf("argument %d to `%s` must be %s, got %s", position, name, kindListText(p.Kinds), got)
 }
 
+// elementTypeMessage renders the complaint for an element of an array argument,
+// naming the argument it belongs to so the reader can find it in a call with
+// several. It follows the runtime's own phrasing — str_join says "must be an
+// ARRAY of STRING; element 0 is INTEGER".
+func elementTypeMessage(name string, position int, p builtin.BuiltinParamDoc, got builtin.ParamKind) string {
+	return fmt.Sprintf("argument %d to `%s` must be an ARRAY of %s; this element is %s",
+		position, name, kindListText(p.Elem), got)
+}
+
+// ArgTypeDiagnosticRule is the value a builtinArgType diagnostic carries under
+// "rule", so a code-action provider can recognise its payload without matching
+// on the message text.
+const ArgTypeDiagnosticRule = "builtinArgType"
+
+// ArgTypeDiagnosticData is the machine-readable half of a builtinArgType
+// diagnostic: the kinds the parameter accepts and the kind the argument had.
+//
+// It goes in Diagnostic.Data, which the protocol preserves between
+// publishDiagnostics and codeAction precisely so a fix does not have to
+// re-derive — or worse, re-parse out of English — what the diagnostic already
+// knew. Every value is a string because the payload round-trips through JSON on
+// the way to the client and back: strings survive that unchanged, where a
+// number would come back as a float64 and a struct as a map.
+func ArgTypeDiagnosticData(p builtin.BuiltinParamDoc, got builtin.ParamKind) map[string]any {
+	return map[string]any{
+		"rule": ArgTypeDiagnosticRule,
+		"want": p.KindsText(),
+		"got":  string(got),
+	}
+}
+
+// ElementTypeDiagnosticData is the same payload for an array element, carrying
+// the element contract rather than the parameter's own kinds.
+//
+// It uses the same rule name on purpose: a fix that knows how to convert a
+// value to a wanted kind works identically whether the value is the argument or
+// one of its elements, so `str_join([1, 2], ",")` gets the same to_string offer
+// on each element that `str_upper(1)` gets on its argument.
+func ElementTypeDiagnosticData(p builtin.BuiltinParamDoc, got builtin.ParamKind) map[string]any {
+	return map[string]any{
+		"rule": ArgTypeDiagnosticRule,
+		"want": p.ElemText(),
+		"got":  string(got),
+	}
+}
+
+// ArgTypeDiagnosticKinds reads back what ArgTypeDiagnosticData wrote, reporting
+// false for anything that is not a builtinArgType payload.
+//
+// It accepts both the map the analyzer built and the map a JSON round-trip
+// produces, which are the same shape by construction.
+func ArgTypeDiagnosticKinds(data any) (want []builtin.ParamKind, got builtin.ParamKind, ok bool) {
+	fields, isMap := data.(map[string]any)
+	if !isMap {
+		return nil, "", false
+	}
+	if rule, _ := fields["rule"].(string); rule != ArgTypeDiagnosticRule {
+		return nil, "", false
+	}
+
+	wantText, _ := fields["want"].(string)
+	gotText, _ := fields["got"].(string)
+	if wantText == "" || gotText == "" {
+		return nil, "", false
+	}
+
+	for _, name := range strings.Split(wantText, "|") {
+		if name == "" {
+			return nil, "", false
+		}
+		want = append(want, builtin.ParamKind(name))
+	}
+	return want, builtin.ParamKind(gotText), true
+}
+
 // argumentTypeIsCertain reports whether an argument's inferred type can be
 // trusted enough to fail a build on.
 //
