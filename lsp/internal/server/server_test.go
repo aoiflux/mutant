@@ -1663,8 +1663,12 @@ func TestSignatureHelpForUserDefinedFunctionCall(t *testing.T) {
 	if len(help.Signatures) != 1 {
 		t.Fatalf("signature count = %d, want 1", len(help.Signatures))
 	}
-	if help.Signatures[0].Label != "add(a, b)" {
-		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, "add(a, b)")
+	// Signature help for a user function now carries the solved kinds, the same
+	// way it has carried a builtin's declared ones since the parameter contracts
+	// landed.
+	wantLabel := "add(a: STRING|INTEGER|FLOAT, b: STRING|INTEGER|FLOAT)"
+	if help.Signatures[0].Label != wantLabel {
+		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
 	if len(help.Signatures[0].Parameters) != 2 {
 		t.Fatalf("signature params = %d, want 2", len(help.Signatures[0].Parameters))
@@ -1719,7 +1723,7 @@ func TestSignatureHelpForBuiltinCall(t *testing.T) {
 	}
 	// The label carries the kinds len accepts, and the parameter is addressed
 	// by offsets into that label rather than by a substring of it.
-	wantLabel := "len(value: STRING|ARRAY|HASH)"
+	wantLabel := "len(value: STRING|ARRAY|HASH) -> INTEGER"
 	if help.Signatures[0].Label != wantLabel {
 		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
@@ -3328,11 +3332,14 @@ func TestHoverOnFunctionIdentifierIncludesSignatureAndDocComment(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "function `add(a, b)`") {
-		t.Fatalf("hover contents = %q, want function signature", contents.Value)
+	// `a + b` is the VM's binary operation, which accepts INTEGER x INTEGER,
+	// STRING x STRING, or numeric x numeric — so the solver narrows both
+	// parameters to exactly those three kinds and no further.
+	if !strings.Contains(contents.Value, "function `add(a: STRING|INTEGER|FLOAT, b: STRING|INTEGER|FLOAT)") {
+		t.Fatalf("hover contents = %q, want the solved function signature", contents.Value)
 	}
-	if !strings.Contains(contents.Value, "params: `a`, `b`") {
-		t.Fatalf("hover contents = %q, want parameter list", contents.Value)
+	if !strings.Contains(contents.Value, "- `a` · `STRING|INTEGER|FLOAT` _(inferred)_") {
+		t.Fatalf("hover contents = %q, want a typed parameter bullet", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Adds two numbers together") {
 		t.Fatalf("hover contents = %q, want doc comment", contents.Value)
@@ -3382,7 +3389,7 @@ func TestHoverOnBuiltinIdentifierIncludesTeachingInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "builtin `len(value: STRING|ARRAY|HASH)`") {
+	if !strings.Contains(contents.Value, "builtin `len(value: STRING|ARRAY|HASH) -> INTEGER`") {
 		t.Fatalf("hover contents = %q, want builtin signature", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Returns the length") {

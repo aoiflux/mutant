@@ -36,6 +36,10 @@ type typeInferer struct {
 	nodeTypes   map[mast.Node]Type
 	structNames map[string]bool
 	enumNames   map[string]bool
+	// solved holds each function literal's parameter kinds, worked out by
+	// fn_solver.go before this walk. Seeding them turns a body that could only
+	// be typed as Any into one whose return type follows from its parameters.
+	solved map[*mast.FunctionLiteral]*solvedFunction
 	// structFields holds each struct's field types as seen in its initializers,
 	// keyed structName -> fieldName -> Type. See observeStructField.
 	structFields map[string]map[string]Type
@@ -53,6 +57,7 @@ func inferTypes(s *Snapshot) (map[mast.Node]Type, map[string]map[string]Type) {
 		structNames:  make(map[string]bool),
 		enumNames:    make(map[string]bool),
 		structFields: make(map[string]map[string]Type),
+		solved:       s.solvedFunctions(),
 	}
 	// Struct/enum type names are file-global; collect them first so a reference
 	// before the declaration still resolves.
@@ -155,7 +160,7 @@ func (inf *typeInferer) multiBindTypes(value mast.Expression, count int) []Type 
 	if !ok {
 		return types
 	}
-	if sig, ok := builtinReturnType(id.Value); ok && sig.fallible && count >= 2 {
+	if sig, ok := builtinReturnType(id.Value); ok && sig.pair && count >= 2 {
 		types[0] = sig.ret
 		types[count-1] = Type{Kind: TypeError}
 	}
@@ -281,6 +286,13 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 				return t
 			}
 			if sig, ok := builtinReturnType(id.Value); ok {
+				// A (value, err) builtin used as a single value is the whole
+				// pair, not its first half. Saying `string` here would make
+				// hover and the inlay hint on `let data = fs_read(p)` describe
+				// a value the program never holds.
+				if sig.pair {
+					return multiOf(sig.ret)
+				}
 				return sig.ret
 			}
 		}
@@ -304,10 +316,20 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		return AnyType
 	case *mast.FunctionLiteral:
 		child := newTypeEnv(env)
-		for _, p := range n.Parameters {
-			if p != nil {
-				child.set(p.Value, AnyType)
+		solvedParams := inf.solved[n]
+		for i, p := range n.Parameters {
+			if p == nil {
+				continue
 			}
+			// A solved parameter narrowed to exactly one kind is worth seeding;
+			// a union collapses to Any, because the lattice has no union to
+			// carry it and a guess would be worse than the gradual unknown.
+			paramType := AnyType
+			if solvedParams != nil && i < len(solvedParams.kinds) {
+				paramType = solvedParams.kinds[i].asType()
+			}
+			child.set(p.Value, paramType)
+			inf.record(p, paramType)
 		}
 		if n.Body != nil {
 			inf.stmt(n.Body, child)

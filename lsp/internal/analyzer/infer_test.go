@@ -53,14 +53,51 @@ func TestInferBuiltinReturnTypes(t *testing.T) {
 	}{
 		{"let x = len(\"hi\");", "int"},
 		{"let x = str_upper(\"hi\");", "string"},
-		{"let x = str_split(\"a,b\", \",\");", "[]string"},
-		{"let x = fs_exists(\"p\");", "bool"},
+		// text_split, not str_split: the curated return table this replaced
+		// named two builtins — str_split and str_replace — that do not exist,
+		// so those entries could never have fired.
+		{"let x = text_split(\"a,b\", \",\");", "[]string"},
 		{"let x = time_now();", "hash"},
 	}
 	for _, c := range cases {
 		if got := typeAt(t, c.src, 0, 4); got != c.want {
 			t.Fatalf("%q: type = %q, want %q", c.src, got, c.want)
 		}
+	}
+}
+
+// TestSingleBindOfAPairBuiltinIsTypedAsThePair covers the correction the
+// derived return contracts made possible.
+//
+// A builtin following the (value, err) convention returns a MULTI_VALUE, and
+// binding it to one name stores the whole thing: evaluator.go takes the
+// `len(names) <= 1` branch and calls env.Set with the value unchanged. The
+// curated table had fs_exists down as a bare BOOLEAN, so hover and the inlay
+// hint both described a plain `bool` that the program never actually holds.
+func TestSingleBindOfAPairBuiltinIsTypedAsThePair(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"let x = fs_exists(\"p\");", "(bool, error)"},
+		{"let x = fs_read(\"p\");", "(string, error)"},
+		{"let x = fs_stat(\"p\");", "(hash, error)"},
+		// fs_write returns boolObj(true), not a byte count — another thing the
+		// curated table had wrong.
+		{"let x = fs_write(\"p\", \"d\");", "(bool, error)"},
+	}
+	for _, c := range cases {
+		if got := typeAt(t, c.src, 0, 4); got != c.want {
+			t.Errorf("%q: type = %q, want %q", c.src, got, c.want)
+		}
+	}
+
+	// Destructuring is unchanged: that is the shape the builtin was written for.
+	if got := typeAt(t, "let ok, err = fs_exists(\"p\");", 0, 4); got != "bool" {
+		t.Errorf("destructured value = %q, want bool", got)
+	}
+	if got := typeAt(t, "let ok, err = fs_exists(\"p\");", 0, 8); got != "error" {
+		t.Errorf("destructured error = %q, want error", got)
 	}
 }
 

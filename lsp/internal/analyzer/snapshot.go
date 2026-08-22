@@ -28,6 +28,26 @@ type Snapshot struct {
 	typeOnce     sync.Once
 	typeMap      map[mast.Node]Type
 	structFields map[string]map[string]Type
+
+	// solvedOnce guards the constraint solver in fn_solver.go, which works out
+	// each user function's parameter kinds from how its body uses them. It runs
+	// before inference rather than inside it, because inference consumes its
+	// result: a parameter solved to a single kind is seeded into the function's
+	// scope, so the body — and therefore the return type — can be typed from it.
+	solvedOnce sync.Once
+	solvedFns  map[*mast.FunctionLiteral]*solvedFunction
+}
+
+// solvedFunctions returns the solved parameter kinds for every user function in
+// the document, building them once on first use.
+func (s *Snapshot) solvedFunctions() map[*mast.FunctionLiteral]*solvedFunction {
+	if s == nil {
+		return nil
+	}
+	s.solvedOnce.Do(func() {
+		s.solvedFns = solveFunctionParams(s.Program)
+	})
+	return s.solvedFns
 }
 
 // types returns the inferred type map, building it once on first use.

@@ -13,12 +13,17 @@ import (
 // Kind names are uppercase constants, so this can never eat a parameter name.
 var kindAnnotation = regexp.MustCompile(`:\s[A-Z|]+`)
 
+// returnAnnotation matches the ` -> STRING` / ` -> (HASH, ERROR)` / ` -> []HASH`
+// suffix builtinSignatureLabel now appends. Like the kind annotations, it is
+// built from uppercase constants and punctuation, so it cannot eat a parameter.
+var returnAnnotation = regexp.MustCompile(` -> \(?\[?\]?[A-Z|]+(, ERROR\))?`)
+
 // untypedSignatureLabel recovers the plain `name(a, b)` spelling from a typed
 // signature label. The coverage tests below assert the parameter *shape* of a
-// builtin, which is fixed; the kind population beside it grows a category at a
-// time, and should not drag those assertions along with it.
+// builtin, which is fixed; the kind and return contracts beside it grow a
+// category at a time, and should not drag those assertions along with them.
 func untypedSignatureLabel(label string) string {
-	return kindAnnotation.ReplaceAllString(label, "")
+	return returnAnnotation.ReplaceAllString(kindAnnotation.ReplaceAllString(label, ""), "")
 }
 
 func TestSemanticTokensDataHandlesTypedNilStatements(t *testing.T) {
@@ -194,11 +199,11 @@ func TestBuiltinRichTeachingForNewerBuiltins(t *testing.T) {
 		wantSignature string
 		wantContains  []string
 	}{
-		{name: "cache_put", wantSignature: "cache_put(name, key, value, ttlSeconds?)", wantContains: []string{"Stores a value in a named cache key", "- `ttlSeconds?`: Optional expiration in seconds"}},
-		{name: "process_kill", wantSignature: "process_kill(pid, signal?)", wantContains: []string{"Sends a signal to a process", "- `pid`: Target process ID."}},
-		{name: "regex_replace", wantSignature: "regex_replace(pattern, input, replacement)", wantContains: []string{"Replaces all regex matches", "- `pattern`: Regular expression pattern."}},
-		{name: "policy_eval", wantSignature: "policy_eval(policy, input)", wantContains: []string{"Evaluates a loaded policy", "- `input`: Input data evaluated by the policy."}},
-		{name: "bin_pe_parse", wantSignature: "bin_pe_parse(path)", wantContains: []string{"Parses PE headers", "- `path`: Path to PE file."}},
+		{name: "cache_put", wantSignature: "cache_put(name, key, value, ttlSeconds?)", wantContains: []string{"Stores a value in a named cache key", "- `ttlSeconds?` · `INTEGER` _(optional)_", "Optional expiration in seconds"}},
+		{name: "process_kill", wantSignature: "process_kill(pid, signal?)", wantContains: []string{"Sends a signal to a process", "- `pid` · `INTEGER`", "Target process ID."}},
+		{name: "regex_replace", wantSignature: "regex_replace(pattern, input, replacement)", wantContains: []string{"Replaces all regex matches", "- `pattern` · `STRING`", "Regular expression pattern."}},
+		{name: "policy_eval", wantSignature: "policy_eval(policy, input)", wantContains: []string{"Evaluates a loaded policy", "- `input` · `HASH`", "Input data evaluated by the policy."}},
+		{name: "bin_pe_parse", wantSignature: "bin_pe_parse(path)", wantContains: []string{"Parses PE headers", "- `path` · `STRING`", "Path to PE file."}},
 	}
 
 	for _, tc := range cases {
@@ -310,14 +315,14 @@ func TestBuiltinRichParameterDocsForNewerFamilies(t *testing.T) {
 		name        string
 		wantBullets []string
 	}{
-		{name: "process_memory_scan", wantBullets: []string{"- `pid`:", "- `pattern`:"}},
-		{name: "exec_string", wantBullets: []string{"- `command`:", "- `shell?`:"}},
-		{name: "cmd_add", wantBullets: []string{"- `builder`:", "- `arg`:"}},
-		{name: "net_dns_query", wantBullets: []string{"- `name`:", "- `qtype`:"}},
-		{name: "reg_get_value", wantBullets: []string{"- `handle`:", "- `keyPath`:", "- `valueName`:"}},
-		{name: "mem_read", wantBullets: []string{"- `path`:", "- `offset`:", "- `size`:"}},
-		{name: "detect_suspicious_files", wantBullets: []string{"- `paths`:"}},
-		{name: "db_add_relation", wantBullets: []string{"- `db`:", "- `from`:", "- `to`:", "- `relation`:"}},
+		{name: "process_memory_scan", wantBullets: []string{"- `pid` ", "- `pattern` "}},
+		{name: "exec_string", wantBullets: []string{"- `command` ", "- `shell?` "}},
+		{name: "cmd_add", wantBullets: []string{"- `builder` ", "- `arg` "}},
+		{name: "net_dns_query", wantBullets: []string{"- `name` ", "- `qtype` "}},
+		{name: "reg_get_value", wantBullets: []string{"- `handle` ", "- `keyPath` ", "- `valueName` "}},
+		{name: "mem_read", wantBullets: []string{"- `path` ", "- `offset` ", "- `size` "}},
+		{name: "detect_suspicious_files", wantBullets: []string{"- `paths` "}},
+		{name: "db_add_relation", wantBullets: []string{"- `db` ", "- `from` ", "- `to` ", "- `relation` "}},
 	}
 
 	for _, tc := range cases {

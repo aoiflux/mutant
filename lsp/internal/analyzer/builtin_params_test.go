@@ -17,7 +17,10 @@ func TestBuiltinSignatureLabelSpansCoverTheirParameters(t *testing.T) {
 		t.Fatal("builtin bytes_slice has no signature label")
 	}
 
-	wantLabel := "bytes_slice(data: STRING, start: INTEGER, length: INTEGER)"
+	// The return rides on the end of the label. Spans are prefix offsets, so
+	// appending it leaves every one of them valid — which is the property that
+	// lets one renderer serve both hover and signature help.
+	wantLabel := "bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)"
 	if label != wantLabel {
 		t.Fatalf("signature label = %q, want %q", label, wantLabel)
 	}
@@ -41,8 +44,8 @@ func TestBuiltinSignatureLabelFallsBackToThePlainSignature(t *testing.T) {
 	if !ok {
 		t.Fatal("builtin gets has no signature label")
 	}
-	if label != "gets()" {
-		t.Errorf("label for a builtin with no parameters = %q, want the plain signature", label)
+	if label != "gets() -> STRING" {
+		t.Errorf("label for a builtin with no parameters = %q, want the plain signature plus its return", label)
 	}
 	if spans != nil {
 		t.Errorf("label for a builtin with no parameters carried %d spans, want none", len(spans))

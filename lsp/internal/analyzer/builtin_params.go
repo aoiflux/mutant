@@ -274,12 +274,32 @@ func reassignedNames(snapshot *Snapshot) map[string]struct{} {
 		return names
 	}
 	for node := range snapshot.Program.NodePositions {
-		assign, ok := node.(*mast.AssignExpression)
-		if !ok || assign == nil {
-			continue
-		}
-		if ident, ok := assign.Left.(*mast.Identifier); ok && ident != nil && ident.Value != "" {
-			names[ident.Value] = struct{}{}
+		switch n := node.(type) {
+		case *mast.AssignExpression:
+			if ident, ok := n.Left.(*mast.Identifier); ok && ident != nil && ident.Value != "" {
+				names[ident.Value] = struct{}{}
+			}
+		case *mast.FunctionLiteral:
+			// Function parameters are excluded for a different reason than
+			// assignment, and a more important one.
+			//
+			// A parameter's type does not come from inference at all: it comes
+			// from the constraint solver in fn_solver.go, which deduces it from
+			// how the body uses it. That is a sound basis for *describing* a
+			// function in hover, and not a sound basis for underlining a call —
+			// a deduction about a dynamically-typed program is not the same kind
+			// of fact as a builtin's verified contract.
+			//
+			// Excluding the names here is what makes "solved types are
+			// display-only" a property of the code rather than an argument about
+			// it. It costs nothing in practice: contradictory constraints
+			// collapse to Any, so a solved parameter could not have produced a
+			// diagnostic anyway.
+			for _, p := range n.Parameters {
+				if p != nil && p.Value != "" {
+					names[p.Value] = struct{}{}
+				}
+			}
 		}
 	}
 	return names

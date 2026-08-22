@@ -81,7 +81,7 @@ func (s *Snapshot) signatureInformationForCall(call *mast.CallExpression, pos ls
 
 	switch fn := call.Function.(type) {
 	case *mast.FunctionLiteral:
-		return functionLiteralSignature(fn, functionDisplayName("fn", fn.Name)), true
+		return s.functionLiteralSignature(fn, functionDisplayName("fn", fn.Name)), true
 	case *mast.Identifier:
 		if fn == nil || fn.Value == "" {
 			return lsp.SignatureInformation{}, false
@@ -104,25 +104,45 @@ func (s *Snapshot) signatureInformationForCall(call *mast.CallExpression, pos ls
 		if !ok {
 			return lsp.SignatureInformation{}, false
 		}
-		return functionLiteralSignature(literal, functionDisplayName(fn.Value, literal.Name)), true
+		return s.functionLiteralSignature(literal, functionDisplayName(fn.Value, literal.Name)), true
 	default:
 		return lsp.SignatureInformation{}, false
 	}
 }
 
-func functionLiteralSignature(fn *mast.FunctionLiteral, displayName string) lsp.SignatureInformation {
+// functionLiteralSignature builds signature help for a user-defined function,
+// carrying the parameter kinds the solver worked out.
+//
+// A builtin's signature help has shown types since the parameter contracts
+// landed. Without this a user function's showed bare names, so the popup that
+// appears while typing a call said less about the code in front of you than
+// about the standard library.
+func (s *Snapshot) functionLiteralSignature(fn *mast.FunctionLiteral, displayName string) lsp.SignatureInformation {
 	if fn == nil {
 		return lsp.SignatureInformation{Label: fmt.Sprintf("%s()", displayName)}
 	}
 
+	var solved *solvedFunction
+	if s != nil {
+		solved = s.solvedFunctions()[fn]
+	}
+
 	paramNames := make([]string, 0, len(fn.Parameters))
 	parameters := make([]lsp.ParameterInformation, 0, len(fn.Parameters))
-	for _, p := range fn.Parameters {
+	for i, p := range fn.Parameters {
 		if p == nil {
 			continue
 		}
-		paramNames = append(paramNames, p.Value)
-		parameters = append(parameters, lsp.ParameterInformation{Label: p.Value})
+		label := p.Value
+		if solved != nil && i < len(solved.kinds) {
+			if kinds := solved.kinds[i].text(); kinds != "" {
+				label += ": " + kinds
+			}
+		}
+		paramNames = append(paramNames, label)
+		// A string parameter label is matched as a substring of the signature
+		// label, so it has to be the decorated spelling that appears there.
+		parameters = append(parameters, lsp.ParameterInformation{Label: label})
 	}
 
 	return lsp.SignatureInformation{

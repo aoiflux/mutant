@@ -120,24 +120,30 @@ func (p BuiltinParamDoc) KindsText() string {
 }
 
 // TypedSignature renders a builtin's signature with each parameter's accepted
-// kinds inline — `bytes_slice(data: STRING, start: INTEGER, length: INTEGER)` —
-// and reports the span each parameter occupies in the result.
+// kinds inline and the return appended —
+// `bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)`
+// — and reports the span each parameter occupies in the result.
 //
 // Parameters keep the spelling they have in the signature string, so `topic?`
 // and `...values` still read the way they do everywhere else, and a parameter
-// with no declared kinds is left bare. A builtin that documents no parameters
-// renders as its plain signature with no spans, which is what keeps the output
-// sensible while kind coverage is still growing.
+// with no declared kinds is left bare.
 //
-// It is the one renderer behind both the editor's signature help and the
-// generated capability reference, so the two can never disagree.
+// The return is a suffix, so every span stays a prefix offset and remains valid
+// for the LSP, which addresses signature-help parameters by offset. That is what
+// lets one renderer serve hover, signature help, completion detail and the
+// generated capability reference at once, so none of them can disagree about
+// what a builtin takes or gives back.
 func TypedSignature(name string) (string, []ParamSpan, bool) {
 	signature, _, params, ok := TeachingDoc(name)
 	if !ok {
 		return "", nil, false
 	}
+
+	returns, _ := ReturnSpec(name)
+	suffix := " -> " + returns.Text()
+
 	if len(params) == 0 {
-		return signature, nil, true
+		return signature + suffix, nil, true
 	}
 
 	var b strings.Builder
@@ -158,6 +164,7 @@ func TypedSignature(name string) (string, []ParamSpan, bool) {
 		spans = append(spans, ParamSpan{Start: start, End: b.Len()})
 	}
 	b.WriteByte(')')
+	b.WriteString(suffix)
 
 	return b.String(), spans, true
 }

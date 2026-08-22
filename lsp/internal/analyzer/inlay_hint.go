@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"sort"
+	"strings"
 
 	mast "mutant/ast"
 	localprotocol "mutant/lsp/internal/protocol"
@@ -81,8 +82,16 @@ func (s *Snapshot) InlayHints(rng lsp.Range) []localprotocol.InlayHint {
 			}
 			// ParameterInformation.Label is `string | [uint, uint]`; we only emit
 			// hints for the plain-string form.
-			name, ok := sig.Parameters[i].Label.(string)
-			if !ok || name == "" {
+			label, ok := sig.Parameters[i].Label.(string)
+			if !ok || label == "" {
+				continue
+			}
+			// A user function's label now carries the solved kinds
+			// (`host: STRING`), which belong in signature help but not in an
+			// inline hint: this annotates an argument with the name it binds to,
+			// and `host: STRING:` in the middle of a call reads as noise.
+			name, _, _ := strings.Cut(label, ":")
+			if name == "" {
 				continue
 			}
 			// Noise reduction: skip when the argument is exactly the identifier

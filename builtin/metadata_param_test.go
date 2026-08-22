@@ -203,13 +203,19 @@ func TestTypedSignature(t *testing.T) {
 		name string
 		want string
 	}{
-		{"gets", "gets()"},
-		{"len", "len(value: STRING|ARRAY|HASH)"},
-		{"bytes_slice", "bytes_slice(data: STRING, start: INTEGER, length: INTEGER)"},
-		{"help", "help(topic?: STRING, mode?: STRING)"},
-		{"min", "min(value: INTEGER|FLOAT, ...values: INTEGER|FLOAT)"},
-		{"putf", "putf(format, ...values)"},
-		{"text_replace", "text_replace(text: STRING, old: STRING, new: STRING, count?: INTEGER)"},
+		{"gets", "gets() -> STRING"},
+		{"len", "len(value: STRING|ARRAY|HASH) -> INTEGER"},
+		{"bytes_slice", "bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)"},
+		{"help", "help(topic?: STRING, mode?: STRING) -> STRING"},
+		{"min", "min(value: INTEGER|FLOAT, ...values: INTEGER|FLOAT) -> INTEGER|FLOAT"},
+		{"putf", "putf(format, ...values) -> NULL"},
+		{"text_replace", "text_replace(text: STRING, old: STRING, new: STRING, count?: INTEGER) -> STRING"},
+		// The return is what tells a reader which binding of `let a, b = f()`
+		// receives the error, so both shapes are pinned here.
+		{"fs_read", "fs_read(path: STRING) -> (STRING, ERROR)"},
+		{"str_upper", "str_upper(s: STRING) -> STRING"},
+		{"text_split", "text_split(text: STRING, sep: STRING) -> []STRING"},
+		{"process_list", "process_list() -> ([]HASH, ERROR)"},
 	}
 
 	for _, test := range tests {

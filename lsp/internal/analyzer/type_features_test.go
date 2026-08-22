@@ -47,8 +47,11 @@ func TestHoverShowsFunctionReturnType(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hover text")
 	}
-	if !strings.Contains(text, "-> int") {
-		t.Fatalf("hover = %q, want it to contain '-> int'", text)
+	// The card renders inferred types in the same uppercase vocabulary the
+	// builtin cards use, so hovering a user function and hovering a builtin
+	// read alike rather than in two different type languages.
+	if !strings.Contains(text, "-> INTEGER") {
+		t.Fatalf("hover = %q, want it to contain '-> INTEGER'", text)
 	}
 }
 

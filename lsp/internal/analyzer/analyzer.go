@@ -73,31 +73,13 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if resolved, ok := s.resolveDefinition(pos); ok {
 			if resolved.kind == lsp.CompletionItemKindFunction {
 				if literal, ok := s.functionLiteralForBindingIdent(resolved.ident); ok {
-					name := n.Value
-					display := functionLiteralSignature(literal, functionDisplayName(name, literal.Name)).Label
-					if ty, ok := s.TypeOf(resolved.ident); ok && ty.Kind == TypeFunction && ty.Ret != nil && ty.Ret.IsKnown() {
-						display += " -> " + ty.Ret.String()
-					}
-					params := parameterNames(literal.Parameters)
-					doc := s.leadingLineCommentForIdentifier(resolved.ident)
-
-					var b strings.Builder
-					b.WriteString("function `")
-					b.WriteString(display)
-					b.WriteString("`")
-
-					if len(params) > 0 {
-						b.WriteString("\n\nparams: `")
-						b.WriteString(strings.Join(params, "`, `"))
-						b.WriteString("`")
-					}
-
-					if doc != "" {
-						b.WriteString("\n\n")
-						b.WriteString(doc)
-					}
-
-					return b.String(), rng, true
+					// A user function renders through the same card as a
+					// builtin: typed signature, summary, per-parameter types,
+					// and a return. What differs is where the types come from,
+					// which the card marks rather than hides.
+					card := userFunctionCard(s, functionDisplayName(n.Value, literal.Name),
+						literal, s.leadingLineCommentForIdentifier(resolved.ident))
+					return card.render(), rng, true
 				}
 			}
 

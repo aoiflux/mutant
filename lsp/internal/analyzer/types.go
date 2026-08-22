@@ -1,5 +1,7 @@
 package analyzer
 
+import "strings"
+
 // This file defines the static type lattice used by the language server's
 // best-effort type inference (see infer.go). It has ZERO runtime effect: the
 // compiler, VM, and evaluator never see these types. `Any` is the gradual
@@ -21,16 +23,28 @@ const (
 	TypeFunction
 	TypeError
 	TypeNull
+	// TypeMulti is the MULTI_VALUE a (value, err) builtin returns when it is
+	// bound to a single name. `let data = fs_read(p)` stores the whole pair —
+	// evaluator.go takes the len(names) <= 1 branch and binds the value
+	// unchanged — so typing data as `string` was a lie the editor told.
+	TypeMulti
 )
 
 // Type is a static type in the lattice. Name carries the struct/enum name;
 // Elem carries an array's element type (optional); Ret carries a function's
-// inferred return type (optional, only for Kind == TypeFunction).
+// inferred return type (optional, only for Kind == TypeFunction); Parts carries
+// the components of a TypeMulti.
 type Type struct {
-	Kind TypeKind
-	Name string
-	Elem *Type
-	Ret  *Type
+	Kind  TypeKind
+	Name  string
+	Elem  *Type
+	Ret   *Type
+	Parts []Type
+}
+
+// multiOf builds the (value, error) pair a fallible builtin returns.
+func multiOf(value Type) Type {
+	return Type{Kind: TypeMulti, Parts: []Type{value, {Kind: TypeError}}}
 }
 
 // AnyType is the shared gradual-unknown value.
@@ -78,6 +92,12 @@ func (t Type) String() string {
 			return t.Name
 		}
 		return "enum"
+	case TypeMulti:
+		parts := make([]string, 0, len(t.Parts))
+		for _, part := range t.Parts {
+			parts = append(parts, part.String())
+		}
+		return "(" + strings.Join(parts, ", ") + ")"
 	default:
 		return "any"
 	}

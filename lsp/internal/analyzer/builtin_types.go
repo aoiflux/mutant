@@ -1,18 +1,25 @@
 package analyzer
 
-// Curated, hand-authored return types for a subset of builtins. Mutant's builtin
-// metadata carries no machine-readable types (only prose), so this table is the
-// seed for inferring the result type of a builtin call. It is intentionally a
-// high-confidence subset: any builtin absent here infers to Any, which is always
-// safe (the editor simply shows no type). `fallible` marks the `(value, err)`
-// idiom so multi-bind `let v, e = f()` can type v as the value and e as error.
+import "mutant/builtin"
+
+// Builtin result types, derived from the contracts in builtin/metadata.go.
 //
-// Grow this table over time; never add an entry you are not confident about, to
-// avoid showing misleading types.
+// This used to be a hand-curated table of 110 entries maintained here, in the
+// language server, with no link to the implementations it described. Deriving
+// instead of curating takes coverage to all 399 and removes the drift: the same
+// declarations the hover card shows are the ones inference reasons about, and
+// return_conformance_test.go checks them against the implementations.
+//
+// The switch also found three bugs the curated table had been carrying:
+// fs_write was typed INTEGER when it returns a BOOLEAN, fs_exists was typed as a
+// bare BOOLEAN when it returns a (value, err) pair, and two entries named
+// builtins — str_split, str_replace — that do not exist.
 
 type builtinSig struct {
-	ret      Type
-	fallible bool
+	ret Type
+	// pair marks the (value, err) convention, so a multi-name `let` can type
+	// the first name as the value and the last as the error.
+	pair bool
 }
 
 var (
@@ -24,127 +31,58 @@ var (
 	tArray  = Type{Kind: TypeArray}
 )
 
-var builtinReturnTypes = map[string]builtinSig{
-	// core / collections
-	"len":      {ret: tInt},
-	"contains": {ret: tBool},
-	"index_of": {ret: tInt},
-	"keys":     {ret: tArray},
-	"values":   {ret: tArray},
-	"entries":  {ret: tArray},
-	"push":     {ret: tArray},
-	"rest":     {ret: tArray},
-	"pop":      {ret: tArray},
-	"reverse":  {ret: tArray},
-	"unique":   {ret: tArray},
-	"sort":     {ret: tArray},
-	"sort_by":  {ret: tArray},
-	"zip":      {ret: tArray},
-	"map":      {ret: tArray},
-	"filter":   {ret: tArray},
-	"slice":    {ret: tArray},
-	"concat":   {ret: tArray},
-	"flatten":  {ret: tArray},
-	"has_key":  {ret: tBool},
-	"range":    {ret: arrayOf(tInt)},
+var builtinReturnTypes = deriveBuiltinReturnTypes()
 
-	// math (kind-preserving ops — abs/sum/min/max/clamp/mod — are handled
-	// arg-aware in infer.go, not here, since their int-vs-float result depends
-	// on the argument types).
-	"pow":        {ret: tFloat},
-	"sqrt":       {ret: tFloat},
-	"floor":      {ret: tInt},
-	"ceil":       {ret: tInt},
-	"round":      {ret: tInt},
-	"avg":        {ret: tFloat},
-	"rand":       {ret: tFloat},
-	"rand_int":   {ret: tInt},
-	"rand_bytes": {ret: tString},
-	"math_pi":    {ret: tFloat},
-	"math_e":     {ret: tFloat},
+// deriveBuiltinReturnTypes reads every builtin's declared return once at init.
+//
+// Only a single, concrete kind becomes a type. A union or an explicit ANY is
+// left out entirely, so it infers to Any exactly as an unknown builtin does:
+// widening *coverage* must not widen what the editor claims, because a type
+// shown here is a type the reader will believe.
+func deriveBuiltinReturnTypes() map[string]builtinSig {
+	types := make(map[string]builtinSig, len(builtin.Builtins))
+	for _, def := range builtin.Builtins {
+		if def.Name == "" {
+			continue
+		}
+		spec, ok := builtin.ReturnSpec(def.Name)
+		if !ok || len(spec.Kinds) != 1 {
+			continue
+		}
+		ret, ok := typeForParamKind(spec.Kinds[0])
+		if !ok {
+			continue
+		}
+		if ret.Kind == TypeArray && len(spec.Elem) == 1 {
+			if elem, ok := typeForParamKind(spec.Elem[0]); ok {
+				ret = arrayOf(elem)
+			}
+		}
+		types[def.Name] = builtinSig{ret: ret, pair: spec.Pair}
+	}
+	return types
+}
 
-	// conversion
-	"to_int":      {ret: tInt, fallible: true},
-	"to_float":    {ret: tFloat, fallible: true},
-	"to_string":   {ret: tString},
-	"to_bool":     {ret: tBool, fallible: true},
-	"parse_int":   {ret: tInt, fallible: true},
-	"parse_float": {ret: tFloat, fallible: true},
-	"type_of":     {ret: tString},
-	"is_null":     {ret: tBool},
-	"to_base":     {ret: tString},
-	"from_base":   {ret: tInt, fallible: true},
-
-	// strings
-	"str_upper":       {ret: tString},
-	"str_lower":       {ret: tString},
-	"str_title":       {ret: tString},
-	"str_trim":        {ret: tString},
-	"str_trim_left":   {ret: tString},
-	"str_trim_right":  {ret: tString},
-	"str_trim_prefix": {ret: tString},
-	"str_trim_suffix": {ret: tString},
-	"str_replace":     {ret: tString},
-	"str_repeat":      {ret: tString},
-	"str_reverse":     {ret: tString},
-	"str_substr":      {ret: tString},
-	"str_char_at":     {ret: tString},
-	"str_pad_left":    {ret: tString},
-	"str_pad_right":   {ret: tString},
-	"str_format":      {ret: tString},
-	"str_join":        {ret: tString},
-	"str_split":       {ret: arrayOf(tString)},
-	"str_starts_with": {ret: tBool},
-	"str_ends_with":   {ret: tBool},
-
-	// text
-	"text_contains":     {ret: tBool},
-	"text_replace":      {ret: tString},
-	"text_split":        {ret: arrayOf(tString)},
-	"text_count":        {ret: tInt},
-	"text_index":        {ret: tInt},
-	"text_levenshtein":  {ret: tInt},
-	"text_similarity":   {ret: tFloat},
-	"text_jaro_winkler": {ret: tFloat},
-
-	// structured data
-	"json_stringify": {ret: tString, fallible: true},
-
-	// filesystem
-	"fs_read":   {ret: tString, fallible: true},
-	"fs_write":  {ret: tInt, fallible: true},
-	"fs_exists": {ret: tBool},
-	"fs_list":   {ret: tArray, fallible: true},
-	"fs_stat":   {ret: tHash, fallible: true},
-
-	// time (epoch seconds are integers; time_now is a hash)
-	"time_now":    {ret: tHash},
-	"time_unix":   {ret: tInt},
-	"time_format": {ret: tString},
-	"time_parse":  {ret: tInt, fallible: true},
-	"time_diff":   {ret: tInt},
-	"time_add":    {ret: tInt},
-
-	// identifiers
-	"uuid_v7":    {ret: tString},
-	"random_hex": {ret: tString},
-	"nanoid":     {ret: tString},
-
-	// encoding (bytes ride on strings in Mutant; decoders return (value, err))
-	"hex_encode":       {ret: tString},
-	"hex_decode":       {ret: tString, fallible: true},
-	"base64_encode":    {ret: tString},
-	"base64_decode":    {ret: tString, fallible: true},
-	"base64url_encode": {ret: tString},
-	"base64url_decode": {ret: tString, fallible: true},
-	"base32_encode":    {ret: tString},
-	"base32_decode":    {ret: tString, fallible: true},
-	"url_encode":       {ret: tString},
-	"url_decode":       {ret: tString, fallible: true},
-	"gzip":             {ret: tString},
-	"gunzip":           {ret: tString, fallible: true},
-	"zlib_compress":    {ret: tString},
-	"zlib_decompress":  {ret: tString, fallible: true},
+// typeForParamKind translates a declared kind into the inference lattice,
+// reporting false for the ones it deliberately cannot express: ANY carries no
+// information, and NULL as a *declared* result would make `let x = putln(...)`
+// claim a type where "no useful value" is the honest answer.
+func typeForParamKind(kind builtin.ParamKind) (Type, bool) {
+	switch kind {
+	case builtin.ParamInt:
+		return tInt, true
+	case builtin.ParamFloat:
+		return tFloat, true
+	case builtin.ParamBool:
+		return tBool, true
+	case builtin.ParamString:
+		return tString, true
+	case builtin.ParamArray:
+		return tArray, true
+	case builtin.ParamHash:
+		return tHash, true
+	}
+	return AnyType, false
 }
 
 func builtinReturnType(name string) (builtinSig, bool) {
