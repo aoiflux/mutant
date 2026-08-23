@@ -743,6 +743,75 @@ var builtinDocs = map[string]builtinDoc{
 			param("fn", "Function called per element: (element) or (element, index).", ParamFn),
 		},
 		returns: ret("null; each is called for its side effects", ParamNull)},
+	BuiltinNamePMap: {
+		signature: "pmap(array, fn, workers?)", summary: "Like map, but applies fn to elements concurrently and returns results in the original order. fn takes (element) or (element, index). Each worker runs on its own VM with a snapshot of globals, so fn should be self-contained: it cannot write back to a global.",
+		params: []builtinParamDoc{
+			param("array", "Array to transform.", ParamArray),
+			param("fn", "Function called per element: (element) or (element, index).", ParamFn),
+			param("workers?", "Maximum concurrent workers; defaults to the CPU count, capped by the array length.", ParamInt),
+		},
+		returns: ret("a new array holding the callback's result for each element, in the input's order", ParamArray)},
+	BuiltinNamePEach: {
+		signature: "peach(array, fn, workers?)", summary: "Like each, but calls fn on elements concurrently for their side effects and returns null. fn takes (element) or (element, index). Each worker runs on its own VM with a snapshot of globals, so fn should report through a shared store (cache_*/db_*) rather than by assigning to a global.",
+		params: []builtinParamDoc{
+			param("array", "Array to iterate.", ParamArray),
+			param("fn", "Function called per element: (element) or (element, index).", ParamFn),
+			param("workers?", "Maximum concurrent workers; defaults to the CPU count, capped by the array length.", ParamInt),
+		},
+		returns: ret("null; peach is called for its side effects", ParamNull)},
+	BuiltinNameSpawn: {
+		signature: "spawn(fn, arg?)", summary: "Runs fn on its own VM alongside the rest of the program and returns a task handle to collect it with. fn takes no arguments, or one if arg is given. The task sees a snapshot of globals taken at the spawn, so it should report back through its return value or a channel rather than by assigning to a global.",
+		params: []builtinParamDoc{
+			param("fn", "Function to run concurrently: () or (arg).", ParamFn),
+			param("arg?", "Value passed to fn; any type is accepted.", ParamAny),
+		},
+		returns: pairRet("a task handle; collect it with task_wait", ParamInt)},
+	BuiltinNameTaskWait: {
+		signature: "task_wait(handle, timeoutMs?)", summary: "Waits for a spawned task and returns the value its function returned. Whatever stopped the task arrives in the error slot. Without a timeout it waits indefinitely; running out of time is reported as an error and leaves the task collectable. Collecting a task releases its handle, so wait for it once.",
+		params: []builtinParamDoc{
+			param("handle", "Task handle from spawn.", ParamInt),
+			param("timeoutMs?", "How long to wait, in milliseconds; omit to wait indefinitely.", ParamInt),
+		},
+		returns: pairRet("the value the task's function returned", ParamAny)},
+	BuiltinNameTaskDone: {
+		signature: "task_done(handle)", summary: "Reports whether a spawned task has finished, without waiting for it.",
+		params: []builtinParamDoc{
+			param("handle", "Task handle from spawn.", ParamInt),
+		},
+		returns: pairRet("true once the task has finished", ParamBool)},
+	BuiltinNameChanNew: {
+		signature: "chan_new(capacity?)", summary: "Creates a channel for passing values between concurrently running code and returns its handle. Capacity 0 (the default) is unbuffered, so a send waits for a receive; a positive capacity lets that many values queue first.",
+		params: []builtinParamDoc{
+			param("capacity?", "How many values may queue before a send waits; 0 for unbuffered.", ParamInt),
+		},
+		returns: pairRet("a channel handle; close it with chan_close", ParamInt)},
+	BuiltinNameChanSend: {
+		signature: "chan_send(handle, value, timeoutMs?)", summary: "Puts a value on a channel, waiting for a receiver if the channel is full. Returns true once the value is handed over and false if the timeout ran out first; sending on a closed channel is an error.",
+		params: []builtinParamDoc{
+			param("handle", "Channel handle from chan_new.", ParamInt),
+			param("value", "Value to send; any type is accepted.", ParamAny),
+			param("timeoutMs?", "How long to wait, in milliseconds; 0 to give up immediately, omit to wait indefinitely.", ParamInt),
+		},
+		returns: pairRet("true if the value was sent, false if the timeout ran out", ParamBool)},
+	BuiltinNameChanRecv: {
+		signature: "chan_recv(handle, timeoutMs?)", summary: "Takes the next value off a channel, waiting for one if the channel is empty. Returns {ok, value, closed, timeout}; check ok before reading value, since null is itself a sendable value. Values already queued are delivered even after the channel is closed.",
+		params: []builtinParamDoc{
+			param("handle", "Channel handle from chan_new.", ParamInt),
+			param("timeoutMs?", "How long to wait, in milliseconds; 0 to give up immediately, omit to wait indefinitely.", ParamInt),
+		},
+		returns: pairRet("whether a value arrived, the value itself, and whether the channel is closed or the wait timed out", ParamHash).withFields("ok", "value", "closed", "timeout")},
+	BuiltinNameChanTryRecv: {
+		signature: "chan_try_recv(handle)", summary: "Takes a value off a channel only if one is already waiting, and never blocks. Returns the same {ok, value, closed, timeout} shape as chan_recv.",
+		params: []builtinParamDoc{
+			param("handle", "Channel handle from chan_new.", ParamInt),
+		},
+		returns: pairRet("whether a value was waiting, the value itself, and whether the channel is closed", ParamHash).withFields("ok", "value", "closed", "timeout")},
+	BuiltinNameChanClose: {
+		signature: "chan_close(handle)", summary: "Closes a channel, waking every waiting sender and receiver. Returns true when this call did the closing and false when the channel was already closed. Receivers can still drain values that were already queued.",
+		params: []builtinParamDoc{
+			param("handle", "Channel handle from chan_new.", ParamInt),
+		},
+		returns: pairRet("true if this call closed the channel, false if it was already closed", ParamBool)},
 	BuiltinNameSortBy: {
 		signature: "sort_by(array, fn)", summary: "Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys).",
 		params: []builtinParamDoc{
@@ -1943,6 +2012,10 @@ var capabilityCategories = []capabilityCategory{
 	{"to_", "structured data"},
 	{"parse_", "structured data"},
 	{"plist_", "structured data"},
+	// concurrency
+	{"chan_", "concurrency"},
+	{"task_", "concurrency"},
+	{"spawn", "concurrency"},
 	// graph database
 	{"db_", "graph database"},
 	// runtime integration

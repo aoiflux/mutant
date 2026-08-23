@@ -35,12 +35,12 @@ func Putf(args ...object.Object) object.Object {
 			}
 
 		}
-		fmt.Printf(format, vals...)
+		fmt.Fprintf(Output(), format, vals...)
 		return nil
 	}
 
 	for _, arg := range args {
-		fmt.Printf("%v", arg.Inspect())
+		fmt.Fprintf(Output(), "%v", arg.Inspect())
 	}
 	return nil
 }

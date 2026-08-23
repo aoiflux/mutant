@@ -421,6 +421,12 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	globals := make([]object.Object, global.GlobalSize)
 	machine := vm.NewWithPasswordAndGlobalStoreMode(bytecode, password, globals, secureMode)
 	defer machine.CleanupSensitiveData(true)
+	// Registered second so it runs FIRST (defers unwind last-registered-first).
+	// A spawned task outlives the main program by design, and it is still
+	// decrypting the very constants CleanupSensitiveData zeroes -- the trap
+	// serve.go documents. Waiting here means a program that starts work and
+	// forgets to collect it still finishes that work instead of losing it.
+	defer builtin.WaitForTasks()
 
 	if err := machine.Run(); err != nil {
 		return err, errrs.VM_ERROR

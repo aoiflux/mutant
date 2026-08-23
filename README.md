@@ -16,7 +16,7 @@ accessible, secure system for programming & security research.
    works on **YOUR** machine
 4. Cross Compilation: mutant supports compiling standalone, independent binary
    executables for multiple platforms.
-5. Batteries included: a **399-builtin** standard library (pure-Go, no cgo)
+5. Batteries included: a **409-builtin** standard library (pure-Go, no cgo)
    spanning strings/math/hashing/time, structured data, higher-order collection
    functions, networking (sockets/TLS/HTTP), graph modeling, cryptography,
    detection, sandboxed Lua, and a deep forensic suite — see the

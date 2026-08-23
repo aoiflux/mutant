@@ -34,6 +34,7 @@ Some examples use fixture files in:
 - `examples/security/` environment diagnostics and anti-analysis status
 - `examples/lua/` Lua interop examples and helper scripts
 - `examples/bytes/` byte cursor and binary-safe parsing helpers
+- `examples/concurrency/` spawn, task_wait, channels, and pmap
 
 ## Suggested learning path
 

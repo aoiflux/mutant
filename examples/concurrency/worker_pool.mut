@@ -1,0 +1,130 @@
+// worker_pool.mut
+// Running work alongside the rest of the program: spawn, task_wait, and
+// channels. This is the shape to reach for when the work is NOT just "apply one
+// function to every element of an array" -- that case is pmap, one line, and is
+// shown at the end for contrast.
+//
+// `_` discards a binding an example does not go on to inspect. Real code should
+// check the error slot of every call that has one.
+//
+// Builtins used: spawn, task_wait, task_done, chan_new, chan_send, chan_recv,
+//   chan_close, pmap, sleep_ms.
+//
+// Run:  mutant examples/concurrency/worker_pool.mut
+
+putln("=== 1. one task, collected later ===");
+
+// spawn(fn) calls a function of no parameters; spawn(fn, arg) one of a single
+// parameter. It returns straight away with a handle.
+let counter, spawn_err = spawn(fn(upto) {
+    let total = 0;
+    for (let i = 1; i <= upto; i++) {
+        total += i;
+    }
+    return total;
+}, 1000);
+
+if (spawn_err) {
+    putln("  spawn failed: ", spawn_err);
+} else {
+    // The program is free to do other work here; the task is already running.
+    putln("  spawned, doing something else meanwhile...");
+
+    // task_wait blocks for the result. Collecting a task releases its handle,
+    // so wait for it once.
+    let total, wait_err = task_wait(counter);
+    if (wait_err) {
+        putln("  task failed: ", wait_err);
+    } else {
+        putln("  sum(1..1000) = ", total);
+    };
+};
+
+putln("");
+putln("=== 2. a producer and a consumer, joined by a channel ===");
+
+// A task gets a SNAPSHOT of globals, so it cannot write a result back into one.
+// A channel is how the two halves meet.
+let queue, _ = chan_new(8);
+
+let producer, _ = spawn(fn(out) {
+    let words = ["alpha", "bravo", "charlie", "delta"];
+    for (let i = 0; i < len(words); i++) {
+        let _, _ = chan_send(out, words[i]);
+    }
+    // Closing is how the consumer learns there is no more coming.
+    let _, _ = chan_close(out);
+    return len(words);
+}, queue);
+
+let received = 0;
+for (;;) {
+    // chan_recv reports {ok, value, closed, timeout} rather than the value,
+    // because null is itself a sendable value: ok is the only way to tell
+    // "received null" from "received nothing".
+    let msg, _ = chan_recv(queue, 5000);
+    if (!msg["ok"]) {
+        if (msg["timeout"]) {
+            putln("  gave up waiting");
+        };
+        break;
+    };
+    received += 1;
+    putln("  received ", msg["value"]);
+}
+
+let produced, _ = task_wait(producer);
+putln("  produced ", produced, ", received ", received);
+
+putln("");
+putln("=== 3. polling instead of waiting ===");
+
+let gate, _ = chan_new(0);
+let slow, _ = spawn(fn(g) {
+    // Waits until the program opens the gate.
+    let _, _ = chan_recv(g, 5000);
+    return "finished";
+}, gate);
+
+// task_done answers without blocking, so a program can get on with something
+// else and check back.
+let before, _ = task_done(slow);
+putln("  done before the gate opens? ", before);
+
+let _, _ = chan_send(gate, true, 5000);
+let outcome, _ = task_wait(slow);
+putln("  task returned ", outcome);
+
+putln("");
+putln("=== 4. a failing task reports, it does not crash ===");
+
+let doomed, _ = spawn(fn() {
+    return 1 / 0;
+});
+let value, failure = task_wait(doomed);
+putln("  value=", value);
+putln("  failure=", failure);
+
+putln("");
+putln("=== 5. when the work IS an array, use pmap ===");
+
+// Everything above is for work that is not shaped like a collection. When it
+// is, pmap does the same thing in one line and keeps the input's order.
+let squares = pmap([1, 2, 3, 4, 5, 6, 7, 8], fn(n) {
+    sleep_ms(50);
+    return n * n;
+}, 8);
+putln("  ", squares);
+
+putln("");
+putln("=== 6. work the program never collects still finishes ===");
+
+// Nothing waits on this task. The runtime waits for it before the program ends,
+// so its work is not thrown away.
+let _, _ = spawn(fn() {
+    sleep_ms(100);
+    putln("  the detached task finished after the program body did");
+    return true;
+});
+
+putln("  program body done; the runtime will wait for the detached task");

@@ -83,6 +83,23 @@ func NewWithState(st *SymbolTable, constants []object.Object) *Compiler {
 	return compiler
 }
 
+// SeedTypeDefinitions pre-loads struct and enum declarations recorded by an
+// earlier compilation. A REPL session compiles each line separately, so without
+// this a type declared on one line is "undefined" on the next; seeding the
+// definitions carried out of the previous ByteCode keeps a session coherent.
+func (c *Compiler) SeedTypeDefinitions(structs map[string][]*ast.Identifier, enums map[string][]string) {
+	for name, fields := range structs {
+		if _, exists := c.structDefinitions[name]; !exists {
+			c.structDefinitions[name] = fields
+		}
+	}
+	for name, variants := range enums {
+		if _, exists := c.enumDefinitions[name]; !exists {
+			c.enumDefinitions[name] = variants
+		}
+	}
+}
+
 func (c *Compiler) EnableSecurityOpcodeInjection() {
 	c.injectSecurityChecks = true
 }
@@ -318,6 +335,14 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return fmt.Errorf("undefined variable: %s", node.Value)
 		}
 		c.loadSymbol(symbol)
+
+	case *ast.MacroLiteral:
+		// Macros are expanded into ordinary AST before compilation
+		// (evaluator.DefineMacros/ExpandMacros); one reaching codegen means
+		// expansion was skipped. Emitting nothing for it would leave the stack
+		// unbalanced and the VM would later pop past the bottom and panic, so
+		// say plainly what went wrong instead.
+		return fmt.Errorf("macro definitions must be expanded before compilation: enable macro expansion for this program")
 
 	case *ast.FunctionLiteral:
 		c.enterScope()

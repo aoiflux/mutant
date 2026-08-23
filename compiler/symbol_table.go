@@ -1,5 +1,7 @@
 package compiler
 
+import "sort"
+
 type SymbolScope string
 
 const (
@@ -84,4 +86,19 @@ func (st *SymbolTable) defineFree(original Symbol) Symbol {
 	symbol.Scope = FreeScope
 	st.store[original.Name] = symbol
 	return symbol
+}
+
+// GlobalNames returns the names defined in this table's global scope, excluding
+// builtins. A REPL session uses it to offer the user's own bindings as
+// completion candidates, the way object.Environment.Keys() does for the
+// tree-walking path.
+func (st *SymbolTable) GlobalNames() []string {
+	names := make([]string, 0, len(st.store))
+	for name, symbol := range st.store {
+		if symbol.Scope == GlobalScope {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }

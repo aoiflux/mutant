@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"mutant/ast"
 	"mutant/builtin"
 	"mutant/compiler"
 	"mutant/errrs"
@@ -422,35 +423,17 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 			continue
 		}
 
+		// Macros expand into plain AST and then take the ordinary compile+VM
+		// path. --enable-macros used to hand the expanded program to the
+		// tree-walking evaluator instead, so the flag quietly changed the
+		// language: index assignment, string indexing, struct-literal
+		// validation and call-arity checking all behave differently there.
+		// Expanding and then compiling keeps one executor for every mode.
 		if enableMacros {
 			evaluator.DefineMacros(program, macroEnv)
-			expanded := evaluator.ExpandMacros(program, macroEnv)
-			evaluated := evaluator.Eval(expanded, env)
-			if evaluated == nil {
-				if lineReader != nil {
-					lineReader.AddHistory(line, false)
-				}
-				continue
+			if expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program); ok {
+				program = expanded
 			}
-			if lineReader != nil {
-				failed := evaluated.Type() == object.ERROR_OBJ
-				lineReader.AddHistory(line, failed)
-			}
-			io.WriteString(out, evaluated.Inspect())
-			io.WriteString(out, "\n")
-			tinyShown := false
-			if shouldShowTinyTaskEasterEgg(line) {
-				io.WriteString(out, "  ")
-				io.WriteString(out, styledTinyTaskMessage(randomTinyTaskMessage()))
-				io.WriteString(out, "\n")
-				tinyShown = true
-			}
-			if shouldShowGeneralSuccessEasterEgg(line, tinyShown) {
-				io.WriteString(out, "  ")
-				io.WriteString(out, styledGeneralSuccessMessage(randomGeneralSuccessMessage()))
-				io.WriteString(out, "\n")
-			}
-			continue
 		}
 
 		comp := compiler.NewWithState(symbolTable, constants)

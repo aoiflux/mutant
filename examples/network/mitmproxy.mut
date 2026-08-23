@@ -15,11 +15,13 @@
 // Builtins used: tls_generate_ca, tls_sign_cert, net_listen, net_accept,
 //   net_conn_write, net_tls_upgrade_server, net_connect, net_tls_upgrade_client,
 //   http_conn_read_request, http_build_request, http_conn_read_response,
-//   http_build_response, text_split.
+//   http_build_response, text_split, spawn.
 //
-// NOTE: single-threaded and one request per connection (sends Connection:
-// close) to stay readable. Configure your client to use 127.0.0.1:8080 as its
-// HTTP and HTTPS proxy.
+// CONCURRENCY: the accept loop hands each connection to spawn, which runs the
+// handler on its own VM, so a slow upstream no longer stalls every other
+// client. Still one request per connection (it sends Connection: close) to stay
+// readable. Configure your client to use 127.0.0.1:8080 as its HTTP and HTTPS
+// proxy.
 //
 // Run:  mutant mitmproxy.mut --dev
 
@@ -183,10 +185,26 @@ let run_proxy = fn(bind_addr) {
     };
     putln("proxy listening on ", bind_addr, " (set as your HTTP+HTTPS proxy)");
 
+    // spawn passes exactly one argument, so the CA rides along as a captured
+    // free variable. A spawned task gets its own copy of what it captures, which
+    // is what lets many connections read the CA at once without coordinating.
+    let serve_one = fn(client) {
+        handle_client(client, ca);
+    };
+
     for (let i = 0; true; i = i + 1) {
         let acc, err = net_accept(ln, 0);
         if (acc["ok"]) {
-            handle_client(acc["handle"], ca);
+            // Hand the connection off and go straight back to accepting.
+            // The handle is discarded on purpose: nothing collects this task,
+            // and each handler closes its own connection when it is done.
+            let _, spawn_err = spawn(serve_one, acc["handle"]);
+            if (spawn_err) {
+                // Every task slot is busy. Refusing the connection is better
+                // than queueing it behind work that is already backed up.
+                putln("  [!] at capacity, dropping a connection: ", spawn_err);
+                net_conn_close(acc["handle"]);
+            };
         };
     }
     return true;

@@ -9,10 +9,10 @@
 // executed on a fresh VM per connection. Each VM gets its own stack/frames and
 // its own globals slice, and shares the read-only, already-encrypted bytecode of
 // the cached handler. The connection handle and shared arg are exposed to the
-// handler via the serve_conn()/serve_arg() builtins (a goroutine-keyed context
-// set around machine.Run()), so a handler file compiles/runs standalone too and a
-// program can serve itself. Per-connection VMs deliberately skip cleanup so a
-// finishing worker never wipes the shared bytecode its siblings are still running.
+// handler via the serve_conn()/serve_arg() builtins, carried on the handler's own
+// VM, so a handler file compiles/runs standalone too and a program can serve
+// itself. Per-connection VMs deliberately skip cleanup so a finishing worker
+// never wipes the shared bytecode its siblings are still running.
 package serve
 
 import (
@@ -111,13 +111,12 @@ func run(handlerPath string, connHandle int64, arg object.Object) {
 
 	globals := make([]object.Object, global.GlobalSize)
 
-	// Expose the connection + arg to the handler via serve_conn()/serve_arg() for
-	// the duration of this Run (goroutine-keyed; the handler VM runs on this
-	// goroutine synchronously).
-	builtin.SetServeContext(connHandle, arg)
-	defer builtin.ClearServeContext()
-
 	machine := vm.NewWithGlobalStoreAndPassword(pr.bc, globals, servePassword)
+
+	// Expose the connection + arg to the handler via serve_conn()/serve_arg().
+	// The context rides on this VM rather than on this goroutine, so work the
+	// handler hands to spawn or pmap keeps it.
+	machine.SetServeContext(connHandle, arg)
 	// NOTE: do NOT call CleanupRuntimeSensitiveData here. Its stack sweep calls
 	// clearObjectSensitiveData on stack entries, which alias the SHARED constant
 	// objects of pr.bc — a finishing worker would zero the encrypted constants

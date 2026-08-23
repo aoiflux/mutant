@@ -75,6 +75,112 @@ let sorted = sort_by(nums, fn(x) { return x; });
 
 `map`/`filter`/`each` callbacks may also take `(element, index)`.
 
+### Running a callback in parallel (`pmap` / `peach`)
+
+Collection work in this language is usually I/O- or CPU-bound per element --
+hashing a directory of files, resolving a list of domains, scanning a range of
+ports -- and doing it one element at a time is what makes a collection script
+slow. `pmap` is `map` with the elements processed concurrently; `peach` is `each`.
+
+```mutant
+// Hash every file in a directory, eight at a time.
+let digests = pmap(paths, fn(path) {
+    let digest, err = fs_hash(path, "sha256");
+    if (err) { return ""; };
+    return digest;
+}, 8);
+```
+
+**Results keep the input's order.** Workers finish out of order, but each result
+lands back in its element's position, so `pmap` is a drop-in replacement for
+`map` wherever the callback is independent per element.
+
+The third argument caps how many run at once. Omit it and the worker count
+follows the machine's CPU count, capped by the array length.
+
+**What the callback may rely on.** Each worker runs on its own VM with a
+*snapshot* of globals, taken when the call starts. So a callback can read
+globals and its own captured variables, but an assignment to a global stays
+local to that worker and is lost when it finishes. Write callbacks that return
+their result rather than accumulating into a global; when workers genuinely need
+to share state, put it in a `cache_*` or `db_*` store, which is what `net_serve`
+handlers already do.
+
+An error raised inside a callback stops the whole call and surfaces, the same as
+in `map`.
+
+### Running one function alongside the program (`spawn` / channels)
+
+`pmap` covers the case where the work is an array. When it isn't -- a server
+handling connections, a long collection running while the program does something
+else -- `spawn` runs a single function on its own VM and hands back a handle:
+
+```mutant
+let t, err = spawn(fn(dir) {
+    let entries, e = fs_walk(dir);
+    return len(entries);
+}, "/evidence");
+
+// ... do other work here ...
+
+let count, werr = task_wait(t);
+```
+
+`spawn(fn)` calls a function of no parameters and `spawn(fn, arg)` one of a
+single parameter. `task_wait(handle)` blocks for the result; `task_wait(handle,
+ms)` gives up after a while and leaves the task collectable; `task_done(handle)`
+answers without waiting. Whatever stopped a task -- an error, a division by zero
+-- comes back in `task_wait`'s error slot rather than taking the program down.
+Collecting a task releases its handle, so wait for it once.
+
+**A spawned task follows the same rules as a `pmap` worker**: its own VM, its own
+stack, and a *snapshot* of globals taken at the spawn. It can read globals and
+its captured variables; its own writes stay local. The way back is the return
+value, or a channel.
+
+#### Channels
+
+A channel passes values between concurrently running code, since the pieces
+share no variables:
+
+```mutant
+let ch, e = chan_new(16);            // 16 values may queue; 0 is unbuffered
+
+let t, se = spawn(fn(c) {
+    let entries, err = fs_walk("/evidence");
+    for (let i = 0; i < len(entries); i++) {
+        let sent, serr = chan_send(c, entries[i]["path"]);
+    }
+    let closed, cerr = chan_close(c);   // tells the receiver there is no more
+}, ch);
+
+for (;;) {
+    let r, rerr = chan_recv(ch, 5000);  // wait up to 5s
+    if (!r["ok"]) { break; }            // closed, or timed out
+    putln(r["value"]);
+}
+```
+
+`chan_recv` reports `{ok, value, closed, timeout}` rather than returning the
+value directly, because `null` is itself a sendable value: `ok` is the only way
+to tell "received null" from "received nothing". `chan_try_recv` is the same
+without ever waiting. Values already queued survive a close, so a receive loop
+drains a closed channel before it sees `closed`.
+
+`chan_send` returns true once the value is handed over and false if its timeout
+ran out; sending on a *closed* channel is an error, because the value had
+nowhere to go.
+
+#### What happens at exit
+
+The runtime waits for every spawned task before the program ends, so work
+started and never collected still finishes. The flip side is that a task which
+never returns keeps the program alive -- close the channel it is waiting on, or
+give its receive a timeout.
+
+At most 1024 tasks run at once. Past that `spawn` reports an error rather than
+blocking, so an accept loop can shed load instead of deadlocking.
+
 ### Logical operators
 
 `&&` (and) and `||` (or) combine conditions and **short-circuit** — the right
@@ -133,13 +239,14 @@ n -= 30;   n /= 2;   n %= 9;    // chained: 100 -> 70 -> 35 -> 8
 
 ## Builtins
 
-**Total builtins currently registered: 399**, across 32 capability categories.
+**Total builtins currently registered: 409**, across 33 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
 | Category | Count | What it covers |
 | --- | --- | --- |
-| [Standard library](CAPABILITY_REFERENCE.md#standard-library-54) | 54 | Core primitives, collection/hash ops, higher-order functions, I/O, introspection |
+| [Standard library](CAPABILITY_REFERENCE.md#standard-library-56) | 56 | Core primitives, collection/hash ops, higher-order functions (including parallel `pmap`/`peach`), I/O, introspection |
+| [Concurrency](CAPABILITY_REFERENCE.md#concurrency-8) | 8 | Background tasks (`spawn`/`task_wait`) and channels for passing values between them |
 | [Strings](CAPABILITY_REFERENCE.md#strings-18) | 18 | Rune-aware string manipulation |
 | [Text analysis](CAPABILITY_REFERENCE.md#text-analysis-14) | 14 | Search, split/replace, regex, fuzzy matching |
 | [Structured data](CAPABILITY_REFERENCE.md#structured-data-25) | 25 | JSON, encoding, compression, type/base conversion, plist |

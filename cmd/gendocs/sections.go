@@ -50,6 +50,11 @@ var categorySections = []categorySection{
 		blurb:    "Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.",
 	},
 	{
+		category: "concurrency",
+		heading:  "Concurrency",
+		blurb:    "Run work alongside the rest of the program and pass values between the pieces. `spawn` starts a closure on its own VM and hands back a handle for `task_wait`/`task_done`; `chan_*` moves values between them. Each task gets a snapshot of globals, so a channel or a return value is the way back, not a shared variable. For applying one callback across an array, reach for `pmap`/`peach` in the standard library instead.",
+	},
+	{
 		category: "strings",
 		heading:  "Strings",
 		blurb:    "Rune-aware string manipulation: case, trimming, padding, slicing, joining, and formatting. Pairs with the `text_*`/`regex_*` matching family.",

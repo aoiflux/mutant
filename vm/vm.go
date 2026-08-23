@@ -17,6 +17,11 @@ import (
 
 // VM structure defines virtual machine
 type VM struct {
+	// bytecode is kept so a worker VM can be built over the SAME compiled
+	// program: pmap runs its callback on sibling VMs, and they must share the
+	// constants pool, instruction length and password or the closure they call
+	// would not decrypt.
+	bytecode        *compiler.ByteCode
 	constants       []object.Object
 	stack           []object.Object
 	stackPointer    int // top of stack is stack[stackPointer-1]
@@ -43,6 +48,19 @@ type VM struct {
 	// xorStream caches the opcode-decryption key/nonce (seed=inslen, password are
 	// constant per run) so per-opcode fetch avoids re-deriving them each time.
 	xorStream *security.XORStream
+
+	// serveConn and serveArg are what serve_conn()/serve_arg() report. net_serve
+	// sets them before running a handler; everywhere else they stay zero and the
+	// builtins answer null, which is what lets one file both serve a connection
+	// and run standalone. Worker VMs inherit them, so a handler that hands work
+	// to spawn or pmap does not lose its connection along the way.
+	// serveContextSet distinguishes "no context" from a context whose connection
+	// handle is 0, which is what net_spawn dispatches with -- a handler with no
+	// connection but a real shared arg. Without it, serve_conn() would answer
+	// null there instead of the 0 that case has always reported.
+	serveContextSet bool
+	serveConn       int64
+	serveArg        object.Object
 }
 
 var (
@@ -125,6 +143,7 @@ func New(bc *compiler.ByteCode) *VM {
 	integritySeed := deriveIntegritySeed(mainInstructions)
 
 	vm := &VM{
+		bytecode:        bc,
 		constants:       bc.Constants,
 		stack:           make([]object.Object, initialStackCapacity),
 		stackPointer:    0,
@@ -517,7 +536,11 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 	return nil
 }
 
-func (vm *VM) Run() error {
+// prepareForExecution performs the one-time setup execLoop depends on. Run()
+// does it before driving a whole program; a worker VM (see parallel.go) needs it
+// too, because it enters through CallClosureSync and never calls Run at all --
+// without this its xorStream is nil and the first opcode fetch dereferences it.
+func (vm *VM) prepareForExecution() {
 	vm.ensureFrameBoundaries()
 
 	// Cache the opcode-decryption key/nonce once; seed (inslen) and password are
@@ -525,6 +548,10 @@ func (vm *VM) Run() error {
 	if vm.xorStream == nil {
 		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
 	}
+}
+
+func (vm *VM) Run() error {
+	vm.prepareForExecution()
 
 	if err := vm.validateSecurityCheckOpcodes("before-execution"); err != nil {
 		return err
@@ -1724,11 +1751,11 @@ func (vm *VM) verifyFrameIntegrity(frame *Frame, stage string) error {
 }
 
 func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
-	// Higher-order builtins (map/filter/reduce/each/sort_by) call user closures,
-	// which only the VM can do, so the VM handles them natively rather than
-	// invoking the placeholder Fn.
-	if kind := builtin.HigherOrderKind(bi); kind != "" {
-		return vm.callHigherOrder(kind, numArgs)
+	// Some builtins need something only the VM has -- the ability to call a user
+	// closure, or the running program's serve context -- so the VM runs them
+	// itself rather than invoking the registered Fn.
+	if kind := builtin.ExecutorNativeKind(bi); kind != "" {
+		return vm.callExecutorNative(kind, numArgs)
 	}
 
 	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
@@ -1749,15 +1776,16 @@ func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
 	return nil
 }
 
-// callHigherOrder gathers the builtin's arguments and dispatches to the VM-native
-// higher-order implementation, which drives user closures via CallClosureSync.
-func (vm *VM) callHigherOrder(kind string, numArgs int) error {
+// callExecutorNative gathers the builtin's arguments and dispatches to the
+// VM-native implementation, which is free to drive user closures via
+// CallClosureSync and to read the VM's own state.
+func (vm *VM) callExecutorNative(kind string, numArgs int) error {
 	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
 	args := make([]object.Object, len(storedArgs))
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	result, err := vm.applyHigherOrder(kind, args)
+	result, err := vm.applyExecutorNative(kind, args)
 	if err != nil {
 		return err
 	}

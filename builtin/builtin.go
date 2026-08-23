@@ -281,8 +281,8 @@ var Builtins = []BuiltinDefinition{
 	// concurrency (dev-sec-platform-upgrades) — append-only, keep last.
 	{BuiltinNameNetServe, &BuiltIn{NetServe}},
 	{BuiltinNameNetSpawn, &BuiltIn{NetSpawn}},
-	{BuiltinNameServeConn, &BuiltIn{ServeConn}},
-	{BuiltinNameServeArg, &BuiltIn{ServeArg}},
+	{BuiltinNameServeConn, serveConnBuiltin},
+	{BuiltinNameServeArg, serveArgBuiltin},
 	{BuiltinNameSleepMs, &BuiltIn{SleepMs}},
 	{BuiltinNameTimeMs, &BuiltIn{TimeMs}},
 	{BuiltinNameWsAcceptKey, &BuiltIn{WSAcceptKey}},
@@ -472,6 +472,18 @@ var Builtins = []BuiltinDefinition{
 
 	// net: truthful primary name for the connect-scan (net_syn_scan alias above)
 	{BuiltinNameNetConnectScan, &BuiltIn{NetConnectScan}},
+
+	// collections: parallel higher-order (executor-native; append-only)
+	{BuiltinNamePMap, pmapBuiltin},
+	{BuiltinNamePEach, peachBuiltin},
+	{BuiltinNameSpawn, spawnBuiltin},
+	{BuiltinNameTaskWait, &BuiltIn{TaskWait}},
+	{BuiltinNameTaskDone, &BuiltIn{TaskDone}},
+	{BuiltinNameChanNew, &BuiltIn{ChanNew}},
+	{BuiltinNameChanSend, &BuiltIn{ChanSend}},
+	{BuiltinNameChanRecv, &BuiltIn{ChanRecv}},
+	{BuiltinNameChanTryRecv, &BuiltIn{ChanTryRecv}},
+	{BuiltinNameChanClose, &BuiltIn{ChanClose}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

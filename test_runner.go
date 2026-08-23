@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mutant/builtin"
 	"mutant/compiler"
 	"mutant/global"
 	"mutant/lexer"
@@ -112,7 +113,14 @@ func runMutantSource(src string) (result object.Object, err error) {
 	byteCode = mutil.EncryptByteCode(byteCode, password)
 
 	machine := vm.NewWithGlobalStoreAndPassword(byteCode, make([]object.Object, global.GlobalSize), password)
-	if runErr := machine.Run(); runErr != nil {
+	runErr := machine.Run()
+
+	// Wait for anything the test spawned, so a test that starts work and asserts
+	// on its effect sees a finished program rather than a racing one -- the same
+	// guarantee runner.runvm gives a real run.
+	builtin.WaitForTasks()
+
+	if runErr != nil {
 		return nil, fmt.Errorf("runtime error: %w", runErr)
 	}
 	return machine.LastPoppedStackElement(), nil

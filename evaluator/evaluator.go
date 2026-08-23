@@ -1,3 +1,12 @@
+// Package evaluator expands macros.
+//
+// It contains a tree-walking interpreter because macro expansion needs one:
+// expanding a macro means evaluating its body, and quote/unquote evaluates the
+// unquoted expressions, both before any bytecode exists. That is now its only
+// role -- no production path executes a user program through Eval. Programs are
+// compiled and run on the VM in every mode, including the REPL's
+// --enable-macros mode, so the language cannot behave one way here and another
+// way there.
 package evaluator
 
 import (
@@ -216,15 +225,22 @@ func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object
 func applyFunction(fn object.Object, args []object.Object) object.Object {
 	switch fun := fn.(type) {
 	case *object.Function:
+		// Check arity before binding parameters. extendFunctionEnv indexes
+		// args positionally, so an under-applied call used to panic with an
+		// index-out-of-range instead of reporting the mistake. The message
+		// matches the VM's so both paths read the same.
+		if len(args) != len(fun.Parameters) {
+			return newError("wrong number of arguments. want=%d, got=%d", len(fun.Parameters), len(args))
+		}
 		extendedEnv := extendFunctionEnv(fun, args)
 		evaluated := Eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
-		// Higher-order builtins (map/filter/reduce/each/sort_by) call user
-		// functions, which the builtin itself cannot; the evaluator handles them
-		// natively via applyFunction, mirroring the VM's native handling.
-		if kind := builtin.HigherOrderKind(fun); kind != "" {
-			return applyHigherOrder(kind, args)
+		// Some builtins need something the builtin itself does not have: the
+		// ability to call a user function, or the running program's context. The
+		// evaluator handles those natively, mirroring the VM.
+		if kind := builtin.ExecutorNativeKind(fun); kind != "" {
+			return applyExecutorNative(kind, args)
 		}
 		result := fun.Fn(args...)
 		if result == nil {

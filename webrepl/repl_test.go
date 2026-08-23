@@ -246,12 +246,12 @@ func TestEvalExtendedDataBuiltins(t *testing.T) {
 	}
 
 	t.Run("json parse fields", func(t *testing.T) {
-		got := evalInput(t, repl, `json_parse(json_stringify({"ok": true, "items": [1, 2]}))["ok"]`)
+		got := evalInput(t, repl, `let raw, serr = json_stringify({"ok": true, "items": [1, 2]}); let parsed, perr = json_parse(raw); parsed["ok"]`)
 		if got != "true" {
 			t.Fatalf("json_parse field lookup = %q, want %q", got, "true")
 		}
 
-		got = evalInput(t, repl, `json_parse(json_stringify({"ok": true, "items": [1, 2]}))["items"][1]`)
+		got = evalInput(t, repl, `let raw2, serr2 = json_stringify({"ok": true, "items": [1, 2]}); let nested, nerr = json_parse(raw2); nested["items"][1]`)
 		if got != "2" {
 			t.Fatalf("json_parse nested array lookup = %q, want %q", got, "2")
 		}
@@ -305,17 +305,17 @@ func TestEvalExtendedDataBuiltins(t *testing.T) {
 			t.Fatalf("bytes_write_u16_le = %q, want %q", got, "ABCD")
 		}
 
-		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_tell(c)`)
+		got = evalInput(t, repl, `let c, cerr = bytes_cursor_new("AB"); let pos, perr = bytes_cursor_tell(c); pos`)
 		if got != "0" {
 			t.Fatalf("bytes_cursor_tell = %q, want %q", got, "0")
 		}
 
-		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_read_u8(c)["value"]`)
+		got = evalInput(t, repl, `let c2, c2err = bytes_cursor_new("AB"); let read, rerr = bytes_cursor_read_u8(c2); read["value"]`)
 		if got != "65" {
 			t.Fatalf("bytes_cursor_read_u8 value = %q, want %q", got, "65")
 		}
 
-		got = evalInput(t, repl, `let c = bytes_cursor_new("AB"); bytes_cursor_read_u8(c)["cursor"]["offset"]`)
+		got = evalInput(t, repl, `let c3, c3err = bytes_cursor_new("AB"); let read2, r2err = bytes_cursor_read_u8(c3); read2["cursor"]["offset"]`)
 		if got != "1" {
 			t.Fatalf("bytes_cursor_read_u8 next cursor offset = %q, want %q", got, "1")
 		}
@@ -329,7 +329,7 @@ func TestEvalCallErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown function")
 	}
-	if !strings.Contains(err.Error(), "identifier not found: unknown_fn") {
+	if !strings.Contains(err.Error(), "undefined variable: unknown_fn") {
 		t.Fatalf("unexpected error for unknown function: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestEvalCallErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid len argument")
 	}
-	if !strings.Contains(err.Error(), "argument to len not supported") {
+	if !strings.Contains(err.Error(), "argument to `len` not supported") {
 		t.Fatalf("unexpected len error: %v", err)
 	}
 }
@@ -445,14 +445,14 @@ policy_allow("allow_policy", {"user": "analyst"})
 	})
 
 	t.Run("cache roundtrip", func(t *testing.T) {
-		got := evalInput(t, repl, `cache_open("session"); cache_put("session", "k", 7); cache_get("session", "k")["value"]`)
+		got := evalInput(t, repl, `cache_open("session"); cache_put("session", "k", 7); let entry, err = cache_get("session", "k"); entry["value"]`)
 		if got != "7.000000" {
 			t.Fatalf("cache roundtrip output = %q, want %q", got, "7.000000")
 		}
 	})
 
 	t.Run("db in-memory workflow", func(t *testing.T) {
-		got := evalInput(t, repl, `let h = db_open(); let n1 = db_add_node(h); let n2 = db_add_node(h); db_add_edge(h, n1, n2); len(db_query_nodes(h))`)
+		got := evalInput(t, repl, `let h, herr = db_open(); let n1, e1 = db_add_node(h); let n2, e2 = db_add_node(h); db_add_edge(h, n1, n2); let nodes, qerr = db_query_nodes(h); len(nodes)`)
 		if got != "2" {
 			t.Fatalf("db workflow output = %q, want %q", got, "2")
 		}

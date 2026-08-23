@@ -1,19 +1,22 @@
 package parity
 
-// Cross-engine golden parity test. Mutant has three execution engines that must
-// agree on documented operator semantics: the compiler+stack-VM (vm/vm.go), the
-// tree-walking evaluator (evaluator/, used by CLI --macros mode), and the WASM
-// web REPL (webrepl/repl.go). The evaluator and web REPL now share a single
-// numeric operator core (object.NumericInfix); this test pins the evaluator and
-// the VM to identical results for a table of expressions so the two independent
-// implementations of the operator semantics can never silently drift apart.
+// Golden parity test between the two remaining evaluators of expressions.
 //
-// The web REPL is covered transitively: it routes numeric infix through the very
-// same object.NumericInfix the evaluator uses, so evaluator==VM here implies
-// webrepl==VM for these expressions.
+// Mutant used to have three execution engines -- the compiler+stack-VM, the
+// tree-walking evaluator, and a separate WASM web REPL -- and this test existed
+// to stop them drifting. The web REPL now runs the compiler+VM directly, so it
+// is the same engine rather than a third one to compare against.
+//
+// The evaluator still evaluates expressions, though, because macro expansion
+// needs it: `unquote(2 + 3)` is computed by the evaluator at expansion time and
+// spliced into the program the VM then runs. So the two implementations of
+// operator semantics still both exist, and must still agree -- otherwise a value
+// computed inside a macro differs from the same expression written inline.
+// TestMacroExpansionMatchesDirectCompilation pins exactly that.
 
 import (
 	"fmt"
+	"mutant/ast"
 	"mutant/compiler"
 	"mutant/evaluator"
 	"mutant/global"
@@ -49,6 +52,36 @@ func evalViaVM(t *testing.T, input string) (object.Object, error) {
 
 	comp := compiler.New()
 	if err := comp.Compile(program); err != nil {
+		t.Fatalf("compiler error for %q: %s", input, err)
+	}
+
+	byteCode := comp.ByteCode()
+	password := fmt.Sprint(security.DerivePasswordFromInstructions(byteCode.Instructions))
+	byteCode = mutil.EncryptByteCode(byteCode, password)
+
+	machine := vm.NewWithGlobalStoreAndPassword(byteCode, make([]object.Object, global.GlobalSize), password)
+	if err := machine.Run(); err != nil {
+		return nil, err
+	}
+	return machine.LastPoppedStackElement(), nil
+}
+
+// evalViaVMWithMacros mirrors the production pipeline in generator/generate.go:
+// define and expand macros over the AST first, then compile and run. evalViaVM
+// deliberately skips expansion, so it cannot be used for macro input.
+func evalViaVMWithMacros(t *testing.T, input string) (object.Object, error) {
+	t.Helper()
+	program := parser.New(lexer.New(input)).ParseProgram()
+
+	macroEnv := object.NewEnvironment()
+	evaluator.DefineMacros(program, macroEnv)
+	expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program)
+	if !ok {
+		t.Fatalf("macro expansion did not yield a program for %q", input)
+	}
+
+	comp := compiler.New()
+	if err := comp.Compile(expanded); err != nil {
 		t.Fatalf("compiler error for %q: %s", input, err)
 	}
 
@@ -135,6 +168,43 @@ func TestEvaluatorVMOperatorParity(t *testing.T) {
 		}
 		if evalRes != vmRes {
 			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+}
+
+// A value computed by the evaluator during macro expansion must equal the same
+// expression compiled straight to bytecode. This is the parity that still has
+// teeth: `unquote(...)` runs in the evaluator and splices its result into the
+// program, so any disagreement between the two operator implementations shows up
+// as a macro silently producing a different number than the inline expression.
+//
+// unquote splices back integers, booleans, and quoted nodes (see
+// convertObjectToASTNode), so the table stays within those.
+func TestMacroExpansionMatchesDirectCompilation(t *testing.T) {
+	inputs := []string{
+		"1 + 2", "10 - 3", "6 * 7", "20 / 4", "7 % 3", "-5 + 2",
+		"2 + 3 * 4", "(2 + 3) * 4", "10 - 2 - 3",
+		"2 < 3", "5 > 4", "2 <= 2", "3 >= 4", "5 == 5", "5 != 6",
+		"true && false", "true || false", "2 < 3 && 3 < 4",
+		"!true", "!false",
+	}
+
+	for _, input := range inputs {
+		direct, directErr := evalViaVM(t, input)
+		if directErr != nil {
+			t.Fatalf("direct compilation of %q failed: %s", input, directErr)
+		}
+
+		// The macro body evaluates `input` in the evaluator and splices the
+		// resulting literal; the VM then runs that literal.
+		viaMacro, macroErr := evalViaVMWithMacros(t, fmt.Sprintf("let m = macro() { quote(unquote(%s)); }; m();", input))
+		if macroErr != nil {
+			t.Fatalf("macro expansion of %q failed: %s", input, macroErr)
+		}
+
+		if normalize(direct) != normalize(viaMacro) {
+			t.Errorf("macro/inline divergence for %q: inline=%s via-macro=%s",
+				input, normalize(direct), normalize(viaMacro))
 		}
 	}
 }

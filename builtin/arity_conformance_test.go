@@ -46,16 +46,23 @@ var arityProbeSkip = map[string]string{
 	"sandbox_status":       "runs the sandbox-detection probes",
 	"process_hash":         "hashes the running executable; file I/O and slow",
 
-	// The higher-order builtins register a stub Fn that only reports "must be
+	// The closure-calling builtins register a stub Fn that only reports "must be
 	// applied to a function inside a running program" (higher_order.go); both
-	// executors intercept them via HigherOrderKind before the stub is reached,
-	// so the stub never sees an argument count and the probe cannot observe the
-	// real check. TestHigherOrderArityMatchesExecutors covers them instead.
+	// executors intercept them via ExecutorNativeKind before the stub is
+	// reached, so the stub never sees an argument count and the probe cannot
+	// observe the real check. The vm package's
+	// TestExecutorNativeArityMatchesExecutor covers them instead. serve_conn and
+	// serve_arg are also intercepted but are NOT listed here: their registered
+	// Fn is the real out-of-executor implementation, complete with its own
+	// argument-count check, so the probe reaches it normally.
 	"map":     "arity is enforced by the executor, not the registered stub",
 	"filter":  "arity is enforced by the executor, not the registered stub",
 	"reduce":  "arity is enforced by the executor, not the registered stub",
 	"each":    "arity is enforced by the executor, not the registered stub",
 	"sort_by": "arity is enforced by the executor, not the registered stub",
+	"pmap":    "arity is enforced by the executor, not the registered stub",
+	"peach":   "arity is enforced by the executor, not the registered stub",
+	"spawn":   "arity is enforced by the executor, not the registered stub",
 }
 
 // handCheckedArities pins the argument counts of the builtins the probe must

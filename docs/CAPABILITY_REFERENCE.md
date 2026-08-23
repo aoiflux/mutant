@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **399 registered builtins** across **32 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **409 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -27,7 +27,7 @@ Almost every builtin is cross-platform. The exceptions:
 
 ---
 
-## Standard Library (54)
+## Standard Library (56)
 
 Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.
 
@@ -62,6 +62,8 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `merge(a: HASH, b: HASH) -> HASH` | all | Returns a new hash combining a and b (b wins on key conflicts). |
 | `min(value: INTEGER\|FLOAT, ...values: INTEGER\|FLOAT) -> INTEGER\|FLOAT` | all | Returns the smallest of the numeric arguments (original type preserved). |
 | `mod(a: INTEGER\|FLOAT, b: INTEGER\|FLOAT) -> INTEGER\|FLOAT` | all | Returns a modulo b; errors on b=0. Integer mod when both are INTEGER. |
+| `peach(array: ARRAY, fn: FUNCTION, workers?: INTEGER) -> NULL` | all | Like each, but calls fn on elements concurrently for their side effects and returns null. fn takes (element) or (element, index). Each worker runs on its own VM with a snapshot of globals, so fn should report through a shared store (cache_*/db_*) rather than by assigning to a global. |
+| `pmap(array: ARRAY, fn: FUNCTION, workers?: INTEGER) -> ARRAY` | all | Like map, but applies fn to elements concurrently and returns results in the original order. fn takes (element) or (element, index). Each worker runs on its own VM with a snapshot of globals, so fn should be self-contained: it cannot write back to a global. |
 | `pop(array: ARRAY) -> ARRAY` | all | Returns a new array without the last element. |
 | `pow(x: INTEGER\|FLOAT, y: INTEGER\|FLOAT) -> FLOAT` | all | Returns x raised to the power y (FLOAT). |
 | `push(array: ARRAY, value) -> ARRAY` | all | Returns a new array with value appended. |
@@ -87,6 +89,21 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `unique(array: ARRAY) -> ARRAY` | all | Returns a new array with duplicate values removed (order preserved). |
 | `values(hash: HASH) -> ARRAY` | all | Returns the hash values as an array (ordered by sorted key). |
 | `zip(a: ARRAY, b: ARRAY) -> ARRAY` | all | Returns an array of [a[i], b[i]] pairs up to the shorter length. |
+
+## Concurrency (8)
+
+Run work alongside the rest of the program and pass values between the pieces. `spawn` starts a closure on its own VM and hands back a handle for `task_wait`/`task_done`; `chan_*` moves values between them. Each task gets a snapshot of globals, so a channel or a return value is the way back, not a shared variable. For applying one callback across an array, reach for `pmap`/`peach` in the standard library instead.
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `chan_close(handle: INTEGER) -> (BOOLEAN, ERROR)` | all | Closes a channel, waking every waiting sender and receiver. Returns true when this call did the closing and false when the channel was already closed. Receivers can still drain values that were already queued. |
+| `chan_new(capacity?: INTEGER) -> (INTEGER, ERROR)` | all | Creates a channel for passing values between concurrently running code and returns its handle. Capacity 0 (the default) is unbuffered, so a send waits for a receive; a positive capacity lets that many values queue first. |
+| `chan_recv(handle: INTEGER, timeoutMs?: INTEGER) -> (HASH, ERROR)` | all | Takes the next value off a channel, waiting for one if the channel is empty. Returns {ok, value, closed, timeout}; check ok before reading value, since null is itself a sendable value. Values already queued are delivered even after the channel is closed. |
+| `chan_send(handle: INTEGER, value, timeoutMs?: INTEGER) -> (BOOLEAN, ERROR)` | all | Puts a value on a channel, waiting for a receiver if the channel is full. Returns true once the value is handed over and false if the timeout ran out first; sending on a closed channel is an error. |
+| `chan_try_recv(handle: INTEGER) -> (HASH, ERROR)` | all | Takes a value off a channel only if one is already waiting, and never blocks. Returns the same {ok, value, closed, timeout} shape as chan_recv. |
+| `spawn(fn: FUNCTION, arg?) -> (INTEGER, ERROR)` | all | Runs fn on its own VM alongside the rest of the program and returns a task handle to collect it with. fn takes no arguments, or one if arg is given. The task sees a snapshot of globals taken at the spawn, so it should report back through its return value or a channel rather than by assigning to a global. |
+| `task_done(handle: INTEGER) -> (BOOLEAN, ERROR)` | all | Reports whether a spawned task has finished, without waiting for it. |
+| `task_wait(handle: INTEGER, timeoutMs?: INTEGER) -> (ANY, ERROR)` | all | Waits for a spawned task and returns the value its function returned. Whatever stopped the task arrives in the error slot. Without a timeout it waits indefinitely; running out of time is reported as an error and leaves the task collectable. Collecting a task releases its handle, so wait for it once. |
 
 ## Strings (18)
 

@@ -44,6 +44,9 @@ var returnShapeProbeSkip = map[string]string{
 	"reduce":  "shape comes from the executor, not the registered stub",
 	"each":    "shape comes from the executor, not the registered stub",
 	"sort_by": "shape comes from the executor, not the registered stub",
+	"pmap":    "shape comes from the executor, not the registered stub",
+	"peach":   "shape comes from the executor, not the registered stub",
+	"spawn":   "shape comes from the executor, not the registered stub",
 }
 
 // handCheckedReturnShapes pins the shape of every builtin the probe skips, read
@@ -65,6 +68,9 @@ var handCheckedReturnShapes = map[string]bool{
 	"reduce":  false, // vm/higher_order.go hoReduce: returns the accumulator
 	"each":    false, // vm/higher_order.go hoEach: returns global.Null
 	"sort_by": false, // vm/higher_order.go hoSortBy: returns &object.Array
+	"pmap":    false, // vm/parallel.go hoPMap: returns &object.Array
+	"peach":   false, // vm/parallel.go hoPEach: returns global.Null
+	"spawn":   true,  // vm/spawn.go hoSpawn: returns vmPair(handle, err)
 }
 
 // TestSkippedReturnShapesAreHandChecked keeps the skip list honest: a builtin may

@@ -1,18 +1,21 @@
 package evaluator
 
 import (
+	"errors"
 	"sort"
 
 	"mutant/builtin"
+	"mutant/global"
 	"mutant/object"
 )
 
-// The higher-order collection builtins are handled natively by the evaluator
-// (mirroring the VM), because they must call user functions — which the builtin
-// placeholder cannot. Errors surface as *object.Error values, per the evaluator's
-// convention.
+// The builtins an executor must run itself are handled natively by the evaluator
+// (mirroring the VM): the collection operations, because they call user
+// functions the builtin placeholder cannot, and the serve-context pair, because
+// their answer lives in the running program. Errors surface as *object.Error
+// values, per the evaluator's convention.
 
-func applyHigherOrder(kind string, args []object.Object) object.Object {
+func applyExecutorNative(kind string, args []object.Object) object.Object {
 	switch kind {
 	case "map":
 		return evalMap(args)
@@ -24,8 +27,21 @@ func applyHigherOrder(kind string, args []object.Object) object.Object {
 		return evalEach(args)
 	case "sort_by":
 		return evalSortBy(args)
+	case "pmap":
+		return evalParallel("pmap", args)
+	case "peach":
+		return evalParallel("peach", args)
+	case "spawn":
+		return evalSpawn(args)
+	case "serve_conn", "serve_arg":
+		// Macro expansion has no connection and no net_serve arg, which is the
+		// same answer a program gets when it runs outside a handler.
+		if len(args) != 0 {
+			return evalPair(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
+		}
+		return evalPair(nil, nil)
 	default:
-		return newError("unknown higher-order builtin %q", kind)
+		return newError("unknown executor-native builtin %q", kind)
 	}
 }
 
@@ -193,4 +209,100 @@ func sortKeyLess(a, b object.Object) (bool, object.Object) {
 		}
 	}
 	return false, newError("sort_by: cannot compare keys of type %s and %s", a.Type(), b.Type())
+}
+
+// evalParallel runs pmap/peach sequentially.
+//
+// Parallelism there means one VM per worker (see vm/parallel.go), which the
+// evaluator has no way to create -- and it does not need to: the evaluator's
+// only remaining job is expanding macros, where a callback runs at compile time
+// over a handful of elements. Running in order produces the same results, so a
+// macro body that uses pmap still expands correctly; it simply does not run
+// concurrently. The optional third argument (worker count) is accepted and
+// ignored, because it only ever tunes throughput.
+func evalParallel(op string, args []object.Object) object.Object {
+	if len(args) != 2 && len(args) != 3 {
+		return newError("%s: want 2 or 3 arguments (array, function[, workers]), got %d", op, len(args))
+	}
+	if len(args) == 3 {
+		if _, ok := args[2].(*object.Integer); !ok {
+			return newError("%s: third argument (workers) must be INTEGER, got %s", op, args[2].Type())
+		}
+	}
+
+	arr, fn, errObj := arrayAndCallback(op, args[:2])
+	if errObj != nil {
+		return errObj
+	}
+
+	out := make([]object.Object, len(arr.Elements))
+	for i, el := range arr.Elements {
+		r := callElement(fn, el, i)
+		if isError(r) {
+			return r
+		}
+		out[i] = r
+	}
+
+	if op == "peach" {
+		return NULL
+	}
+	return &object.Array{Elements: out}
+}
+
+// evalSpawn runs the closure immediately, on this goroutine, and hands back a
+// handle for an already-finished task.
+//
+// Concurrency there means one VM per task (see vm/spawn.go), which the evaluator
+// has no way to create -- and does not need to. Its only remaining job is
+// expanding macros, which happens before bytecode exists; a macro body that
+// spawns still produces the same expansion, it simply produces it in order. The
+// task registry is the same one task_wait reads, so waiting on the handle works
+// and returns at once.
+func evalSpawn(args []object.Object) object.Object {
+	if len(args) != 1 && len(args) != 2 {
+		return evalPair(nil, newError("spawn: want 1 or 2 arguments (function[, arg]), got %d", len(args)))
+	}
+	if !isCallable(args[0]) {
+		return evalPair(nil, newError("spawn: first argument must be a function, got %s", args[0].Type()))
+	}
+
+	var callArgs []object.Object
+	if len(args) == 2 {
+		callArgs = []object.Object{args[1]}
+	}
+	if fn, ok := args[0].(*object.Function); ok && len(fn.Parameters) != len(callArgs) {
+		wanted := "spawn: spawn(fn) needs a function that takes no parameters"
+		if len(callArgs) == 1 {
+			wanted = "spawn: spawn(fn, arg) needs a function that takes one parameter"
+		}
+		return evalPair(nil, newError("%s, but this one takes %d", wanted, len(fn.Parameters)))
+	}
+
+	handle, regErr := builtin.RegisterTask()
+	if regErr != nil {
+		return evalPair(nil, regErr)
+	}
+
+	result := applyFunction(args[0], callArgs)
+	if errObj, failed := result.(*object.Error); failed {
+		builtin.CompleteTask(handle, nil, errors.New(errObj.Message))
+	} else {
+		builtin.CompleteTask(handle, result, nil)
+	}
+
+	return evalPair(&object.Integer{Value: handle}, nil)
+}
+
+// evalPair builds the (value, err) shape for the executor-native builtins that
+// follow that convention, matching resultAndError in the builtin package.
+func evalPair(result object.Object, errObj *object.Error) object.Object {
+	if result == nil {
+		result = global.Null
+	}
+	var errValue object.Object = global.Null
+	if errObj != nil {
+		errValue = errObj
+	}
+	return &object.MultiValue{Values: []object.Object{result, errValue}}
 }
