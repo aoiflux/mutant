@@ -240,6 +240,14 @@ func (s *Server) captureWorkspaceRoots(params *lsp.InitializeParams) {
 		add(*params.RootPath)
 	}
 
+	s.setRoots(roots)
+}
+
+// setRoots replaces the workspace roots. It exists so there is exactly one way
+// to write the field: the background workspace scan reads it on its own
+// goroutine, so an unlocked assignment is a data race rather than a style
+// preference.
+func (s *Server) setRoots(roots []string) {
 	s.mu.Lock()
 	s.roots = roots
 	s.mu.Unlock()

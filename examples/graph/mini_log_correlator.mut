@@ -97,12 +97,11 @@ for (let i = 0; i < log_count; i = i + 1) {
 
                 check(db_add_edge(db, ip_node, pattern_node, EDGE_HAS_PATTERN), "db_add_edge");
 
-                let updated_suspicious, err = push(suspicious, {
+                let updated_suspicious = push(suspicious, {
                     "ip": current["ip"],
                     "pattern": "repeated_login_failed",
                     "failed_count": failed_count
 });
-                check_err(err, "push suspicious");
                 suspicious = updated_suspicious;
             };
         };

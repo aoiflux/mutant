@@ -86,23 +86,24 @@ generation, release packaging, and help.
 
 ```bash
 mutant
-mutant hello.mut
-mutant hello.mu --secure --signer-auth
+mutant hello.mut --password "My$tr0ngPass!"
+mutant hello.mu --dev --password "My$tr0ngPass!"
 mutant help
 mutant help gen
 mutant help release
 ```
 
 - `mutant` starts the REPL
-- `mutant hello.mut` compiles source into encrypted bytecode
-- `mutant hello.mu` runs compiled bytecode in the Mutant VM
+- `mutant hello.mut --password ...` compiles source into encrypted bytecode,
+  writing `hello.mu` beside it. A password is required.
+- `mutant hello.mu --password ...` runs compiled bytecode in the Mutant VM
 
 ### Bytecode generation
 
 ```bash
-mutant gen --src hello.mut
+mutant gen --src hello.mut --password "My$tr0ngPass!"
 mutant gen hello.mut --password "My$tr0ngPass!"
-mutant gen hello.mut --mutation 5 --seed 42
+mutant gen hello.mut --password "My$tr0ngPass!" --mutation 5 --seed 42
 ```
 
 ### Release asset generation
@@ -295,10 +296,18 @@ real security and forensics workflows:
 Suggested run sequence:
 
 ```bash
-mutant examples/security_environment_report.mut
-mutant examples/network_service_recon_graph.mut
-mutant examples/ioc_event_triage.mut
-mutant examples/persistence_triage_commands.mut
+# Compile, then run the bytecode each compile writes beside its source.
+mutant gen --src examples/security/security_environment_report.mut --password <password>
+mutant examples/security/security_environment_report.mu --dev --password <password>
+
+mutant gen --src examples/network/network_service_recon_graph.mut --password <password>
+mutant examples/network/network_service_recon_graph.mu --dev --password <password>
+
+mutant gen --src examples/binary/ioc_event_triage.mut --password <password>
+mutant examples/binary/ioc_event_triage.mu --dev --password <password>
+
+mutant gen --src examples/registry/persistence_triage_commands.mut --password <password>
+mutant examples/registry/persistence_triage_commands.mu --dev --password <password>
 ```
 
 Artifacts are written under `example_output/`.

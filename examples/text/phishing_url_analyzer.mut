@@ -135,7 +135,7 @@ for (let i = 0; i < url_count; i = i + 1) {
     check(db_index_prop(db, risk_node, "listed", listed_text), "db_index_prop");
     check(db_add_edge(db, url_node, risk_node, EDGE_HAS_RISK), "db_add_edge");
 
-    let updated_findings, err = push(findings, {
+    let updated_findings = push(findings, {
         "url": url,
         "domain": domain,
         "listed_in_feed": listed,
@@ -144,7 +144,6 @@ for (let i = 0; i < url_count; i = i + 1) {
         "severity": severity,
         "error": resp["error"]
 });
-    check_err(err, "push findings");
     findings = updated_findings;
 }
 

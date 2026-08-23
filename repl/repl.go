@@ -431,7 +431,15 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		// Expanding and then compiling keeps one executor for every mode.
 		if enableMacros {
 			evaluator.DefineMacros(program, macroEnv)
-			if expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program); ok {
+			expandedNode, expandErr := evaluator.ExpandMacros(program, macroEnv)
+			if expandErr != nil {
+				if lineReader != nil {
+					lineReader.AddHistory(line, true)
+				}
+				errrs.PrintCompilerError(out, expandErr.Error())
+				continue
+			}
+			if expanded, ok := expandedNode.(*ast.Program); ok {
 				program = expanded
 			}
 		}

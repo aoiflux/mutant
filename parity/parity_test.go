@@ -75,7 +75,11 @@ func evalViaVMWithMacros(t *testing.T, input string) (object.Object, error) {
 
 	macroEnv := object.NewEnvironment()
 	evaluator.DefineMacros(program, macroEnv)
-	expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program)
+	expandedNode, expandErr := evaluator.ExpandMacros(program, macroEnv)
+	if expandErr != nil {
+		t.Fatalf("macro expansion failed for %q: %s", input, expandErr)
+	}
+	expanded, ok := expandedNode.(*ast.Program)
 	if !ok {
 		t.Fatalf("macro expansion did not yield a program for %q", input)
 	}

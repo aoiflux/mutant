@@ -101,14 +101,13 @@ for (let i = 0; i < endpoint_count; i = i + 1) {
     check(db_index_prop(db, result_node, "allow_sensitive", allow_sensitive_json), "db_index_prop");
     check(db_add_edge(db, endpoint_node, result_node, EDGE_CHECKED), "db_add_edge");
 
-    let updated_results, err = push(results, {
+    let updated_results = push(results, {
         "endpoint_index": i,
         "endpoint": endpoint,
         "status": status,
         "error": request_error,
         "body_preview": body_preview
     });
-    check_err(err, "push results");
     results = updated_results;
 }
 

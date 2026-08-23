@@ -41,8 +41,7 @@ for (let i = 0; i < target_host_count; i = i + 1) {
     let host_node, err = db_add_node(db, NODE_HOST);
     check_err(err, "db_add_node host");
     check(db_index_prop(db, host_node, "host", host), "db_index_prop");
-    let updated_host_nodes, err = push(host_nodes, host_node);
-    check_err(err, "push host_nodes");
+    let updated_host_nodes = push(host_nodes, host_node);
     host_nodes = updated_host_nodes;
 
     let resolved, err = net_resolve(host);
@@ -68,13 +67,12 @@ for (let i = 0; i < target_host_count; i = i + 1) {
             check(db_index_prop(db, service_node, "latency_ms", latency_json), "db_index_prop");
             check(db_add_edge(db, host_node, service_node, EDGE_EXPOSES), "db_add_edge");
 
-            let updated_findings, err = push(findings, {
+            let updated_findings = push(findings, {
                 "host": host,
                 "port": port,
                 "latency_ms": dial["latency_ms"],
                 "status": "open"
 });
-            check_err(err, "push findings");
             findings = updated_findings;
 
             putln("open: ", host, ":", port, " latency_ms=", dial["latency_ms"]);
@@ -87,8 +85,8 @@ check_err(err, "db_stats");
 let bfs_node_count = 0;
 let host_node_count = len(host_nodes);
 if (host_node_count > 0) {
-    let first_host_node, err = first(host_nodes);
-    check_err(err, "first host_nodes");
+    // first() returns a single value, not a (value, err) pair.
+    let first_host_node = first(host_nodes);
     let bfs, err = db_bfs(db, first_host_node, 1, "out");
     check_err(err, "db_bfs");
     let bfs_nodes_count = len(bfs["nodes"]);

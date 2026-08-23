@@ -108,7 +108,11 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 
 	macroEnv := object.NewEnvironment()
 	evaluator.DefineMacros(program, macroEnv)
-	expanded, ok := evaluator.ExpandMacros(program, macroEnv).(*ast.Program)
+	expandedNode, expandErr := evaluator.ExpandMacros(program, macroEnv)
+	if expandErr != nil {
+		return nil, expandErr, errrs.COMPILER_ERROR, nil
+	}
+	expanded, ok := expandedNode.(*ast.Program)
 	if !ok || expanded == nil {
 		return nil, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
 	}
@@ -120,7 +124,7 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 		return nil, err, errrs.COMPILER_ERROR, nil
 	}
 
-	encodedByteCode, err := encode(comp.ByteCode(), password, privateKey)
+	encodedByteCode, err := encode(comp.ByteCode(), comp.PolymorphicLevel(), password, privateKey)
 	if err != nil {
 		return nil, err, errrs.ERROR, nil
 	}
@@ -143,11 +147,22 @@ func resolvePolymorphismSeed(seed int64) int64 {
 	return time.Now().UnixNano()
 }
 
-func encode(compByteCode *compiler.ByteCode, password string, privateKey []byte) ([]byte, error) {
+// encode serialises the bytecode for writing. polymorphicLevel is the level the
+// compiler actually applied, not a level guessed from the instruction bytes.
+func encode(compByteCode *compiler.ByteCode, polymorphicLevel int, password string, privateKey []byte) ([]byte, error) {
 	var content bytes.Buffer
 
-	// Polymorphic marker is compile-time metadata and must not be executed by VM.
-	if compiler.DetectPolymorphicLevel(compByteCode.Instructions) > 0 && len(compByteCode.Instructions) >= 2 {
+	// The polymorphic marker is compile-time metadata and must not reach the VM.
+	// It is present exactly when the compiler ran a mutation level above zero, so
+	// that is what decides the trim.
+	//
+	// This used to call DetectPolymorphicLevel, which reads the last two bytes and
+	// treats [0xFF, n<=10] as a marker. Real bytecode hits that pattern by itself:
+	// a program with 256 constants ending in `OpConstant 255` (operand 0x00FF)
+	// followed by OpPop ends in 0xFF 0x01. Two real bytes were then cut from the
+	// program, and it died in the VM on "not enough bytes for operand" -- at
+	// mutation level 0, with no mutation involved anywhere.
+	if polymorphicLevel > 0 && len(compByteCode.Instructions) >= 2 {
 		compByteCode.Instructions = compByteCode.Instructions[:len(compByteCode.Instructions)-2]
 	}
 

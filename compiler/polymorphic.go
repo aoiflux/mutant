@@ -181,53 +181,19 @@ func (pe *PolymorphicEngine) mutateOpcodes(bytecode *ByteCode) *ByteCode {
 	return bytecode
 }
 
-// generateOpcodeMapping creates a random but valid opcode remapping using deterministic RNG
+// generateOpcodeMapping creates a random but valid opcode remapping using deterministic RNG.
+//
+// The set comes from code.AllOpcodes rather than a list written out here. The
+// hand-written list had fallen two opcodes behind the code package
+// (OpGreaterEqual and OpSetIndex), and a partial remapping is worse than none:
+// the opcodes present get new values while the absent ones keep theirs, so the
+// two collide and the program silently decodes as something else.
+//
+// This stage is gated off in getConfig (the VM has no reverse mapping), so the
+// drift was latent. Deriving the set means it stays correct if the stage is
+// ever turned on.
 func (pe *PolymorphicEngine) generateOpcodeMapping() map[code.Opcode]code.Opcode {
-	// Define all valid opcodes from the code package
-	opcodes := []code.Opcode{
-		code.OpConstant,
-		code.OpPop,
-		code.OpAdd,
-		code.OpSub,
-		code.OpMul,
-		code.OpDiv,
-		code.OpMod,
-		code.OpTrue,
-		code.OpFalse,
-		code.OpEqual,
-		code.OpUnEqual,
-		code.OpGreater,
-		code.OpMinus,
-		code.OpBang,
-		code.OpJumpFalse,
-		code.OpJump,
-		code.OpNull,
-		code.OpGetGlobal,
-		code.OpSetGlobal,
-		code.OpGetLocal,
-		code.OpSetLocal,
-		code.OpArray,
-		code.OpHash,
-		code.OpIndex,
-		code.OpCall,
-		code.OpReturnValue,
-		code.OpReturn,
-		code.OpMultiValue,
-		code.OpDup,
-		code.OpDestructure,
-		code.OpGetBuiltin,
-		code.OpClosure,
-		code.OpGetFree,
-		code.OpCurrentClosure,
-		code.OpChkDbg,
-		code.OpChkSnd,
-		code.OpBreak,
-		code.OpContinue,
-		code.OpMakeStruct,
-		code.OpGetField,
-		code.OpSetField,
-		code.OpEnumValue,
-	}
+	opcodes := code.AllOpcodes()
 
 	// Create a copy for shuffling
 	shuffled := make([]code.Opcode, len(opcodes))
@@ -294,13 +260,23 @@ func (pe *PolymorphicEngine) generateShuffleMapping(size int) []int {
 	return mapping
 }
 
-// updateConstantReferences updates OpConstant operands
+// updateConstantReferences rewrites every operand that indexes the constant
+// pool so it follows its constant to the pool's new position.
+//
+// It walks instruction-by-instruction using the operand widths rather than
+// scanning for opcode bytes, because an operand byte can hold any value and
+// would otherwise be mistaken for an opcode.
+//
+// Which operands to rewrite comes from code.ConstantOperands, not from a list
+// kept here: this used to rewrite only OpConstant, which left closures, struct
+// literals, field access and enum values pointing at whatever the shuffle had
+// moved into their old slots. Those programs compiled without complaint and
+// died inside the VM.
 func (pe *PolymorphicEngine) updateConstantReferences(instructions code.Instructions, mapping []int) code.Instructions {
 	result := make(code.Instructions, len(instructions))
 	copy(result, instructions)
 
 	for i := 0; i < len(result); {
-		opcode := code.Opcode(result[i])
 		def, err := code.Lookup(result[i])
 		if err != nil {
 			break
@@ -314,18 +290,32 @@ func (pe *PolymorphicEngine) updateConstantReferences(instructions code.Instruct
 			break
 		}
 
-		if opcode == code.OpConstant && i+3 <= len(result) {
-			oldIdx := binary.BigEndian.Uint16(result[i+1 : i+3])
-			if int(oldIdx) < len(mapping) {
-				newIdx := uint16(mapping[oldIdx])
-				binary.BigEndian.PutUint16(result[i+1:i+3], newIdx)
+		slots := code.ConstantOperands[code.Opcode(result[i])]
+
+		offset := i + 1
+		for operand, width := range def.OperandWidths {
+			if width == 2 && containsInt(slots, operand) {
+				oldIdx := binary.BigEndian.Uint16(result[offset : offset+2])
+				if int(oldIdx) < len(mapping) {
+					binary.BigEndian.PutUint16(result[offset:offset+2], uint16(mapping[oldIdx]))
+				}
 			}
+			offset += width
 		}
 
 		i += instLen
 	}
 
 	return result
+}
+
+func containsInt(haystack []int, needle int) bool {
+	for _, v := range haystack {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // randomIntCrypto generates a random integer in range [0, max) using cryptographic randomness
@@ -346,15 +336,32 @@ func (pe *PolymorphicEngine) AddPolymorphicMarker(instructions code.Instructions
 	return append(instructions, marker...)
 }
 
-// DetectPolymorphicLevel reads the polymorphic level from bytecode
+// DetectPolymorphicLevel reports the mutation level recorded in a trailing
+// marker, or 0 if the last two bytes do not look like one.
+//
+// This is a heuristic and cannot be anything else: the marker is [0xFF, level]
+// appended to an instruction stream, with nothing to distinguish it from
+// instruction bytes that happen to end the same way. A program with 256
+// constants ending in `OpConstant 255` (0x00 0x00 0xFF) followed by OpPop ends
+// in 0xFF 0x01 and reads as "level 1".
+//
+// So it must never be used to decide whether to truncate. Doing that cut two
+// real bytes from roughly a third of such programs, which then failed in the VM
+// on "not enough bytes for operand". Ask the compiler instead:
+// Compiler.PolymorphicLevel reports what was actually applied.
+//
+// It remains useful for asserting in tests that a marker was written, where the
+// bytecode is known to be mutated.
 func DetectPolymorphicLevel(instructions code.Instructions) int {
 	if len(instructions) < 2 {
 		return 0
 	}
 
-	// Check for marker
+	// A level above the documented 0-10 range is not a marker this engine wrote.
 	if instructions[len(instructions)-2] == 0xFF {
-		return int(instructions[len(instructions)-1])
+		if level := int(instructions[len(instructions)-1]); level <= 10 {
+			return level
+		}
 	}
 
 	return 0

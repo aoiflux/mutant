@@ -98,7 +98,10 @@ Current state:
 
 1. Polymorphic engine is integrated and marker/tagging is active.
 2. Mutation level and seed flags are wired through CLI paths.
-3. Advanced mutation transforms are currently gated off in the engine config.
+3. Constant-pool randomization is active at mutation level 6 and above; the
+   CLI default is 5, so it is off unless `--mutation` is raised.
+4. The remaining transforms (NOP insertion, instruction reordering, opcode
+   remapping, dead-code insertion) are gated off in the engine config.
 
 Practical meaning: framework and controls exist, but not every planned
 transformation is active by default.

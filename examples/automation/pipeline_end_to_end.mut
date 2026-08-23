@@ -13,7 +13,12 @@ let copen, err = cache_open("e2e_cache");
 putln("cache_open:", copen, "err:", err);
 
 let indicator = "powershell -enc aGVsbG8=";
-let has_enc = regex_match(indicator, "-enc")[0];
+// regex_match takes the pattern first, then the input, and returns
+// (matched, err) -- so bind both names rather than indexing the result.
+let has_enc, enc_err = regex_match("-enc", indicator);
+if (enc_err) {
+    putln("[error] regex_match:", enc_err);
+};
 let score = 25;
 if (has_enc) { score = score + 60; }
 

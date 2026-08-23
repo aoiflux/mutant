@@ -7,10 +7,23 @@ let printAndAdd = fn(current, nextToAdd, remaining) {
     return printAndAdd(current + nextToAdd, nextToAdd + 1, remaining - 1);
 };
 
+// gets() returns a single value; at end of input that value is an error object.
 putf("Enter starting number: ");
-let start, err = gets();
+let start = gets();
 
 putf("How many lines to print: ");
-let count, err = gets();
+let count = gets();
 
-printAndAdd(start, 1, count);
+if (type_of(start) == "ERROR_OBJ" || type_of(count) == "ERROR_OBJ") {
+    putln("no input to read; this example needs a terminal");
+} else {
+    // gets() returns text; the arithmetic below needs numbers.
+    let first, first_err = to_int(start);
+    let lines, lines_err = to_int(count);
+
+    if (first_err || lines_err) {
+        putln("please enter two whole numbers");
+    } else {
+        printAndAdd(first, 1, lines);
+    };
+};

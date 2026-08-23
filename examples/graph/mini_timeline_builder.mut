@@ -91,17 +91,15 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
 
     check(db_add_edge(db, file_node, event_node, EDGE_HAS_EVENT), "db_add_edge");
 
-    let updated_event_nodes, err = push(event_nodes, event_node);
-    check_err(err, "push event_nodes");
+    let updated_event_nodes = push(event_nodes, event_node);
     event_nodes = updated_event_nodes;
 
-    let updated_timeline, err = push(timeline, {
+    let updated_timeline = push(timeline, {
         "path": f,
         "size": st ["size"],
         "mod_time": st ["mod_time"],
         "error": st ["error"]
     });
-    check_err(err, "push timeline");
     timeline = updated_timeline;
 }
 

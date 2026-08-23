@@ -337,12 +337,14 @@ func (c *Compiler) Compile(node ast.Node) error {
 		c.loadSymbol(symbol)
 
 	case *ast.MacroLiteral:
-		// Macros are expanded into ordinary AST before compilation
-		// (evaluator.DefineMacros/ExpandMacros); one reaching codegen means
-		// expansion was skipped. Emitting nothing for it would leave the stack
-		// unbalanced and the VM would later pop past the bottom and panic, so
-		// say plainly what went wrong instead.
-		return fmt.Errorf("macro definitions must be expanded before compilation: enable macro expansion for this program")
+		// Macros are collected and expanded into ordinary AST before
+		// compilation (evaluator.DefineMacros/ExpandMacros). DefineMacros only
+		// scans top-level statements, so the usual way one reaches codegen is a
+		// macro declared inside a function or a block -- which is never
+		// collected, and so is never expanded or removed. Emitting nothing for
+		// it would leave the stack unbalanced and the VM would later pop past
+		// the bottom and panic, so say plainly what went wrong instead.
+		return fmt.Errorf("macro definitions must appear at the top level, and are expanded before compilation")
 
 	case *ast.FunctionLiteral:
 		c.enterScope()
@@ -458,6 +460,20 @@ func (c *Compiler) Compile(node ast.Node) error {
 			}
 		}
 		c.emit(code.OpCall, len(node.Arguments))
+
+	case nil:
+		// A missing node is not nothing: the caller expected this to leave a
+		// value on the stack. Emitting nothing balances the compile and breaks
+		// the VM instead, several phases later, with a pop past the bottom of
+		// the stack. Macro expansion used to produce these -- unquoting a value
+		// with no source form put a nil in the tree -- and the resulting .mu
+		// compiled cleanly and then crashed when it was run.
+		return fmt.Errorf("internal: nothing to compile where an expression was expected")
+
+	default:
+		// Every AST node type has a case above. A new one landing here would
+		// otherwise compile to nothing at all, silently.
+		return fmt.Errorf("internal: no code generation for %T", node)
 	}
 
 	return nil
@@ -482,6 +498,23 @@ func (c *Compiler) ByteCode() *ByteCode {
 	}
 
 	return bytecode
+}
+
+// PolymorphicLevel reports the mutation level this compiler applied, or 0 if
+// polymorphism was never enabled.
+//
+// Callers that need to know whether ByteCode() appended a polymorphic marker
+// must ask this rather than inspecting the trailing bytes. The marker is
+// [0xFF, level], and ordinary bytecode reaches those values on its own: an
+// OpConstant whose operand ends in 0xFF followed by a one-byte opcode looks
+// exactly like a marker. Deciding to truncate on that guess silently cut two
+// real bytes off roughly a third of the programs large enough to have 256
+// constants.
+func (c *Compiler) PolymorphicLevel() int {
+	if c.polymorphicEngine == nil {
+		return 0
+	}
+	return c.polymorphicEngine.mutationLevel
 }
 
 func (c *Compiler) maybeEmitRandomSecurityCheckOpcodes() {

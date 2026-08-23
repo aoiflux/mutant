@@ -1,14 +1,16 @@
 putln("=== Fuzzy Matching Builtins ===");
 
-let dist, err = text_levenshtein("kitten", "sitting");
-putln("text_levenshtein:", dist, "err:", err);
+// None of these can fail, so each returns one value, not a (value, err) pair.
 
-let sim, err = text_similarity("powershell", "powrshell");
-putln("text_similarity:", sim, "err:", err);
+let dist = text_levenshtein("kitten", "sitting");
+putln("text_levenshtein:", dist);
+
+let sim = text_similarity("powershell", "powrshell");
+putln("text_similarity:", sim);
 
 let candidates = ["powershell", "rundll32", "cmd", "wmic"];
-let found, err = text_fuzzy_find("powrshell", candidates);
-putln("text_fuzzy_find:", found, "err:", err);
+let found = text_fuzzy_find("powrshell", candidates);
+putln("text_fuzzy_find:", found);
 
-let jw, err = text_jaro_winkler("martha", "marhta");
-putln("text_jaro_winkler:", jw, "err:", err);
+let jw = text_jaro_winkler("martha", "marhta");
+putln("text_jaro_winkler:", jw);

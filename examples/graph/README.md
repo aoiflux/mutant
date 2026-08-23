@@ -1,7 +1,12 @@
 # Graph Examples
 
-Run from repository root:
-mutant examples/graph/db_enums_example.mut
+Run from repository root (compile, then run the bytecode it writes
+beside the source):
+
+```bash
+mutant gen --src examples/graph/db_enums_example.mut --password <password>
+mutant examples/graph/db_enums_example.mu --dev --password <password>
+```
 
 Scripts:
 - db_enums_example.mut

@@ -90,7 +90,10 @@ func (r *REPL) Eval(input string) (string, error) {
 	// Macros expand before compilation, exactly as the CLI pipeline does, so
 	// quote/unquote work in the browser instead of being unsupported.
 	evaluator.DefineMacros(program, r.macroEnv)
-	expanded := evaluator.ExpandMacros(program, r.macroEnv)
+	expanded, expandErr := evaluator.ExpandMacros(program, r.macroEnv)
+	if expandErr != nil {
+		return "", expandErr
+	}
 
 	comp := compiler.NewWithState(r.symbolTable, r.constants)
 	comp.SeedTypeDefinitions(r.structDefs, r.enumDefs)

@@ -71,6 +71,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return &object.String{Value: node.Value}
 	case *ast.CallExpression:
 		if node.Function.TokenLiteral() == "quote" {
+			// Arity is checked here rather than assumed: a bare `quote()` in
+			// source used to index an empty argument slice and panic.
+			if len(node.Arguments) != 1 {
+				return newError("quote takes exactly one expression, got %d", len(node.Arguments))
+			}
 			return quote(node.Arguments[0], env)
 		}
 		function := Eval(node.Function, env)

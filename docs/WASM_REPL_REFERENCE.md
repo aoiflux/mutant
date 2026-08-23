@@ -23,8 +23,8 @@ Source of truth:
 | Core language           | Supported     | numbers (int/float), bool, string, arrays, hashes, if/for, functions           |
 | Struct/enum features    | Supported     | declarations, literals, field access/assignment                                |
 | Return/break/continue   | Supported     | control-flow propagation implemented                                           |
-| Macro system            | Not supported | macros and quote/unquote are intentionally excluded                            |
-| Builtins (browser-safe) | Supported     | 81 builtins across core, bytes, json, regex, text, policy, cache, in-memory db |
+| Macro system            | Supported     | macros expand before compilation here too, so quote/unquote behave as in the CLI |
+| Builtins (browser-safe) | Supported     | 213 of 409, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
 | Host-bound builtins     | Not supported | fs/process/exec/network/registry/memory/binary/disk-image families             |
 | Completion modes        | Supported     | supported (callable-now) and all (discoverability)                             |
 | Output model            | Supported     | buffered putf/putln + optional final expression append                         |
@@ -211,12 +211,16 @@ Supported:
 - enum declarations and variant access
 - field access and field assignment on structs
 - return statements
+- macro declarations and `quote`/`unquote`, expanded before compilation
 - builtin calls listed in this guide
 
 Intentionally unsupported:
 
-- macros
-- quote/unquote macro expansion flow
+- the concurrency family (`spawn`, `task_*`, `chan_*`) and `sleep_ms`: a wasm
+  build has one thread, so a receive with no sender is not a slow call but a
+  fatal "all goroutines are asleep" that takes the whole session down instead
+  of returning an error the REPL could report. `pmap`/`peach` stay available,
+  because they only ever wait on work that is already running.
 
 ## 5) Builtin Support (Current)
 

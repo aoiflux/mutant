@@ -1,15 +1,28 @@
 putln("=== IOC Normalizer Pipeline ===");
 
 let raw = " URL=http://evil.example/login?user=alice  ";
-let lowered = text_replace(raw, "URL=", "url=")[0];
-let compact = regex_replace(lowered, "\\s+", "")[0];
-let host = regex_find(compact, "https?://([^/]+)")[0];
+
+// text_replace, text_contains and text_similarity cannot fail, so each returns a
+// single value. The regex builtins are fallible and return the (value, err)
+// pair. Note their argument order: the pattern comes first, then the input.
+
+let lowered = text_replace(raw, "URL=", "url=");
+
+let compact, compact_err = regex_replace("\s+", lowered, "");
+if (compact_err) {
+    putln("[error] regex_replace:", compact_err);
+};
+
+let host, host_err = regex_find("https?://([^/]+)", compact);
+if (host_err) {
+    putln("[error] regex_find:", host_err);
+};
 
 putln("raw:", raw);
 putln("compact:", compact);
 putln("host_match:", host);
 
-let has_http = text_contains(compact, "http://")[0];
-let sim = text_similarity("evil.example", "evii.example")[0];
+let has_http = text_contains(compact, "http://");
+let sim = text_similarity("evil.example", "evii.example");
 putln("has_http:", has_http);
 putln("domain_similarity:", sim);

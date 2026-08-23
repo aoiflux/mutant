@@ -44,7 +44,7 @@ func TestScanWorkspaceIndexesUnopenedFiles(t *testing.T) {
 	}
 
 	s := New(false)
-	s.roots = []string{dir}
+	s.setRoots([]string{dir})
 	s.scanWorkspace()
 
 	syms := s.symbols.WorkspaceSymbols("shared_helper", 10)
@@ -65,7 +65,7 @@ func TestOpenEvictsStaleScannedEntry(t *testing.T) {
 
 	s := New(false)
 	initializeServer(t, s)
-	s.roots = []string{dir}
+	s.setRoots([]string{dir})
 	s.scanWorkspace()
 
 	// Open the same file under its canonical URI; there must be exactly one
@@ -81,7 +81,7 @@ func TestOpenEvictsStaleScannedEntry(t *testing.T) {
 func TestDidChangeWatchedFilesCreateAndDelete(t *testing.T) {
 	dir := t.TempDir()
 	s := New(false)
-	s.roots = []string{dir}
+	s.setRoots([]string{dir})
 
 	path := filepath.Join(dir, "watched.mut")
 	if err := os.WriteFile(path, []byte("let watched_def = 1;\n"), 0o644); err != nil {

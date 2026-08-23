@@ -287,6 +287,18 @@
                         "off"
                     ],
                     "description": "Severity for builtin argument-type diagnostics: warns when a builtin is passed a value of a type its parameter cannot accept (for example str_upper(42) or len(true)). Only builtins whose parameter types have been verified against their implementation are checked, and only arguments whose type is certain — a literal, or a name that is never reassigned. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.builtinSingleReturn.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for single-return binding diagnostics: warns when several names are bound from a builtin that returns one value rather than a (value, err) pair (for example let updated, err = push(items, x)). Nothing fails at runtime — if the value is an array the binding takes it apart, and otherwise the extra names are always null, so an if (err) check never fires. Set to 'off' to suppress the rule."
                 }
             }
         },

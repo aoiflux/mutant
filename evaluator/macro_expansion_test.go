@@ -107,7 +107,10 @@ func TestExpandMacros(t *testing.T) {
 
 		env := object.NewEnvironment()
 		DefineMacros(program, env)
-		expanded := ExpandMacros(program, env)
+		expanded, err := ExpandMacros(program, env)
+		if err != nil {
+			t.Fatalf("expansion failed for %q: %s", tt.input, err)
+		}
 
 		if expanded.String() != expected.String() {
 			t.Errorf("not equal. want=%q, got=%q",

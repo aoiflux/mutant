@@ -45,6 +45,7 @@ type LintConfig struct {
 	PlatformSupport              LintSeverity
 	BuiltinArity                 LintSeverity
 	BuiltinArgType               LintSeverity
+	BuiltinSingleReturn          LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -70,6 +71,10 @@ func DefaultLintConfig() LintConfig {
 		// Passing a kind a builtin's parameter cannot accept is likewise a
 		// guaranteed runtime error that still compiles.
 		BuiltinArgType: LintSeverityWarning,
+		// Binding two names from a builtin that returns one value is not a
+		// runtime error at all, which is what makes it worth reporting: the
+		// program runs and quietly does the wrong thing.
+		BuiltinSingleReturn: LintSeverityWarning,
 	}
 }
 
@@ -94,6 +99,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinArity
 	case "builtinArgType":
 		severityName = c.BuiltinArgType
+	case "builtinSingleReturn":
+		severityName = c.BuiltinSingleReturn
 	default:
 		return nil, false
 	}
@@ -1252,7 +1259,8 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 
 	aritySeverity, arityEnabled := lintConfig.severityForRule("builtinArity")
 	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
-	if !arityEnabled && !argTypeEnabled {
+	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
+	if !arityEnabled && !argTypeEnabled && !returnEnabled {
 		return nil
 	}
 	if !arityEnabled {
@@ -1260,6 +1268,9 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	}
 	if !argTypeEnabled {
 		argTypeSeverity = nil
+	}
+	if !returnEnabled {
+		returnSeverity = nil
 	}
 
 	source := "mutant-lint"
@@ -1275,6 +1286,7 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		snapshot:        snapshot,
 		aritySeverity:   aritySeverity,
 		argTypeSeverity: argTypeSeverity,
+		returnSeverity:  returnSeverity,
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
@@ -1301,6 +1313,7 @@ type builtinCallCollector struct {
 	snapshot        *Snapshot
 	aritySeverity   *lsp.DiagnosticSeverity
 	argTypeSeverity *lsp.DiagnosticSeverity
+	returnSeverity  *lsp.DiagnosticSeverity
 	source          *string
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
@@ -1328,6 +1341,7 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 		}
 
 		if len(names) > 1 {
+			c.checkMultiNameBinding(names, node.Value, current)
 			for _, ident := range names {
 				c.defineDeclaration(ident, current)
 			}
@@ -1475,6 +1489,74 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 // A call that fails the arity check is not type-checked. Its arguments cannot be
 // mapped onto parameters with any confidence, and one clear complaint per call
 // beats a cascade of consequential ones.
+// checkMultiNameBinding flags `let a, b = f()` where f is a builtin that
+// returns a single value rather than the (value, err) pair the fallible parts of
+// the library use.
+//
+// Nothing fails when this is written: the extra names simply take whatever the
+// binding hands them. If the single value is an ARRAY the binding takes it
+// apart, so the first name receives the array's first element -- `let updated,
+// err = push(items, x)` leaves `updated` as `items[0]`. If it is anything else
+// the first name is correct and the rest are null, so an `if (err)` check
+// silently never fires. Both shapes run to completion with the wrong value,
+// which is exactly why a diagnostic is worth more here than a runtime error.
+//
+// The guards that keep it false-positive-free mirror checkCall's: the callee
+// must be an unshadowed live builtin, and it must carry a declared return
+// contract. A builtin whose contract says pair, or one with no contract at all,
+// is never reported.
+func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression, current *declarationScope) {
+	if c == nil || c.returnSeverity == nil || len(names) < 2 || value == nil {
+		return
+	}
+
+	call, ok := value.(*mast.CallExpression)
+	if !ok || call.Function == nil {
+		return
+	}
+	ident, ok := call.Function.(*mast.Identifier)
+	if !ok || ident.Value == "" {
+		return
+	}
+	// A user/local binding of this name shadows the builtin.
+	if _, shadowed := current.find(ident.Value); shadowed {
+		return
+	}
+	if _, live := c.builtins[ident.Value]; !live {
+		return
+	}
+
+	spec, declared := builtin.ReturnSpec(ident.Value)
+	if !declared || spec.Pair {
+		return
+	}
+
+	rng, ok := c.snapshot.Program.RangeOf(ident)
+	if !ok {
+		return
+	}
+
+	kinds := spec.KindsText()
+	consequence := fmt.Sprintf("the %d extra name(s) are always null", len(names)-1)
+	if len(names) == 2 {
+		consequence = "the second name is always null"
+	}
+	for _, kind := range spec.Kinds {
+		if kind == builtin.ParamArray {
+			consequence = fmt.Sprintf("binding %d names takes that array apart, so %s receives its first element",
+				len(names), names[0].Value)
+		}
+	}
+
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.returnSeverity,
+		Source:   c.source,
+		Message: fmt.Sprintf("%s returns a single %s, not a (value, err) pair: %s. Bind one name.",
+			ident.Value, kinds, consequence),
+	})
+}
+
 func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Expression, current *declarationScope) {
 	if ident == nil || ident.Value == "" {
 		return

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"mutant/ast"
@@ -45,9 +46,19 @@ type VM struct {
 
 	enforceSecurityCheckOpcodes bool
 
-	// xorStream caches the opcode-decryption key/nonce (seed=inslen, password are
-	// constant per run) so per-opcode fetch avoids re-deriving them each time.
+	// xorStream caches the instruction-decryption key/nonce (seed=inslen and
+	// password are constant per run) so decoding an opcode or its operands never
+	// re-derives them. Reach for it through instructionStream, which builds it on
+	// first use: the constructors map instruction boundaries before Run gets a
+	// chance to prepare anything.
 	xorStream *security.XORStream
+
+	// constantBoundariesMapped records that every compiled function in the
+	// constants pool has had its instruction boundaries mapped. The pool is
+	// assigned once, in New, and never grows, so that is a one-time job -- and it
+	// has to be tracked, because the integrity probes ask for the boundaries
+	// before every opcode.
+	constantBoundariesMapped bool
 
 	// serveConn and serveArg are what serve_conn()/serve_arg() report. net_serve
 	// sets them before running a handler; everywhere else they stay zero and the
@@ -376,47 +387,21 @@ func NewWithPassword(bc *compiler.ByteCode, password string) *VM {
 func NewWithPasswordMode(bc *compiler.ByteCode, password string, secureMode bool) *VM {
 	vm := New(bc)
 	vm.password = password
-	vm.stripEncryptedPolymorphicMarker()
+	// No polymorphic-marker trim here. The marker is compile-time metadata that
+	// generator.encode removes before anything is written, using the level the
+	// compiler reports -- so a marker never reaches the VM. What used to stand
+	// here guessed instead, treating a trailing [0xFF, n<=10] (in either order)
+	// as a marker and cutting two bytes. Ordinary bytecode produces that pattern:
+	// `OpConstant 255` is 0x00 0x00 0xFF, and a following OpPop makes 0xFF 0x01.
+	// Programs were truncated and failed on "not enough bytes for operand".
+	//
+	// If a marker ever did survive, 0xFF is not a defined opcode, so the VM
+	// reports an undecodable instruction -- a clean failure rather than a
+	// silently shortened program.
 	vm.secureMode = secureMode
 	vm.enforceSecurityCheckOpcodes = true
 	vm.ensureFrameBoundaries()
 	return vm
-}
-
-func (vm *VM) stripEncryptedPolymorphicMarker() {
-	if vm == nil || vm.password == "" || vm.currentFrame() == nil || vm.currentFrame().cl == nil || vm.currentFrame().cl.Fn == nil {
-		return
-	}
-
-	ins := vm.currentFrame().Instructions()
-	if len(ins) < 2 {
-		return
-	}
-
-	markerPos := len(ins) - 2
-	levelPos := len(ins) - 1
-
-	markerByte, err := security.SecureXOROneAt(ins[markerPos], int64(vm.inslen), vm.password, int64(markerPos))
-	if err != nil {
-		return
-	}
-	levelByte, err := security.SecureXOROneAt(ins[levelPos], int64(vm.inslen), vm.password, int64(levelPos))
-	if err != nil {
-		return
-	}
-
-	validMarker := (markerByte == 0xFF && levelByte <= 10) || (levelByte == 0xFF && markerByte <= 10)
-	if !validMarker {
-		return
-	}
-
-	trimmed := ins[:len(ins)-2]
-	vm.currentFrame().cl.Fn.Instructions = trimmed
-
-	if vm.frameIntegrity == nil {
-		vm.frameIntegrity = make(map[*object.CompiledFunction][32]byte)
-	}
-	vm.frameIntegrity[vm.currentFrame().cl.Fn] = sha256.Sum256(trimmed)
 }
 
 func NewWithGlobalStore(bc *compiler.ByteCode, globals []object.Object) *VM {
@@ -460,12 +445,19 @@ func (vm *VM) ensureFrameBoundaries() {
 		vm.frameBoundaries = make(map[*object.CompiledFunction]map[int]struct{})
 	}
 
+	// The main program's function is synthesised in New rather than taken from
+	// the constants pool, so it is mapped on its own.
 	if frame := vm.currentFrame(); frame != nil && frame.cl != nil && frame.cl.Fn != nil {
 		fn := frame.cl.Fn
 		if _, exists := vm.frameBoundaries[fn]; !exists {
-			vm.frameBoundaries[fn] = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[fn] = vm.buildInstructionBoundaries(fn.Instructions)
 		}
 	}
+
+	if vm.constantBoundariesMapped {
+		return
+	}
+	vm.constantBoundariesMapped = true
 
 	for _, constant := range vm.constants {
 		compiledFn, ok := constant.(*object.CompiledFunction)
@@ -473,20 +465,60 @@ func (vm *VM) ensureFrameBoundaries() {
 			continue
 		}
 		if _, exists := vm.frameBoundaries[compiledFn]; !exists {
-			vm.frameBoundaries[compiledFn] = buildInstructionBoundaries(compiledFn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[compiledFn] = vm.buildInstructionBoundaries(compiledFn.Instructions)
 		}
 	}
 }
 
-func buildInstructionBoundaries(ins code.Instructions, password string, length int) map[int]struct{} {
+// instructionStream returns the cached keystream for this VM's instructions,
+// deriving it on first use. Every instruction byte -- opcode, operand, and the
+// boundary map's decode pass -- is at a stream offset under the same (inslen,
+// password) pair, so the key and nonce are derived exactly once per VM instead
+// of twice per byte.
+func (vm *VM) instructionStream() *security.XORStream {
+	if vm.xorStream == nil {
+		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
+	}
+	return vm.xorStream
+}
+
+// readUint16 and readUint8 decode an operand at an absolute instruction offset.
+// They are the cached-stream equivalents of code.ReadUint16/code.ReadUint8,
+// which take the password and re-derive the key and nonce on every call -- two
+// SHA-256 hashes to decrypt two bytes, on a path the fetch loop walks for
+// nearly every instruction it executes.
+func (vm *VM) readUint16(ins code.Instructions, at int) (uint16, error) {
+	if at < 0 || at+2 > len(ins) {
+		return 0, fmt.Errorf("instruction slice too short for uint16")
+	}
+	dec, err := vm.instructionStream().XORAt(ins[at:at+2], int64(at))
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(dec), nil
+}
+
+func (vm *VM) readUint8(ins code.Instructions, at int) (uint8, error) {
+	if at < 0 || at >= len(ins) {
+		return 0, fmt.Errorf("instruction slice too short for uint8")
+	}
+	dec, err := vm.instructionStream().XOROneAt(ins[at], int64(at))
+	if err != nil {
+		return 0, err
+	}
+	return dec, nil
+}
+
+func (vm *VM) buildInstructionBoundaries(ins code.Instructions) map[int]struct{} {
 	boundaries := make(map[int]struct{})
-	if password == "" {
+	if vm.password == "" {
 		return boundaries
 	}
+	stream := vm.instructionStream()
 
 	for i := 0; i < len(ins); {
 		boundaries[i] = struct{}{}
-		opcodeByte, err := security.SecureXOROneAt(ins[i], int64(length), password, int64(i))
+		opcodeByte, err := stream.XOROneAt(ins[i], int64(i))
 		if err != nil {
 			break
 		}
@@ -520,7 +552,7 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 	fn := frame.cl.Fn
 	boundaries, exists := vm.frameBoundaries[fn]
 	if !exists {
-		boundaries = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+		boundaries = vm.buildInstructionBoundaries(fn.Instructions)
 		vm.frameBoundaries[fn] = boundaries
 	}
 
@@ -542,12 +574,7 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 // without this its xorStream is nil and the first opcode fetch dereferences it.
 func (vm *VM) prepareForExecution() {
 	vm.ensureFrameBoundaries()
-
-	// Cache the opcode-decryption key/nonce once; seed (inslen) and password are
-	// constant for the whole run, so re-deriving per opcode byte was pure waste.
-	if vm.xorStream == nil {
-		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
-	}
+	vm.instructionStream()
 }
 
 func (vm *VM) Run() error {
@@ -617,7 +644,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			constIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			constIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -650,7 +677,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -665,7 +692,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -687,7 +714,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJump: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -697,7 +724,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJumpFalse: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -711,7 +738,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpSetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			globalIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			globalIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -722,7 +749,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			globalIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			globalIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -735,7 +762,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpSetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			localIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			localIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -747,7 +774,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			localIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			localIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -762,7 +789,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetBuiltin: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			builtinIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			builtinIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -778,7 +805,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			freeIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			freeIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -808,11 +835,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+3 >= len(ins) {
 				return fmt.Errorf("OpClosure: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			constIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			constIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			numFree, err := code.ReadUint8(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			numFree, err := vm.readUint8(ins, ip+3)
 			if err != nil {
 				return err
 			}
@@ -829,7 +856,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			numArgs, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			numArgs, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -860,7 +887,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpMultiValue: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			count, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -893,7 +920,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpDestructure: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			count, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -920,11 +947,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+3 >= len(ins) {
 				return fmt.Errorf("OpMakeStruct: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			typeIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			typeIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			fieldCountRaw, err := code.ReadUint8(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			fieldCountRaw, err := vm.readUint8(ins, ip+3)
 			if err != nil {
 				return err
 			}
@@ -971,7 +998,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetField: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			fieldNameIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			fieldNameIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -1000,7 +1027,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpSetField: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			fieldNameIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			fieldNameIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -1025,11 +1052,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+4 >= len(ins) {
 				return fmt.Errorf("OpEnumValue: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			typeIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			typeIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			tagIndex, err := code.ReadUint16(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			tagIndex, err := vm.readUint16(ins, ip+3)
 			if err != nil {
 				return err
 			}
@@ -1142,9 +1169,10 @@ func (vm *VM) scanSecurityCheckOpcodes() (bool, bool, error) {
 func (vm *VM) scanInstructionsForSecurityCheckOpcodes(ins code.Instructions) (bool, bool, error) {
 	foundDbg := false
 	foundSnd := false
+	stream := vm.instructionStream()
 
 	for i := 0; i < len(ins); {
-		opcodeByte, err := security.SecureXOROneAt(ins[i], int64(vm.inslen), vm.password, int64(i))
+		opcodeByte, err := stream.XOROneAt(ins[i], int64(i))
 		if err != nil {
 			return false, false, err
 		}
@@ -1177,7 +1205,10 @@ func (vm *VM) runIntegrityProbes() error {
 		return nil
 	}
 
-	vm.ensureFrameBoundaries()
+	// Deliberately no ensureFrameBoundaries call here. This runs before every
+	// single opcode, and the only reader of the boundary map is
+	// verifyFrameControlFlow, which ensures (and, on a miss, builds) its own --
+	// so mapping here was both redundant and charged to every step.
 
 	if vm.stepCount >= vm.nextIntegrityAt {
 		if err := vm.verifyFrameControlFlow(vm.currentFrame(), "vm-cfi"); err != nil {
@@ -1706,7 +1737,7 @@ func (vm *VM) registerFrameIntegrity(fn *object.CompiledFunction) {
 	}
 	if vm.password != "" {
 		if _, exists := vm.frameBoundaries[fn]; !exists {
-			vm.frameBoundaries[fn] = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[fn] = vm.buildInstructionBoundaries(fn.Instructions)
 		}
 	}
 }

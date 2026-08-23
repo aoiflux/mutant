@@ -8,27 +8,65 @@
 //   1. Generate a CA at startup and print its certificate. Trust that CA in
 //      your browser / client for HTTPS interception to validate.
 //   2. Listen for proxy connections.
-//   3. Plain HTTP  (absolute-form request):  forward to the origin on :80.
+//   3. Plain HTTP  (absolute-form request):  forward to the origin, on the
+//      port the Host header names or :80 when it names none.
 //      HTTPS CONNECT:  answer 200, mint a leaf cert for the host signed by the
 //      CA, TLS-handshake as that host, then decrypt, inspect, and relay.
 //
 // Builtins used: tls_generate_ca, tls_sign_cert, net_listen, net_accept,
 //   net_conn_write, net_tls_upgrade_server, net_connect, net_tls_upgrade_client,
 //   http_conn_read_request, http_build_request, http_conn_read_response,
-//   http_build_response, text_split, spawn.
+//   http_build_response, text_split, text_contains, spawn.
 //
 // CONCURRENCY: the accept loop hands each connection to spawn, which runs the
 // handler on its own VM, so a slow upstream no longer stalls every other
-// client. Still one request per connection (it sends Connection: close) to stay
-// readable. Configure your client to use 127.0.0.1:8080 as its HTTP and HTTPS
-// proxy.
+// client. Still one request per connection -- the handler reads a request,
+// relays it, and closes the socket -- to stay readable. Configure your client to
+// use 127.0.0.1:8080 as its HTTP and HTTPS proxy.
 //
-// Run:  mutant mitmproxy.mut --dev
+// Run:  mutant gen --src examples/network/mitmproxy.mut --password <password>
+//       mutant examples/network/mitmproxy.mu --dev --password <password>
+
+// A proxy authority may or may not carry a port: a CONNECT target always does
+// ("example.com:443"), an absolute-form request's Host header may ("example.com"
+// or "example.com:8099"). IPv6 authorities bracket the address, so the last ":"
+// is the only one that can introduce a port.
+let split_authority = fn(authority) {
+    let parts = text_split(authority, ":");
+    let count = len(parts);
+    if (count < 2) {
+        return {"host": authority, "port": ""};
+    };
+    let port = parts[count - 1];
+    let host = "";
+    for (let i = 0; i < count - 1; i++) {
+        if (i == 0) {
+            host = parts[i];
+        } else {
+            host = host + ":" + parts[i];
+        };
+    }
+    // "[::1]" is a bare IPv6 address, not a host with a port named "]".
+    if (text_contains(port, "]")) {
+        return {"host": authority, "port": ""};
+    };
+    return {"host": host, "port": port};
+};
 
 let host_only = fn(host_port) {
     // "example.com:443" -> "example.com"
-    let parts = text_split(host_port, ":");
-    return parts[0];
+    return split_authority(host_port)["host"];
+};
+
+// Where to reach the origin for an absolute-form request. The Host header
+// already carries the port whenever the client asked for a non-default one, and
+// appending :80 to that produced "127.0.0.1:8099:80", which never connects.
+let origin_addr = fn(host) {
+    let split = split_authority(host);
+    if (split["port"] == "") {
+        return host + ":80";
+    };
+    return host;
 };
 
 // Relay a decrypted request to its real upstream over TLS and return the
@@ -39,7 +77,7 @@ let relay_https = fn(host_port, host, request) {
         return {"status": 502, "body": "mutant-proxy: upstream connect failed", "headers": {}};
     };
     let up_opts = {"server_name": host};
-    let info, err = net_tls_upgrade_client(upstream, up_opts);
+    let _, err = net_tls_upgrade_client(upstream, up_opts);
     if (err) {
         net_conn_close(upstream);
         return {"status": 502, "body": "mutant-proxy: upstream TLS failed", "headers": {}};
@@ -50,7 +88,7 @@ let relay_https = fn(host_port, host, request) {
         net_conn_close(upstream);
         return {"status": 502, "body": "mutant-proxy: request rebuild failed", "headers": {}};
     };
-    let sent, err = net_conn_write(upstream, wire);
+    let _, err = net_conn_write(upstream, wire);
     if (err) {
         net_conn_close(upstream);
         return {"status": 502, "body": "mutant-proxy: upstream write failed", "headers": {}};
@@ -83,7 +121,7 @@ let handle_connect = fn(client, ca, host_port) {
     // Present that cert to the client and complete the handshake as the host.
     let leaf_cert = leaf["cert_pem"];
     let leaf_key = leaf["key_pem"];
-    let up, err = net_tls_upgrade_server(client, leaf_cert, leaf_key);
+    let _, err = net_tls_upgrade_server(client, leaf_cert, leaf_key);
     if (err) {
         putln("  [!] client TLS handshake failed: ", err);
         net_conn_close(client);
@@ -115,7 +153,7 @@ let handle_connect = fn(client, ca, host_port) {
 // Handle a plain-HTTP proxy request (absolute-form URL, forward to :80).
 let handle_plain = fn(client, request) {
     let host = request["host"];
-    let addr = host + ":80";
+    let addr = origin_addr(host);
     putln("  [plain    ] ", request["method"], " ", request["url"]);
 
     let upstream, err = net_connect(addr, 8000);
@@ -131,7 +169,7 @@ let handle_plain = fn(client, request) {
         net_conn_close(client);
         return false;
     };
-    let sent, err = net_conn_write(upstream, wire);
+    let _, err = net_conn_write(upstream, wire);
     if (err) {
         net_conn_close(upstream);
         net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
@@ -144,8 +182,8 @@ let handle_plain = fn(client, request) {
         net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
     } else {
         putln("  [response ] ", resp["status"]);
-        let back, err = http_build_response(resp);
-        if (err) {
+        let back, build_err = http_build_response(resp);
+        if (build_err) {
             net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
         } else {
             net_conn_write(client, back);
@@ -192,19 +230,21 @@ let run_proxy = fn(bind_addr) {
         handle_client(client, ca);
     };
 
-    for (let i = 0; true; i = i + 1) {
-        let acc, err = net_accept(ln, 0);
-        if (acc["ok"]) {
-            // Hand the connection off and go straight back to accepting.
-            // The handle is discarded on purpose: nothing collects this task,
-            // and each handler closes its own connection when it is done.
-            let _, spawn_err = spawn(serve_one, acc["handle"]);
-            if (spawn_err) {
-                // Every task slot is busy. Refusing the connection is better
-                // than queueing it behind work that is already backed up.
-                putln("  [!] at capacity, dropping a connection: ", spawn_err);
-                net_conn_close(acc["handle"]);
-            };
+    for (;;) {
+        let acc, _ = net_accept(ln, 0);
+        if (!acc["ok"]) {
+            continue;
+        };
+
+        // Hand the connection off and go straight back to accepting. The task
+        // handle is discarded on purpose: nothing collects it, and each handler
+        // closes its own connection when it is done.
+        let _, spawn_err = spawn(serve_one, acc["handle"]);
+        if (spawn_err) {
+            // Every task slot is busy. Refusing the connection is better than
+            // queueing it behind work that is already backed up.
+            putln("  [!] at capacity, dropping a connection: ", spawn_err);
+            net_conn_close(acc["handle"]);
         };
     }
     return true;

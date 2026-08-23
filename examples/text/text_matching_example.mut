@@ -1,16 +1,21 @@
 putln("=== Text Matching Builtins ===");
 
-let contains, err = text_contains("malware-analysis", "analysis");
-putln("text_contains:", contains, "err:", err);
+// These builtins cannot fail, so each returns a single value rather than the
+// (value, err) pair the fallible parts of the library use. Binding a second
+// name here would not report an error -- for text_split it would take the
+// returned array apart and hand back its first two elements.
 
-let index, err = text_index("threat-hunting", "hunt");
-putln("text_index:", index, "err:", err);
+let contains = text_contains("malware-analysis", "analysis");
+putln("text_contains:", contains);
 
-let count, err = text_count("ioc,ioc,ioc", "ioc");
-putln("text_count:", count, "err:", err);
+let index = text_index("threat-hunting", "hunt");
+putln("text_index:", index);
 
-let parts, err = text_split("cmd.exe|powershell.exe|rundll32.exe", "|");
-putln("text_split:", parts, "err:", err);
+let count = text_count("ioc,ioc,ioc", "ioc");
+putln("text_count:", count);
 
-let replaced, err = text_replace("alert alert alert", "alert", "signal", 2);
-putln("text_replace:", replaced, "err:", err);
+let parts = text_split("cmd.exe|powershell.exe|rundll32.exe", "|");
+putln("text_split:", parts);
+
+let replaced = text_replace("alert alert alert", "alert", "signal", 2);
+putln("text_replace:", replaced);

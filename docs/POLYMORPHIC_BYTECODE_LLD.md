@@ -19,7 +19,10 @@ Current behavior:
 1. Polymorphic engine is integrated into compiler flow.
 2. Mutation level and seed controls are wired via CLI compile paths.
 3. Polymorphic marker/tagging is applied for non-zero mutation levels.
-4. Advanced mutation transforms are currently gated by config in `getConfig()`.
+4. Constant-pool randomization is active at mutation level 6 and above (the
+   CLI default is 5, so it is off unless `--mutation` is raised).
+5. The remaining transforms -- NOP insertion, instruction reordering, opcode
+   remapping, dead-code insertion -- are gated off by config in `getConfig()`.
 
 ## 3. Why transforms are gated
 
@@ -27,8 +30,19 @@ Reason: safety and compatibility.
 
 1. Transforming instruction streams needs strict operand-boundary correctness.
 2. Opcode remap needs reversible and VM-safe decoding strategy.
-3. Constant pool remap needs complete reference correctness across nested
-   compiled functions.
+
+Constant pool remap is no longer in this list, because it is enabled. What it
+needed was complete reference correctness across every operand that indexes the
+pool, including inside nested compiled functions -- and it shipped without it:
+only `OpConstant` was rewritten, so `OpClosure`, `OpMakeStruct`, `OpGetField`,
+`OpSetField` and `OpEnumValue` were left pointing at whatever the shuffle had
+moved into their old slots. Programs using functions, structs or enums compiled
+without complaint at `--mutation 6` and above, then failed inside the VM with
+`not a function` or `type constant is not string`.
+
+The operand set now comes from `code.ConstantOperands`, and
+`TestMutationLevelDoesNotChangeTheResult` runs a program exercising all of those
+opcodes through the real VM at every level 0-10.
 
 ## 4. Current CLI Controls
 

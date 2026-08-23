@@ -4,10 +4,13 @@ This folder is organized by feature area so examples are easy to discover.
 
 ## How to run
 
-Run from repository root:
+`mutant <file>.mut` compiles a source file; it does not run it. Running means
+compiling first, then running the `.mu` the compile writes beside the source.
+From the repository root:
 
-```powershell
-mutant examples/text/text_matching_example.mut
+```bash
+mutant gen --src examples/text/text_matching_example.mut --password <password>
+mutant examples/text/text_matching_example.mu --dev --password <password>
 ```
 
 Some examples use fixture files in:

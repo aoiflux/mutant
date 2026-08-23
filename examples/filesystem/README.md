@@ -1,7 +1,12 @@
 # Filesystem Examples
 
-Run from repository root:
-mutant examples/filesystem/dependency_version_auditor.mut
+Run from repository root (compile, then run the bytecode it writes
+beside the source):
+
+```bash
+mutant gen --src examples/filesystem/dependency_version_auditor.mut --password <password>
+mutant examples/filesystem/dependency_version_auditor.mu --dev --password <password>
+```
 
 Scripts:
 - dependency_version_auditor.mut

@@ -298,9 +298,11 @@ func (c *Compiler) addConstant(obj object.Object) int {
 limit is never reached in normal programs.
 
 **Constant indices are stable** within a single compilation. If polymorphic
-constant-pool randomization is enabled (see §16), the indices in `OpConstant`
-instructions are rewritten to match the shuffled pool order before the
-`ByteCode` is returned.
+constant-pool randomization is enabled (see §16), every operand that indexes the
+pool is rewritten to match the shuffled order before the `ByteCode` is returned.
+Which operands those are is declared by `code.ConstantOperands`, not assumed:
+`OpConstant`, `OpClosure`, `OpMakeStruct`, `OpGetField`, `OpSetField` and both
+operands of `OpEnumValue`.
 
 ---
 
@@ -1057,10 +1059,13 @@ the last 2 bytes of the main instruction stream encode `[0xFF, level]` (or
 
 ## 16. Polymorphic Mutation Engine
 
-> All mutation flags in `getConfig()` are currently **gated off** (all return
-> `false`). The infrastructure is in place but disabled pending instruction-
-> boundary-aware rewriting in the VM runtime. The marker and detection code are
-> active.
+> Three of the four mutation stages in `getConfig()` are **gated off**
+> (`InsertNOPs`, `ReorderInstructions`, `MutateOpcodes`, `InsertDeadCode` all
+> return `false`), pending instruction-boundary-aware rewriting in the VM
+> runtime. The marker and detection code are active.
+>
+> **`RandomizeConstants` is active** at mutation level 6 and above. The CLI
+> default is 5, so it is off unless `--mutation` is raised.
 
 ### 16.1 Engine Configuration
 
@@ -1100,21 +1105,40 @@ decision (not the deterministic RNG).
 
 ### 16.4 Opcode Remapping
 
-A Fisher-Yates shuffle of all 39 opcode values using the deterministic RNG
+A Fisher-Yates shuffle of every opcode value using the deterministic RNG
 creates a bijective mapping `original → shuffled`. Every opcode byte in the
 instruction stream and in all `CompiledFunction` constants is rewritten through
 this mapping.
+
+The opcode set comes from `code.AllOpcodes()` rather than a list kept in the
+engine, which is what keeps the mapping bijective: a hand-written list that
+falls behind the `code` package produces a *partial* remap, where the opcodes it
+covers take new values while the ones it missed keep theirs, and the two
+collide.
 
 > **Not yet active:** the VM has no corresponding remapping table, so any
 > remapped bytecode would be misinterpreted.
 
 ### 16.5 Constant Pool Randomisation
 
-Fisher-Yates shuffle of the constant pool using the deterministic RNG. All
-`OpConstant` operands in the instruction stream and in compiled functions are
-updated to reference the new indices.
+Fisher-Yates shuffle of the constant pool using the deterministic RNG, followed
+by a rewrite of every operand that indexes the pool -- in the main instruction
+stream and in each `CompiledFunction` constant.
 
-> **Not yet active** for the same reason.
+The operands to rewrite are read from `code.ConstantOperands`, which names
+`OpConstant`, `OpClosure`, `OpMakeStruct`, `OpGetField`, `OpSetField` and both
+operands of `OpEnumValue`. The rewrite walks instructions by operand width
+rather than scanning for opcode bytes, because an operand byte can hold any
+value and would otherwise be misread as an opcode.
+
+> **Active** at mutation level 6 and above. This is the one mutation stage that
+> runs today.
+>
+> Missing an operand from `ConstantOperands` does not fail loudly: the operand
+> still lands on a real pool entry, just the wrong one, so the program compiles
+> clean and misbehaves inside the VM. `TestConstantOperandsCoversEveryWideOperand`
+> pins every two-byte operand as either a pool index or explicitly not, so a new
+> opcode cannot be added without that call being made.
 
 ### 16.6 Polymorphic Marker Format
 

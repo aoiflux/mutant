@@ -10,7 +10,8 @@
 // Builtins used: spawn, task_wait, task_done, chan_new, chan_send, chan_recv,
 //   chan_close, pmap, sleep_ms.
 //
-// Run:  mutant examples/concurrency/worker_pool.mut
+// Run:  mutant gen --src examples/concurrency/worker_pool.mut --password <password>
+//       mutant examples/concurrency/worker_pool.mu --dev --password <password>
 
 putln("=== 1. one task, collected later ===");
 

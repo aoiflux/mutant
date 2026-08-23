@@ -49,6 +49,37 @@ putln("read", len(report), "bytes");
 
 This convention runs through the whole standard library; the [Capability Reference](CAPABILITY_REFERENCE.md) marks which builtins return a pair. (Idiom note: keep `return` inside functions rather than at the top level of a program.)
 
+### Binding several names at once
+
+`let a, b = ...` binds more than one name from a single expression. What it does
+depends on what is on the right:
+
+```mutant
+let data, err = fs_read(path);   // a fallible builtin: result, then error
+let first, second = [1, 2, 3];   // an array: element by element -- 1 and 2
+let value, extra = 42;           // anything else: value goes to the first name,
+                                 // extra is null
+```
+
+Names past the end are null, and elements past the last name are dropped.
+
+**This is worth knowing before you write `let x, err = ...` out of habit.** A
+builtin that cannot fail returns one value, not a pair — and if that value is an
+array, the binding takes it apart instead of reporting an error:
+
+```mutant
+let items = ["a", "b"];
+let updated, err = push(items, "c");   // WRONG: push returns one array
+                                       // updated is "a", err is "b"
+
+let updated = push(items, "c");        // right: ["a", "b", "c"]
+```
+
+Nothing about this fails at compile time, and `err` is usually falsy, so an
+`if (err)` check passes and the program carries on with the wrong value. Check
+the [Capability Reference](CAPABILITY_REFERENCE.md) for whether a builtin returns
+a pair; `push`, `first`, `last`, `rest` and `len` do not.
+
 ### First-class functions and closures
 
 Functions are values: you can bind them, pass them, return them, and capture free variables.
@@ -216,6 +247,49 @@ name += "ant";                  // string concatenation -> "mutant"
 let n = 100;
 n -= 30;   n /= 2;   n %= 9;    // chained: 100 -> 70 -> 35 -> 8
 ```
+
+### Macros (`macro`, `quote`, `unquote`)
+
+A macro is a template the compiler expands before it generates any code. It
+receives its arguments as **source**, not as values, and returns source that is
+substituted at the call site.
+
+```mutant
+let unless = macro(condition, consequence, alternative) {
+    quote(if (!(unquote(condition))) { unquote(consequence); } else { unquote(alternative); });
+};
+
+unless(1 > 2, putln("smaller"), putln("bigger"));   // prints: smaller
+```
+
+- `quote(expr)` captures `expr` as source instead of evaluating it. A macro body
+  must end in one; a body that produces an ordinary value is a compile error.
+- `unquote(expr)` is only meaningful inside a `quote`. It evaluates `expr` at
+  expansion time and splices the result in as source. Only values with a literal
+  spelling can make that trip — integers, floats, strings, booleans, and
+  already-quoted source. Splicing an array, a hash or a function is a compile
+  error.
+- Macro parameters arrive already quoted, so `unquote(param)` substitutes the
+  **argument's source**, unevaluated. `add(dynamic, 5)` substitutes the
+  identifier `dynamic`, not whatever it holds at expansion time.
+
+**Declaration and scope.** Macros are collected from top-level statements only,
+and their declarations are removed from the program before compilation. A macro
+declared inside a function or a block is never collected, and is reported as
+such. A macro is not a value: it cannot be passed to a function, stored in an
+array, or called at run time.
+
+**Where calls expand.** Anywhere an expression can appear — as a call argument,
+an array element, an index, a `for` header, an assignment's right side, a struct
+literal field. A macro may also expand into a call to another macro; expansion
+repeats until nothing changes. A macro that expands into a call to itself never
+settles and is reported rather than run forever.
+
+**When expansion happens.** During compilation, so `mutant gen` needs no flag
+and neither do the examples in [examples/macros/](../examples/macros/). The
+interactive REPL only defines macros when started with `-em` /
+`--enable-macros`; it then expands and compiles them on the same path the CLI
+uses, so the flag does not change what the language means.
 
 ### Notes
 - String literals are simple quoted strings; escape-sequence behavior is intentionally limited.
