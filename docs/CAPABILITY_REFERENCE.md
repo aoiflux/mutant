@@ -76,7 +76,7 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `round(x: INTEGER\|FLOAT) -> INTEGER` | all | Nearest integer to x (INTEGER). |
 | `sandbox_status() -> (HASH, ERROR)` | all | Returns sandbox-detection status information. |
 | `security_diagnostics() -> (HASH, ERROR)` | all | Returns security diagnostics for the current runtime. |
-| `serve_arg() -> (NULL, ERROR)` | all | Inside a net_serve handler, returns the shared arg passed to net_serve; null otherwise. |
+| `serve_arg() -> (ANY, ERROR)` | all | Inside a net_serve handler, returns the shared arg passed to net_serve; null otherwise. |
 | `serve_conn() -> (INTEGER\|NULL, ERROR)` | all | Inside a net_serve handler, returns the connection handle (INTEGER); null otherwise. |
 | `set(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN, value) -> HASH` | all | Returns a new hash with key set to value (original unchanged). |
 | `sleep_ms(ms: INTEGER) -> (BOOLEAN, ERROR)` | all | Blocks the current handler for ms milliseconds. |

@@ -300,6 +300,18 @@
                     ],
                     "description": "Severity for single-return binding diagnostics: warns when several names are bound from a builtin that returns one value rather than a (value, err) pair (for example let updated, err = push(items, x)). Nothing fails at runtime — if the value is an array the binding takes it apart, and otherwise the extra names are always null, so an if (err) check never fires. Set to 'off' to suppress the rule."
                 },
+                "mutant.lint.rules.builtinPairReturn.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for pair-return binding diagnostics: warns when one name is bound from a builtin that returns a (value, err) pair (for example let data = fs_read(path)). The name holds the pair rather than the value, and nothing fails at the binding — a pair prints as its value, so the mistake surfaces somewhere else or not at all. Silent when the program does something with the name that only makes sense for a pair, such as indexing it or returning it. Set to 'off' to suppress the rule."
+                },
                 "mutant.lint.rules.spawnGlobalWrite.severity": {
                     "type": "string",
                     "default": "warning",

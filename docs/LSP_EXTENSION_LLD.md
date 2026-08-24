@@ -255,6 +255,12 @@ Current lint rules (rule id -> default severity):
 - `builtinSingleReturn` -> warning (several names bound from a builtin that
   returns one value rather than a `(value, err)` pair; from
   `builtin.ReturnSpec(name).Pair`)
+- `builtinPairReturn` -> warning (one name bound from a builtin that *does*
+  return a `(value, err)` pair, so the name holds the whole MULTI_VALUE. The
+  mirror of `builtinSingleReturn`, off the same contract. It is the only lint
+  rule that cannot decide at the call site: holding a pair on purpose is legal,
+  so the walk collects candidates and drops any name the program later indexes,
+  returns, or destructures)
 - `spawnGlobalWrite` -> warning (a `spawn`/`pmap`/`peach` callback assigning to
   a top-level name. Those callbacks run on a worker VM with a *snapshot* of the
   globals, so the write lands in a copy that is discarded when the callback

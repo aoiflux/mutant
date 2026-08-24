@@ -47,6 +47,9 @@ VS Code language support for Mutant.
   a builtin parameter cannot accept
 - `mutant.lint.rules.builtinSingleReturn.severity`: severity for binding several
   names from a builtin that returns one value
+- `mutant.lint.rules.builtinPairReturn.severity`: severity for binding one name
+  from a builtin that returns a `(value, err)` pair, which leaves the name
+  holding the pair rather than the value
 - `mutant.lint.rules.spawnGlobalWrite.severity`: severity for a `spawn`/`pmap`/
   `peach` callback writing a global, which lands in that worker's copy and is
   lost when the callback finishes

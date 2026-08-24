@@ -46,6 +46,7 @@ type LintConfig struct {
 	BuiltinArity                 LintSeverity
 	BuiltinArgType               LintSeverity
 	BuiltinSingleReturn          LintSeverity
+	BuiltinPairReturn            LintSeverity
 	SpawnGlobalWrite             LintSeverity
 }
 
@@ -76,6 +77,10 @@ func DefaultLintConfig() LintConfig {
 		// runtime error at all, which is what makes it worth reporting: the
 		// program runs and quietly does the wrong thing.
 		BuiltinSingleReturn: LintSeverityWarning,
+		// And binding one name from a builtin that returns a (value, err) pair
+		// is the same mistake from the other side: the name holds the pair, so
+		// the program keeps running with a MULTI_VALUE where it meant a value.
+		BuiltinPairReturn: LintSeverityWarning,
 		// Writing a global from a spawned callback is the same shape: the write
 		// lands in that worker's copy of the globals and is gone when it
 		// finishes, and nothing at all reports it.
@@ -106,6 +111,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinArgType
 	case "builtinSingleReturn":
 		severityName = c.BuiltinSingleReturn
+	case "builtinPairReturn":
+		severityName = c.BuiltinPairReturn
 	case "spawnGlobalWrite":
 		severityName = c.SpawnGlobalWrite
 	default:
@@ -1258,8 +1265,15 @@ func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *
 // entry in builtinArities for the count, declared kinds in builtin/metadata.go
 // for the types. Anything unverified is simply never checked.
 //
-// One walk serves both rules; the severity of each is read independently, so
-// either can be turned off without disturbing the other.
+// The third rule on this walk, builtinPairReturn, checks the other machine-
+// readable contract: what a builtin gives back. It lives in
+// builtin_pair_return.go because, unlike the other two, it cannot decide at the
+// call site -- whether a single-name binding is a defect depends on what the
+// rest of the program does with the name, so the walk collects candidates and
+// they are resolved once it finishes.
+//
+// One walk serves all three rules; the severity of each is read independently,
+// so any can be turned off without disturbing the others.
 func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil {
 		return nil
@@ -1268,7 +1282,8 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	aritySeverity, arityEnabled := lintConfig.severityForRule("builtinArity")
 	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
 	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
-	if !arityEnabled && !argTypeEnabled && !returnEnabled {
+	pairSeverity, pairEnabled := lintConfig.severityForRule("builtinPairReturn")
+	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled {
 		return nil
 	}
 	if !arityEnabled {
@@ -1279,6 +1294,9 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	}
 	if !returnEnabled {
 		returnSeverity = nil
+	}
+	if !pairEnabled {
+		pairSeverity = nil
 	}
 
 	source := "mutant-lint"
@@ -1295,6 +1313,7 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		aritySeverity:   aritySeverity,
 		argTypeSeverity: argTypeSeverity,
 		returnSeverity:  returnSeverity,
+		pairSeverity:    pairSeverity,
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
@@ -1306,7 +1325,11 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		collector.collectStatement(stmt, root)
 	}
 
-	return collector.result
+	// Appended rather than interleaved: a pair binding is only known to be a
+	// defect once the whole program has been seen, and Diagnostics already
+	// concatenates rules rather than sorting them into source order.
+	return append(collector.result,
+		pairBindingDiagnostics(snapshot, collector.pairSeverity, collector.source, collector.pairCandidates)...)
 }
 
 // builtinCallCollector walks the program tracking lexical scope so it can tell a
@@ -1322,10 +1345,12 @@ type builtinCallCollector struct {
 	aritySeverity   *lsp.DiagnosticSeverity
 	argTypeSeverity *lsp.DiagnosticSeverity
 	returnSeverity  *lsp.DiagnosticSeverity
+	pairSeverity    *lsp.DiagnosticSeverity
 	source          *string
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
 	result          []lsp.Diagnostic
+	pairCandidates  []pairBindingCandidate
 }
 
 func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
@@ -1341,6 +1366,9 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 		}
 
 		if len(names) == 1 {
+			// Checked before defining, so the callee resolves in the scope that
+			// exists where the call is written, not the one this let creates.
+			c.checkSingleNameBinding(names[0], node.Value, current)
 			c.defineDeclaration(names[0], current)
 		}
 
