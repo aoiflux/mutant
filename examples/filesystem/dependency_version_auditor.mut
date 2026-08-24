@@ -28,7 +28,7 @@ if (mkdir_result == false) {
 let package_exists, err = fs_exists(package_path);
 check_err(err, "fs_exists package");
 if (package_exists == false) {
-    let package_seed = json_stringify({
+    let package_seed, _ = json_stringify({
         "name": "demo",
         "dependencies": {
             "express": "4.17.1",

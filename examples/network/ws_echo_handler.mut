@@ -3,6 +3,7 @@
 //
 // WebSocket opcodes: 0x1 text, 0x2 binary, 0x8 close, 0x9 ping, 0xA pong.
 // Server->client frames are written unmasked (mask=false), per RFC 6455.
+// mutant:sweep serve-handler -- net_serve dispatches this; standalone it has no connection to read
 
 let conn, cerr = serve_conn();
 

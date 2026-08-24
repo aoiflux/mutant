@@ -26,6 +26,7 @@
 //
 // Run:  mutant gen --src examples/network/mitmproxy.mut --password <password>
 //       mutant examples/network/mitmproxy.mu --dev --password <password>
+// mutant:sweep server -- binds 127.0.0.1:8080 and proxies until interrupted
 
 // A proxy authority may or may not carry a port: a CONNECT target always does
 // ("example.com:443"), an absolute-form request's Host header may ("example.com"

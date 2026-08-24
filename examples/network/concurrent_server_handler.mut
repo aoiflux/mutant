@@ -6,6 +6,7 @@
 //   serve_conn() -- INTEGER connection handle (use with net_conn_* / http_conn_*)
 //   serve_arg()  -- the shared value passed as net_serve's 3rd argument
 // Handlers run concurrently, so keep per-connection state local (as below).
+// mutant:sweep serve-handler -- net_serve dispatches this; standalone it has no connection to read
 
 let conn, cerr = serve_conn();
 let ctx, aerr = serve_arg();

@@ -4,15 +4,16 @@
 // handle is exposed via serve_conn() and the shared arg (a banner string, set in
 // main.mut) via serve_arg(). Because the file is a normal program, it also runs
 // standalone — in which case serve_conn() returns null and it prints a notice.
+// mutant:sweep run -- calls serve_conn(), but checks for null and prints a notice standalone
 
 let handle = fn() {
-    let conn = serve_conn();
+    let conn, _ = serve_conn();
     if (is_null(conn)) {
         putln("handler.mut run standalone (no connection). Launch via main.mut.");
         return false;
     };
 
-    let banner = serve_arg();
+    let banner, _ = serve_arg();
 
     // Greet the client (bounded write; a stalled peer cannot hang us forever).
     let n, werr = net_conn_write(conn, banner + "\r\n", 2000);
