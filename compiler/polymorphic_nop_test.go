@@ -31,7 +31,7 @@ func TestPaddingRepointsJumpTargets(t *testing.T) {
 	original = append(original, code.Make(code.OpPop)...)
 
 	engine := NewPolymorphicEngine(10, 1)
-	padded := engine.padInstructions(original, 1.0, true)
+	padded := padWithNOPs(engine, original, 1.0, true)
 
 	if len(padded) != 16 {
 		t.Fatalf("padded stream is %d bytes, want 16:\n%s", len(padded), padded)
@@ -73,7 +73,7 @@ func TestPaddedJumpsLandOnInstructionBoundaries(t *testing.T) {
 		}
 
 		engine := NewPolymorphicEngine(level, int64(level)*31)
-		padded := engine.padInstructions(bc.Instructions, float64(level)*1.5/100.0, true)
+		padded := padWithNOPs(engine, bc.Instructions, float64(level)*1.5/100.0, true)
 		assertJumpsHitBoundaries(t, level, padded)
 	}
 }
@@ -94,7 +94,7 @@ func TestPaddingStopsAtTheFinalPop(t *testing.T) {
 	original = append(original, code.Make(code.OpChkDbg)...)
 	original = append(original, code.Make(code.OpChkSnd)...)
 
-	padded := NewPolymorphicEngine(10, 3).padInstructions(original, 1.0, true)
+	padded := padWithNOPs(NewPolymorphicEngine(10, 3), original, 1.0, true)
 
 	starts, _, ok := decodeBoundaries(padded)
 	if !ok {
@@ -147,12 +147,12 @@ func TestFunctionBodiesArePaddedWithoutAPop(t *testing.T) {
 	body = append(body, code.Make(code.OpGetLocal, 0)...)
 	body = append(body, code.Make(code.OpReturnValue)...)
 
-	guarded := NewPolymorphicEngine(10, 3).padInstructions(body, 1.0, true)
+	guarded := padWithNOPs(NewPolymorphicEngine(10, 3), body, 1.0, true)
 	if len(guarded) != len(body) {
 		t.Errorf("the tail guard should suppress padding on a stream with no OpPop, got %d bytes from %d", len(guarded), len(body))
 	}
 
-	unguarded := NewPolymorphicEngine(10, 3).padInstructions(body, 1.0, false)
+	unguarded := padWithNOPs(NewPolymorphicEngine(10, 3), body, 1.0, false)
 	if len(unguarded) <= len(body) {
 		t.Error("a function body with no OpPop was left unpadded")
 	}
@@ -165,7 +165,7 @@ func TestPaddingDeclinesOnAnUndecodableStream(t *testing.T) {
 	broken := code.Instructions{0xFE, 0xFE, 0xFE}
 
 	engine := NewPolymorphicEngine(10, 7)
-	got := engine.padInstructions(broken, 1.0, true)
+	got := padWithNOPs(engine, broken, 1.0, true)
 
 	if len(got) != len(broken) {
 		t.Fatalf("padding rewrote an undecodable stream: %d bytes in, %d out", len(broken), len(got))
@@ -227,9 +227,9 @@ func TestPaddingIsReproducibleFromTheSeed(t *testing.T) {
 	}
 	original := comp.ByteCode().Instructions
 
-	first := NewPolymorphicEngine(10, 20260824).padInstructions(original, 0.5, true)
-	again := NewPolymorphicEngine(10, 20260824).padInstructions(original, 0.5, true)
-	other := NewPolymorphicEngine(10, 11111111).padInstructions(original, 0.5, true)
+	first := padWithNOPs(NewPolymorphicEngine(10, 20260824), original, 0.5, true)
+	again := padWithNOPs(NewPolymorphicEngine(10, 20260824), original, 0.5, true)
+	other := padWithNOPs(NewPolymorphicEngine(10, 11111111), original, 0.5, true)
 
 	if string(first) != string(again) {
 		t.Error("the same seed produced two different padded streams")
@@ -258,7 +258,7 @@ func TestPaddingReachesCompiledFunctions(t *testing.T) {
 		t.Fatal("the test program compiled no functions")
 	}
 
-	NewPolymorphicEngine(10, 5).insertNOPs(bc)
+	NewPolymorphicEngine(10, 5).spliceFillers(bc, MutationConfig{InsertNOPs: true})
 
 	grew := 0
 	for i, c := range bc.Constants {
@@ -338,4 +338,12 @@ func assertJumpsHitBoundaries(t *testing.T, level int, ins code.Instructions) {
 		}
 		i += width
 	}
+}
+
+// padWithNOPs pins these cases to NOP insertion alone. Dead-code insertion goes
+// through the same pass and the same jump repointing, so letting it in here
+// would mean every assertion about NOP shape had to allow for a block that is
+// jumped over instead -- which is what polymorphic_dead_code_test.go is for.
+func padWithNOPs(pe *PolymorphicEngine, ins code.Instructions, rate float64, protectFinalPop bool) code.Instructions {
+	return pe.padInstructions(ins, rate, protectFinalPop, pe.fillerGenerators(MutationConfig{InsertNOPs: true}))
 }

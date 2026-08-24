@@ -475,7 +475,9 @@ Options:
   --password <value>   Encrypt output with a password. Required.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
-  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  --seed <int64>       Build seed: reproduces the bytecode (mutations and
+                       security-check placement). The .mu file still differs
+                       every build. Default: current timestamp.
   -h, --help           Show command help.
 
 Examples:
@@ -524,7 +526,9 @@ Options:
   --password <value>   Encrypt output with a password.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
-  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  --seed <int64>       Build seed: reproduces the bytecode (mutations and
+                       security-check placement). The .mu file still differs
+                       every build. Default: current timestamp.
   -h, --help           Show command help.
 
 Supported OS values:
@@ -718,7 +722,7 @@ func prepareRelease(args []string) (string, string, string, string, int, int64, 
 	releasecmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
 	releasecmd.StringVar(&password, "pwd", "", "Short for -password")
 	releasecmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
-	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
+	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := releasecmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", "", "", 0, 0, err
@@ -763,7 +767,7 @@ func prepareGenRun(args []string) (string, string, int, int64, error) {
 	gencmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
 	gencmd.StringVar(&password, "pwd", "", "Short for -password")
 	gencmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
-	gencmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
+	gencmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := gencmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", 0, 0, err

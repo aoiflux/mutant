@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	mathrand "math/rand"
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/code"
@@ -23,6 +24,10 @@ type Compiler struct {
 	injectSecurityChecks bool
 	hasChkDbg            bool
 	hasChkSnd            bool
+	// securityRNG decides where the optional security checks land. It is nil
+	// unless a seed was supplied, in which case the placement becomes
+	// reproducible -- see SetSecurityCheckSeed.
+	securityRNG *mathrand.Rand
 
 	polymorphicEngine *PolymorphicEngine // Optional bytecode mutation engine
 }
@@ -116,6 +121,26 @@ func (c *Compiler) SeedTypeDefinitions(structs map[string][]*ast.Identifier, enu
 
 func (c *Compiler) EnableSecurityOpcodeInjection() {
 	c.injectSecurityChecks = true
+}
+
+// SetSecurityCheckSeed makes the placement of the injected OpChkDbg/OpChkSnd
+// checks reproducible from a seed.
+//
+// Without it the placement is drawn from crypto/rand, which meant --seed did
+// not actually reproduce a build: two compiles of the same source with the same
+// seed produced instruction streams of different lengths, at every mutation
+// level, including 0 where the polymorphic engine does not run at all. That is
+// the same defect NOP insertion had, in the one part of the pipeline that was
+// never looked at because it is not a mutation stage.
+//
+// What the seed reproduces is the bytecode, not the .mu file. The file is
+// sealed with AES-GCM under a fresh salt and nonce and differs every build,
+// which is correct -- repeating a GCM nonce under one key is a break.
+//
+// Leaving it unset keeps the old behaviour, which is what a build with no --seed
+// wants: the checks land somewhere different every time.
+func (c *Compiler) SetSecurityCheckSeed(seed int64) {
+	c.securityRNG = mathrand.New(mathrand.NewSource(seed))
 }
 
 // EnablePolymorphism enables bytecode polymorphism at the specified mutation level
@@ -536,12 +561,12 @@ func (c *Compiler) maybeEmitRandomSecurityCheckOpcodes() {
 		return
 	}
 
-	if randomChance(3) {
+	if c.randomChance(3) {
 		c.emit(code.OpChkDbg)
 		c.hasChkDbg = true
 	}
 
-	if randomChance(3) {
+	if c.randomChance(3) {
 		c.emit(code.OpChkSnd)
 		c.hasChkSnd = true
 	}
@@ -559,9 +584,13 @@ func (c *Compiler) ensureRequiredSecurityCheckOpcodes() {
 	}
 }
 
-func randomChance(mod uint32) bool {
+func (c *Compiler) randomChance(mod uint32) bool {
 	if mod == 0 {
 		return false
+	}
+
+	if c.securityRNG != nil {
+		return uint32(c.securityRNG.Int63())%mod == 0
 	}
 
 	b := make([]byte, 4)

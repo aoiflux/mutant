@@ -633,7 +633,20 @@ func (vm *VM) Run() error {
 // to baseFrameIndex. Run() drives the whole program via execLoop(0); the
 // closure-from-builtin bridge (CallClosureSync) re-enters with a higher base to
 // run exactly one closure to completion, then returns control to its caller.
-func (vm *VM) execLoop(baseFrameIndex int) error {
+//
+// It is also the fault boundary, which is why the loop body lives in a separate
+// function. Every path into the executor goes through here -- Run, and through
+// CallClosureSync also pmap, spawn and every net_serve handler -- so one recover
+// here is what makes bytecode the VM cannot decode report an error instead of
+// taking the process down. Those three had their own recovers already; the main
+// program path had none, so the same corrupt .mu file errored inside a worker
+// and panicked on the main thread. See vm/fault.go.
+func (vm *VM) execLoop(baseFrameIndex int) (err error) {
+	defer func() { containFault(recover(), &err) }()
+	return vm.runInstructions(baseFrameIndex)
+}
+
+func (vm *VM) runInstructions(baseFrameIndex int) error {
 	var ip int
 	var ins code.Instructions
 	var op code.Opcode
@@ -684,7 +697,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 2
 
-			if err := vm.push(vm.constants[constIndex]); err != nil {
+			constant, err := vm.constantAt(int(constIndex))
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			if err := vm.push(constant); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpBang:
@@ -717,6 +734,9 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
+			if vm.stackPointer-numElements < 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d elements (sp=%d)", numElements, vm.stackPointer)
+			}
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
 			vm.stackPointer = vm.stackPointer - numElements // pop the elements (OpHash does this; OpArray had omitted it)
 			if err := vm.push(array); err != nil {
@@ -732,6 +752,10 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
+			// buildHash reads pairs, so an odd count would read one past the top.
+			if vm.stackPointer-numElements < 0 || numElements%2 != 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d key/value slots (sp=%d)", numElements, vm.stackPointer)
+			}
 			hash, err := vm.buildHash(vm.stackPointer-numElements, vm.stackPointer)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
@@ -802,8 +826,12 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip++
 			frame := vm.currentFrame()
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
 			obj := vm.pop()
-			vm.stack[frame.bp+int(localIndex)] = vm.encryptForStorage(obj)
+			vm.stack[slot] = vm.encryptForStorage(obj)
 		case code.OpGetLocal:
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -814,7 +842,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip++
 			frame := vm.currentFrame()
-			if err := vm.push(vm.decryptForUse(vm.stack[frame.bp+int(localIndex)])); err != nil {
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
+			if err := vm.push(vm.decryptForUse(vm.stack[slot])); err != nil {
 				return err
 			}
 		case code.OpGetBuiltin:
@@ -845,6 +877,9 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip++
 			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
 			if err := vm.push(vm.decryptForUse(currentClosure.Free[freeIndex])); err != nil {
 				return err
 			}
@@ -908,6 +943,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if err := vm.push(returnValue); err != nil {
 				return err
 			}
+			vm.settleProgramResult()
 		case code.OpReturn:
 			frame := vm.popFrame()
 			vm.stackPointer = frame.bp - 1
@@ -917,6 +953,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if err := vm.push(global.Null); err != nil {
 				return err
 			}
+			vm.settleProgramResult()
 		case code.OpMultiValue:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpMultiValue: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -992,9 +1029,9 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			fieldCount := int(fieldCountRaw)
 			vm.currentFrame().ip += 3
 
-			typeObj, ok := vm.decryptForUse(vm.constants[typeIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpMakeStruct: type constant is not string at index=%d", typeIndex)
+			typeObj, err := vm.constantString("OpMakeStruct: type constant", int(typeIndex))
+			if err != nil {
+				return err
 			}
 			typeName := typeObj.Value
 
@@ -1038,9 +1075,9 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 2
 
-			fieldObj, ok := vm.decryptForUse(vm.constants[fieldNameIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpGetField: field constant is not string at index=%d", fieldNameIndex)
+			fieldObj, err := vm.constantString("OpGetField: field constant", int(fieldNameIndex))
+			if err != nil {
+				return err
 			}
 			fieldName := fieldObj.Value
 			obj := vm.pop()
@@ -1067,9 +1104,9 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 2
 
-			fieldObj, ok := vm.decryptForUse(vm.constants[fieldNameIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpSetField: field constant is not string at index=%d", fieldNameIndex)
+			fieldObj, err := vm.constantString("OpSetField: field constant", int(fieldNameIndex))
+			if err != nil {
+				return err
 			}
 			fieldName := fieldObj.Value
 			value := vm.pop()
@@ -1096,13 +1133,13 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 4
 
-			typeObj, ok := vm.decryptForUse(vm.constants[typeIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpEnumValue: type constant is not string at index=%d", typeIndex)
+			typeObj, err := vm.constantString("OpEnumValue: type constant", int(typeIndex))
+			if err != nil {
+				return err
 			}
-			tagObj, ok := vm.decryptForUse(vm.constants[tagIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpEnumValue: tag constant is not string at index=%d", tagIndex)
+			tagObj, err := vm.constantString("OpEnumValue: tag constant", int(tagIndex))
+			if err != nil {
+				return err
 			}
 			typeName := typeObj.Value
 			tagName := tagObj.Value
@@ -1267,6 +1304,27 @@ func (vm *VM) runIntegrityProbes() error {
 	return nil
 }
 
+// settleProgramResult puts the value of a top-level `return` where the rest of
+// the runtime looks for a program's result.
+//
+// Returning from the outermost frame ends the program, and nothing pops after
+// it -- so the returned value sat at stack[sp-1] while LastPoppedStackElement,
+// which the CLI prints and the REPL echoes, reads stack[sp]. That slot still
+// held whatever the last expression left behind, so `return 7;` at the top level
+// printed a leftover comparison operand rather than 7. Which leftover it was
+// depended on the exact instruction layout, which is how mutation could change a
+// program's printed result without changing what the program did.
+//
+// Dropping the pointer by one is exactly what OpPop does, so the value lands in
+// the slot everything already reads. Only the outermost frame is adjusted:
+// CallClosureSync enters with a base frame of its own and pops its result from
+// stack[sp-1], so a worker returning to it must be left alone.
+func (vm *VM) settleProgramResult() {
+	if vm.frameIndex == 0 && vm.stackPointer > 0 {
+		vm.stackPointer--
+	}
+}
+
 func (vm *VM) StackTop() object.Object {
 	if vm.stackPointer == 0 {
 		return nil
@@ -1275,15 +1333,71 @@ func (vm *VM) StackTop() object.Object {
 	return vm.decryptForUse(vm.stack[vm.stackPointer-1])
 }
 
+// LastPoppedStackElement reports the value the program finished with: the slot
+// just above the stack pointer, which the final OpPop vacated. It is what the
+// CLI prints and what the REPL echoes.
+//
+// Unlike everything else that reads the stack, this one runs after execution has
+// ended and outside the fault boundary -- runner, repl and webrepl call it on
+// the way to printing a result, with no error return between here and the
+// terminal. So an out-of-range read reports null rather than raising a fault: by
+// this point the program has either already succeeded or already reported why it
+// did not, and neither is improved by a panic on the way to printing it.
 func (vm *VM) LastPoppedStackElement() object.Object {
+	if vm.stackPointer < 0 || vm.stackPointer >= len(vm.stack) {
+		return global.Null
+	}
 	return vm.decryptForUse(vm.stack[vm.stackPointer])
 }
 
+// constantAt reads the constant an operand pointed at. The index is only as
+// trustworthy as the instruction stream it came out of, so it is bounded here
+// the way OpGetBuiltin bounds its own index -- the two are the same kind of
+// operand and were guarded inconsistently.
+func (vm *VM) constantAt(index int) (object.Object, error) {
+	if index < 0 || index >= len(vm.constants) {
+		return nil, fmt.Errorf("constant index %d out of range, len=%d", index, len(vm.constants))
+	}
+	return vm.constants[index], nil
+}
+
+// constantString reads a constant an opcode requires to be a string: a struct or
+// enum type name, a field name, an enum tag. what names the operand, so the
+// error says which one of an instruction's several constants was wrong.
+func (vm *VM) constantString(what string, index int) (*object.String, error) {
+	constant, err := vm.constantAt(index)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+
+	str, ok := vm.decryptForUse(constant).(*object.String)
+	if !ok {
+		return nil, fmt.Errorf("%s is not string at index=%d", what, index)
+	}
+	return str, nil
+}
+
+// freeCount reports how many values a closure captured, for an error message
+// raised on the path where the closure itself may be missing.
+func freeCount(cl *object.Closure) int {
+	if cl == nil {
+		return 0
+	}
+	return len(cl.Free)
+}
+
 func (vm *VM) pushClosure(constIndex, numFree int) error {
-	constant := vm.constants[constIndex]
+	constant, err := vm.constantAt(constIndex)
+	if err != nil {
+		return err
+	}
 	fun, ok := constant.(*object.CompiledFunction)
 	if !ok {
 		return fmt.Errorf("not a function: %+v", constant)
+	}
+
+	if numFree < 0 || vm.stackPointer-numFree < 0 {
+		return fmt.Errorf("free-variable count %d reaches below the stack floor (sp=%d)", numFree, vm.stackPointer)
 	}
 
 	free := make([]object.Object, numFree)
@@ -1306,7 +1420,15 @@ func (vm *VM) push(obj object.Object) error {
 	return nil
 }
 
+// pop takes the top of the stack. An empty stack is a fault rather than an
+// error return: pop is called from more than twenty places in the dispatch
+// switch, and it cannot happen for bytecode this toolchain produced. See
+// vm/fault.go for why that is a panic and where it is caught.
 func (vm *VM) pop() object.Object {
+	if vm.stackPointer <= 0 {
+		faultf("stack underflow: pop with nothing on the stack")
+	}
+
 	obj := vm.decryptForUse(vm.stack[vm.stackPointer-1])
 
 	vm.stackPointer--
@@ -1667,7 +1789,12 @@ func (vm *VM) buildHash(startIndex, endIndex int) (object.Object, error) {
 	return &object.Hash{Pairs: hashedPairs}, nil
 }
 
-func (vm *VM) currentFrame() *Frame { return vm.frames[vm.frameIndex-1] }
+func (vm *VM) currentFrame() *Frame {
+	if vm.frameIndex <= 0 {
+		faultf("frame underflow: no frame is executing")
+	}
+	return vm.frames[vm.frameIndex-1]
+}
 func (vm *VM) pushFrame(f *Frame) {
 	vm.ensureFrameCapacity(vm.frameIndex + 1)
 	vm.frames[vm.frameIndex] = f
@@ -1677,16 +1804,31 @@ func (vm *VM) pushFrame(f *Frame) {
 	}
 }
 func (vm *VM) popFrame() *Frame {
+	if vm.frameIndex <= 0 {
+		faultf("frame underflow: returning from no frame")
+	}
 	vm.frameIndex--
 	return vm.frames[vm.frameIndex]
 }
 
 func (vm *VM) execCall(numArgs int) error {
+	// numArgs arrives as an instruction operand, so it decides how far below the
+	// stack pointer the callee sits. A corrupted one reaches past the floor.
+	calleeIndex := vm.stackPointer - 1 - numArgs
+	if numArgs < 0 || calleeIndex < 0 || calleeIndex >= len(vm.stack) {
+		return fmt.Errorf("call with %d arguments reaches outside the stack (sp=%d)", numArgs, vm.stackPointer)
+	}
+
+	// A slot below the stack pointer can still be nil: callClosure raises the
+	// pointer over a frame's locals without writing them.
 	var callee object.Object
-	if vm.stack[vm.stackPointer-1-numArgs].Type() == object.CLOSURE_OBJ || vm.stack[vm.stackPointer-1-numArgs].Type() == object.BUILTIN_OBJ {
-		callee = vm.stack[vm.stackPointer-1-numArgs]
-	} else {
+	if at := vm.stack[calleeIndex]; at != nil && (at.Type() == object.CLOSURE_OBJ || at.Type() == object.BUILTIN_OBJ) {
+		callee = at
+	} else if len(vm.stack) > 0 {
 		callee = vm.stack[0]
+	}
+	if callee == nil {
+		return fmt.Errorf("calling non-function and non-built-in")
 	}
 
 	switch calleeType := callee.(type) {

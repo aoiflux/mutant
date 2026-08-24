@@ -46,6 +46,7 @@ type LintConfig struct {
 	BuiltinArity                 LintSeverity
 	BuiltinArgType               LintSeverity
 	BuiltinSingleReturn          LintSeverity
+	SpawnGlobalWrite             LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -75,6 +76,10 @@ func DefaultLintConfig() LintConfig {
 		// runtime error at all, which is what makes it worth reporting: the
 		// program runs and quietly does the wrong thing.
 		BuiltinSingleReturn: LintSeverityWarning,
+		// Writing a global from a spawned callback is the same shape: the write
+		// lands in that worker's copy of the globals and is gone when it
+		// finishes, and nothing at all reports it.
+		SpawnGlobalWrite: LintSeverityWarning,
 	}
 }
 
@@ -101,6 +106,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinArgType
 	case "builtinSingleReturn":
 		severityName = c.BuiltinSingleReturn
+	case "spawnGlobalWrite":
+		severityName = c.SpawnGlobalWrite
 	default:
 		return nil, false
 	}
@@ -155,6 +162,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintUnreachableCode(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

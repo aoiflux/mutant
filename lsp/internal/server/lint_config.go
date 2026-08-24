@@ -54,6 +54,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "builtinArity", &config.BuiltinArity)
 	applyRuleSeverity(rulesMap, "builtinArgType", &config.BuiltinArgType)
 	applyRuleSeverity(rulesMap, "builtinSingleReturn", &config.BuiltinSingleReturn)
+	applyRuleSeverity(rulesMap, "spawnGlobalWrite", &config.SpawnGlobalWrite)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

@@ -98,13 +98,13 @@ Current state:
 
 1. Polymorphic engine is integrated and marker/tagging is active.
 2. Mutation level and seed flags are wired through CLI paths.
-3. All three implemented transforms -- NOP insertion, constant-pool
+3. All four transforms -- NOP insertion, dead-code insertion, constant-pool
    randomization and opcode remapping -- run at **any non-zero** mutation level,
    including the CLI default of 5. `--mutation 0` is the only setting that
    leaves the program byte-identical.
-4. `ReorderInstructions` and `InsertDeadCode` are named in `MutationConfig` but
-   have no implementation behind them. They are not gated transforms; there is
-   nothing to gate.
+4. `ReorderInstructions` has been removed from `MutationConfig`. Reordering a
+   stream needs a reverse mapping the VM has no way to carry; leaving the name
+   in place made it read as a transform that was merely switched off.
 
 Until this was fixed, constant-pool randomization was the only transform that
 ran and it was gated at level 6 while the CLI defaulted to 5 -- so the default

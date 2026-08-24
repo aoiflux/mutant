@@ -119,6 +119,10 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 
 	comp := compiler.NewWithState(symbolTable, constants)
 	comp.EnableSecurityOpcodeInjection()
+	// The same seed the polymorphic engine gets, applied whatever the mutation
+	// level: the injected security checks are part of what --seed has to
+	// reproduce, and they are emitted even at level 0.
+	comp.SetSecurityCheckSeed(resolvePolymorphismSeed(mutationSeed))
 	configureCompilerPolymorphism(comp, mutationLevel, mutationSeed)
 	if err := comp.Compile(expanded); err != nil {
 		return nil, err, errrs.COMPILER_ERROR, nil

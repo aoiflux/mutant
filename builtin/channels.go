@@ -29,6 +29,21 @@ import (
 // net_conn_read puts on a single read.
 const maxChannelCapacity = 1 << 20
 
+// maxLiveChannels bounds how many channels may be open at once, and
+// maxRetainedChannels how many closed ones stay addressable afterwards. Both
+// mirror the task registry deliberately: they are the same resource with the
+// same failure mode. Channels were the one handle registry in this package that
+// never released anything at all -- chan_close keeps a handle valid so a
+// receiver can drain what was already queued, and nothing ever reclaimed it, so
+// a chan_new per connection leaked a Go channel, a map entry and every value
+// still buffered in it for the life of the process.
+//
+// Reaching the ceiling is an error rather than a wait, for the reason
+// RegisterTask gives: blocking is backpressure for an accept loop but a deadlock
+// for code waiting on a sibling it cannot create.
+const maxLiveChannels = 1024
+const maxRetainedChannels = 4096
+
 // managedChannel carries its closed state in a second channel rather than a
 // boolean, because a sender may be blocked inside a send when chan_close runs.
 // A mutex around the send would deadlock against exactly that case; a done
@@ -64,18 +79,56 @@ var channelRegistry = struct {
 	sync.Mutex
 	channels map[int64]*managedChannel
 	nextID   int64
+	live     int
+	// closed lists handles in close order, so the oldest closed channel is the
+	// one dropped once retention fills. An entry stays here after its handle is
+	// deleted; evicting it again is a no-op delete, which keeps both closing and
+	// evicting constant-time. taskRegistry.finished works the same way.
+	closed []int64
 }{
 	channels: map[int64]*managedChannel{},
 	nextID:   1,
 }
 
-func registerChannel(mc *managedChannel) int64 {
+// registerChannel reserves a handle and counts the channel as open.
+func registerChannel(mc *managedChannel) (int64, *object.Error) {
 	channelRegistry.Lock()
+	if channelRegistry.live >= maxLiveChannels {
+		channelRegistry.Unlock()
+		return 0, newError("chan_new: too many channels open at once (limit %d); close some with chan_close", maxLiveChannels)
+	}
 	id := channelRegistry.nextID
 	channelRegistry.nextID++
+	channelRegistry.live++
 	channelRegistry.channels[id] = mc
 	channelRegistry.Unlock()
-	return id
+	return id, nil
+}
+
+// retireChannel records a channel as no longer open and evicts the oldest
+// closed handles once retention fills.
+//
+// It deliberately does not delete the handle that was just closed. A receiver
+// is allowed to keep draining values queued before the close, which is what
+// makes closing a channel a way to end a receive loop rather than a way to
+// discard whatever was still in flight.
+func retireChannel(id int64) {
+	channelRegistry.Lock()
+	channelRegistry.live--
+	channelRegistry.closed = append(channelRegistry.closed, id)
+	for len(channelRegistry.closed) > maxRetainedChannels {
+		delete(channelRegistry.channels, channelRegistry.closed[0])
+		channelRegistry.closed = channelRegistry.closed[1:]
+	}
+	channelRegistry.Unlock()
+}
+
+// LiveChannelCount reports how many channels are open but not yet closed. It
+// mirrors LiveTaskCount.
+func LiveChannelCount() int {
+	channelRegistry.Lock()
+	defer channelRegistry.Unlock()
+	return channelRegistry.live
 }
 
 func lookupChannel(id int64) (*managedChannel, bool) {
@@ -138,7 +191,11 @@ func ChanNew(args ...object.Object) object.Object {
 		ch:   make(chan object.Object, capacity),
 		done: make(chan struct{}),
 	}
-	return resultAndError(intObj(registerChannel(mc)), nil)
+	handle, errObj := registerChannel(mc)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	return resultAndError(intObj(handle), nil)
 }
 
 // ChanSend puts a value on a channel.
@@ -305,5 +362,10 @@ func ChanClose(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	return resultAndError(boolObj(mc.closeChannel()), nil)
+
+	first := mc.closeChannel()
+	if first {
+		retireChannel(args[0].(*object.Integer).Value)
+	}
+	return resultAndError(boolObj(first), nil)
 }

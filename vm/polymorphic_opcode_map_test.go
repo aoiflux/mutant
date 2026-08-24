@@ -80,20 +80,11 @@ func TestARemappedProgramNeedsItsReverseTable(t *testing.T) {
 		password,
 	)
 
-	// Recovering here is not defensive padding, it is what actually happens: a
-	// stream decoded with the wrong opcode widths runs instructions that were
-	// never there, and VM.pop() has no underflow guard, so it panics on
-	// stack[-1] rather than returning an error. That is a real gap in how the VM
-	// handles bytecode it cannot decode, and it is not this test's subject --
-	// the subject is that the reverse table is load-bearing, which a panic
-	// demonstrates as well as an error does.
+	// A stream decoded with the wrong opcode widths runs instructions that were
+	// never there. This used to have to recover a panic -- VM.pop() had no
+	// underflow guard and died on stack[-1] -- which is the gap vm/fault.go
+	// closes: undecodable bytecode is now an error on every path.
 	ran, value := func() (ran bool, value int64) {
-		defer func() {
-			if recover() != nil {
-				ran = false
-			}
-		}()
-
 		if err := machine.Run(); err != nil {
 			return false, 0
 		}

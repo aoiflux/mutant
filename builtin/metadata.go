@@ -780,11 +780,11 @@ var builtinDocs = map[string]builtinDoc{
 		},
 		returns: pairRet("true once the task has finished", ParamBool)},
 	BuiltinNameChanNew: {
-		signature: "chan_new(capacity?)", summary: "Creates a channel for passing values between concurrently running code and returns its handle. Capacity 0 (the default) is unbuffered, so a send waits for a receive; a positive capacity lets that many values queue first.",
+		signature: "chan_new(capacity?)", summary: "Creates a channel for passing values between concurrently running code and returns its handle. Capacity 0 (the default) is unbuffered, so a send waits for a receive; a positive capacity lets that many values queue first. At most 1024 channels may be open at once; close each one with chan_close when you are done with it.",
 		params: []builtinParamDoc{
 			param("capacity?", "How many values may queue before a send waits; 0 for unbuffered.", ParamInt),
 		},
-		returns: pairRet("a channel handle; close it with chan_close", ParamInt)},
+		returns: pairRet("a channel handle; close it with chan_close, which is what releases it", ParamInt)},
 	BuiltinNameChanSend: {
 		signature: "chan_send(handle, value, timeoutMs?)", summary: "Puts a value on a channel, waiting for a receiver if the channel is full. Returns true once the value is handed over and false if the timeout ran out first; sending on a closed channel is an error.",
 		params: []builtinParamDoc{
@@ -807,7 +807,7 @@ var builtinDocs = map[string]builtinDoc{
 		},
 		returns: pairRet("whether a value was waiting, the value itself, and whether the channel is closed", ParamHash).withFields("ok", "value", "closed", "timeout")},
 	BuiltinNameChanClose: {
-		signature: "chan_close(handle)", summary: "Closes a channel, waking every waiting sender and receiver. Returns true when this call did the closing and false when the channel was already closed. Receivers can still drain values that were already queued.",
+		signature: "chan_close(handle)", summary: "Closes a channel, waking every waiting sender and receiver. Returns true when this call did the closing and false when the channel was already closed. Receivers can still drain values that were already queued; the handle is reclaimed once enough other channels have been closed after it, after which it reports as unknown.",
 		params: []builtinParamDoc{
 			param("handle", "Channel handle from chan_new.", ParamInt),
 		},

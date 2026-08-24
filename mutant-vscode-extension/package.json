@@ -299,6 +299,18 @@
                         "off"
                     ],
                     "description": "Severity for single-return binding diagnostics: warns when several names are bound from a builtin that returns one value rather than a (value, err) pair (for example let updated, err = push(items, x)). Nothing fails at runtime — if the value is an array the binding takes it apart, and otherwise the extra names are always null, so an if (err) check never fires. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.spawnGlobalWrite.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for spawned-callback global-write diagnostics: warns when a spawn, pmap or peach callback assigns to a top-level name. Those callbacks run on their own VM with a snapshot of the globals, so the write lands in a copy that is discarded when the callback finishes — the program runs, reports nothing, and the value never changes. Only a function literal written at the call site is checked, and only a name the callback does not rebind for itself. Set to 'off' to suppress the rule."
                 }
             }
         },

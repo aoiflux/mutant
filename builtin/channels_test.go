@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -384,5 +385,97 @@ func TestChannelArgumentValidation(t *testing.T) {
 				t.Fatalf("error = %q, want %q", err.Message, tc.want)
 			}
 		})
+	}
+}
+
+// A channel that is opened and never closed is a live resource; a channel that
+// is closed is a bounded amount of memory that a later close will reclaim.
+// Neither used to be true -- the registry only ever grew.
+
+func TestClosingAChannelStopsCountingItAsOpen(t *testing.T) {
+	before := LiveChannelCount()
+
+	handle := newTestChannel(t, 1)
+	if got := LiveChannelCount(); got != before+1 {
+		t.Fatalf("opening a channel moved the live count %d -> %d, want +1", before, got)
+	}
+
+	if _, err := unwrapPair(t, ChanClose(handle)); err != nil {
+		t.Fatalf("chan_close failed: %s", err.Message)
+	}
+	if got := LiveChannelCount(); got != before {
+		t.Fatalf("closing a channel left the live count at %d, want %d", got, before)
+	}
+
+	// A second close is a no-op and must not decrement twice, or a program that
+	// closes defensively would drive the count negative and buy itself extra
+	// channels past the ceiling.
+	if _, err := unwrapPair(t, ChanClose(handle)); err != nil {
+		t.Fatalf("second chan_close failed: %s", err.Message)
+	}
+	if got := LiveChannelCount(); got != before {
+		t.Fatalf("a repeated close moved the live count to %d, want %d", got, before)
+	}
+}
+
+func TestOpeningPastTheCeilingIsAnError(t *testing.T) {
+	opened := make([]*object.Integer, 0, maxLiveChannels)
+	defer func() {
+		for _, handle := range opened {
+			ChanClose(handle)
+		}
+	}()
+
+	var ceilingErr string
+	for i := 0; i < maxLiveChannels+1; i++ {
+		result, err := unwrapPair(t, ChanNew(&object.Integer{Value: 0}))
+		if err != nil {
+			ceilingErr = err.Message
+			break
+		}
+		opened = append(opened, result.(*object.Integer))
+	}
+
+	if ceilingErr == "" {
+		t.Fatalf("opened %d channels with no ceiling; the registry is unbounded", len(opened))
+	}
+	if !strings.Contains(ceilingErr, "too many channels open at once") {
+		t.Fatalf("the ceiling error does not say what happened: %s", ceilingErr)
+	}
+}
+
+// Retention is the backstop for fire-and-forget code that closes channels and
+// never looks at them again. A closed handle stays addressable -- that is what
+// lets a receiver drain what was queued -- until enough others have been closed
+// after it.
+func TestClosedChannelsAreReclaimedOnceRetentionFills(t *testing.T) {
+	first := newTestChannel(t, 1)
+	if _, err := unwrapPair(t, ChanSend(first, &object.Integer{Value: 7})); err != nil {
+		t.Fatalf("chan_send failed: %s", err.Message)
+	}
+	if _, err := unwrapPair(t, ChanClose(first)); err != nil {
+		t.Fatalf("chan_close failed: %s", err.Message)
+	}
+
+	// Still addressable straight after the close, with its queued value intact.
+	value, err := unwrapPair(t, ChanRecv(first, &object.Integer{Value: 0}))
+	if err != nil {
+		t.Fatalf("draining a just-closed channel failed: %s", err.Message)
+	}
+	if got, ok, _, _ := recvFields(t, value); !ok || got.Inspect() != "7" {
+		t.Fatalf("a just-closed channel did not hand back its queued value, got %s (ok=%v)", got.Inspect(), ok)
+	}
+
+	for i := 0; i < maxRetainedChannels; i++ {
+		handle := newTestChannel(t, 0)
+		if _, err := unwrapPair(t, ChanClose(handle)); err != nil {
+			t.Fatalf("chan_close failed on filler %d: %s", i, err.Message)
+		}
+	}
+
+	if _, err := unwrapPair(t, ChanRecv(first, &object.Integer{Value: 0})); err == nil {
+		t.Fatal("the oldest closed channel survived retention; closed handles are never reclaimed")
+	} else if !strings.Contains(err.Message, "unknown channel handle") {
+		t.Fatalf("an evicted handle reported something else: %s", err.Message)
 	}
 }

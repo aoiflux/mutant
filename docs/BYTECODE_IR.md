@@ -1067,13 +1067,14 @@ an undecodable instruction rather than silently running a shortened program.
 
 ## 16. Polymorphic Mutation Engine
 
-> **All three implemented stages run at any non-zero mutation level**:
-> `InsertNOPs`, `MutateOpcodes` and `RandomizeConstants`. `--mutation 0` is the
-> only setting that leaves the program byte-identical.
+> **All four stages run at any non-zero mutation level**: `InsertNOPs`,
+> `InsertDeadCode`, `MutateOpcodes` and `RandomizeConstants`. `--mutation 0` is
+> the only setting that leaves the program byte-identical.
 >
-> `ReorderInstructions` and `InsertDeadCode` are fields on `MutationConfig` with
-> **no implementation behind them anywhere in the package**. They are not stages
-> held back by a flag; setting either true does nothing.
+> `ReorderInstructions` used to be a fifth field with no implementation behind
+> it. It has been removed: reordering needs a reverse mapping the VM has no way
+> to carry, and a named stage that does nothing is how a stale opcode list once
+> survived unnoticed.
 >
 > Until this was fixed, `RandomizeConstants` was the only stage that ran and it
 > was gated at level 6 while the CLI defaulted to 5 -- so the default ran the
@@ -1096,11 +1097,18 @@ Constructed with `compiler.EnablePolymorphism(level)` (random seed via
 
 ```
 ByteCode.Mutate(bc):
-    if InsertNOPs         → insertNOPs(bc)              // every stream, jumps repointed
-    if RandomizeConstants → randomizeConstantPool(bc)   // pool operands rewritten
-    if MutateOpcodes      → mutateOpcodes(bc)           // must be last
+    if InsertNOPs                     → spliceFillers(bc, config)     // every stream, jumps repointed
+       or InsertDeadCode
+    if RandomizeConstants             → randomizeConstantPool(bc)     // pool operands rewritten
+    if MutateOpcodes                  → mutateOpcodes(bc)             // must be last
     append PolymorphicMarker
 ```
+
+NOP insertion and dead-code insertion are two stages but **one pass**. Both
+splice a block at an instruction boundary and both need every jump in the stream
+repointed afterwards, so running them separately would decode the boundaries and
+rewrite the jumps twice to reach the same stream. `spliceFillers` picks a
+generator per insertion point from whichever stages are enabled.
 
 **The order is load-bearing.** NOP insertion and constant-pool randomization
 both walk the instruction stream by operand width, so they have to run while the

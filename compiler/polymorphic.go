@@ -17,12 +17,11 @@ type PolymorphicEngine struct {
 
 // MutationConfig controls which mutations are applied
 type MutationConfig struct {
-	InsertNOPs          bool
-	ReorderInstructions bool
-	MutateOpcodes       bool
-	InsertDeadCode      bool
-	RandomizeConstants  bool
-	Level               int // 0-10
+	InsertNOPs         bool
+	MutateOpcodes      bool
+	InsertDeadCode     bool
+	RandomizeConstants bool
+	Level              int // 0-10
 }
 
 // NewPolymorphicEngine creates a new polymorphic engine
@@ -56,9 +55,13 @@ func (pe *PolymorphicEngine) Mutate(bytecode *ByteCode) *ByteCode {
 
 	config := pe.getConfig()
 
-	// Apply mutations in stages
-	if config.InsertNOPs {
-		bytecode = pe.insertNOPs(bytecode)
+	// Apply mutations in stages. NOP insertion and dead-code insertion are two
+	// stages but one pass: both splice a stack-neutral block at an instruction
+	// boundary and both need every jump in the stream repointed afterwards, so
+	// running them separately would decode the boundaries and rewrite the jumps
+	// twice to reach the same stream.
+	if config.InsertNOPs || config.InsertDeadCode {
+		bytecode = pe.spliceFillers(bytecode, config)
 	}
 
 	if config.RandomizeConstants {
@@ -95,12 +98,9 @@ func (pe *PolymorphicEngine) getConfig() MutationConfig {
 		// (code.ConstantOperands).
 		RandomizeConstants: active,
 
-		// Neither of these has an implementation anywhere in the package. They
-		// are not stages held back by a flag, they are names with nothing behind
-		// them, kept because MutationConfig is the record of what the engine
-		// could grow. Setting either true does nothing at all.
-		ReorderInstructions: false,
-		InsertDeadCode:      false,
+		// Splices blocks that are jumped over rather than executed, through the
+		// same pass and the same jump repointing NOP insertion uses.
+		InsertDeadCode: active,
 
 		Level: pe.mutationLevel,
 	}
@@ -110,16 +110,27 @@ func polymorphicSafeStagesEnabled() bool {
 	return true
 }
 
-// insertNOPs splices stack-neutral instructions into every instruction stream in
-// the program -- the main one and each compiled function in the constant pool.
+// spliceFillers splices blocks that do not change what the program computes
+// into every instruction stream -- the main one and each compiled function in
+// the constant pool.
 //
-// The previous version walked the main stream a byte at a time, appended NOPs
-// after arbitrary bytes rather than after instructions, and never touched a jump
-// operand. Jump targets are absolute offsets, so a single inserted byte ahead of
-// one silently redirects it into the middle of an instruction; the VM's
+// Two mutation stages arrive here. A NOP is executed and does nothing; a dead
+// block is jumped over and never executed at all. They differ in what they
+// generate and in nothing else, so they share one boundary decode and one jump
+// rewrite instead of doing both twice.
+//
+// The version this replaces walked the main stream a byte at a time, appended
+// NOPs after arbitrary bytes rather than after instructions, and never touched a
+// jump operand. Jump targets are absolute offsets, so a single inserted byte
+// ahead of one silently redirects it into the middle of an instruction; the VM's
 // control-flow integrity check then reports the program as tampered with. That
 // is why the stage was gated off rather than fixed.
-func (pe *PolymorphicEngine) insertNOPs(bytecode *ByteCode) *ByteCode {
+func (pe *PolymorphicEngine) spliceFillers(bytecode *ByteCode, config MutationConfig) *ByteCode {
+	gens := pe.fillerGenerators(config)
+	if len(gens) == 0 {
+		return bytecode
+	}
+
 	// Level 1: ~1.5% of instruction boundaries. Level 10: ~15%.
 	rate := float64(pe.mutationLevel) * 1.5 / 100.0
 
@@ -127,17 +138,38 @@ func (pe *PolymorphicEngine) insertNOPs(bytecode *ByteCode) *ByteCode {
 	// the slot above the stack pointer once the program has finished, so it is
 	// the main stream's final pop that decides it. A function body's pops all
 	// happen earlier, inside a frame that has since been unwound.
-	bytecode.Instructions = pe.padInstructions(bytecode.Instructions, rate, true)
+	bytecode.Instructions = pe.padInstructions(bytecode.Instructions, rate, true, gens)
 
 	for _, constant := range bytecode.Constants {
 		fn, ok := constant.(*object.CompiledFunction)
 		if !ok {
 			continue
 		}
-		fn.Instructions = pe.padInstructions(fn.Instructions, rate, false)
+		fn.Instructions = pe.padInstructions(fn.Instructions, rate, false, gens)
 	}
 
 	return bytecode
+}
+
+// padGenerator produces one filler block to splice in at offset `at` in the
+// stream being built. It also reports the offsets, relative to the block, of any
+// jump operand it wrote itself: those already hold final offsets, and the pass
+// that repoints the stream's original jumps must leave them alone.
+//
+// Returning an empty block means "not here" -- a generator declines when what it
+// would emit cannot be expressed, which for a dead block means a jump target too
+// large for a two-byte operand.
+type padGenerator func(at int) (block code.Instructions, ownJumpOperands []int)
+
+func (pe *PolymorphicEngine) fillerGenerators(config MutationConfig) []padGenerator {
+	var gens []padGenerator
+	if config.InsertNOPs {
+		gens = append(gens, func(int) (code.Instructions, []int) { return pe.generateNOP(), nil })
+	}
+	if config.InsertDeadCode {
+		gens = append(gens, pe.generateDeadBlock)
+	}
+	return gens
 }
 
 // padInstructions returns ins with NOPs spliced in and every jump operand
@@ -148,9 +180,9 @@ func (pe *PolymorphicEngine) insertNOPs(bytecode *ByteCode) *ByteCode {
 // that is not an instruction boundary, an offset a uint16 operand cannot hold.
 // Declining to mutate is always available; a half-rewritten stream is not
 // recoverable, and obfuscation is never worth a corrupted program.
-func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64, protectFinalPop bool) code.Instructions {
+func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64, protectFinalPop bool, gens []padGenerator) code.Instructions {
 	starts, widths, ok := decodeBoundaries(ins)
-	if !ok || len(starts) == 0 {
+	if !ok || len(starts) == 0 || len(gens) == 0 {
 		return ins
 	}
 
@@ -164,18 +196,29 @@ func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64
 	remap := make(map[int]int, len(starts)+1)
 	padded := make(code.Instructions, 0, len(ins)+len(ins)/4)
 
+	// Operand offsets in padded that this pass wrote itself. They already hold
+	// final offsets, so rewriting them through remap would look up an offset that
+	// was never an instruction start in the original stream -- which either fails
+	// the whole rewrite or, worse, collides with a real old offset and silently
+	// redirects the injected jump into live code.
+	ownJumps := map[int]bool{}
+
 	for i, start := range starts {
 		remap[start] = len(padded)
 		padded = append(padded, ins[start:start+widths[i]]...)
 
 		if start < cutoff && pe.rng.Float64() < rate {
-			padded = append(padded, pe.generateNOP()...)
+			block, own := gens[pe.rng.Intn(len(gens))](len(padded))
+			for _, offset := range own {
+				ownJumps[len(padded)+offset] = true
+			}
+			padded = append(padded, block...)
 		}
 	}
 	// A jump to one past the end means "leave this stream", and stays that.
 	remap[len(ins)] = len(padded)
 
-	if !rewriteJumpTargets(padded, remap) {
+	if !rewriteJumpTargets(padded, remap, ownJumps) {
 		return ins
 	}
 
@@ -239,7 +282,7 @@ func decodeBoundaries(ins code.Instructions) (starts, widths []int, ok bool) {
 // stream, or if its new offset no longer fits the two-byte operand. Either way
 // the caller must discard the padded stream rather than ship a jump landing
 // mid-instruction.
-func rewriteJumpTargets(padded code.Instructions, remap map[int]int) bool {
+func rewriteJumpTargets(padded code.Instructions, remap map[int]int, ownJumps map[int]bool) bool {
 	for i := 0; i < len(padded); {
 		def, err := code.Lookup(padded[i])
 		if err != nil {
@@ -258,7 +301,7 @@ func rewriteJumpTargets(padded code.Instructions, remap map[int]int) bool {
 
 		offset := i + 1
 		for operand, w := range def.OperandWidths {
-			if w == 2 && containsInt(slots, operand) {
+			if w == 2 && containsInt(slots, operand) && !ownJumps[offset] {
 				old := int(binary.BigEndian.Uint16(padded[offset : offset+2]))
 				target, known := remap[old]
 				if !known || target > math.MaxUint16 {
@@ -293,6 +336,71 @@ func (pe *PolymorphicEngine) generateNOP() code.Instructions {
 	}
 
 	return append(code.Make(push), code.Make(code.OpPop)...)
+}
+
+// deadCodeFillers are the instructions a dead block is padded out with. Every
+// one of them is operand-free, which matters twice over: the block still decodes
+// at a fixed width, so every later pass that walks the stream by operand width
+// walks it correctly, and none of them carries an index that could point outside
+// the constants pool, the stack or the builtin table. Code that never runs must
+// still be code the VM can read, because the control-flow integrity check reads
+// all of it.
+//
+// No OpChkDbg or OpChkSnd: the security-opcode scan looks for those, and junk
+// must not be able to answer for checks the compiler was supposed to inject.
+// No jumps either, beyond the one guarding the block, which the generator
+// resolves itself.
+var deadCodeFillers = []code.Opcode{
+	code.OpTrue, code.OpFalse, code.OpNull,
+	code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod,
+	code.OpBang, code.OpMinus, code.OpPop, code.OpDup,
+	code.OpEqual, code.OpUnEqual, code.OpGreater, code.OpGreaterEqual,
+}
+
+// generateDeadBlock returns instructions that are branched over rather than
+// run: a jump past a stretch of plausible-looking junk.
+//
+// Where a NOP hides one instruction boundary, a dead block hides a stretch of
+// stream -- a disassembler reading straight through sees instructions the
+// program never executes, and a signature taken over the byte sequence no longer
+// matches the one taken over what runs.
+//
+// Two shapes, for the reason generateNOP has three: padding that always looks
+// the same is one signature rather than none. Both are stack-neutral. The
+// unconditional form touches the stack not at all; the guarded form pushes a
+// false that OpJumpFalse immediately pops, and !isTruthy(false) means the branch
+// is always taken.
+//
+// The jump target is computed here and is already a final offset in the padded
+// stream, which is why the offset comes back to the caller to be excluded from
+// the pass that repoints the original jumps.
+func (pe *PolymorphicEngine) generateDeadBlock(at int) (code.Instructions, []int) {
+	guarded := pe.rng.Intn(2) == 0
+
+	var blk code.Instructions
+	jumpOp := code.OpJump
+	if guarded {
+		blk = append(blk, code.Make(code.OpFalse)...)
+		jumpOp = code.OpJumpFalse
+	}
+
+	operandAt := len(blk) + 1
+	blk = append(blk, code.Make(jumpOp, 0)...)
+
+	for n := 2 + pe.rng.Intn(5); n > 0; n-- {
+		blk = append(blk, code.Make(deadCodeFillers[pe.rng.Intn(len(deadCodeFillers))])...)
+	}
+
+	// Resolving to the instruction immediately after the block is what makes the
+	// junk unreachable. If that offset does not fit the operand, emit nothing:
+	// a truncated target would be a jump into the middle of the program.
+	target := at + len(blk)
+	if target > math.MaxUint16 {
+		return nil, nil
+	}
+	binary.BigEndian.PutUint16(blk[operandAt:operandAt+2], uint16(target))
+
+	return blk, []int{operandAt}
 }
 
 // mutateOpcodes replaces every opcode byte with its image under a seeded

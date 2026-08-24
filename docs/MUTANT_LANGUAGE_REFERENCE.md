@@ -47,7 +47,7 @@ let report = load("report.json");
 putln("read", len(report), "bytes");
 ```
 
-This convention runs through the whole standard library; the [Capability Reference](CAPABILITY_REFERENCE.md) marks which builtins return a pair. (Idiom note: keep `return` inside functions rather than at the top level of a program.)
+This convention runs through the whole standard library; the [Capability Reference](CAPABILITY_REFERENCE.md) marks which builtins return a pair. (Idiom note: keep `return` inside functions rather than at the top level of a program. A top-level `return` is legal and stops the program there, reporting the value it returned — or nothing at all for a bare `return;` — but a program that reads top to bottom is easier to follow than one with exits scattered through it.)
 
 ### Binding several names at once
 
@@ -201,6 +201,15 @@ drains a closed channel before it sees `closed`.
 `chan_send` returns true once the value is handed over and false if its timeout
 ran out; sending on a *closed* channel is an error, because the value had
 nowhere to go.
+
+**Close every channel you open.** At most 1024 may be open at once, and
+`chan_new` reports an error rather than waiting when that is reached -- waiting
+would deadlock code that is trying to create the channel a sibling is about to
+read. Closing is what releases a channel: the handle stays usable afterwards so
+a receiver can drain what was already queued, and is reclaimed once enough other
+channels have been closed after it, at which point it reports as unknown. A
+server that opens a channel per connection therefore has to close them, not just
+stop using them.
 
 #### What happens at exit
 

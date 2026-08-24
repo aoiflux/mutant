@@ -41,6 +41,15 @@ VS Code language support for Mutant.
   diagnostics (statements after an unconditional `return`/`break`/`continue`)
 - `mutant.lint.rules.platformSupport.severity`: severity for OS-aware
   platform-support warnings (a builtin unsupported on the host OS)
+- `mutant.lint.rules.builtinArity.severity`: severity for wrong-argument-count
+  calls to fixed-arity builtins
+- `mutant.lint.rules.builtinArgType.severity`: severity for arguments of a type
+  a builtin parameter cannot accept
+- `mutant.lint.rules.builtinSingleReturn.severity`: severity for binding several
+  names from a builtin that returns one value
+- `mutant.lint.rules.spawnGlobalWrite.severity`: severity for a `spawn`/`pmap`/
+  `peach` callback writing a global, which lands in that worker's copy and is
+  lost when the callback finishes
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing
