@@ -39,6 +39,9 @@ add(p.x, p.y);
 // compileMutated mirrors what generator.encode does: compile at a mutation
 // level, then strip the trailing polymorphic marker, which is compile-time
 // metadata and not executable.
+//
+// The trim is decided by the level passed in, not by reading the last two bytes.
+// DetectPolymorphicLevel is a heuristic that ordinary bytecode trips.
 func compileMutated(t *testing.T, level int, seed int64) *compiler.ByteCode {
 	t.Helper()
 
@@ -51,10 +54,21 @@ func compileMutated(t *testing.T, level int, seed int64) *compiler.ByteCode {
 	}
 
 	bc := comp.ByteCode()
-	if compiler.DetectPolymorphicLevel(bc.Instructions) > 0 && len(bc.Instructions) >= 2 {
+	if level > 0 && len(bc.Instructions) >= 2 {
 		bc.Instructions = bc.Instructions[:len(bc.Instructions)-2]
 	}
 	return bc
+}
+
+// realOpcode reads the opcode at an offset the way the VM does, undoing the
+// polymorphic engine's permutation when the program carries one. A test that
+// decoded the raw byte instead would walk a remapped stream with the wrong
+// operand widths and report corruption that is not there.
+func realOpcode(bc *compiler.ByteCode, b byte) code.Opcode {
+	if len(bc.OpcodeMap) != 256 {
+		return code.Opcode(b)
+	}
+	return code.Opcode(bc.OpcodeMap[b])
 }
 
 // The mutation level must not change what the program computes. This is the
@@ -110,7 +124,7 @@ func TestMutationKeepsConstantReferencesPointingAtTheRightConstants(t *testing.T
 
 		seen := 0
 		for _, ins := range streams {
-			seen += checkConstantRefs(t, level, ins, bc.Constants, wantKind)
+			seen += checkConstantRefs(t, level, bc, ins, wantKind)
 		}
 
 		// If the program stopped emitting these opcodes the test would pass
@@ -127,15 +141,19 @@ func TestMutationKeepsConstantReferencesPointingAtTheRightConstants(t *testing.T
 func checkConstantRefs(
 	t *testing.T,
 	level int,
+	bc *compiler.ByteCode,
 	ins code.Instructions,
-	constants []object.Object,
 	wantKind map[code.Opcode]object.ObjectType,
 ) int {
 	t.Helper()
 
+	constants := bc.Constants
+
 	checked := 0
 	for i := 0; i < len(ins); {
-		def, err := code.Lookup(ins[i])
+		op := realOpcode(bc, ins[i])
+
+		def, err := code.Lookup(byte(op))
 		if err != nil {
 			t.Fatalf("level %d: undecodable opcode %d at offset %d", level, ins[i], i)
 		}
@@ -148,7 +166,6 @@ func checkConstantRefs(
 			t.Fatalf("level %d: %s at offset %d runs past the end of the stream", level, def.Name, i)
 		}
 
-		op := code.Opcode(ins[i])
 		want, interesting := wantKind[op]
 
 		offset := i + 1

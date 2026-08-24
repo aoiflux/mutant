@@ -46,6 +46,17 @@ type VM struct {
 
 	enforceSecurityCheckOpcodes bool
 
+	// opcodeReverse undoes the polymorphic engine's opcode permutation, indexed
+	// by the byte found in the stream. nil when the program was not remapped,
+	// which is every program compiled outside `mutant gen`/`mutant release` and
+	// every one built at --mutation 0.
+	//
+	// It must be consulted at every point an opcode byte is turned into a
+	// code.Opcode, not just in the fetch loop: the boundary map and the
+	// security-opcode scan decode the same streams, and a scan that missed the
+	// remapping would report a program as missing its OpChkDbg/OpChkSnd checks.
+	opcodeReverse []byte
+
 	// xorStream caches the instruction-decryption key/nonce (seed=inslen and
 	// password are constant per run) so decoding an opcode or its operands never
 	// re-derives them. Reach for it through instructionStream, which builds it on
@@ -155,6 +166,7 @@ func New(bc *compiler.ByteCode) *VM {
 
 	vm := &VM{
 		bytecode:        bc,
+		opcodeReverse:   normalizeOpcodeMap(bc.OpcodeMap),
 		constants:       bc.Constants,
 		stack:           make([]object.Object, initialStackCapacity),
 		stackPointer:    0,
@@ -178,6 +190,28 @@ func New(bc *compiler.ByteCode) *VM {
 	vm.nextIntegrityAt = 0
 	vm.nextSweepAt = vm.nextSweepInterval()
 	return vm
+}
+
+// normalizeOpcodeMap accepts a reverse opcode table only if it can address every
+// byte an instruction stream might hold. A short table would panic on the first
+// opcode past its end, and a table that is present but wrong is worse than none
+// -- so anything malformed is treated as absent, and the program runs as though
+// it had never been remapped. That fails loudly at the first instruction rather
+// than executing something else.
+func normalizeOpcodeMap(reverse []byte) []byte {
+	if len(reverse) != 256 {
+		return nil
+	}
+	return reverse
+}
+
+// decodeOpcode turns a byte read from an instruction stream into the opcode it
+// stands for, undoing polymorphic remapping when the program carries a table.
+func (vm *VM) decodeOpcode(b byte) code.Opcode {
+	if vm.opcodeReverse == nil {
+		return code.Opcode(b)
+	}
+	return code.Opcode(vm.opcodeReverse[b])
 }
 
 func convertStructDefs(structDefs map[string][]*ast.Identifier) map[string]interface{} {
@@ -523,7 +557,7 @@ func (vm *VM) buildInstructionBoundaries(ins code.Instructions) map[int]struct{}
 			break
 		}
 
-		def, err := code.Lookup(opcodeByte)
+		def, err := code.Lookup(byte(vm.decodeOpcode(opcodeByte)))
 		if err != nil {
 			break
 		}
@@ -619,7 +653,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 		if err != nil {
 			return vm.runtimeErrorAt(ip, op, err)
 		}
-		op = code.Opcode(opcodeByte)
+		op = vm.decodeOpcode(opcodeByte)
 
 		switch op {
 		case code.OpChkDbg:
@@ -1177,7 +1211,7 @@ func (vm *VM) scanInstructionsForSecurityCheckOpcodes(ins code.Instructions) (bo
 			return false, false, err
 		}
 
-		op := code.Opcode(opcodeByte)
+		op := vm.decodeOpcode(opcodeByte)
 		if op == code.OpChkDbg {
 			foundDbg = true
 		}

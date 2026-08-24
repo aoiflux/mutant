@@ -92,19 +92,28 @@ Remote scan status:
 
 ## 7) Are polymorphic mutations fully active?
 
-Partially.
+Yes, for every transform that exists.
 
 Current state:
 
 1. Polymorphic engine is integrated and marker/tagging is active.
 2. Mutation level and seed flags are wired through CLI paths.
-3. Constant-pool randomization is active at mutation level 6 and above; the
-   CLI default is 5, so it is off unless `--mutation` is raised.
-4. The remaining transforms (NOP insertion, instruction reordering, opcode
-   remapping, dead-code insertion) are gated off in the engine config.
+3. All three implemented transforms -- NOP insertion, constant-pool
+   randomization and opcode remapping -- run at **any non-zero** mutation level,
+   including the CLI default of 5. `--mutation 0` is the only setting that
+   leaves the program byte-identical.
+4. `ReorderInstructions` and `InsertDeadCode` are named in `MutationConfig` but
+   have no implementation behind them. They are not gated transforms; there is
+   nothing to gate.
 
-Practical meaning: framework and controls exist, but not every planned
-transformation is active by default.
+Until this was fixed, constant-pool randomization was the only transform that
+ran and it was gated at level 6 while the CLI defaulted to 5 -- so the default
+ran the engine and shipped unmutated bytecode. Two builds of the same source at
+the default level were byte-identical.
+
+Practical meaning: `mutant gen` and `mutant release` now emit a structurally
+different program on every build unless a fixed `--seed` is given, and the same
+`--seed` reproduces a build exactly.
 
 ## 8) Is memory security implemented?
 

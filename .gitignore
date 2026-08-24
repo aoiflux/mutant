@@ -12,5 +12,12 @@ releaseassets/data/
 dist/
 plans/
 replwasm
+# Artifacts examples write into the working directory when run.
+# Named explicitly: `example*/` also matches examples/, which would
+# silently keep a newly added example out of `git add`.
+example_output/
+example_output.txt
+example_dir/
+example_graph_data*/
 
 !releaseassets/data/placeholder.bin

@@ -62,14 +62,19 @@ Enforcement trigger:
 
 ## 5. Polymorphic engine status
 
-Current status is mixed by design:
+Every transform the engine implements is active:
 
 1. Engine integration exists.
-2. Mutation controls are wired.
-3. Marker/tagging is active.
-4. Advanced transforms are currently gated for safety and compatibility.
+2. Mutation controls are wired (`--mutation 0-10`, `--seed`).
+3. Marker/tagging is applied at compile time and stripped before the file is
+   written, so it never reaches the VM.
+4. NOP insertion, constant-pool randomization and opcode remapping all run at
+   any non-zero level, including the CLI default. `--mutation 0` is the only
+   setting that leaves the program byte-identical.
+5. `ReorderInstructions` and `InsertDeadCode` are named in the config but have
+   no implementation behind them.
 
-See full status and roadmap:
+See full status and what is left:
 
 1. [POLYMORPHIC_BYTECODE_LLD](POLYMORPHIC_BYTECODE_LLD.md)
 

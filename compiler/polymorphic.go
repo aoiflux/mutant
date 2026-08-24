@@ -1,9 +1,8 @@
 package compiler
 
 import (
-	cryptorand "crypto/rand"
 	"encoding/binary"
-	"math/big"
+	"math"
 	mathrand "math/rand"
 	"mutant/code"
 	"mutant/object"
@@ -42,7 +41,14 @@ func NewPolymorphicEngine(level int, seed int64) *PolymorphicEngine {
 	}
 }
 
-// Mutate applies polymorphic transformations to bytecode
+// Mutate applies polymorphic transformations to bytecode.
+//
+// The order of the stages is load-bearing. NOP insertion and constant-pool
+// randomization both walk the instruction stream by operand width, so they have
+// to run while the opcode bytes still mean what code.Lookup says they mean.
+// Opcode remapping destroys that and therefore runs last. It used to run in the
+// middle, which would have left the constant-pool pass parsing a remapped
+// stream -- one more reason the stage could not simply be switched on.
 func (pe *PolymorphicEngine) Mutate(bytecode *ByteCode) *ByteCode {
 	if pe.mutationLevel == 0 {
 		return bytecode // No mutations
@@ -52,15 +58,15 @@ func (pe *PolymorphicEngine) Mutate(bytecode *ByteCode) *ByteCode {
 
 	// Apply mutations in stages
 	if config.InsertNOPs {
-		bytecode.Instructions = pe.insertNOPs(bytecode.Instructions)
-	}
-
-	if config.MutateOpcodes {
-		bytecode = pe.mutateOpcodes(bytecode)
+		bytecode = pe.insertNOPs(bytecode)
 	}
 
 	if config.RandomizeConstants {
 		bytecode = pe.randomizeConstantPool(bytecode)
+	}
+
+	if config.MutateOpcodes {
+		bytecode = pe.mutateOpcodes(bytecode)
 	}
 
 	// Add polymorphic marker to indicate mutation level
@@ -69,21 +75,34 @@ func (pe *PolymorphicEngine) Mutate(bytecode *ByteCode) *ByteCode {
 	return bytecode
 }
 
-// getConfig returns mutation configuration based on level
+// getConfig returns mutation configuration based on level.
+//
+// Every implemented stage engages at any non-zero level. It used to take level 6
+// to reach the only working stage while the CLI defaulted to 5, so the default
+// shipped bytecode that had been through the engine and come out unchanged.
 func (pe *PolymorphicEngine) getConfig() MutationConfig {
-	safeStagesEnabled := polymorphicSafeStagesEnabled()
+	active := polymorphicSafeStagesEnabled() && pe.mutationLevel >= 1
 
 	return MutationConfig{
-		// These transformations are intentionally gated off until instruction-boundary
-		// aware rewriting and opcode remap reversal are implemented in VM/runtime.
-		InsertNOPs:          false,
+		// Splices stack-neutral instructions in and repoints the jump targets
+		// they displace (code.JumpOperands). Its density scales with the level,
+		// so this is the one stage where 1..10 grades rather than switches.
+		InsertNOPs: active,
+		// Permutes the instruction set and ships the inverse in
+		// ByteCode.OpcodeMap; the VM applies it on every opcode fetch.
+		MutateOpcodes: active,
+		// Reorders the constant pool and rewrites the operands that index it
+		// (code.ConstantOperands).
+		RandomizeConstants: active,
+
+		// Neither of these has an implementation anywhere in the package. They
+		// are not stages held back by a flag, they are names with nothing behind
+		// them, kept because MutationConfig is the record of what the engine
+		// could grow. Setting either true does nothing at all.
 		ReorderInstructions: false,
-		MutateOpcodes:       false,
 		InsertDeadCode:      false,
-		// First safe stage: deterministic constant-pool randomization with
-		// instruction-boundary aware reference rewriting.
-		RandomizeConstants: safeStagesEnabled && pe.mutationLevel >= 6,
-		Level:              pe.mutationLevel,
+
+		Level: pe.mutationLevel,
 	}
 }
 
@@ -91,94 +110,292 @@ func polymorphicSafeStagesEnabled() bool {
 	return true
 }
 
-// insertNOPs inserts no-operation instructions
-func (pe *PolymorphicEngine) insertNOPs(instructions code.Instructions) code.Instructions {
-	if len(instructions) == 0 {
-		return instructions
-	}
+// insertNOPs splices stack-neutral instructions into every instruction stream in
+// the program -- the main one and each compiled function in the constant pool.
+//
+// The previous version walked the main stream a byte at a time, appended NOPs
+// after arbitrary bytes rather than after instructions, and never touched a jump
+// operand. Jump targets are absolute offsets, so a single inserted byte ahead of
+// one silently redirects it into the middle of an instruction; the VM's
+// control-flow integrity check then reports the program as tampered with. That
+// is why the stage was gated off rather than fixed.
+func (pe *PolymorphicEngine) insertNOPs(bytecode *ByteCode) *ByteCode {
+	// Level 1: ~1.5% of instruction boundaries. Level 10: ~15%.
+	rate := float64(pe.mutationLevel) * 1.5 / 100.0
 
-	// Calculate NOP insertion rate based on level
-	// Level 3: ~5%, Level 10: ~15%
-	insertionRate := float64(pe.mutationLevel) * 1.5 / 100.0
+	// Only the main stream needs its tail protected: LastPoppedStackElement reads
+	// the slot above the stack pointer once the program has finished, so it is
+	// the main stream's final pop that decides it. A function body's pops all
+	// happen earlier, inside a frame that has since been unwound.
+	bytecode.Instructions = pe.padInstructions(bytecode.Instructions, rate, true)
 
-	result := make(code.Instructions, 0, int(float64(len(instructions))*(1+insertionRate)))
-
-	for i := 0; i < len(instructions); i++ {
-		result = append(result, instructions[i])
-
-		// Randomly insert NOP after this instruction
-		if pe.shouldInsertNOP(insertionRate) {
-			nop := pe.generateNOP()
-			result = append(result, nop...)
+	for _, constant := range bytecode.Constants {
+		fn, ok := constant.(*object.CompiledFunction)
+		if !ok {
+			continue
 		}
+		fn.Instructions = pe.padInstructions(fn.Instructions, rate, false)
 	}
 
-	return result
-}
-
-// shouldInsertNOP determines if a NOP should be inserted using cryptographic randomness
-func (pe *PolymorphicEngine) shouldInsertNOP(rate float64) bool {
-	max := big.NewInt(100)
-	n, _ := cryptorand.Int(cryptorand.Reader, max)
-	return float64(n.Int64()) < rate*100
-}
-
-// generateNOP creates a no-operation instruction sequence
-func (pe *PolymorphicEngine) generateNOP() code.Instructions {
-	// Generate different types of NOPs randomly
-	nopType := pe.randomIntCrypto(4)
-
-	switch nopType {
-	case 0:
-		// Push null then pop
-		return append(code.Make(code.OpNull), code.Make(code.OpPop)...)
-	case 1:
-		// Push true then pop
-		return append(code.Make(code.OpTrue), code.Make(code.OpPop)...)
-	case 2:
-		// Push false then pop
-		return append(code.Make(code.OpFalse), code.Make(code.OpPop)...)
-	default:
-		// Just OpPop (safe if stack has something)
-		return code.Make(code.OpPop)
-	}
-}
-
-// mutateOpcodes remaps opcodes to different values
-func (pe *PolymorphicEngine) mutateOpcodes(bytecode *ByteCode) *ByteCode {
-	// Create a random opcode mapping
-	mapping := pe.generateOpcodeMapping()
-
-	// Apply mapping to instructions
-	newInstructions := make(code.Instructions, len(bytecode.Instructions))
-	copy(newInstructions, bytecode.Instructions)
-
-	for i := 0; i < len(newInstructions); i++ {
-		// Check if this is an opcode position
-		if mapped, ok := mapping[code.Opcode(newInstructions[i])]; ok {
-			newInstructions[i] = byte(mapped)
-		}
-	}
-
-	// Apply mapping to compiled functions in constants
-	for i, constant := range bytecode.Constants {
-		if fn, ok := constant.(*object.CompiledFunction); ok {
-			newFnInsts := make(code.Instructions, len(fn.Instructions))
-			copy(newFnInsts, fn.Instructions)
-
-			for j := 0; j < len(newFnInsts); j++ {
-				if mapped, ok := mapping[code.Opcode(newFnInsts[j])]; ok {
-					newFnInsts[j] = byte(mapped)
-				}
-			}
-
-			fn.Instructions = newFnInsts
-			bytecode.Constants[i] = fn
-		}
-	}
-
-	bytecode.Instructions = newInstructions
 	return bytecode
+}
+
+// padInstructions returns ins with NOPs spliced in and every jump operand
+// repointed at its instruction's new offset.
+//
+// It hands back ins untouched whenever the stream does not add up -- an
+// undecodable opcode, an instruction running off the end, a jump to an offset
+// that is not an instruction boundary, an offset a uint16 operand cannot hold.
+// Declining to mutate is always available; a half-rewritten stream is not
+// recoverable, and obfuscation is never worth a corrupted program.
+func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64, protectFinalPop bool) code.Instructions {
+	starts, widths, ok := decodeBoundaries(ins)
+	if !ok || len(starts) == 0 {
+		return ins
+	}
+
+	// Nothing is spliced in at or after cutoff.
+	cutoff := starts[len(starts)-1] // never after the last instruction
+	if protectFinalPop {
+		cutoff = lastPopOffset(ins, starts)
+	}
+
+	// remap[oldOffset] is where that same instruction begins once padded.
+	remap := make(map[int]int, len(starts)+1)
+	padded := make(code.Instructions, 0, len(ins)+len(ins)/4)
+
+	for i, start := range starts {
+		remap[start] = len(padded)
+		padded = append(padded, ins[start:start+widths[i]]...)
+
+		if start < cutoff && pe.rng.Float64() < rate {
+			padded = append(padded, pe.generateNOP()...)
+		}
+	}
+	// A jump to one past the end means "leave this stream", and stays that.
+	remap[len(ins)] = len(padded)
+
+	if !rewriteJumpTargets(padded, remap) {
+		return ins
+	}
+
+	return padded
+}
+
+// lastPopOffset returns the offset of the final OpPop in ins, which is the
+// last insertion point padding may use. Nothing may be spliced in at or after
+// it.
+//
+// A NOP is a push and a pop, so one placed after the program's final OpPop
+// becomes the last pop -- and VM.LastPoppedStackElement, which is what the CLI
+// prints and what the REPL echoes, then reports the NOP's value instead of the
+// program's result. Guarding only the final *instruction* is not enough: when
+// the compiler injects the required security checks it appends OpChkDbg and
+// OpChkSnd after that OpPop, leaving two legal-looking insertion points past the
+// end of the program's own value. Roughly one build in sixteen printed a stray
+// `true`.
+//
+// Returning 0 when there is no OpPop disables padding for that stream, which is
+// right: a stream with nothing to pop is a handful of instructions where padding
+// buys nothing.
+func lastPopOffset(ins code.Instructions, starts []int) int {
+	for i := len(starts) - 1; i >= 0; i-- {
+		if code.Opcode(ins[starts[i]]) == code.OpPop {
+			return starts[i]
+		}
+	}
+	return 0
+}
+
+// decodeBoundaries returns the start offset and total width of every
+// instruction in ins, or ok=false if the stream cannot be decoded end to end.
+func decodeBoundaries(ins code.Instructions) (starts, widths []int, ok bool) {
+	for i := 0; i < len(ins); {
+		def, err := code.Lookup(ins[i])
+		if err != nil {
+			return nil, nil, false
+		}
+
+		width := 1
+		for _, w := range def.OperandWidths {
+			width += w
+		}
+		if i+width > len(ins) {
+			return nil, nil, false
+		}
+
+		starts = append(starts, i)
+		widths = append(widths, width)
+		i += width
+	}
+
+	return starts, widths, true
+}
+
+// rewriteJumpTargets repoints every operand named in code.JumpOperands through
+// remap, in place.
+//
+// Reports false if a target is not an instruction boundary of the original
+// stream, or if its new offset no longer fits the two-byte operand. Either way
+// the caller must discard the padded stream rather than ship a jump landing
+// mid-instruction.
+func rewriteJumpTargets(padded code.Instructions, remap map[int]int) bool {
+	for i := 0; i < len(padded); {
+		def, err := code.Lookup(padded[i])
+		if err != nil {
+			return false
+		}
+
+		width := 1
+		for _, w := range def.OperandWidths {
+			width += w
+		}
+		if i+width > len(padded) {
+			return false
+		}
+
+		slots := code.JumpOperands[code.Opcode(padded[i])]
+
+		offset := i + 1
+		for operand, w := range def.OperandWidths {
+			if w == 2 && containsInt(slots, operand) {
+				old := int(binary.BigEndian.Uint16(padded[offset : offset+2]))
+				target, known := remap[old]
+				if !known || target > math.MaxUint16 {
+					return false
+				}
+				binary.BigEndian.PutUint16(padded[offset:offset+2], uint16(target))
+			}
+			offset += w
+		}
+
+		i += width
+	}
+
+	return true
+}
+
+// generateNOP returns a stack-neutral instruction pair: push a value, drop it
+// again. The variants differ only so the padding does not read as one repeated
+// signature.
+//
+// A bare OpPop used to be one of the four choices, commented "safe if stack has
+// something". It is not safe: the stack at an arbitrary instruction boundary
+// holds values belonging to the expression in progress, and popping one discards
+// it. Randomness decided whether a program was correct.
+func (pe *PolymorphicEngine) generateNOP() code.Instructions {
+	push := code.OpNull
+	switch pe.rng.Intn(3) {
+	case 0:
+		push = code.OpTrue
+	case 1:
+		push = code.OpFalse
+	}
+
+	return append(code.Make(push), code.Make(code.OpPop)...)
+}
+
+// mutateOpcodes replaces every opcode byte with its image under a seeded
+// permutation of the instruction set, and records the inverse in
+// ByteCode.OpcodeMap so the VM can read the result.
+//
+// Two separate things were wrong with the version this replaces, and either
+// alone made the stage unusable. It walked each stream one byte at a time and
+// rewrote anything that matched an opcode, so an operand byte holding a value
+// that happens to equal an opcode was rewritten as though it were one. And
+// nothing carried the inverse to the runtime, so even a correct rewrite produced
+// a program no VM could decode -- which is what "the VM has no reverse mapping"
+// in the old gating comment meant.
+//
+// All or nothing: every stream is rewritten or none is. A program with some
+// streams remapped and some not cannot be described by one inverse table, since
+// applying it would destroy the streams that were left alone.
+func (pe *PolymorphicEngine) mutateOpcodes(bytecode *ByteCode) *ByteCode {
+	forward, reverse := opcodeTables(pe.generateOpcodeMapping())
+
+	remapped, ok := remapOpcodes(bytecode.Instructions, forward)
+	if !ok {
+		return bytecode
+	}
+
+	fnStreams := make([]code.Instructions, 0, len(bytecode.Constants))
+	for _, constant := range bytecode.Constants {
+		fn, isFn := constant.(*object.CompiledFunction)
+		if !isFn {
+			continue
+		}
+
+		fnRemapped, fnOK := remapOpcodes(fn.Instructions, forward)
+		if !fnOK {
+			return bytecode
+		}
+		fnStreams = append(fnStreams, fnRemapped)
+	}
+
+	bytecode.Instructions = remapped
+	next := 0
+	for _, constant := range bytecode.Constants {
+		fn, isFn := constant.(*object.CompiledFunction)
+		if !isFn {
+			continue
+		}
+		fn.Instructions = fnStreams[next]
+		next++
+	}
+	bytecode.OpcodeMap = reverse
+
+	return bytecode
+}
+
+// remapOpcodes rewrites the opcode byte of each instruction and leaves every
+// operand byte exactly as it was, walking the stream by operand width so the two
+// are never confused.
+func remapOpcodes(ins code.Instructions, forward []byte) (code.Instructions, bool) {
+	out := make(code.Instructions, len(ins))
+	copy(out, ins)
+
+	for i := 0; i < len(out); {
+		def, err := code.Lookup(ins[i])
+		if err != nil {
+			return nil, false
+		}
+
+		width := 1
+		for _, w := range def.OperandWidths {
+			width += w
+		}
+		if i+width > len(out) {
+			return nil, false
+		}
+
+		out[i] = forward[ins[i]]
+		i += width
+	}
+
+	return out, true
+}
+
+// opcodeTables turns the permutation into the two 256-entry lookups the rewrite
+// and the VM need: forward maps a real opcode to the byte written into the
+// stream, reverse maps that byte back to the real opcode.
+//
+// Bytes that are not defined opcodes map to themselves in both directions, so an
+// undecodable byte stays undecodable instead of being laundered into a valid
+// instruction on the way through.
+func opcodeTables(mapping map[code.Opcode]code.Opcode) (forward, reverse []byte) {
+	forward = make([]byte, 256)
+	reverse = make([]byte, 256)
+	for i := range forward {
+		forward[i] = byte(i)
+		reverse[i] = byte(i)
+	}
+
+	for orig, mapped := range mapping {
+		forward[byte(orig)] = byte(mapped)
+		reverse[byte(mapped)] = byte(orig)
+	}
+
+	return forward, reverse
 }
 
 // generateOpcodeMapping creates a random but valid opcode remapping using deterministic RNG.
@@ -189,9 +406,9 @@ func (pe *PolymorphicEngine) mutateOpcodes(bytecode *ByteCode) *ByteCode {
 // the opcodes present get new values while the absent ones keep theirs, so the
 // two collide and the program silently decodes as something else.
 //
-// This stage is gated off in getConfig (the VM has no reverse mapping), so the
-// drift was latent. Deriving the set means it stays correct if the stage is
-// ever turned on.
+// The stage was gated off when that drift went in, so it stayed latent. Deriving
+// the set is what makes it safe to have turned the stage on: an opcode added to
+// the code package joins the permutation without anyone remembering to.
 func (pe *PolymorphicEngine) generateOpcodeMapping() map[code.Opcode]code.Opcode {
 	opcodes := code.AllOpcodes()
 
@@ -316,16 +533,6 @@ func containsInt(haystack []int, needle int) bool {
 		}
 	}
 	return false
-}
-
-// randomIntCrypto generates a random integer in range [0, max) using cryptographic randomness
-func (pe *PolymorphicEngine) randomIntCrypto(max int) int {
-	if max <= 0 {
-		return 0
-	}
-
-	n, _ := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(max)))
-	return int(n.Int64())
 }
 
 // AddPolymorphicMarker adds metadata to bytecode indicating polymorphic level

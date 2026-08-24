@@ -33,6 +33,20 @@ type ByteCode struct {
 	StructDefs   map[string][]*ast.Identifier
 	EnumDefs     map[string][]string
 	LuaPatches   map[string]*object.LuaPatch
+
+	// OpcodeMap undoes the polymorphic engine's opcode permutation: it is
+	// indexed by the byte found in the instruction stream and yields the real
+	// opcode. 256 entries, or nil when the program was not remapped.
+	//
+	// It has to travel with the program rather than be re-derived from the seed,
+	// because nothing that runs a .mu file knows the seed -- and a VM that
+	// guesses wrong does not fail cleanly. Every opcode maps to another *defined*
+	// opcode, so a stream read without this table still decodes, just as a
+	// different instruction of a different width.
+	//
+	// The field is gob-encoded with the rest of ByteCode. An older .mu simply has
+	// no entry for it and decodes to nil, which is the unmutated case.
+	OpcodeMap []byte
 }
 
 type EmittedInstruction struct {

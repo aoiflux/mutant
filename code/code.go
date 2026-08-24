@@ -134,6 +134,27 @@ var ConstantOperands = map[Opcode][]int{
 	OpEnumValue:  {0, 1}, // enum type name and variant tag, both strings
 }
 
+// JumpOperands lists, per opcode, which operand slots hold an absolute offset
+// into the instruction stream the opcode itself lives in.
+//
+// Anything that changes instruction offsets -- inserting, removing or moving
+// instructions -- has to rewrite exactly these. The failure mode mirrors
+// ConstantOperands: a stale jump target is still a number the VM will happily
+// jump to, so the program does not fail where it was corrupted. It resumes
+// executing in the middle of some other instruction, which the control-flow
+// integrity check reports as tampering rather than as a bad rewrite.
+//
+// Both operands are two bytes and both are absolute, not relative: the VM sets
+// ip to target-1 and lets the fetch loop's increment land it on the target.
+//
+// A new opcode that carries an instruction offset MUST be added here.
+// TestWideOperandsAreClassified pins the set so one cannot be added without
+// this map being considered.
+var JumpOperands = map[Opcode][]int{
+	OpJump:      {0},
+	OpJumpFalse: {0},
+}
+
 // AllOpcodes returns every defined opcode in ascending numeric order.
 //
 // Ordered rather than ranged over the definitions map so callers that shuffle
