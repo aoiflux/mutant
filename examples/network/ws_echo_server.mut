@@ -6,8 +6,10 @@
 // request, completes the 101 handshake with ws_accept_key, then echoes text
 // frames back with a prefix until the client sends a close frame.
 //
-// Run:  mutant ws_echo_server.mut --compat
+// Run:  mutant gen --src examples/network/ws_echo_server.mut --password <password>
+//       mutant examples/network/ws_echo_server.mu --compat --password <password>
 //   then connect a WebSocket client to ws://127.0.0.1:8140/
+// mutant:sweep server -- binds 127.0.0.1:8140 and serves until interrupted
 
 let ln, err = net_listen("127.0.0.1:8140");
 if (err) {

@@ -28,7 +28,7 @@ if (mkdir_result == false) {
 let package_exists, err = fs_exists(package_path);
 check_err(err, "fs_exists package");
 if (package_exists == false) {
-    let package_seed = json_stringify({
+    let package_seed, _ = json_stringify({
         "name": "demo",
         "dependencies": {
             "express": "4.17.1",
@@ -67,8 +67,11 @@ if (err) {
     putln("go extraction failed");
 };
 
-let npm_deps, err = json_parse(npm_result);
-let go_deps, err = json_parse(go_result);
+// lua_run_string returns {ok, result, error, schema_version}; the script's own
+// return value is under "result". Passing the whole hash gives json_parse a
+// HASH where it wants JSON text.
+let npm_deps, err = json_parse(npm_result["result"]);
+let go_deps, err = json_parse(go_result["result"]);
 check_err(err, "json_parse go_deps");
 
 let NODE_DEP = 1;
@@ -123,7 +126,7 @@ for (let i = 0; i < npm_dep_count; i = i + 1) {
     check(db_index_prop(db, finding_node, "vuln_signal", vulnerability_signal_json), "db_index_prop");
     check(db_add_edge(db, dep_node, finding_node, EDGE_HAS_FINDING), "db_add_edge");
 
-    let updated_findings, err = push(findings, {
+    let updated_findings = push(findings, {
         "name": dep["name"],
         "version": dep["version"],
         "ecosystem": dep["ecosystem"],
@@ -131,7 +134,6 @@ for (let i = 0; i < npm_dep_count; i = i + 1) {
         "vuln_signal": vuln_signal,
         "error": resp["error"]
 });
-    check_err(err, "push npm findings");
     findings = updated_findings;
 }
 
@@ -179,7 +181,7 @@ for (let i = 0; i < go_dep_count; i = i + 1) {
     check(db_index_prop(db, finding_node, "vuln_signal", vulnerability_signal_json), "db_index_prop");
     check(db_add_edge(db, dep_node, finding_node, EDGE_HAS_FINDING), "db_add_edge");
 
-    let updated_findings, err = push(findings, {
+    let updated_findings = push(findings, {
         "name": dep["name"],
         "version": dep["version"],
         "ecosystem": dep["ecosystem"],
@@ -187,7 +189,6 @@ for (let i = 0; i < go_dep_count; i = i + 1) {
         "vuln_signal": vuln_signal,
         "error": resp["error"]
 });
-    check_err(err, "push go findings");
     findings = updated_findings;
 }
 

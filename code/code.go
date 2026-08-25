@@ -110,6 +110,66 @@ var definitions = map[Opcode]*Definition{
 	OpSetIndex:       {"OpSetIndex", []int{}},
 }
 
+// ConstantOperands lists, per opcode, which of its operand slots hold an index
+// into ByteCode.Constants rather than a jump target, a local slot, an element
+// count, or a builtin index.
+//
+// Anything that reorders the constant pool has to rewrite exactly these and
+// nothing else. Getting the set wrong is not a crash at rewrite time: the
+// operand still points at a valid pool slot, just the wrong constant, so the
+// program compiles clean and fails much later inside the VM. That is what
+// happened when the polymorphic engine rewrote only OpConstant and left
+// OpClosure, OpMakeStruct, OpGetField, OpSetField and OpEnumValue pointing at
+// whatever had been shuffled into their old slots.
+//
+// A new opcode that carries a constant index MUST be added here.
+// TestConstantOperandsCoversEveryWideOperand pins the set so one cannot be
+// added without this map being considered.
+var ConstantOperands = map[Opcode][]int{
+	OpConstant:   {0},
+	OpClosure:    {0}, // operand 1 is the free-variable count
+	OpMakeStruct: {0}, // operand 1 is the field count
+	OpGetField:   {0},
+	OpSetField:   {0},
+	OpEnumValue:  {0, 1}, // enum type name and variant tag, both strings
+}
+
+// JumpOperands lists, per opcode, which operand slots hold an absolute offset
+// into the instruction stream the opcode itself lives in.
+//
+// Anything that changes instruction offsets -- inserting, removing or moving
+// instructions -- has to rewrite exactly these. The failure mode mirrors
+// ConstantOperands: a stale jump target is still a number the VM will happily
+// jump to, so the program does not fail where it was corrupted. It resumes
+// executing in the middle of some other instruction, which the control-flow
+// integrity check reports as tampering rather than as a bad rewrite.
+//
+// Both operands are two bytes and both are absolute, not relative: the VM sets
+// ip to target-1 and lets the fetch loop's increment land it on the target.
+//
+// A new opcode that carries an instruction offset MUST be added here.
+// TestWideOperandsAreClassified pins the set so one cannot be added without
+// this map being considered.
+var JumpOperands = map[Opcode][]int{
+	OpJump:      {0},
+	OpJumpFalse: {0},
+}
+
+// AllOpcodes returns every defined opcode in ascending numeric order.
+//
+// Ordered rather than ranged over the definitions map so callers that shuffle
+// with a seeded RNG stay reproducible; a map range would give a different
+// permutation for the same seed on every run.
+func AllOpcodes() []Opcode {
+	opcodes := make([]Opcode, 0, len(definitions))
+	for op := 0; op <= 0xFF; op++ {
+		if _, ok := definitions[Opcode(op)]; ok {
+			opcodes = append(opcodes, Opcode(op))
+		}
+	}
+	return opcodes
+}
+
 func Lookup(op byte) (*Definition, error) {
 	def, ok := definitions[Opcode(op)]
 	if !ok {

@@ -15,7 +15,6 @@ const (
 	defaultCommandMaxOutput   = 8192
 
 	errorCommandEmpty     = "command is empty"
-	errorCommandDisabled  = "command execution disabled"
 	errorCommandTimedOut  = "command timed out"
 	truncatedOutputSuffix = "\n...[truncated]"
 
@@ -24,10 +23,12 @@ const (
 	shellPwsh        = "pwsh"
 	shellCmd         = "cmd"
 	shellBatch       = "batch"
+	shellBash        = "bash"
 
 	powershellExecutable = "powershell.exe"
 	cmdExecutable        = "cmd.exe"
 	cmdFlagExec          = "/C"
+	bashExec             = "bash"
 
 	pwshFlagNoLogo         = "-NoLogo"
 	pwshFlagNoProfile      = "-NoProfile"
@@ -111,6 +112,8 @@ func buildShellCommand(shell, command string) (string, []string, error) {
 		return powershellExecutable, []string{pwshFlagNoLogo, pwshFlagNoProfile, pwshFlagNonInteractive, pwshFlagCommand, command}, nil
 	case shellCmd, shellBatch:
 		return cmdExecutable, []string{cmdFlagExec, command}, nil
+	case shellBash:
+		return bashExec, []string{command}, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported shell %q", shell)
 	}

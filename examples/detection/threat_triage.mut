@@ -36,13 +36,10 @@ let run = fn() {
     // IOC extraction from free text, then defang for safe reporting.
     let text = "seen beaconing to 185.12.0.9 and evil.example.com; " +
         "dropper sha256 44d88612fea8a8f36de82e1278abb02f";
-    let iocs, ierr = extract_iocs(text);
-    if (ierr) {
-        putln("[error] extract_iocs:", ierr);
-    } else {
-        putln("ipv4 IOCs   :", iocs["ipv4"]);
-        putln("domain IOCs :", iocs["domains"]);
-    };
+    // extract_iocs cannot fail, so it returns one hash rather than a pair.
+    let iocs = extract_iocs(text);
+    putln("ipv4 IOCs   :", iocs["ipv4"]);
+    putln("domain IOCs :", iocs["domains"]);
     putln("defanged URL:", defang("http://evil.example.com/payload"));
 
     return true;

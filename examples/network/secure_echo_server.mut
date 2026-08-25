@@ -6,8 +6,10 @@
 // Demonstrates: tls_generate_cert, net_tls_listen, net_accept, net_conn_read,
 // net_conn_write.
 //
-// Run:    mutant secure_echo_server.mut --dev
+// Run:  mutant gen --src examples/network/secure_echo_server.mut --password <password>
+//       mutant examples/network/secure_echo_server.mu --dev --password <password>
 // Test:   openssl s_client -connect 127.0.0.1:8443   (then type a line)
+// mutant:sweep server -- binds 127.0.0.1:8443 over TLS and serves until interrupted
 
 let serve = fn(bind_addr) {
     // Mint a self-signed server certificate valid for localhost + 127.0.0.1.

@@ -14,6 +14,7 @@ let lspState: "starting" | "running" | "failed" | "stopped" = "stopped";
 let lspLastError = "";
 let lspCommand = "";
 let lspOutput: vscode.OutputChannel | undefined;
+let lspStatusItem: vscode.StatusBarItem | undefined;
 let extensionInstallPath = "";
 const maxBufferedLogLines = 1000;
 const lspLogBuffer: string[] = [];
@@ -36,6 +37,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   extensionInstallPath = context.extensionPath;
   lspOutput = vscode.window.createOutputChannel("Mutant LSP");
   context.subscriptions.push(lspOutput);
+
+  lspStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  lspStatusItem.command = "mutant.restartLsp";
+  context.subscriptions.push(lspStatusItem);
+  updateLspStatusBar();
+
+  // Bridge command backing the codeLens reference lenses: converts the LSP
+  // arguments the server sends into VS Code types and opens the references peek.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "mutant.showReferences",
+      (uri: string, position: { line: number; character: number }, locations: Array<{ uri: string; range: unknown }>) => {
+        const targetUri = vscode.Uri.parse(uri);
+        const targetPosition = new vscode.Position(position.line, position.character);
+        const peekLocations = (locations ?? []).map((loc) => {
+          const r = loc.range as { start: { line: number; character: number }; end: { line: number; character: number } };
+          return new vscode.Location(
+            vscode.Uri.parse(loc.uri),
+            new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character)
+          );
+        });
+        void vscode.commands.executeCommand("editor.action.showReferences", targetUri, targetPosition, peekLocations);
+      }
+    )
+  );
 
   applyMutantFormattingPreferences();
 
@@ -91,6 +117,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await formatActiveDocument();
     })
   );
+
+  context.subscriptions.push(
+    vscode.tasks.registerTaskProvider(MUTANT_TASK_TYPE, new MutantTaskProvider())
+  );
 }
 
 // formatActiveDocument backs the "Mutant: Format Document" command. It
@@ -133,7 +163,7 @@ function applyMutantFormattingPreferences(): void {
 
 export async function deactivate(): Promise<void> {
   await stopLspClient();
-  lspState = "stopped";
+  setLspState("stopped");
   logLsp("Extension deactivated.");
 }
 
@@ -396,6 +426,135 @@ async function executeTaskAndWait(task: vscode.Task): Promise<number | undefined
   });
 }
 
+const MUTANT_TASK_TYPE = "mutant";
+
+interface MutantTaskDefinition extends vscode.TaskDefinition {
+  command: "gen" | "run" | "release";
+  src?: string;
+  os?: string;
+  arch?: string;
+  mutation?: number;
+  password?: string;
+  args?: string[];
+}
+
+function mutantCliPath(): string {
+  const configured = vscode.workspace.getConfiguration("mutant").get<string>("cli.path", "mutant");
+  return configured && configured.trim().length > 0 ? configured.trim() : "mutant";
+}
+
+function mutantTaskArgs(def: MutantTaskDefinition, srcFallback: string): string[] {
+  const src = def.src && def.src.length > 0 ? def.src : srcFallback;
+  const args: string[] = [];
+  switch (def.command) {
+    case "gen":
+      args.push("gen");
+      if (src) {
+        args.push("--src", src);
+      }
+      break;
+    case "run":
+      if (src) {
+        args.push(src);
+      }
+      break;
+    case "release":
+      args.push("release");
+      if (src) {
+        args.push("--src", src);
+      }
+      if (def.os) {
+        args.push("--os", def.os);
+      }
+      if (def.arch) {
+        args.push("--arch", def.arch);
+      }
+      if (typeof def.mutation === "number") {
+        args.push("--mutation", String(def.mutation));
+      }
+      if (def.password) {
+        args.push("--password", def.password);
+      }
+      break;
+  }
+  if (Array.isArray(def.args)) {
+    args.push(...def.args);
+  }
+  return args;
+}
+
+function makeMutantTask(def: MutantTaskDefinition, name: string, srcFallback: string): vscode.Task {
+  const task = new vscode.Task(
+    def,
+    vscode.TaskScope.Workspace,
+    name,
+    MUTANT_TASK_TYPE,
+    new vscode.ShellExecution(mutantCliPath(), mutantTaskArgs(def, srcFallback)),
+    []
+  );
+  if (def.command === "gen" || def.command === "release") {
+    task.group = vscode.TaskGroup.Build;
+  }
+  return task;
+}
+
+// MutantTaskProvider surfaces build/run/release tasks that wrap the real `mutant`
+// CLI (separate from the bundled language server). The CLI is resolved from the
+// `mutant.cli.path` setting (default: `mutant` on PATH).
+class MutantTaskProvider implements vscode.TaskProvider {
+  provideTasks(): vscode.Task[] {
+    const file = vscode.window.activeTextEditor?.document.fileName ?? "";
+    const tasks: vscode.Task[] = [];
+    if (file.endsWith(".mut")) {
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "gen", src: file }, "gen (compile active file)", file));
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "release", src: file }, "release (host target)", file));
+    } else if (file.endsWith(".mu")) {
+      tasks.push(makeMutantTask({ type: MUTANT_TASK_TYPE, command: "run", src: file }, "run compiled (.mu)", file));
+    }
+    return tasks;
+  }
+
+  resolveTask(task: vscode.Task): vscode.Task | undefined {
+    const def = task.definition as MutantTaskDefinition;
+    if (def.type !== MUTANT_TASK_TYPE || !def.command) {
+      return undefined;
+    }
+    const srcFallback = vscode.window.activeTextEditor?.document.fileName ?? "";
+    return makeMutantTask(def, task.name || def.command, srcFallback);
+  }
+}
+
+// setLspState updates the language-server state and keeps the status bar in sync.
+function setLspState(next: "starting" | "running" | "failed" | "stopped"): void {
+  lspState = next;
+  updateLspStatusBar();
+}
+
+function updateLspStatusBar(): void {
+  if (!lspStatusItem) {
+    return;
+  }
+  switch (lspState) {
+    case "running":
+      lspStatusItem.text = "$(check) Mutant";
+      lspStatusItem.tooltip = `Mutant LSP is running (${lspCommand}). Click to restart.`;
+      break;
+    case "starting":
+      lspStatusItem.text = "$(sync~spin) Mutant";
+      lspStatusItem.tooltip = "Mutant LSP is starting. Click to restart.";
+      break;
+    case "failed":
+      lspStatusItem.text = "$(error) Mutant";
+      lspStatusItem.tooltip = `Mutant LSP failed to start${lspLastError ? `: ${lspLastError}` : ""}. Click to restart.`;
+      break;
+    default:
+      lspStatusItem.text = "$(circle-slash) Mutant";
+      lspStatusItem.tooltip = "Mutant LSP is stopped. Click to restart.";
+      break;
+  }
+  lspStatusItem.show();
+}
+
 async function showLspStatus(): Promise<void> {
   if (lspState === "running") {
     void vscode.window.showInformationMessage(`Mutant LSP is running (command: ${lspCommand}).`);
@@ -431,7 +590,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
   const args = config.get<string[]>("languageServer.args", []);
 
   lspCommand = command;
-  lspState = "starting";
+  setLspState("starting");
   lspLastError = "";
 
   if (process.platform !== "win32" && isAbsolute(command) && existsSync(command)) {
@@ -473,7 +632,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
       closed: () => {
         const status = recordCrashAndGetStatus(Date.now());
         if (status.blocked) {
-          lspState = "failed";
+          setLspState("failed");
           lspLastError = status.warningMessage;
           logLsp(status.warningMessage);
           void vscode.window.showWarningMessage(status.warningMessage);
@@ -498,7 +657,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
 
     await nextClient.start();
     client = nextClient;
-    lspState = "running";
+    setLspState("running");
     logLsp("Language server started successfully.");
     if (showStartedMessage) {
       void vscode.window.showInformationMessage(`Mutant LSP started (command: ${command}).`);
@@ -508,7 +667,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
     }
   } catch (err) {
     client = undefined;
-    lspState = "failed";
+    setLspState("failed");
     const message = err instanceof Error ? err.message : String(err);
     lspLastError = message;
     logLsp(`Language server failed to start: ${message}`);
@@ -520,7 +679,7 @@ async function startLspClient(context: vscode.ExtensionContext | undefined, show
 
 async function stopLspClient(): Promise<void> {
   if (!client) {
-    lspState = "stopped";
+    setLspState("stopped");
     logLsp("Stop requested with no active language client.");
     return;
   }
@@ -533,7 +692,7 @@ async function stopLspClient(): Promise<void> {
     logLsp(`Language server stop failed: ${message}`);
   } finally {
     client = undefined;
-    lspState = "stopped";
+    setLspState("stopped");
   }
 }
 
@@ -613,7 +772,7 @@ function recordCrashAndGetStatus(now: number): CrashWindowStatus {
 export const __test = {
   resetCrashTracking(): void {
     lspCrashTimestamps.length = 0;
-    lspState = "stopped";
+    setLspState("stopped");
     lspLastError = "";
   },
 

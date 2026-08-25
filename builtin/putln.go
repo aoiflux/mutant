@@ -22,7 +22,7 @@ func Putln(args ...object.Object) object.Object {
 		b.WriteString(part)
 	}
 
-	fmt.Println(b.String())
+	fmt.Fprintln(Output(), b.String())
 	return nil
 }
 

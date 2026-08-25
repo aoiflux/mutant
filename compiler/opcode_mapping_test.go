@@ -5,41 +5,58 @@ import (
 	"testing"
 )
 
+// The mapping must cover every opcode the code package defines.
+//
+// This test used to carry its own hand-written list of opcodes and compare the
+// mapping against that. The engine carried a second hand-written list. Both
+// fell two opcodes behind the code package together (OpGreaterEqual and
+// OpSetIndex), so the test agreed with the implementation and the drift was
+// invisible. Both now derive from code.AllOpcodes.
 func TestGenerateOpcodeMapping(t *testing.T) {
 	engine := NewPolymorphicEngine(7, 12345)
 	mapping := engine.generateOpcodeMapping()
 
-	// Verify all standard opcodes are present in mapping
-	opcodes := []code.Opcode{
-		code.OpConstant, code.OpPop, code.OpAdd, code.OpSub, code.OpMul,
-		code.OpDiv, code.OpMod, code.OpTrue, code.OpFalse, code.OpEqual,
-		code.OpUnEqual, code.OpGreater, code.OpMinus, code.OpBang,
-		code.OpJumpFalse, code.OpJump, code.OpNull, code.OpGetGlobal,
-		code.OpSetGlobal, code.OpGetLocal, code.OpSetLocal, code.OpArray,
-		code.OpHash, code.OpIndex, code.OpCall, code.OpReturnValue,
-		code.OpReturn, code.OpMultiValue, code.OpDup, code.OpDestructure, code.OpGetBuiltin, code.OpClosure, code.OpGetFree,
-		code.OpCurrentClosure, code.OpChkDbg, code.OpChkSnd, code.OpBreak,
-		code.OpContinue, code.OpMakeStruct, code.OpGetField, code.OpSetField,
-		code.OpEnumValue,
-	}
+	opcodes := code.AllOpcodes()
 
-	// Check all opcodes are mapped
 	for _, opcode := range opcodes {
 		if _, exists := mapping[opcode]; !exists {
-			t.Errorf("Opcode %d not found in mapping", opcode)
+			def, err := code.Lookup(byte(opcode))
+			name := "?"
+			if err == nil {
+				name = def.Name
+			}
+			t.Errorf("opcode %d (%s) is defined but missing from the mapping", opcode, name)
 		}
 	}
 
-	// Verify mapping has correct number of entries
 	if len(mapping) != len(opcodes) {
-		t.Errorf("Expected %d opcode mappings, got %d", len(opcodes), len(mapping))
+		t.Errorf("expected %d opcode mappings, got %d", len(opcodes), len(mapping))
+	}
+}
+
+// The mapping has to be a bijection. A partial or many-to-one mapping is worse
+// than no mapping at all: two opcodes collide on one value and the stream
+// decodes as something else entirely.
+//
+// The old check here was `if orig < 0 || mapped < 0`, which cannot fire --
+// code.Opcode is a byte.
+func TestOpcodeMappingIsABijection(t *testing.T) {
+	engine := NewPolymorphicEngine(7, 12345)
+	mapping := engine.generateOpcodeMapping()
+
+	seen := make(map[code.Opcode]code.Opcode, len(mapping))
+	for orig, mapped := range mapping {
+		if _, err := code.Lookup(byte(mapped)); err != nil {
+			t.Errorf("opcode %d maps to %d, which is not a defined opcode", orig, mapped)
+		}
+		if prev, collision := seen[mapped]; collision {
+			t.Errorf("opcodes %d and %d both map to %d", prev, orig, mapped)
+		}
+		seen[mapped] = orig
 	}
 
-	// Verify all mapped values are valid opcodes (within opcode range)
-	for orig, mapped := range mapping {
-		if orig < 0 || mapped < 0 {
-			t.Errorf("Invalid opcode mapping: %d -> %d", orig, mapped)
-		}
+	if len(seen) != len(mapping) {
+		t.Errorf("mapping is not one-to-one: %d inputs collapsed onto %d outputs", len(mapping), len(seen))
 	}
 }
 

@@ -1,7 +1,7 @@
 let volume_path = "./disk.xfs";
 let opened, open_err = xfs_open(volume_path);
 if (open_err) {
-    putf("xfs_open failed: " + open_err);
+    putln("xfs_open failed:", open_err);
     return;
 }
 
@@ -10,7 +10,7 @@ putf("XFS opened: " + opened["path"] + " (handle=" + handle + ")");
 
 let items, list_err = xfs_list_files(handle, "/");
 if (list_err) {
-    putf("xfs_list_files failed: " + list_err);
+    putln("xfs_list_files failed:", list_err);
     return;
 }
 
@@ -29,7 +29,7 @@ if (!read_err) {
 
 let meta, meta_err = xfs_metadata(handle, target);
 if (meta_err) {
-    putf("xfs_metadata failed: " + meta_err);
+    putln("xfs_metadata failed:", meta_err);
     return;
 }
 
@@ -47,7 +47,7 @@ putf("  size=" + meta["size"]);
 
 let closed, close_err = xfs_close(handle);
 if (close_err) {
-    putf("xfs_close failed: " + close_err);
+    putln("xfs_close failed:", close_err);
     return;
 }
 

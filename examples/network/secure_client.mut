@@ -3,7 +3,8 @@
 // dev-sec networking builtins. Demonstrates: net_connect, net_tls_upgrade_client,
 // http_build_request, net_conn_write, http_conn_read_response.
 //
-// Run:  mutant secure_client.mut --dev
+// Run:  mutant gen --src examples/network/secure_client.mut --password <password>
+//       mutant examples/network/secure_client.mu --dev --password <password>
 
 let fetch_secure = fn(host, addr) {
     putln("=== Secure client: connecting to ", addr, " ===");

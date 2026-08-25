@@ -3,7 +3,7 @@ putln("Safe use: static metadata only. No execution performed.");
 
 let fail_err = fn(err, op) {
     if (err) {
-        putln("[error] " + op + ": " + err);
+        putln("[error]", op, ":", err);
         return true;
     };
     return false;
@@ -99,16 +99,13 @@ let parse_thunks64 = fn(state, thunk) {
         if (hi > 2147483647) {
             let ord = lo - ((lo / 65536) * 65536);
             ordinal_count = ordinal_count + 1;
-            let next_fn_details, err = push(function_details, {
+            let next_fn_details = push(function_details, {
                 "by_ordinal": true,
                 "ordinal": ord,
                 "hint": 0,
                 "name": "",
                 "thunk_rva": thunk_hex
             });
-            if (fail_err(err, "push function_details 64 ordinal")) {
-                break;
-            };
             function_details = next_fn_details;
             continue;
         };
@@ -128,23 +125,17 @@ let parse_thunks64 = fn(state, thunk) {
         };
 
         if (fn_name != "") {
-            let next_functions, err = push(functions, fn_name);
-            if (fail_err(err, "push functions 64")) {
-                break;
-            };
+            let next_functions = push(functions, fn_name);
             functions = next_functions;
         };
 
-        let next_fn_details, err = push(function_details, {
+        let next_fn_details = push(function_details, {
             "by_ordinal": false,
             "ordinal": 0,
             "hint": hint,
             "name": fn_name,
             "thunk_rva": thunk_hex
         });
-        if (fail_err(err, "push function_details 64 name")) {
-            break;
-        };
         function_details = next_fn_details;
     }
 
@@ -187,16 +178,13 @@ let parse_thunks32 = fn(state, thunk) {
         if (value > 2147483647) {
             let ord = value - ((value / 65536) * 65536);
             ordinal_count = ordinal_count + 1;
-            let next_fn_details, err = push(function_details, {
+            let next_fn_details = push(function_details, {
                 "by_ordinal": true,
                 "ordinal": ord,
                 "hint": 0,
                 "name": "",
                 "thunk_rva": thunk_hex
             });
-            if (fail_err(err, "push function_details 32 ordinal")) {
-                break;
-            };
             function_details = next_fn_details;
             continue;
         };
@@ -216,23 +204,17 @@ let parse_thunks32 = fn(state, thunk) {
         };
 
         if (fn_name != "") {
-            let next_functions, err = push(functions, fn_name);
-            if (fail_err(err, "push functions 32")) {
-                break;
-            };
+            let next_functions = push(functions, fn_name);
             functions = next_functions;
         };
 
-        let next_fn_details, err = push(function_details, {
+        let next_fn_details = push(function_details, {
             "by_ordinal": false,
             "ordinal": 0,
             "hint": hint,
             "name": fn_name,
             "thunk_rva": thunk_hex
         });
-        if (fail_err(err, "push function_details 32 name")) {
-            break;
-        };
         function_details = next_fn_details;
     }
 
@@ -317,7 +299,7 @@ let parse_sections = fn(sample_data, sample_last, section_base, sections) {
             return {"ok": false, "section_table": section_table, "section_runtime": section_runtime};
         };
 
-        let next_section_table, err = push(section_table, {
+        let next_section_table = push(section_table, {
             "index": i,
             "name": section_name,
             "virtual_size": virtual_size,
@@ -331,7 +313,7 @@ let parse_sections = fn(sample_data, sample_last, section_base, sections) {
         };
         section_table = next_section_table;
 
-        let next_runtime, err = push(section_runtime, {
+        let next_runtime = push(section_runtime, {
             "vsize": virtual_size,
             "vaddr": virtual_address,
             "raw_size": raw_size,
@@ -443,7 +425,7 @@ let parse_import_descriptors = fn(parse_state, import_directory_raw) {
             continue;
         };
 
-        let next_imports, err = push(import_table, {
+        let next_imports = push(import_table, {
             "dll": dll,
             "function_count": function_count,
             "ordinal_count": ordinal_count,

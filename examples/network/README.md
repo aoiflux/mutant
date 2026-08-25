@@ -1,6 +1,12 @@
 # Network Examples
 
-Run from repository root: mutant examples/network/cloud_metadata_checker.mut
+Run from repository root (compile, then run the bytecode it writes
+beside the source):
+
+```bash
+mutant gen --src examples/network/cloud_metadata_checker.mut --password <password>
+mutant examples/network/cloud_metadata_checker.mu --dev --password <password>
+```
 
 Scripts:
 

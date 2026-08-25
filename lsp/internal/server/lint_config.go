@@ -51,6 +51,11 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "semicolon", &config.Semicolon)
 	applyRuleSeverity(rulesMap, "unreachableCode", &config.UnreachableCode)
 	applyRuleSeverity(rulesMap, "platformSupport", &config.PlatformSupport)
+	applyRuleSeverity(rulesMap, "builtinArity", &config.BuiltinArity)
+	applyRuleSeverity(rulesMap, "builtinArgType", &config.BuiltinArgType)
+	applyRuleSeverity(rulesMap, "builtinSingleReturn", &config.BuiltinSingleReturn)
+	applyRuleSeverity(rulesMap, "builtinPairReturn", &config.BuiltinPairReturn)
+	applyRuleSeverity(rulesMap, "spawnGlobalWrite", &config.SpawnGlobalWrite)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

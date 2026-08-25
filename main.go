@@ -26,14 +26,17 @@ const (
 	GENCMD     = "gen"
 	RUNCMD     = "run"
 	HELPCMD    = "help"
-	VERSION    = "Version: 2.3.0"
+	FMTCMD     = "fmt"
+	LINTCMD    = "lint"
+	TESTCMD    = "test"
+	VERSION    = "Version: 2.4.0"
 )
 
 type cliRuntime struct {
 	runRepl               func(string, bool, string)
-	compileCode           func(string, string, string, bool, string, int, int64)
-	generateReleaseAssets func(string)
-	runCode               func(string, string, bool, bool)
+	compileCode           func(string, string, string, bool, string, int, int64) int
+	generateReleaseAssets func(string) int
+	runCode               func(string, string, bool, bool) int
 	hasStandalonePayload  func(string) (bool, error)
 	executablePath        func() (string, error)
 	getPwd                func() string
@@ -53,6 +56,9 @@ var commandHandlers = map[string]func([]string) int{
 	GENCMD:     handleGenCommand,
 	RUNCMD:     handleGenCommand,
 	RELEASECMD: handleReleaseCommand,
+	FMTCMD:     handleFmtCommand,
+	LINTCMD:    handleLintCommand,
+	TESTCMD:    handleTestCommand,
 }
 
 func main() {
@@ -90,11 +96,10 @@ func tryEmbeddedPayloadRun(args []string) (bool, int) {
 		return false, 0
 	}
 
-	runEmbeddedPayload(executablePath, args)
-	return true, 0
+	return true, runEmbeddedPayload(executablePath, args)
 }
 
-func runEmbeddedPayload(executablePath string, args []string) {
+func runEmbeddedPayload(executablePath string, args []string) int {
 	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
 
 	configureSecurityLogging(args, devMode)
@@ -102,7 +107,7 @@ func runEmbeddedPayload(executablePath string, args []string) {
 		password = runtimeDeps.getPwd()
 	}
 
-	runtimeDeps.runCode(executablePath, password, secureMode, enforceSignerAuth)
+	return runtimeDeps.runCode(executablePath, password, secureMode, enforceSignerAuth)
 }
 
 func resolveRuntimeExecutionOptions(args []string) (string, bool, bool, bool) {
@@ -132,8 +137,8 @@ func runCommandFlow(args []string) int {
 		return 0
 	}
 
-	if handleFileInvocation(args) {
-		return 0
+	if handled, exitCode := handleFileInvocation(args); handled {
+		return exitCode
 	}
 
 	handler, ok := commandHandlers[args[1]]
@@ -153,7 +158,7 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 
 	for _, arg := range args[1:] {
 		switch arg {
-		case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
 			return false
 		}
 
@@ -241,18 +246,18 @@ func handleBuiltinCommand(args []string) bool {
 	return false
 }
 
-func handleFileInvocation(args []string) bool {
+func handleFileInvocation(args []string) (bool, int) {
 	if len(args) < 2 {
-		return false
+		return false, 0
 	}
 
 	if isBuiltinCommand(args[1]) {
-		return false
+		return false, 0
 	}
 
 	fileArg := findProgramArg(args[1:])
 	if fileArg == "" {
-		return false
+		return false, 0
 	}
 
 	return executeProgramFile(args, fileArg)
@@ -260,29 +265,29 @@ func handleFileInvocation(args []string) bool {
 
 func isBuiltinCommand(arg string) bool {
 	switch arg {
-	case RELEASECMD, GENCMD, RUNCMD, HELPCMD:
+	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
 		return true
 	default:
 		return false
 	}
 }
 
-func executeProgramFile(args []string, fileArg string) bool {
+// executeProgramFile reports whether it handled the invocation, and the exit
+// code to leave with when it did.
+func executeProgramFile(args []string, fileArg string) (bool, int) {
 	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
 	configureSecurityLogging(args, devMode)
 
 	if strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention) {
-		runtimeDeps.compileCode(fileArg, "", "", false, password, defaultPolymorphicLevel, time.Now().UnixNano())
-		return true
+		return true, runtimeDeps.compileCode(fileArg, "", "", false, password, defaultPolymorphicLevel, time.Now().UnixNano())
 	}
 
 	if !strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension) {
-		return false
+		return false, 0
 	}
 
 	password = resolveProgramRunPassword(args, password, devMode)
-	runtimeDeps.runCode(fileArg, password, secureMode, enforceSignerAuth)
-	return true
+	return true, runtimeDeps.runCode(fileArg, password, secureMode, enforceSignerAuth)
 }
 
 func resolveProgramRunPassword(args []string, password string, devMode bool) string {
@@ -337,8 +342,7 @@ func handleGenAssetsCommand(args []string) int {
 	}
 
 	fmt.Println("Generating embedded release runtime assets...")
-	runtimeDeps.generateReleaseAssets(out)
-	return 0
+	return runtimeDeps.generateReleaseAssets(out)
 }
 
 func handleGenCompileCommand(args []string) int {
@@ -350,8 +354,7 @@ func handleGenCompileCommand(args []string) int {
 	}
 
 	fmt.Println("Generating bytecode...")
-	runtimeDeps.compileCode(src, "", "", false, password, mutationLevel, mutationSeed)
-	return 0
+	return runtimeDeps.compileCode(src, "", "", false, password, mutationLevel, mutationSeed)
 }
 
 func handleReleaseCompileCommand(args []string) int {
@@ -364,8 +367,7 @@ func handleReleaseCompileCommand(args []string) int {
 	}
 
 	fmt.Println("Compiling release build...")
-	runtimeDeps.compileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed)
-	return 0
+	return runtimeDeps.compileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed)
 }
 
 func printHelpTopic(args []string) {
@@ -399,24 +401,30 @@ Secure-by-default programming language and toolchain.
 
 Usage:
   mutant
-  mutant [global options] <file.mut>
-  mutant [runtime options] <file.mu>
+  mutant <file.mut> --password <value>
+  mutant <file.mu> [runtime options]
   mutant gen [options] --src <file.mut>
   mutant gen assets [options]
   mutant release [options] --src <file.mut>
+  mutant fmt [--check] [--stdout] <file-or-dir>...
+  mutant lint [--strict] <file-or-dir>...
+  mutant test [file-or-dir]...
   mutant help [command]
 
 Commands:
   gen        Compile source into encrypted bytecode.
   gen assets Generate embedded runtime assets for release packaging.
   release    Build a standalone executable for a target OS/ARCH.
+  fmt        Format Mutant source in place (or --check / --stdout).
+  lint       Report diagnostics for Mutant source (--strict fails on warnings).
+  test       Run *_test.mut files (fail on error or a false result).
   help       Show general or command-specific help.
 
 Global options:
   -h, --help                 Show help.
   -v, --version              Show version information.
   -em, --enable-macros       Start the REPL with experimental macros enabled.
-	--repl-theme <name>        REPL theme: default, neon, pastel, forest, sunset.
+  --repl-theme <name>        REPL theme: default, neon, pastel, forest, sunset.
 
 Runtime options:
   --secure                   Enforce secure mode. Default behavior.
@@ -430,13 +438,17 @@ Runtime options:
 Examples:
   mutant
   mutant --enable-macros
-	mutant --repl-theme neon
-	mutant --enable-macros --repl-theme sunset
-  mutant hello.mut
-  mutant hello.mu --secure --signer-auth
+  mutant --repl-theme neon
+  mutant --enable-macros --repl-theme sunset
+  mutant hello.mut --password "My$tr0ngPass!"
+  mutant hello.mu --secure --signer-auth --password "My$tr0ngPass!"
   mutant gen --src hello.mut --password "My$tr0ngPass!"
   mutant gen assets --out ./releaseassets
   mutant release --src hello.mut --os windows --arch amd64 --mutation 5
+  mutant fmt examples/
+  mutant fmt --check hello.mut
+  mutant lint --strict examples/
+  mutant test examples/
 
 Use "mutant help gen", "mutant help gen assets", or "mutant help release" for more detail.
 `, VERSION)
@@ -460,16 +472,21 @@ Usage:
 
 Options:
   --src <file>         Path to the .mut source file.
-  --password <value>   Encrypt output with a password.
+  --password <value>   Encrypt output with a password. Required.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
-  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  --seed <int64>       Build seed: reproduces the bytecode (mutations and
+                       security-check placement). The .mu file still differs
+                       every build. Default: current timestamp.
   -h, --help           Show command help.
 
 Examples:
-  mutant %s --src hello.mut
+  mutant %s --src hello.mut --password "My$tr0ngPass!"
   mutant %s hello.mut --password "My$tr0ngPass!"
-  mutant %s hello.mut --mutation 5 --seed 42
+  mutant %s hello.mut --password "My$tr0ngPass!" --mutation 5 --seed 42
+
+The compiled .mu lands beside the source. Run it with:
+  mutant hello.mu --dev --password "My$tr0ngPass!"
 `, commandName, description, commandName, commandName, defaultPolymorphicLevel, commandName, commandName, commandName)
 }
 
@@ -509,7 +526,9 @@ Options:
   --password <value>   Encrypt output with a password.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
-  --seed <int64>       Polymorphic seed. Default: current timestamp.
+  --seed <int64>       Build seed: reproduces the bytecode (mutations and
+                       security-check placement). The .mu file still differs
+                       every build. Default: current timestamp.
   -h, --help           Show command help.
 
 Supported OS values:
@@ -703,7 +722,7 @@ func prepareRelease(args []string) (string, string, string, string, int, int64, 
 	releasecmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
 	releasecmd.StringVar(&password, "pwd", "", "Short for -password")
 	releasecmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
-	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
+	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := releasecmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", "", "", 0, 0, err
@@ -748,7 +767,7 @@ func prepareGenRun(args []string) (string, string, int, int64, error) {
 	gencmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
 	gencmd.StringVar(&password, "pwd", "", "Short for -password")
 	gencmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
-	gencmd.Int64Var(&mutationSeed, "seed", 0, "Polymorphic seed (default: current timestamp)")
+	gencmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := gencmd.Parse(filterSourceArgs(args[2:])); err != nil {
 		return "", "", 0, 0, err

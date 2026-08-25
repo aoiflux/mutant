@@ -73,35 +73,23 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if resolved, ok := s.resolveDefinition(pos); ok {
 			if resolved.kind == lsp.CompletionItemKindFunction {
 				if literal, ok := s.functionLiteralForBindingIdent(resolved.ident); ok {
-					name := n.Value
-					display := functionLiteralSignature(literal, functionDisplayName(name, literal.Name)).Label
-					params := parameterNames(literal.Parameters)
-					doc := s.leadingLineCommentForIdentifier(resolved.ident)
-
-					var b strings.Builder
-					b.WriteString("function `")
-					b.WriteString(display)
-					b.WriteString("`")
-
-					if len(params) > 0 {
-						b.WriteString("\n\nparams: `")
-						b.WriteString(strings.Join(params, "`, `"))
-						b.WriteString("`")
-					}
-
-					if doc != "" {
-						b.WriteString("\n\n")
-						b.WriteString(doc)
-					}
-
-					return b.String(), rng, true
+					// A user function renders through the same card as a
+					// builtin: typed signature, summary, per-parameter types,
+					// and a return. What differs is where the types come from,
+					// which the card marks rather than hides.
+					card := userFunctionCard(s, functionDisplayName(n.Value, literal.Name),
+						literal, s.leadingLineCommentForIdentifier(resolved.ident))
+					return card.render(), rng, true
 				}
 			}
 
 			if _, ok := s.ReferenceLocations("", pos, true); ok {
 				switch resolved.kind {
 				case lsp.CompletionItemKindField:
-					return fmt.Sprintf("field `%s`", n.Value), rng, true
+					// Rendered as the struct card renders the same field, and
+					// naming the struct it belongs to — which the bare
+					// "field `x`" line never said.
+					return fieldHoverText(s, n, n.Value), rng, true
 				case lsp.CompletionItemKindEnumMember:
 					return fmt.Sprintf("enum member `%s`", n.Value), rng, true
 				}
@@ -110,10 +98,19 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := builtinHoverText(n.Value); ok {
 			return text, rng, true
 		}
+		// A struct or enum name used anywhere — a literal's type, an annotation
+		// in prose, a bare mention — reaches the same card as its declaration.
+		if text, ok := declaredTypeCard(s, n.Value); ok {
+			return text, rng, true
+		}
 		if text, ok := macroSpecialFormHoverText(n.Value); ok {
 			return text, rng, true
 		}
-		return fmt.Sprintf("identifier `%s`", n.Value), rng, true
+		label := fmt.Sprintf("identifier `%s`", n.Value)
+		if ty, ok := s.TypeOf(n); ok {
+			label += fmt.Sprintf(" : %s", ty)
+		}
+		return label, rng, true
 	case *mast.IntegerLiteral:
 		return fmt.Sprintf("integer `%d`", n.Value), rng, true
 	case *mast.FloatLiteral:
@@ -135,22 +132,29 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		return fmt.Sprintf("function `fn(%s)`", joinIdentifiers(n.Parameters)), rng, true
 	case *mast.LetStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("let"); ok {
-				return fmt.Sprintf("binding `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `let`\n\n")), rng, true
+			binding := fmt.Sprintf("binding `%s`", n.Name.Value)
+			if ty, ok := s.TypeOf(n.Name); ok {
+				binding += fmt.Sprintf(" : %s", ty)
 			}
-			return fmt.Sprintf("binding `%s`", n.Name.Value), rng, true
+			if text, ok := keywordHoverText("let"); ok {
+				return fmt.Sprintf("%s\n\n%s", binding, strings.TrimPrefix(text, "keyword `let`\n\n")), rng, true
+			}
+			return binding, rng, true
 		}
 	case *mast.StructStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("struct"); ok {
-				return fmt.Sprintf("struct `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `struct`\n\n")), rng, true
+			// The card lists the declared fields with the types the document's
+			// initializers imply. A struct declaration carries only names, so
+			// that inference is the only place a field type can come from.
+			if text, ok := declaredTypeCard(s, n.Name.Value); ok {
+				return text, rng, true
 			}
 			return fmt.Sprintf("struct `%s`", n.Name.Value), rng, true
 		}
 	case *mast.EnumStatement:
 		if n.Name != nil {
-			if text, ok := keywordHoverText("enum"); ok {
-				return fmt.Sprintf("enum `%s`\n\n%s", n.Name.Value, strings.TrimPrefix(text, "keyword `enum`\n\n")), rng, true
+			if text, ok := declaredTypeCard(s, n.Name.Value); ok {
+				return text, rng, true
 			}
 			return fmt.Sprintf("enum `%s`", n.Name.Value), rng, true
 		}
@@ -219,11 +223,7 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 	}
 	for _, b := range builtin.Builtins {
 		kind := lsp.CompletionItemKindFunction
-		detail := "builtin"
-		if category := builtin.CapabilityCategory(b.Name); category != "" {
-			detail = "builtin · " + category
-		}
-		completion := lsp.CompletionItem{Label: b.Name, Kind: &kind, Detail: &detail}
+		completion := lsp.CompletionItem{Label: b.Name, Kind: &kind, Detail: builtinCompletionDetail(b.Name)}
 		if doc, ok := builtinHoverText(b.Name); ok {
 			completion.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
 		}
@@ -253,7 +253,12 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 			continue
 		}
 		kind := bind.kind
-		items = append(items, lsp.CompletionItem{Label: bind.ident.Value, Kind: &kind})
+		item := lsp.CompletionItem{Label: bind.ident.Value, Kind: &kind}
+		if ty, ok := s.TypeOf(bind.ident); ok {
+			detail := ty.String()
+			item.Detail = &detail
+		}
+		items = append(items, item)
 		seen[bind.ident.Value] = struct{}{}
 	}
 
@@ -583,7 +588,10 @@ func SemanticTokenLegend() lsp.SemanticTokensLegend {
 	return lsp.SemanticTokensLegend{TokenTypes: semanticTokenTypes, TokenModifiers: semanticTokenModifiers}
 }
 
-func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
+// semanticTokenList returns the document's semantic tokens, sorted in reading
+// order and de-duplicated. It is the shared basis for full, range, and delta
+// encodings.
+func (s *Snapshot) semanticTokenList() []semanticToken {
 	if s == nil || s.Program == nil || s.Program.NodePositions == nil {
 		return nil
 	}
@@ -644,7 +652,37 @@ func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
 		}
 		compact = append(compact, tok)
 	}
+	return compact
+}
 
+// SemanticTokensData returns the LSP delta-encoded token stream for the whole
+// document.
+func (s *Snapshot) SemanticTokensData() []lsp.UInteger {
+	return encodeSemanticTokens(s.semanticTokenList())
+}
+
+// SemanticTokensRangeData returns the delta-encoded token stream limited to the
+// lines within rng (inclusive). Deltas restart from the filtered set.
+func (s *Snapshot) SemanticTokensRangeData(rng lsp.Range) []lsp.UInteger {
+	all := s.semanticTokenList()
+	if len(all) == 0 {
+		return nil
+	}
+	filtered := make([]semanticToken, 0, len(all))
+	for _, tok := range all {
+		if tok.line >= uint32(rng.Start.Line) && tok.line <= uint32(rng.End.Line) {
+			filtered = append(filtered, tok)
+		}
+	}
+	return encodeSemanticTokens(filtered)
+}
+
+// encodeSemanticTokens applies the LSP relative (delta) encoding to an ordered,
+// de-duplicated token list.
+func encodeSemanticTokens(compact []semanticToken) []lsp.UInteger {
+	if len(compact) == 0 {
+		return nil
+	}
 	data := make([]lsp.UInteger, 0, len(compact)*5)
 	var prevLine uint32
 	var prevStart uint32

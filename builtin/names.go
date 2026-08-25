@@ -423,4 +423,16 @@ const (
 	BuiltinNameAESEncrypt = "aes_encrypt"
 	BuiltinNameAESDecrypt = "aes_decrypt"
 	BuiltinNamePEMDecode  = "pem_decode"
+	// collections: parallel higher-order (append-only)
+	BuiltinNamePMap  = "pmap"
+	BuiltinNamePEach = "peach"
+	// concurrency: tasks and channels (append-only)
+	BuiltinNameSpawn       = "spawn"
+	BuiltinNameTaskWait    = "task_wait"
+	BuiltinNameTaskDone    = "task_done"
+	BuiltinNameChanNew     = "chan_new"
+	BuiltinNameChanSend    = "chan_send"
+	BuiltinNameChanRecv    = "chan_recv"
+	BuiltinNameChanTryRecv = "chan_try_recv"
+	BuiltinNameChanClose   = "chan_close"
 )

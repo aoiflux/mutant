@@ -67,7 +67,9 @@ if (err) {
     putln("lua parse failed: ", err);
 };
 
-let iocs, err = json_parse(lua_result);
+// The Lua script returns the JSON text; lua_run_string wraps it in
+// {ok, result, error, schema_version}, so the text is under "result".
+let iocs, err = json_parse(lua_result["result"]);
 check_err(err, "json_parse iocs");
 
 let NODE_FEED = 1;

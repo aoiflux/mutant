@@ -1,7 +1,15 @@
 .vscode/**
+.vscode-test/**
 src/**
+scripts/**
+esbuild.mjs
 tsconfig.json
 .eslintrc.json
+eslint.config.*
+node_modules/**
+out/test/**
 **/*.map
 **/*.ts
-node_modules/**/.bin/**
+.gitignore
+package-lock.json
+smoke/**

@@ -1,6 +1,6 @@
 let opened, open_err = raw_open("./disk.raw");
 if (open_err) {
-    putf("raw_open failed: " + open_err);
+    putln("raw_open failed:", open_err);
     return;
 }
 
@@ -9,7 +9,7 @@ putf("RAW opened (handle=" + handle + ")");
 
 let meta, meta_err = raw_metadata(handle);
 if (meta_err) {
-    putf("raw_metadata failed: " + meta_err);
+    putln("raw_metadata failed:", meta_err);
     return;
 }
 
@@ -19,7 +19,7 @@ putf("  sector_size=" + meta["sector_size"]);
 
 let first, read_err = raw_read_at(handle, 0, 512);
 if (read_err) {
-    putf("raw_read_at failed: " + read_err);
+    putln("raw_read_at failed:", read_err);
     return;
 }
 
@@ -28,7 +28,7 @@ putf(first);
 
 let closed, close_err = raw_close(handle);
 if (close_err) {
-    putf("raw_close failed: " + close_err);
+    putln("raw_close failed:", close_err);
     return;
 }
 

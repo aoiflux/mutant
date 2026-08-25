@@ -19,7 +19,13 @@
             "include": "#typeDeclarations"
         },
         {
+            "include": "#typeUsage"
+        },
+        {
             "include": "#functionDeclarations"
+        },
+        {
+            "include": "#macroDeclarations"
         },
         {
             "include": "#builtins"
@@ -120,6 +126,37 @@
                 }
             ]
         },
+        "macroDeclarations": {
+            "patterns": [
+                {
+                    "name": "meta.declaration.macro.mutant",
+                    "match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\s*=\\s*)(macro)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.mutant"
+                        },
+                        "2": {
+                            "name": "entity.name.function.macro.mutant"
+                        },
+                        "4": {
+                            "name": "storage.type.macro.mutant"
+                        }
+                    }
+                }
+            ]
+        },
+        "typeUsage": {
+            "patterns": [
+                {
+                    "match": "\\b([A-Z][A-Za-z0-9_]*)\\s*(?=\\{)",
+                    "name": "entity.name.type.mutant"
+                },
+                {
+                    "match": "\\b([A-Z][A-Za-z0-9_]*)\\b(?=\\s*\\.)",
+                    "name": "entity.name.type.mutant"
+                }
+            ]
+        },
         "builtins": {
             "patterns": [
                 {
@@ -145,7 +182,7 @@
             "patterns": [
                 {
                     "name": "keyword.operator.mutant",
-                    "match": "==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>!=]"
+                    "match": "==|!=|<=|>=|&&|\\|\\||\\+=|-=|\\*=|/=|%=|\\+\\+|--|[+\\-*/%<>!=]"
                 }
             ]
         },

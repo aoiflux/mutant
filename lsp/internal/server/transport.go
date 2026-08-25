@@ -44,6 +44,15 @@ func (b rpcBridge) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 		},
 	}
 
+	// `exit` tells the server to terminate. Give the handler a chance to observe
+	// it, then close the connection so Run() returns even if the client never
+	// closes the stream — otherwise an mlsp process can linger orphaned.
+	if req.Method == "exit" {
+		_, _, _, _ = b.handler.Handle(callCtx)
+		_ = conn.Close()
+		return
+	}
+
 	result, validMethod, validParams, err := b.handler.Handle(callCtx)
 	if err != nil {
 		code := jsonrpc2.CodeInternalError

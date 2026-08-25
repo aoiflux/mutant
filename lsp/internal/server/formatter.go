@@ -31,6 +31,13 @@ const (
 // happens naturally: terminators are emitted from Statement.RequiresSemicolon
 // rather than copied from the source, and stray semicolons never reach the
 // tree in the first place.
+// FormatSource returns the canonical formatting of Mutant source. It is the
+// exported entry point used by the `mutant fmt` CLI (via lsp/api); on a hard
+// parse error it degrades to whitespace normalization rather than mangling.
+func FormatSource(src string) string {
+	return formatSnapshotText(analyzer.New().Analyze(src))
+}
+
 func formatSnapshotText(snapshot *analyzer.Snapshot) string {
 	if snapshot == nil {
 		return ""
@@ -246,6 +253,12 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 	case *mast.InfixExpression:
 		return "(" + p.expression(node.Left, level) + " " + node.Operator + " " + p.expression(node.Right, level) + ")"
 	case *mast.AssignExpression:
+		if node.Postfix != "" {
+			return p.expression(node.Left, level) + node.Postfix
+		}
+		if node.Operator != "" {
+			return p.expression(node.Left, level) + " " + node.Operator + "= " + p.expression(node.Value, level)
+		}
 		return p.expression(node.Left, level) + " = " + p.expression(node.Value, level)
 	case *mast.CallExpression:
 		return p.expression(node.Function, level) + "(" + p.expressionList(node.Arguments, level) + ")"
@@ -439,10 +452,43 @@ func bracedIdents(idents []*mast.Identifier, sep string, terminator string) stri
 	return " " + joined + terminator + " "
 }
 
+// quoteString renders a decoded string value back as Mutant source. It has to
+// undo exactly what the lexer's readString did -- \n \r \t \" \\ \0 -- and it
+// used to re-escape only the backslash and the quote, so every other escape came
+// back as the raw control byte it decodes to.
+//
+// That is worse than ugly. A carriage return inside a source file is invisible,
+// and anything that normalises line endings -- git's autocrlf, an editor, a CI
+// checkout -- would quietly turn a formatted "HTTP/1.1 200 OK\r\n" into a string
+// carrying a bare newline, changing the bytes the program puts on the wire. The
+// escape exists precisely so the byte survives text processing.
+//
+// Byte-oriented to match the lexer: every byte of a multi-byte rune is >= 0x80
+// and passes through untouched.
 func quoteString(value string) string {
-	escaped := strings.ReplaceAll(value, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-	return "\"" + escaped + "\""
+	var out strings.Builder
+	out.Grow(len(value) + 2)
+	out.WriteByte('"')
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; c {
+		case '\\':
+			out.WriteString(`\\`)
+		case '"':
+			out.WriteString(`\"`)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\r':
+			out.WriteString(`\r`)
+		case '\t':
+			out.WriteString(`\t`)
+		case 0:
+			out.WriteString(`\0`)
+		default:
+			out.WriteByte(c)
+		}
+	}
+	out.WriteByte('"')
+	return out.String()
 }
 
 // normalizeDocumentWhitespace is the degraded path used when the document

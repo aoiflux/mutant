@@ -18,10 +18,6 @@ assignees: []
 - [ ] Read
       [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](../docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
 - [ ] Read [docs/LSP_EXTENSION_LLD.md](../docs/LSP_EXTENSION_LLD.md)
-- [ ] Read
-      [docs/VSCODE_LSP_TEACHING_REFERENCE.md](../docs/VSCODE_LSP_TEACHING_REFERENCE.md)
-- [ ] Read
-      [docs/VSCODE_EXTENSION_TROUBLESHOOTING.md](../docs/VSCODE_EXTENSION_TROUBLESHOOTING.md)
 
 ## Environment Setup
 

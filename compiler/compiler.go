@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	mathrand "math/rand"
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/code"
@@ -23,6 +24,10 @@ type Compiler struct {
 	injectSecurityChecks bool
 	hasChkDbg            bool
 	hasChkSnd            bool
+	// securityRNG decides where the optional security checks land. It is nil
+	// unless a seed was supplied, in which case the placement becomes
+	// reproducible -- see SetSecurityCheckSeed.
+	securityRNG *mathrand.Rand
 
 	polymorphicEngine *PolymorphicEngine // Optional bytecode mutation engine
 }
@@ -33,6 +38,20 @@ type ByteCode struct {
 	StructDefs   map[string][]*ast.Identifier
 	EnumDefs     map[string][]string
 	LuaPatches   map[string]*object.LuaPatch
+
+	// OpcodeMap undoes the polymorphic engine's opcode permutation: it is
+	// indexed by the byte found in the instruction stream and yields the real
+	// opcode. 256 entries, or nil when the program was not remapped.
+	//
+	// It has to travel with the program rather than be re-derived from the seed,
+	// because nothing that runs a .mu file knows the seed -- and a VM that
+	// guesses wrong does not fail cleanly. Every opcode maps to another *defined*
+	// opcode, so a stream read without this table still decodes, just as a
+	// different instruction of a different width.
+	//
+	// The field is gob-encoded with the rest of ByteCode. An older .mu simply has
+	// no entry for it and decodes to nil, which is the unmutated case.
+	OpcodeMap []byte
 }
 
 type EmittedInstruction struct {
@@ -83,8 +102,45 @@ func NewWithState(st *SymbolTable, constants []object.Object) *Compiler {
 	return compiler
 }
 
+// SeedTypeDefinitions pre-loads struct and enum declarations recorded by an
+// earlier compilation. A REPL session compiles each line separately, so without
+// this a type declared on one line is "undefined" on the next; seeding the
+// definitions carried out of the previous ByteCode keeps a session coherent.
+func (c *Compiler) SeedTypeDefinitions(structs map[string][]*ast.Identifier, enums map[string][]string) {
+	for name, fields := range structs {
+		if _, exists := c.structDefinitions[name]; !exists {
+			c.structDefinitions[name] = fields
+		}
+	}
+	for name, variants := range enums {
+		if _, exists := c.enumDefinitions[name]; !exists {
+			c.enumDefinitions[name] = variants
+		}
+	}
+}
+
 func (c *Compiler) EnableSecurityOpcodeInjection() {
 	c.injectSecurityChecks = true
+}
+
+// SetSecurityCheckSeed makes the placement of the injected OpChkDbg/OpChkSnd
+// checks reproducible from a seed.
+//
+// Without it the placement is drawn from crypto/rand, which meant --seed did
+// not actually reproduce a build: two compiles of the same source with the same
+// seed produced instruction streams of different lengths, at every mutation
+// level, including 0 where the polymorphic engine does not run at all. That is
+// the same defect NOP insertion had, in the one part of the pipeline that was
+// never looked at because it is not a mutation stage.
+//
+// What the seed reproduces is the bytecode, not the .mu file. The file is
+// sealed with AES-GCM under a fresh salt and nonce and differs every build,
+// which is correct -- repeating a GCM nonce under one key is a break.
+//
+// Leaving it unset keeps the old behaviour, which is what a build with no --seed
+// wants: the checks land somewhere different every time.
+func (c *Compiler) SetSecurityCheckSeed(seed int64) {
+	c.securityRNG = mathrand.New(mathrand.NewSource(seed))
 }
 
 // EnablePolymorphism enables bytecode polymorphism at the specified mutation level
@@ -319,6 +375,16 @@ func (c *Compiler) Compile(node ast.Node) error {
 		}
 		c.loadSymbol(symbol)
 
+	case *ast.MacroLiteral:
+		// Macros are collected and expanded into ordinary AST before
+		// compilation (evaluator.DefineMacros/ExpandMacros). DefineMacros only
+		// scans top-level statements, so the usual way one reaches codegen is a
+		// macro declared inside a function or a block -- which is never
+		// collected, and so is never expanded or removed. Emitting nothing for
+		// it would leave the stack unbalanced and the VM would later pop past
+		// the bottom and panic, so say plainly what went wrong instead.
+		return fmt.Errorf("macro definitions must appear at the top level, and are expanded before compilation")
+
 	case *ast.FunctionLiteral:
 		c.enterScope()
 		if node.Name != "" {
@@ -433,6 +499,20 @@ func (c *Compiler) Compile(node ast.Node) error {
 			}
 		}
 		c.emit(code.OpCall, len(node.Arguments))
+
+	case nil:
+		// A missing node is not nothing: the caller expected this to leave a
+		// value on the stack. Emitting nothing balances the compile and breaks
+		// the VM instead, several phases later, with a pop past the bottom of
+		// the stack. Macro expansion used to produce these -- unquoting a value
+		// with no source form put a nil in the tree -- and the resulting .mu
+		// compiled cleanly and then crashed when it was run.
+		return fmt.Errorf("internal: nothing to compile where an expression was expected")
+
+	default:
+		// Every AST node type has a case above. A new one landing here would
+		// otherwise compile to nothing at all, silently.
+		return fmt.Errorf("internal: no code generation for %T", node)
 	}
 
 	return nil
@@ -459,17 +539,34 @@ func (c *Compiler) ByteCode() *ByteCode {
 	return bytecode
 }
 
+// PolymorphicLevel reports the mutation level this compiler applied, or 0 if
+// polymorphism was never enabled.
+//
+// Callers that need to know whether ByteCode() appended a polymorphic marker
+// must ask this rather than inspecting the trailing bytes. The marker is
+// [0xFF, level], and ordinary bytecode reaches those values on its own: an
+// OpConstant whose operand ends in 0xFF followed by a one-byte opcode looks
+// exactly like a marker. Deciding to truncate on that guess silently cut two
+// real bytes off roughly a third of the programs large enough to have 256
+// constants.
+func (c *Compiler) PolymorphicLevel() int {
+	if c.polymorphicEngine == nil {
+		return 0
+	}
+	return c.polymorphicEngine.mutationLevel
+}
+
 func (c *Compiler) maybeEmitRandomSecurityCheckOpcodes() {
 	if !c.injectSecurityChecks {
 		return
 	}
 
-	if randomChance(3) {
+	if c.randomChance(3) {
 		c.emit(code.OpChkDbg)
 		c.hasChkDbg = true
 	}
 
-	if randomChance(3) {
+	if c.randomChance(3) {
 		c.emit(code.OpChkSnd)
 		c.hasChkSnd = true
 	}
@@ -487,9 +584,13 @@ func (c *Compiler) ensureRequiredSecurityCheckOpcodes() {
 	}
 }
 
-func randomChance(mod uint32) bool {
+func (c *Compiler) randomChance(mod uint32) bool {
 	if mod == 0 {
 		return false
+	}
+
+	if c.securityRNG != nil {
+		return uint32(c.securityRNG.Int63())%mod == 0
 	}
 
 	b := make([]byte, 4)
@@ -699,9 +800,23 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 }
 
 func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
+	// Compound assignment (x += v, x++) desugars to `x = x <op> v`: the value to
+	// store is the base operator applied to the target's current value and the
+	// right-hand side. Every store path below compiles valueExpr, so this is the
+	// single point where the fold is introduced.
+	valueExpr := node.Value
+	if node.Operator != "" {
+		valueExpr = &ast.InfixExpression{
+			Token:    node.Token,
+			Left:     node.Left,
+			Operator: node.Operator,
+			Right:    node.Value,
+		}
+	}
+
 	// Handle identifier assignment: x = value
 	if ident, ok := node.Left.(*ast.Identifier); ok {
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
@@ -729,7 +844,7 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 
 		fieldNameIndex := c.addConstant(&object.String{Value: fieldExpr.Field.Value})
 
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
@@ -762,7 +877,7 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 		if err := c.Compile(idxExpr.Index); err != nil {
 			return err
 		}
-		if err := c.Compile(node.Value); err != nil {
+		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 		c.emit(code.OpSetIndex)

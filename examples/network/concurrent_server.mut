@@ -10,8 +10,10 @@
 // the predefined global `serve_conn`, and any shared context passed as the third
 // net_serve argument from `serve_arg`.
 //
-// Run:  mutant concurrent_server.mut --compat
+// Run:  mutant gen --src examples/network/concurrent_server.mut --password <password>
+//       mutant examples/network/concurrent_server.mu --compat --password <password>
 //   then:  curl http://127.0.0.1:8130/hello   (from several terminals at once)
+// mutant:sweep server -- binds 127.0.0.1:8130 and serves until interrupted
 
 let bind = "127.0.0.1:8130";
 let handler = "examples/network/concurrent_server_handler.mut";

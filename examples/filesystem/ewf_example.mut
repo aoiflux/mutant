@@ -1,7 +1,7 @@
 let segments = ["./image.E01", "./image.E02"];
 let opened, open_err = ewf_open(segments);
 if (open_err) {
-    putf("ewf_open failed: " + open_err);
+    putln("ewf_open failed:", open_err);
     return;
 }
 
@@ -10,7 +10,7 @@ putf("EWF opened (handle=" + handle + ", segment_count=" + opened["segment_count
 
 let meta, meta_err = ewf_metadata(handle);
 if (meta_err) {
-    putf("ewf_metadata failed: " + meta_err);
+    putln("ewf_metadata failed:", meta_err);
     return;
 }
 
@@ -27,7 +27,7 @@ putf("  total_logical_bytes=" + meta["total_logical_bytes"]);
 
 let first, read_err = ewf_read_at(handle, 0, 512);
 if (read_err) {
-    putf("ewf_read_at failed: " + read_err);
+    putln("ewf_read_at failed:", read_err);
     return;
 }
 
@@ -36,7 +36,7 @@ putf(first);
 
 let closed, close_err = ewf_close(handle);
 if (close_err) {
-    putf("ewf_close failed: " + close_err);
+    putln("ewf_close failed:", close_err);
     return;
 }
 

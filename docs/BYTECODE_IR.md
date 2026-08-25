@@ -298,9 +298,11 @@ func (c *Compiler) addConstant(obj object.Object) int {
 limit is never reached in normal programs.
 
 **Constant indices are stable** within a single compilation. If polymorphic
-constant-pool randomization is enabled (see §16), the indices in `OpConstant`
-instructions are rewritten to match the shuffled pool order before the
-`ByteCode` is returned.
+constant-pool randomization is enabled (see §16), every operand that indexes the
+pool is rewritten to match the shuffled order before the `ByteCode` is returned.
+Which operands those are is declared by `code.ConstantOperands`, not assumed:
+`OpConstant`, `OpClosure`, `OpMakeStruct`, `OpGetField`, `OpSetField` and both
+operands of `OpEnumValue`.
 
 ---
 
@@ -1045,22 +1047,38 @@ object is GC'd.
 
 ### 15.6 Polymorphic Marker Stripping
 
-When a password-encrypted `ByteCode` was produced with the polymorphic engine,
-the last 2 bytes of the main instruction stream encode `[0xFF, level]` (or
-`[level, 0xFF]`). On VM construction (`stripEncryptedPolymorphicMarker`):
+The marker never reaches the VM. `generator.encode` removes it before anything
+is written, using the level `Compiler.PolymorphicLevel()` reports, so what the
+runtime loads is the instruction stream and nothing else.
 
-1. Those 2 bytes are decrypted.
-2. If the pattern matches, the instruction slice is trimmed.
-3. The integrity checksum is updated to the trimmed slice.
+The VM used to strip it itself, by guessing: it read the last two bytes and
+treated `[0xFF, n<=10]` in either order as a marker. Ordinary bytecode produces
+that pattern on its own -- `OpConstant 255` encodes as `00 00 FF`, and a
+following `OpPop` makes the last two bytes `FF 01` -- so real programs had two
+real bytes cut off and died on "not enough bytes for operand". There is nothing
+in the format that distinguishes a marker from instruction bytes that end the
+same way, which is why the decision belongs to the compiler that knows, not to
+the reader that has to guess.
+
+If a marker ever did survive, `0xFF` is not a defined opcode, so the VM reports
+an undecodable instruction rather than silently running a shortened program.
 
 ---
 
 ## 16. Polymorphic Mutation Engine
 
-> All mutation flags in `getConfig()` are currently **gated off** (all return
-> `false`). The infrastructure is in place but disabled pending instruction-
-> boundary-aware rewriting in the VM runtime. The marker and detection code are
-> active.
+> **All four stages run at any non-zero mutation level**: `InsertNOPs`,
+> `InsertDeadCode`, `MutateOpcodes` and `RandomizeConstants`. `--mutation 0` is
+> the only setting that leaves the program byte-identical.
+>
+> `ReorderInstructions` used to be a fifth field with no implementation behind
+> it. It has been removed: reordering needs a reverse mapping the VM has no way
+> to carry, and a named stage that does nothing is how a stale opcode list once
+> survived unnoticed.
+>
+> Until this was fixed, `RandomizeConstants` was the only stage that ran and it
+> was gated at level 6 while the CLI defaulted to 5 -- so the default ran the
+> engine and emitted unmutated bytecode.
 
 ### 16.1 Engine Configuration
 
@@ -1079,15 +1097,28 @@ Constructed with `compiler.EnablePolymorphism(level)` (random seed via
 
 ```
 ByteCode.Mutate(bc):
-    if InsertNOPs       → insertNOPs(bc.Instructions)
-    if MutateOpcodes    → mutateOpcodes(bc)
-    if RandomizeConstants → randomizeConstantPool(bc)
+    if InsertNOPs                     → spliceFillers(bc, config)     // every stream, jumps repointed
+       or InsertDeadCode
+    if RandomizeConstants             → randomizeConstantPool(bc)     // pool operands rewritten
+    if MutateOpcodes                  → mutateOpcodes(bc)             // must be last
     append PolymorphicMarker
 ```
 
+NOP insertion and dead-code insertion are two stages but **one pass**. Both
+splice a block at an instruction boundary and both need every jump in the stream
+repointed afterwards, so running them separately would decode the boundaries and
+rewrite the jumps twice to reach the same stream. `spliceFillers` picks a
+generator per insertion point from whichever stages are enabled.
+
+**The order is load-bearing.** NOP insertion and constant-pool randomization
+both walk the instruction stream by operand width, so they have to run while the
+opcode bytes still mean what `code.Lookup` says. Opcode remapping destroys that
+and therefore runs last. It used to sit in the middle, which would have left the
+constant-pool pass parsing a remapped stream.
+
 ### 16.3 NOP Insertion
 
-Inserts push-then-pop sequences at random positions:
+Splices a stack-neutral pair in after a random subset of instruction boundaries:
 
 ```
 OpNull  + OpPop
@@ -1095,26 +1126,107 @@ OpTrue  + OpPop
 OpFalse + OpPop
 ```
 
-Rate: `level × 1.5 %` of instructions. Uses `crypto/rand` for the insertion
-decision (not the deterministic RNG).
+Rate: `level × 1.5 %` of instruction boundaries, drawn from the **seeded** RNG,
+so `--seed` reproduces the build. Applied to the main stream and to every
+`CompiledFunction` in the constant pool.
+
+Two properties make this safe, and the absence of either is why the stage was
+gated off rather than merely unfinished:
+
+- **Jump targets are repointed.** `OpJump` and `OpJumpFalse` carry absolute
+  offsets (`code.JumpOperands`), so one inserted byte ahead of a target
+  redirects it into the middle of an instruction. Every target is remapped to
+  its instruction's new offset. The old implementation did not do this at all.
+- **Every variant is stack-neutral.** A bare `OpPop` used to be one of four
+  choices, commented "safe if stack has something". At an arbitrary instruction
+  boundary the stack holds the expression in progress, so that variant discarded
+  a live value -- randomness decided whether the program was correct.
+
+Nothing is inserted after the final instruction of a stream: the last value
+popped is what `LastPoppedStackElement` reports, and a trailing push/pop pair
+would make every program's result `null`.
+
+If a stream cannot be decoded end to end, or a jump target is not an instruction
+boundary, or a new offset will not fit a `uint16`, padding is **declined** and
+the stream is returned untouched. A half-rewritten stream is not recoverable.
 
 ### 16.4 Opcode Remapping
 
-A Fisher-Yates shuffle of all 39 opcode values using the deterministic RNG
-creates a bijective mapping `original → shuffled`. Every opcode byte in the
+A Fisher-Yates shuffle of every opcode value using the deterministic RNG
+creates a bijective mapping `original → shuffled`. Every **opcode byte** in the
 instruction stream and in all `CompiledFunction` constants is rewritten through
-this mapping.
+this mapping; operand bytes are left exactly as they were.
 
-> **Not yet active:** the VM has no corresponding remapping table, so any
-> remapped bytecode would be misinterpreted.
+The rewrite walks by operand width. It used to walk one byte at a time and
+replace anything matching a defined opcode, which rewrote operand bytes as
+though they were opcodes -- `OpConstant 5` encodes as `00 00 05`, and all three
+of those bytes are defined opcode values.
+
+The opcode set comes from `code.AllOpcodes()` rather than a list kept in the
+engine, which is what keeps the mapping bijective: a hand-written list that
+falls behind the `code` package produces a *partial* remap, where the opcodes it
+covers take new values while the ones it missed keep theirs, and the two
+collide. That drift had already happened (`OpGreaterEqual`, `OpSetIndex`) and
+stayed invisible because the stage was off.
+
+Bytes that are not defined opcodes map to themselves in both directions, so an
+undecodable byte stays undecodable instead of being laundered into a valid
+instruction.
+
+**Reversal.** The inverse table is shipped in `ByteCode.OpcodeMap`, 256 entries
+indexed by the byte found in the stream:
+
+```go
+type ByteCode struct {
+    ...
+    OpcodeMap []byte   // mutated byte → real opcode; nil when not remapped
+}
+```
+
+It travels with the program rather than being re-derived from the seed, because
+nothing that runs a `.mu` knows the seed. It is gob-encoded with the rest of
+`ByteCode`; an older file simply has no entry and decodes to `nil`, which is the
+unmutated case.
+
+The VM applies it at **every** point a byte becomes an opcode
+(`VM.decodeOpcode`), which is three places, not one:
+
+| Site | What breaks without it |
+| --- | --- |
+| `execLoop` fetch | wrong instruction, wrong operand width |
+| `buildInstructionBoundaries` | control-flow integrity reports valid jumps as tampering |
+| `scanInstructionsForSecurityCheckOpcodes` | a program carrying `OpChkDbg`/`OpChkSnd` is reported as having lost them |
+
+A table that is not exactly 256 entries is treated as absent
+(`normalizeOpcodeMap`) rather than indexed past its end.
+
+Remapping is **all or nothing**: if any stream cannot be decoded, no stream is
+rewritten and no table is shipped. A program with some streams remapped and some
+not cannot be described by one inverse table.
+
+> **Compatibility:** a remapped `.mu` requires a runtime that understands
+> `OpcodeMap`. Standalone releases embed their runtime, so they are inherently
+> matched; a `.mu` handed to an older CLI is not, and the file format carries no
+> version negotiation.
 
 ### 16.5 Constant Pool Randomisation
 
-Fisher-Yates shuffle of the constant pool using the deterministic RNG. All
-`OpConstant` operands in the instruction stream and in compiled functions are
-updated to reference the new indices.
+Fisher-Yates shuffle of the constant pool using the deterministic RNG, followed
+by a rewrite of every operand that indexes the pool -- in the main instruction
+stream and in each `CompiledFunction` constant.
 
-> **Not yet active** for the same reason.
+The operands to rewrite are read from `code.ConstantOperands`, which names
+`OpConstant`, `OpClosure`, `OpMakeStruct`, `OpGetField`, `OpSetField` and both
+operands of `OpEnumValue`. The rewrite walks instructions by operand width
+rather than scanning for opcode bytes, because an operand byte can hold any
+value and would otherwise be misread as an opcode.
+
+> Missing an operand from `ConstantOperands` does not fail loudly: the operand
+> still lands on a real pool entry, just the wrong one, so the program compiles
+> clean and misbehaves inside the VM. `TestWideOperandsAreClassified` pins every
+> two-byte operand as a constant-pool index, an instruction offset, or
+> explicitly neither, so a new opcode cannot be added without that call being
+> made for both `ConstantOperands` and `JumpOperands`.
 
 ### 16.6 Polymorphic Marker Format
 

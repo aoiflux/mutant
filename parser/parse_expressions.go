@@ -241,6 +241,86 @@ func (p *Parser) parseAssignExpression(left ast.Expression) ast.Expression {
 	return exp
 }
 
+// compoundAssignBaseOperator maps a compound-assignment token to the base binary
+// operator it desugars to (e.g. "+=" -> "+").
+func compoundAssignBaseOperator(tt token.TokenType) string {
+	switch tt {
+	case token.PLUS_ASSIGN:
+		return "+"
+	case token.MINUS_ASSIGN:
+		return "-"
+	case token.ASTERISK_ASSIGN:
+		return "*"
+	case token.SLASH_ASSIGN:
+		return "/"
+	case token.MODULO_ASSIGN:
+		return "%"
+	default:
+		return ""
+	}
+}
+
+// parseCompoundAssignExpression parses `x += v` (and friends) as an assignment
+// carrying the base operator, so it evaluates as `x = x + v` in every engine.
+func (p *Parser) parseCompoundAssignExpression(left ast.Expression) ast.Expression {
+	switch left.(type) {
+	case *ast.Identifier, *ast.FieldExpression, *ast.IndexExpression:
+	default:
+		msg := fmt.Sprintf("invalid assignment target: %T", left)
+		p.appendError(p.curToken, msg)
+		return nil
+	}
+
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
+	exp := &ast.AssignExpression{
+		Token:    p.curToken,
+		Left:     left,
+		Operator: compoundAssignBaseOperator(p.curToken.Type),
+	}
+	precedence := p.curPrecedence()
+	p.nextToken()
+	exp.Value = p.parseExpression(precedence - 1)
+
+	p.recordRange(exp, start)
+	return exp
+}
+
+// parsePostfixIncDecExpression parses `x++` / `x--` as `x = x + 1` / `x = x - 1`,
+// preserving the original spelling for faithful formatting via Postfix.
+func (p *Parser) parsePostfixIncDecExpression(left ast.Expression) ast.Expression {
+	switch left.(type) {
+	case *ast.Identifier, *ast.FieldExpression, *ast.IndexExpression:
+	default:
+		msg := fmt.Sprintf("invalid increment/decrement target: %T", left)
+		p.appendError(p.curToken, msg)
+		return nil
+	}
+
+	start := p.curToken.Start
+	if r, ok := p.nodeRanges[left]; ok {
+		start = r.Start
+	}
+
+	operator := "+"
+	if p.curToken.Type == token.DECREMENT {
+		operator = "-"
+	}
+
+	exp := &ast.AssignExpression{
+		Token:    p.curToken,
+		Left:     left,
+		Operator: operator,
+		Postfix:  p.curToken.Literal,
+		Value:    &ast.IntegerLiteral{Token: token.Token{Type: token.INT, Literal: "1"}, Value: 1},
+	}
+
+	p.recordRange(exp, start)
+	return exp
+}
+
 func (p *Parser) parseFieldExpression(left ast.Expression) ast.Expression {
 	start := p.curToken.Start
 	if r, ok := p.nodeRanges[left]; ok {

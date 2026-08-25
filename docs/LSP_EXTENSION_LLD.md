@@ -247,6 +247,26 @@ Current lint rules (rule id -> default severity):
   supported-platform set comes from `builtin.PlatformSupport` /
   `builtin.UnsupportedOn` in [builtin/metadata.go](../builtin/metadata.go); the
   host OS is `runtime.GOOS` (overridable in tests via the analyzer's `hostGOOS`).
+- `builtinArity` -> warning (a fixed-arity builtin called with the wrong number
+  of arguments; the contract comes from `builtin.TypedSignature`)
+- `builtinArgType` -> warning (a builtin passed a kind its parameter cannot
+  accept, for arguments whose type is certain -- a literal, or a name that is
+  never reassigned)
+- `builtinSingleReturn` -> warning (several names bound from a builtin that
+  returns one value rather than a `(value, err)` pair; from
+  `builtin.ReturnSpec(name).Pair`)
+- `builtinPairReturn` -> warning (one name bound from a builtin that *does*
+  return a `(value, err)` pair, so the name holds the whole MULTI_VALUE. The
+  mirror of `builtinSingleReturn`, off the same contract. It is the only lint
+  rule that cannot decide at the call site: holding a pair on purpose is legal,
+  so the walk collects candidates and drops any name the program later indexes,
+  returns, or destructures)
+- `spawnGlobalWrite` -> warning (a `spawn`/`pmap`/`peach` callback assigning to
+  a top-level name. Those callbacks run on a worker VM with a *snapshot* of the
+  globals, so the write lands in a copy that is discarded when the callback
+  finishes. Only a function literal written at the call site is examined, and
+  only a name the callback does not rebind for itself -- a callback passed by
+  name may also be called normally elsewhere, where the write does take effect)
 
 Config ingestion path:
 

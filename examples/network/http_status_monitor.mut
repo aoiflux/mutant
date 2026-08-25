@@ -114,14 +114,13 @@ for (let i = 0; i < endpoint_count; i = i + 1) {
     check(db_index_prop(db, check_node, "is_up", is_up_json), "db_index_prop");
     check(db_add_edge(db, endpoint_node, check_node, EDGE_HAS_CHECK), "db_add_edge");
 
-    let updated_checks, err = push(checks, {
+    let updated_checks = push(checks, {
         "endpoint": endpoint,
         "status": resp["status"],
         "class": status_class,
         "is_up": is_up,
         "error": resp["error"]
 });
-    check_err(err, "push checks");
     checks = updated_checks;
 }
 

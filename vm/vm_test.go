@@ -32,18 +32,6 @@ func runVMTests(t *testing.T, tests []vmTestCase) {
 
 		byteCode := comp.ByteCode()
 
-		for i, constant := range byteCode.Constants {
-			fmt.Printf("CONSTANT %d %p (%T):\n", i, constant, constant)
-			switch constant := constant.(type) {
-			case *object.CompiledFunction:
-				fmt.Printf(" Instructions:\n%s", constant.Instructions)
-			case *object.Integer:
-				fmt.Printf(" Valie: %d\n", constant.Value)
-			}
-
-			fmt.Println()
-		}
-
 		password := fmt.Sprint(security.DerivePasswordFromInstructions(byteCode.Instructions))
 		byteCode = mutil.EncryptByteCode(byteCode, password)
 

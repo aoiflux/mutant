@@ -3,6 +3,7 @@ package security
 import (
 	"runtime"
 	"strings"
+	"sync"
 )
 
 type sandboxDetection struct {
@@ -71,7 +72,42 @@ func GetSandboxIndicators() ([]string, error) {
 	return indicators, nil
 }
 
+// Whether this process is running inside a container, VM, or analysis sandbox is
+// fixed for its lifetime -- a program does not move between a hypervisor and
+// bare metal while it runs -- but establishing it is expensive. On Windows the
+// probe shells out to tasklist, three wmic queries, powershell, and four reg
+// queries, which together cost about a second.
+//
+// That cost used to be paid per call, and the VM calls this from its instruction
+// stream: OpChkSnd runs security.IsSandboxed() wherever the compiler injected a
+// check, so a program's runtime grew by roughly a second for every injected
+// check it reached. Detecting once and remembering the answer is both faster and
+// more honest about what is being measured.
+var (
+	sandboxOnce      sync.Once
+	sandboxCached    sandboxDetection
+	sandboxCachedErr error
+)
+
 func detectSandbox() (sandboxDetection, error) {
+	sandboxOnce.Do(func() {
+		sandboxCached, sandboxCachedErr = detectSandboxUncached()
+	})
+	// The struct is returned by value; callers that adjust Confidence or read
+	// Indicators (which GetSandboxIndicators copies) cannot disturb the cache.
+	return sandboxCached, sandboxCachedErr
+}
+
+// resetSandboxCache forces the next detection to run for real. Tests that drive
+// the platform detectors through different environments need it; nothing in the
+// running language does.
+func resetSandboxCache() {
+	sandboxOnce = sync.Once{}
+	sandboxCached = sandboxDetection{}
+	sandboxCachedErr = nil
+}
+
+func detectSandboxUncached() (sandboxDetection, error) {
 	switch runtime.GOOS {
 	case "windows":
 		return detectSandboxWindows()

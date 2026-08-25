@@ -2,7 +2,7 @@
     "name": "mutant-language-tools",
     "displayName": "Mutant Language Tools",
     "description": "Language tools for Mutant, powered by a dedicated language server: strict canonical formatting, rich diagnostics (OS-aware platform warnings, unreachable code, unused/undefined/duplicate checks, semicolons), hover with capability categories, completion, semantic highlighting, go-to-definition, references, and rename.",
-    "version": "0.0.5",
+    "version": "0.1.0",
     "publisher": "aoiflux",
     "icon": "images/icon-128.png",
     "license": "AGPL-3.0-only",
@@ -49,6 +49,67 @@
                 "language": "mutant",
                 "scopeName": "source.mutant",
                 "path": "./syntaxes/mutant.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "mutant",
+                "path": "./snippets/mutant.json"
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "type": "mutant",
+                "required": [
+                    "command"
+                ],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": [
+                            "gen",
+                            "run",
+                            "release"
+                        ],
+                        "description": "gen = compile a .mut to encrypted .mu bytecode; run = execute a compiled .mu; release = build a standalone executable."
+                    },
+                    "src": {
+                        "type": "string",
+                        "description": "Source (.mut) or bytecode (.mu) file. Defaults to the active editor file."
+                    },
+                    "os": {
+                        "type": "string",
+                        "enum": [
+                            "windows",
+                            "linux",
+                            "darwin"
+                        ],
+                        "description": "release only: target operating system."
+                    },
+                    "arch": {
+                        "type": "string",
+                        "enum": [
+                            "amd64",
+                            "arm64"
+                        ],
+                        "description": "release only: target architecture."
+                    },
+                    "mutation": {
+                        "type": "number",
+                        "description": "Polymorphic mutation level (0-10)."
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "Optional encryption/decryption password."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Additional raw CLI arguments appended to the command."
+                    }
+                }
             }
         ],
         "commands": [
@@ -103,6 +164,11 @@
                     "items": {
                         "type": "string"
                     }
+                },
+                "mutant.cli.path": {
+                    "type": "string",
+                    "default": "mutant",
+                    "description": "Path or command name for the Mutant CLI, used by the Mutant build/run/release tasks. The CLI is separate from the bundled language server and is expected on PATH by default."
                 },
                 "mutant.strictFormatting": {
                     "type": "boolean",
@@ -197,6 +263,66 @@
                         "off"
                     ],
                     "description": "Severity for platform-support diagnostics: warns when a program calls a builtin that is not supported on the operating system the language server is running on (for example a Windows/Linux-only builtin used on macOS). Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.builtinArity.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for builtin arity diagnostics: warns when a builtin with a known fixed argument count is called with the wrong number of arguments (for example abs(1, 2) or clamp(x)). Only a curated, verified subset of builtins is checked. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.builtinArgType.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for builtin argument-type diagnostics: warns when a builtin is passed a value of a type its parameter cannot accept (for example str_upper(42) or len(true)). Only builtins whose parameter types have been verified against their implementation are checked, and only arguments whose type is certain — a literal, or a name that is never reassigned. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.builtinSingleReturn.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for single-return binding diagnostics: warns when several names are bound from a builtin that returns one value rather than a (value, err) pair (for example let updated, err = push(items, x)). Nothing fails at runtime — if the value is an array the binding takes it apart, and otherwise the extra names are always null, so an if (err) check never fires. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.builtinPairReturn.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for pair-return binding diagnostics: warns when one name is bound from a builtin that returns a (value, err) pair (for example let data = fs_read(path)). The name holds the pair rather than the value, and nothing fails at the binding — a pair prints as its value, so the mistake surfaces somewhere else or not at all. Silent when the program does something with the name that only makes sense for a pair, such as indexing it or returning it. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.spawnGlobalWrite.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for spawned-callback global-write diagnostics: warns when a spawn, pmap or peach callback assigns to a top-level name. Those callbacks run on their own VM with a snapshot of the globals, so the write lands in a copy that is discarded when the callback finishes — the program runs, reports nothing, and the value never changes. Only a function literal written at the call site is checked, and only a name the callback does not rebind for itself. Set to 'off' to suppress the rule."
                 }
             }
         },
@@ -205,16 +331,43 @@
                 "editor.formatOnSave": true,
                 "editor.formatOnType": false
             }
-        }
+        },
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "mutant.formatDocument",
+                    "when": "editorLangId == mutant"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "mutant.formatDocument",
+                    "when": "editorLangId == mutant",
+                    "group": "1_modification"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "command": "mutant.restartLsp",
+                "key": "ctrl+alt+r",
+                "mac": "cmd+alt+r",
+                "when": "editorLangId == mutant"
+            }
+        ]
     },
     "scripts": {
         "prepare:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs",
+        "check:lsp-bins": "node ./scripts/stage-lsp-binaries.mjs --check",
+        "esbuild": "node ./esbuild.mjs",
+        "compile": "node ./esbuild.mjs --production",
+        "watch": "node ./esbuild.mjs --watch",
+        "compile-tests": "tsc -p ./",
         "vscode:prepublish": "npm run prepare:lsp-bins && npm run compile",
-        "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./",
         "lint": "eslint src --ext ts",
-        "pretest": "npm run compile && npm run lint",
-        "test": "node ./out/test/runTest.js"
+        "pretest": "npm run compile-tests && npm run lint",
+        "test": "node ./out/test/runTest.js",
+        "package": "node ./scripts/package-targets.mjs"
     },
     "devDependencies": {
         "@types/mocha": "^10.0.10",
@@ -222,10 +375,12 @@
         "@types/vscode": "^1.90.0",
         "@typescript-eslint/eslint-plugin": "^8.2.0",
         "@typescript-eslint/parser": "^8.2.0",
+        "@vscode/test-electron": "^2.5.2",
+        "@vscode/vsce": "^3.2.0",
+        "esbuild": "^0.24.0",
         "eslint": "^9.8.0",
         "glob": "^11.0.3",
         "mocha": "^11.7.4",
-        "@vscode/test-electron": "^2.5.2",
         "typescript": "^5.5.4"
     },
     "dependencies": {

@@ -29,7 +29,10 @@ if (mutation_err) {
     putln("lua mutation failed: ", mutation_err);
 };
 
-let mutated_wordlist = mutation_result;
+// The script returns the newline-joined wordlist; lua_run_string wraps it in
+// {ok, result, error, schema_version}, which is why lines 49-50 below already
+// read mutation_result["ok"] and ["error"].
+let mutated_wordlist = mutation_result["result"];
 let write_mutated_result, err = fs_write(mutated_file_path, mutated_wordlist);
 if (write_mutated_result) {
     putln("wrote mutated list: ", mutated_file_path);

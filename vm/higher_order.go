@@ -8,13 +8,14 @@ import (
 	"mutant/object"
 )
 
-// This file implements the higher-order collection builtins natively in the VM.
-// They are registered as builtins (so they compile as ordinary calls) but the VM
-// intercepts them in callBuiltin because they must call user closures, which only
-// the VM can do — via CallClosureSync. Handling them per-VM (rather than through
-// a shared package hook) keeps them safe under concurrent VMs.
+// This file implements the higher-order collection builtins natively in the VM,
+// and dispatches every other builtin the VM must run itself. They are registered
+// as builtins (so they compile as ordinary calls) but the VM intercepts them in
+// callBuiltin, because they need either the ability to call a user closure — via
+// CallClosureSync — or the VM's own state. Handling them per-VM (rather than
+// through a shared package hook) keeps them safe under concurrent VMs.
 
-func (vm *VM) applyHigherOrder(kind string, args []object.Object) (object.Object, error) {
+func (vm *VM) applyExecutorNative(kind string, args []object.Object) (object.Object, error) {
 	switch kind {
 	case "map":
 		return vm.hoMap(args)
@@ -26,8 +27,18 @@ func (vm *VM) applyHigherOrder(kind string, args []object.Object) (object.Object
 		return vm.hoEach(args)
 	case "sort_by":
 		return vm.hoSortBy(args)
+	case "pmap":
+		return vm.hoPMap(args)
+	case "peach":
+		return vm.hoPEach(args)
+	case "spawn":
+		return vm.hoSpawn(args)
+	case "serve_conn":
+		return vm.serveConnValue(args)
+	case "serve_arg":
+		return vm.serveArgValue(args)
 	default:
-		return vmErrorf("unknown higher-order builtin %q", kind), nil
+		return vmErrorf("unknown executor-native builtin %q", kind), nil
 	}
 }
 

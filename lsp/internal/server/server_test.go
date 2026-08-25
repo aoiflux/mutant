@@ -24,9 +24,12 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
 
-	result, ok := resultAny.(*lsp.InitializeResult)
+	result, ok := resultAny.(*initializeResult)
 	if !ok {
-		t.Fatalf("initialize result type = %T, want *protocol.InitializeResult", resultAny)
+		t.Fatalf("initialize result type = %T, want *initializeResult", resultAny)
+	}
+	if provider, ok := result.Capabilities.InlayHintProvider.(bool); !ok || !provider {
+		t.Fatalf("InlayHintProvider = %#v, want true", result.Capabilities.InlayHintProvider)
 	}
 
 	if result.ServerInfo == nil || result.ServerInfo.Name != serverName {
@@ -58,8 +61,8 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 	if provider, ok := result.Capabilities.ReferencesProvider.(bool); !ok || !provider {
 		t.Fatalf("ReferencesProvider = %#v, want true", result.Capabilities.ReferencesProvider)
 	}
-	if provider, ok := result.Capabilities.RenameProvider.(bool); !ok || !provider {
-		t.Fatalf("RenameProvider = %#v, want true", result.Capabilities.RenameProvider)
+	if renameOpts, ok := result.Capabilities.RenameProvider.(*lsp.RenameOptions); !ok || renameOpts.PrepareProvider == nil || !*renameOpts.PrepareProvider {
+		t.Fatalf("RenameProvider = %#v, want *RenameOptions{PrepareProvider:true}", result.Capabilities.RenameProvider)
 	}
 	if result.Capabilities.CompletionProvider == nil {
 		t.Fatal("CompletionProvider is nil")
@@ -74,11 +77,20 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 	if !containsString(sigOpts.TriggerCharacters, ",") {
 		t.Fatalf("signature help trigger chars missing ',': %#v", sigOpts.TriggerCharacters)
 	}
-	if provider, ok := result.Capabilities.CodeActionProvider.(bool); !ok || !provider {
-		t.Fatalf("CodeActionProvider = %#v, want true", result.Capabilities.CodeActionProvider)
+	if caOpts, ok := result.Capabilities.CodeActionProvider.(*lsp.CodeActionOptions); !ok || len(caOpts.CodeActionKinds) == 0 || caOpts.CodeActionKinds[0] != lsp.CodeActionKindQuickFix {
+		t.Fatalf("CodeActionProvider = %#v, want *CodeActionOptions{quickfix}", result.Capabilities.CodeActionProvider)
 	}
 	if provider, ok := result.Capabilities.DocumentHighlightProvider.(bool); !ok || !provider {
 		t.Fatalf("DocumentHighlightProvider = %#v, want true", result.Capabilities.DocumentHighlightProvider)
+	}
+	if provider, ok := result.Capabilities.FoldingRangeProvider.(bool); !ok || !provider {
+		t.Fatalf("FoldingRangeProvider = %#v, want true", result.Capabilities.FoldingRangeProvider)
+	}
+	if result.Capabilities.CodeLensProvider == nil {
+		t.Fatal("CodeLensProvider is nil, want *CodeLensOptions")
+	}
+	if result.Capabilities.DocumentLinkProvider == nil {
+		t.Fatal("DocumentLinkProvider is nil, want *DocumentLinkOptions")
 	}
 	if provider, ok := result.Capabilities.WorkspaceSymbolProvider.(bool); !ok || !provider {
 		t.Fatalf("WorkspaceSymbolProvider = %#v, want true", result.Capabilities.WorkspaceSymbolProvider)
@@ -1446,7 +1458,7 @@ func TestSemanticTokensClassifyParameterAndProperty(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
@@ -1510,7 +1522,7 @@ func TestSemanticTokensClassifyBuiltinAsDefaultLibraryFunction(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
@@ -1572,7 +1584,7 @@ func TestSemanticTokensClassifyOperatorAndPunctuation(t *testing.T) {
 	if !validMethod || !validParams {
 		t.Fatalf("initialize validity flags = method:%t params:%t", validMethod, validParams)
 	}
-	initResult, ok := initAny.(*lsp.InitializeResult)
+	initResult, ok := initAny.(*initializeResult)
 	if !ok || initResult == nil || initResult.Capabilities.SemanticTokensProvider == nil {
 		t.Fatalf("initialize result = %T, want semantic tokens capability", initAny)
 	}
@@ -1651,8 +1663,12 @@ func TestSignatureHelpForUserDefinedFunctionCall(t *testing.T) {
 	if len(help.Signatures) != 1 {
 		t.Fatalf("signature count = %d, want 1", len(help.Signatures))
 	}
-	if help.Signatures[0].Label != "add(a, b)" {
-		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, "add(a, b)")
+	// Signature help for a user function now carries the solved kinds, the same
+	// way it has carried a builtin's declared ones since the parameter contracts
+	// landed.
+	wantLabel := "add(a: STRING|INTEGER|FLOAT, b: STRING|INTEGER|FLOAT)"
+	if help.Signatures[0].Label != wantLabel {
+		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
 	if len(help.Signatures[0].Parameters) != 2 {
 		t.Fatalf("signature params = %d, want 2", len(help.Signatures[0].Parameters))
@@ -1705,14 +1721,21 @@ func TestSignatureHelpForBuiltinCall(t *testing.T) {
 	if len(help.Signatures) != 1 {
 		t.Fatalf("signature count = %d, want 1", len(help.Signatures))
 	}
-	if help.Signatures[0].Label != "len(value)" {
-		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, "len(value)")
+	// The label carries the kinds len accepts, and the parameter is addressed
+	// by offsets into that label rather than by a substring of it.
+	wantLabel := "len(value: STRING|ARRAY|HASH) -> INTEGER"
+	if help.Signatures[0].Label != wantLabel {
+		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
 	if len(help.Signatures[0].Parameters) != 1 {
 		t.Fatalf("signature params = %d, want 1", len(help.Signatures[0].Parameters))
 	}
-	if paramLabel, ok := help.Signatures[0].Parameters[0].Label.(string); !ok || paramLabel != "value" {
-		t.Fatalf("signature param label = %#v, want %q", help.Signatures[0].Parameters[0].Label, "value")
+	span, ok := help.Signatures[0].Parameters[0].Label.([2]lsp.UInteger)
+	if !ok {
+		t.Fatalf("signature param label = %#v, want an offset pair", help.Signatures[0].Parameters[0].Label)
+	}
+	if got := wantLabel[span[0]:span[1]]; got != "value: STRING|ARRAY|HASH" {
+		t.Fatalf("signature param span %v covers %q, want the whole parameter", span, got)
 	}
 	if doc, ok := help.Signatures[0].Documentation.(lsp.MarkupContent); !ok || !strings.Contains(doc.Value, "Returns the length") {
 		t.Fatalf("signature documentation = %#v, want builtin summary", help.Signatures[0].Documentation)
@@ -3259,8 +3282,9 @@ func TestHoverOnResolvedStructFieldUsageShowsField(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if contents.Value != "field `x`" {
-		t.Fatalf("hover contents = %q, want field hover for resolved struct field usage", contents.Value)
+	// The field renders as the struct card renders it, and names its struct.
+	if contents.Value != "field `x` · `INTEGER` _(inferred)_\n\nField of struct `Point`." {
+		t.Fatalf("hover contents = %q, want typed field hover for resolved struct field usage", contents.Value)
 	}
 }
 
@@ -3309,11 +3333,14 @@ func TestHoverOnFunctionIdentifierIncludesSignatureAndDocComment(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "function `add(a, b)`") {
-		t.Fatalf("hover contents = %q, want function signature", contents.Value)
+	// `a + b` is the VM's binary operation, which accepts INTEGER x INTEGER,
+	// STRING x STRING, or numeric x numeric — so the solver narrows both
+	// parameters to exactly those three kinds and no further.
+	if !strings.Contains(contents.Value, "function `add(a: STRING|INTEGER|FLOAT, b: STRING|INTEGER|FLOAT)") {
+		t.Fatalf("hover contents = %q, want the solved function signature", contents.Value)
 	}
-	if !strings.Contains(contents.Value, "params: `a`, `b`") {
-		t.Fatalf("hover contents = %q, want parameter list", contents.Value)
+	if !strings.Contains(contents.Value, "- `a` · `STRING|INTEGER|FLOAT` _(inferred)_") {
+		t.Fatalf("hover contents = %q, want a typed parameter bullet", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Adds two numbers together") {
 		t.Fatalf("hover contents = %q, want doc comment", contents.Value)
@@ -3363,7 +3390,7 @@ func TestHoverOnBuiltinIdentifierIncludesTeachingInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "builtin `len(value)`") {
+	if !strings.Contains(contents.Value, "builtin `len(value: STRING|ARRAY|HASH) -> INTEGER`") {
 		t.Fatalf("hover contents = %q, want builtin signature", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Returns the length") {

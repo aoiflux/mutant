@@ -77,7 +77,7 @@ for (let i = 0; i < event_count; i = i + 1) {
     };
 
     if (severity != "low") {
-        let updated_findings, err = push(findings, {
+        let updated_findings = push(findings, {
             "src": ev["src"],
             "event": ev["event"],
             "count": ev["count"],

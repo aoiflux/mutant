@@ -27,6 +27,28 @@ func (s *Snapshot) TypeDefinitionLocation(uri lsp.DocumentUri, pos lsp.Position)
 		}
 	}
 
+	// Fall back to the inferred type of the binding. This reaches vars whose
+	// struct/enum type came through any inference path (a function's return, a
+	// propagated value, an `Enum.Variant`), not just a direct `let p = Point{...}`.
+	if t, ok := s.TypeOf(resolved.ident); ok {
+		switch t.Kind {
+		case TypeStruct:
+			if loc, ok := s.structDefinitionLocation(uri, t.Name); ok {
+				return loc, true
+			}
+		case TypeEnum:
+			if loc, ok := s.enumDefinitionLocation(uri, t.Name); ok {
+				return loc, true
+			}
+		case TypeArray:
+			if t.Elem != nil && t.Elem.Kind == TypeStruct {
+				if loc, ok := s.structDefinitionLocation(uri, t.Elem.Name); ok {
+					return loc, true
+				}
+			}
+		}
+	}
+
 	if resolved.kind == lsp.CompletionItemKindField {
 		if loc, ok := s.structDefinitionLocationForField(uri, resolved.ident); ok {
 			return loc, true
@@ -52,6 +74,24 @@ func (s *Snapshot) structDefinitionLocation(uri lsp.DocumentUri, typeName string
 			continue
 		}
 		rng, ok := s.identifierRange(structStmt.Name)
+		if !ok {
+			return nil, false
+		}
+		return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(rng)}, true
+	}
+	return nil, false
+}
+
+func (s *Snapshot) enumDefinitionLocation(uri lsp.DocumentUri, typeName string) (*lsp.Location, bool) {
+	if s == nil || s.Program == nil || typeName == "" {
+		return nil, false
+	}
+	for _, stmt := range s.Program.Statements {
+		enumStmt, ok := stmt.(*mast.EnumStatement)
+		if !ok || enumStmt == nil || enumStmt.Name == nil || enumStmt.Name.Value != typeName {
+			continue
+		}
+		rng, ok := s.identifierRange(enumStmt.Name)
 		if !ok {
 			return nil, false
 		}

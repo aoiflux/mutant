@@ -43,6 +43,11 @@ type LintConfig struct {
 	Semicolon                    LintSeverity
 	UnreachableCode              LintSeverity
 	PlatformSupport              LintSeverity
+	BuiltinArity                 LintSeverity
+	BuiltinArgType               LintSeverity
+	BuiltinSingleReturn          LintSeverity
+	BuiltinPairReturn            LintSeverity
+	SpawnGlobalWrite             LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -61,6 +66,25 @@ func DefaultLintConfig() LintConfig {
 		// the program may be authored on one platform to run on another, and the
 		// call still parses/compiles — it just fails at runtime on this host.
 		PlatformSupport: LintSeverityWarning,
+		// A wrong-argument-count call to a fixed-arity builtin is a guaranteed
+		// runtime error, but it still parses/compiles, so warning (matching the
+		// platformSupport family) rather than error.
+		BuiltinArity: LintSeverityWarning,
+		// Passing a kind a builtin's parameter cannot accept is likewise a
+		// guaranteed runtime error that still compiles.
+		BuiltinArgType: LintSeverityWarning,
+		// Binding two names from a builtin that returns one value is not a
+		// runtime error at all, which is what makes it worth reporting: the
+		// program runs and quietly does the wrong thing.
+		BuiltinSingleReturn: LintSeverityWarning,
+		// And binding one name from a builtin that returns a (value, err) pair
+		// is the same mistake from the other side: the name holds the pair, so
+		// the program keeps running with a MULTI_VALUE where it meant a value.
+		BuiltinPairReturn: LintSeverityWarning,
+		// Writing a global from a spawned callback is the same shape: the write
+		// lands in that worker's copy of the globals and is gone when it
+		// finishes, and nothing at all reports it.
+		SpawnGlobalWrite: LintSeverityWarning,
 	}
 }
 
@@ -81,6 +105,16 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.UnreachableCode
 	case "platformSupport":
 		severityName = c.PlatformSupport
+	case "builtinArity":
+		severityName = c.BuiltinArity
+	case "builtinArgType":
+		severityName = c.BuiltinArgType
+	case "builtinSingleReturn":
+		severityName = c.BuiltinSingleReturn
+	case "builtinPairReturn":
+		severityName = c.BuiltinPairReturn
+	case "spawnGlobalWrite":
+		severityName = c.SpawnGlobalWrite
 	default:
 		return nil, false
 	}
@@ -134,6 +168,8 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUnreachableCode(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
@@ -1216,6 +1252,490 @@ func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *
 		return
 	}
 	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet, topLevel: current.depth == 0})
+}
+
+// lintBuiltinCalls checks calls to builtins against the two contracts the
+// metadata makes machine-readable: how many arguments a builtin takes
+// (`builtinArity`, e.g. `abs(1, 2)` or `clamp(x)`) and what kinds each of its
+// parameters accepts (`builtinArgType`, e.g. `str_upper(42)`).
+//
+// Both are deliberately conservative and share the guards that make them
+// false-positive-free: the callee must not be shadowed by an in-scope binding,
+// must be live in builtin.Builtins, and must carry a verified contract — an
+// entry in builtinArities for the count, declared kinds in builtin/metadata.go
+// for the types. Anything unverified is simply never checked.
+//
+// The third rule on this walk, builtinPairReturn, checks the other machine-
+// readable contract: what a builtin gives back. It lives in
+// builtin_pair_return.go because, unlike the other two, it cannot decide at the
+// call site -- whether a single-name binding is a defect depends on what the
+// rest of the program does with the name, so the walk collects candidates and
+// they are resolved once it finishes.
+//
+// One walk serves all three rules; the severity of each is read independently,
+// so any can be turned off without disturbing the others.
+func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil || snapshot.Program == nil {
+		return nil
+	}
+
+	aritySeverity, arityEnabled := lintConfig.severityForRule("builtinArity")
+	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
+	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
+	pairSeverity, pairEnabled := lintConfig.severityForRule("builtinPairReturn")
+	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled {
+		return nil
+	}
+	if !arityEnabled {
+		aritySeverity = nil
+	}
+	if !argTypeEnabled {
+		argTypeSeverity = nil
+	}
+	if !returnEnabled {
+		returnSeverity = nil
+	}
+	if !pairEnabled {
+		pairSeverity = nil
+	}
+
+	source := "mutant-lint"
+	knownBuiltins := make(map[string]struct{}, len(builtin.Builtins))
+	for _, def := range builtin.Builtins {
+		if def.Name == "" {
+			continue
+		}
+		knownBuiltins[def.Name] = struct{}{}
+	}
+
+	collector := &builtinCallCollector{
+		snapshot:        snapshot,
+		aritySeverity:   aritySeverity,
+		argTypeSeverity: argTypeSeverity,
+		returnSeverity:  returnSeverity,
+		pairSeverity:    pairSeverity,
+		source:          &source,
+		builtins:        knownBuiltins,
+		reassigned:      reassignedNames(snapshot),
+		result:          make([]lsp.Diagnostic, 0, 2),
+	}
+
+	root := newDeclarationScope(nil, 0)
+	for _, stmt := range snapshot.Program.Statements {
+		collector.collectStatement(stmt, root)
+	}
+
+	// Appended rather than interleaved: a pair binding is only known to be a
+	// defect once the whole program has been seen, and Diagnostics already
+	// concatenates rules rather than sorting them into source order.
+	return append(collector.result,
+		pairBindingDiagnostics(snapshot, collector.pairSeverity, collector.source, collector.pairCandidates)...)
+}
+
+// builtinCallCollector walks the program tracking lexical scope so it can tell a
+// real builtin call from a shadowed name, then checks each such call against the
+// arity table and the declared parameter kinds. It mirrors undefinedCollector's
+// scope walk; the only leaf action is checkCall at an identifier-callee
+// CallExpression.
+//
+// A nil severity means that rule is switched off. The walk still runs, because
+// the other rule may be on.
+type builtinCallCollector struct {
+	snapshot        *Snapshot
+	aritySeverity   *lsp.DiagnosticSeverity
+	argTypeSeverity *lsp.DiagnosticSeverity
+	returnSeverity  *lsp.DiagnosticSeverity
+	pairSeverity    *lsp.DiagnosticSeverity
+	source          *string
+	builtins        map[string]struct{}
+	reassigned      map[string]struct{}
+	result          []lsp.Diagnostic
+	pairCandidates  []pairBindingCandidate
+}
+
+func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || stmt == nil {
+		return
+	}
+
+	switch node := stmt.(type) {
+	case *mast.LetStatement:
+		names := node.Names
+		if len(names) == 0 && node.Name != nil {
+			names = []*mast.Identifier{node.Name}
+		}
+
+		if len(names) == 1 {
+			// Checked before defining, so the callee resolves in the scope that
+			// exists where the call is written, not the one this let creates.
+			c.checkSingleNameBinding(names[0], node.Value, current)
+			c.defineDeclaration(names[0], current)
+		}
+
+		if node.Value != nil {
+			c.collectExpression(node.Value, current)
+		}
+
+		if len(names) > 1 {
+			c.checkMultiNameBinding(names, node.Value, current)
+			for _, ident := range names {
+				c.defineDeclaration(ident, current)
+			}
+		}
+	case *mast.ReturnStatement:
+		for _, expr := range node.ReturnValues {
+			c.collectExpression(expr, current)
+		}
+		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
+			c.collectExpression(node.ReturnValue, current)
+		}
+	case *mast.ExpressionStatement:
+		if node.Expression != nil {
+			c.collectExpression(node.Expression, current)
+		}
+	case *mast.BlockStatement:
+		for _, inner := range node.Statements {
+			c.collectStatement(inner, current)
+		}
+	case *mast.ForStatement:
+		if node.Init != nil {
+			c.collectStatement(node.Init, current)
+		}
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Post != nil {
+			c.collectExpression(node.Post, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.StructStatement:
+		c.defineDeclaration(node.Name, current)
+	case *mast.EnumStatement:
+		c.defineDeclaration(node.Name, current)
+	}
+}
+
+func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || expr == nil {
+		return
+	}
+
+	switch node := expr.(type) {
+	case *mast.FunctionLiteral:
+		child := newDeclarationScope(current, current.depth+1)
+		for _, param := range node.Parameters {
+			c.defineDeclaration(param, child)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, child)
+		}
+	case *mast.MacroLiteral:
+		child := newDeclarationScope(current, current.depth+1)
+		for _, param := range node.Parameters {
+			c.defineDeclaration(param, child)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, child)
+		}
+	case *mast.IfExpression:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Consequence != nil {
+			c.collectStatement(node.Consequence, current)
+		}
+		if node.Alternative != nil {
+			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.CallExpression:
+		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil {
+			// Macro special forms (quote/unquote/...) are not builtin calls; do
+			// not arity-check them, but still walk their arguments.
+			if isMacroSpecialFormName(ident.Value) {
+				for _, arg := range node.Arguments {
+					c.collectExpression(arg, current)
+				}
+				return
+			}
+			c.checkCall(ident, node.Arguments, current)
+		}
+		if node.Function != nil {
+			c.collectExpression(node.Function, current)
+		}
+		for _, arg := range node.Arguments {
+			c.collectExpression(arg, current)
+		}
+	case *mast.PrefixExpression:
+		if node.Right != nil {
+			c.collectExpression(node.Right, current)
+		}
+	case *mast.InfixExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Right != nil {
+			c.collectExpression(node.Right, current)
+		}
+	case *mast.IndexExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Index != nil {
+			c.collectExpression(node.Index, current)
+		}
+	case *mast.AssignExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+		if node.Value != nil {
+			c.collectExpression(node.Value, current)
+		}
+	case *mast.FieldExpression:
+		if node.Left != nil {
+			c.collectExpression(node.Left, current)
+		}
+	case *mast.StructLiteral:
+		if node.Name != nil {
+			c.collectExpression(node.Name, current)
+		}
+		for _, field := range node.Fields {
+			if field == nil || field.Value == nil {
+				continue
+			}
+			c.collectExpression(field.Value, current)
+		}
+	case *mast.ArrayLiteral:
+		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.HashLiteral:
+		for key, value := range node.Pairs {
+			c.collectExpression(key, current)
+			c.collectExpression(value, current)
+		}
+	}
+}
+
+// checkCall runs both builtin-call rules at one call site: the argument count
+// against the curated arity table, then each argument's type against the
+// parameter kinds declared in builtin/metadata.go.
+//
+// A call that fails the arity check is not type-checked. Its arguments cannot be
+// mapped onto parameters with any confidence, and one clear complaint per call
+// beats a cascade of consequential ones.
+// checkMultiNameBinding flags `let a, b = f()` where f is a builtin that
+// returns a single value rather than the (value, err) pair the fallible parts of
+// the library use.
+//
+// Nothing fails when this is written: the extra names simply take whatever the
+// binding hands them. If the single value is an ARRAY the binding takes it
+// apart, so the first name receives the array's first element -- `let updated,
+// err = push(items, x)` leaves `updated` as `items[0]`. If it is anything else
+// the first name is correct and the rest are null, so an `if (err)` check
+// silently never fires. Both shapes run to completion with the wrong value,
+// which is exactly why a diagnostic is worth more here than a runtime error.
+//
+// The guards that keep it false-positive-free mirror checkCall's: the callee
+// must be an unshadowed live builtin, and it must carry a declared return
+// contract. A builtin whose contract says pair, or one with no contract at all,
+// is never reported.
+func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression, current *declarationScope) {
+	if c == nil || c.returnSeverity == nil || len(names) < 2 || value == nil {
+		return
+	}
+
+	call, ok := value.(*mast.CallExpression)
+	if !ok || call.Function == nil {
+		return
+	}
+	ident, ok := call.Function.(*mast.Identifier)
+	if !ok || ident.Value == "" {
+		return
+	}
+	// A user/local binding of this name shadows the builtin.
+	if _, shadowed := current.find(ident.Value); shadowed {
+		return
+	}
+	if _, live := c.builtins[ident.Value]; !live {
+		return
+	}
+
+	spec, declared := builtin.ReturnSpec(ident.Value)
+	if !declared || spec.Pair {
+		return
+	}
+
+	rng, ok := c.snapshot.Program.RangeOf(ident)
+	if !ok {
+		return
+	}
+
+	kinds := spec.KindsText()
+	consequence := fmt.Sprintf("the %d extra name(s) are always null", len(names)-1)
+	if len(names) == 2 {
+		consequence = "the second name is always null"
+	}
+	for _, kind := range spec.Kinds {
+		if kind == builtin.ParamArray {
+			consequence = fmt.Sprintf("binding %d names takes that array apart, so %s receives its first element",
+				len(names), names[0].Value)
+		}
+	}
+
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.returnSeverity,
+		Source:   c.source,
+		Message: fmt.Sprintf("%s returns a single %s, not a (value, err) pair: %s. Bind one name.",
+			ident.Value, kinds, consequence),
+	})
+}
+
+func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Expression, current *declarationScope) {
+	if ident == nil || ident.Value == "" {
+		return
+	}
+	// A user/local binding of this name shadows the builtin — not a builtin call.
+	if _, ok := current.find(ident.Value); ok {
+		return
+	}
+	// Only real builtins; a stale table key is inert.
+	if _, ok := c.builtins[ident.Value]; !ok {
+		return
+	}
+
+	if arity, ok := builtinArityFor(ident.Value); ok && !arity.accepts(len(args)) {
+		// The count is wrong whether or not the rule that reports it is on, so
+		// the type check is suppressed either way.
+		if c.aritySeverity != nil {
+			if rng, ok := c.snapshot.Program.RangeOf(ident); ok {
+				c.result = append(c.result, lsp.Diagnostic{
+					Range:    localprotocol.ToLSPRange(rng),
+					Severity: c.aritySeverity,
+					Source:   c.source,
+					Message:  arity.message(ident.Value, len(args)),
+				})
+			}
+		}
+		return
+	}
+
+	c.checkArgumentTypes(ident, args)
+}
+
+// checkArgumentTypes flags an argument whose kind the parameter in that position
+// cannot accept.
+//
+// It fires only where every one of these holds, which together are what make the
+// rule false-positive-free:
+//
+//  1. the builtin documents its parameters and the call's argument count fits
+//     them, so positions map to parameters unambiguously;
+//  2. the parameter declares a non-empty kind set — an undeclared parameter, or
+//     one verified to accept anything, is never checked;
+//  3. the argument's type is certain rather than merely inferred
+//     (argumentTypeIsCertain);
+//  4. that type is expressible as a kind — structs, enums, and errors have no
+//     kind to compare against and are skipped.
+func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args []mast.Expression) {
+	if c.argTypeSeverity == nil || len(args) == 0 {
+		return
+	}
+
+	params, ok := builtin.ParamSpecs(ident.Value)
+	if !ok || len(params) == 0 || !argumentCountFitsParams(params, len(args)) {
+		return
+	}
+
+	for i, arg := range args {
+		if arg == nil {
+			continue
+		}
+		param, ok := paramForArgument(params, i)
+		if !ok || param.AcceptsAnyKind() {
+			continue
+		}
+		if !argumentTypeIsCertain(arg, c.reassigned) {
+			continue
+		}
+		argType, ok := c.snapshot.TypeOf(arg)
+		if !ok || !argType.IsKnown() {
+			continue
+		}
+		kind, ok := paramKindForType(argType)
+		if !ok {
+			continue
+		}
+		if param.Accepts(kind) {
+			c.checkArrayElements(ident, i, param, arg)
+			continue
+		}
+		rng, ok := c.snapshot.Program.RangeOf(arg)
+		if !ok {
+			continue
+		}
+		c.result = append(c.result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: c.argTypeSeverity,
+			Source:   c.source,
+			Message:  argTypeMessage(ident.Value, i+1, param, kind),
+			Data:     ArgTypeDiagnosticData(param, kind),
+		})
+	}
+}
+
+// checkArrayElements flags elements of an array literal that the parameter's
+// element contract rejects — `str_join([1, 2], ",")`, where every element has to
+// be a STRING.
+//
+// It only ever looks at an array *literal*. A name bound to an array would take
+// its element types from inference, and inference widens a mixed or unknown
+// element to Any rather than tracking it, so the literal is the only place the
+// elements are read straight off the syntax. Each element is then held to the
+// same certainty rule as a top-level argument, so an element that is itself a
+// call or an arithmetic expression is skipped rather than guessed at.
+func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
+	if len(param.Elem) == 0 {
+		return
+	}
+	literal, ok := arg.(*mast.ArrayLiteral)
+	if !ok || literal == nil {
+		return
+	}
+
+	for _, element := range literal.Elements {
+		if element == nil || !argumentTypeIsCertain(element, c.reassigned) {
+			continue
+		}
+		elementType, ok := c.snapshot.TypeOf(element)
+		if !ok || !elementType.IsKnown() {
+			continue
+		}
+		elementKind, ok := paramKindForType(elementType)
+		if !ok || param.AcceptsElement(elementKind) {
+			continue
+		}
+		rng, ok := c.snapshot.Program.RangeOf(element)
+		if !ok {
+			continue
+		}
+		c.result = append(c.result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: c.argTypeSeverity,
+			Source:   c.source,
+			Message:  elementTypeMessage(ident.Value, argIndex+1, param, elementKind),
+			Data:     ElementTypeDiagnosticData(param, elementKind),
+		})
+	}
+}
+
+func (c *builtinCallCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
+	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
+		return
+	}
+	current.define(ident.Value, declInfo{ident: ident, topLevel: current.depth == 0})
 }
 
 func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]struct{} {

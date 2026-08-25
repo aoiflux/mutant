@@ -2,6 +2,7 @@ package vm
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"mutant/ast"
@@ -17,6 +18,11 @@ import (
 
 // VM structure defines virtual machine
 type VM struct {
+	// bytecode is kept so a worker VM can be built over the SAME compiled
+	// program: pmap runs its callback on sibling VMs, and they must share the
+	// constants pool, instruction length and password or the closure they call
+	// would not decrypt.
+	bytecode        *compiler.ByteCode
 	constants       []object.Object
 	stack           []object.Object
 	stackPointer    int // top of stack is stack[stackPointer-1]
@@ -40,9 +46,43 @@ type VM struct {
 
 	enforceSecurityCheckOpcodes bool
 
-	// xorStream caches the opcode-decryption key/nonce (seed=inslen, password are
-	// constant per run) so per-opcode fetch avoids re-deriving them each time.
+	// opcodeReverse undoes the polymorphic engine's opcode permutation, indexed
+	// by the byte found in the stream. nil when the program was not remapped,
+	// which is every program compiled outside `mutant gen`/`mutant release` and
+	// every one built at --mutation 0.
+	//
+	// It must be consulted at every point an opcode byte is turned into a
+	// code.Opcode, not just in the fetch loop: the boundary map and the
+	// security-opcode scan decode the same streams, and a scan that missed the
+	// remapping would report a program as missing its OpChkDbg/OpChkSnd checks.
+	opcodeReverse []byte
+
+	// xorStream caches the instruction-decryption key/nonce (seed=inslen and
+	// password are constant per run) so decoding an opcode or its operands never
+	// re-derives them. Reach for it through instructionStream, which builds it on
+	// first use: the constructors map instruction boundaries before Run gets a
+	// chance to prepare anything.
 	xorStream *security.XORStream
+
+	// constantBoundariesMapped records that every compiled function in the
+	// constants pool has had its instruction boundaries mapped. The pool is
+	// assigned once, in New, and never grows, so that is a one-time job -- and it
+	// has to be tracked, because the integrity probes ask for the boundaries
+	// before every opcode.
+	constantBoundariesMapped bool
+
+	// serveConn and serveArg are what serve_conn()/serve_arg() report. net_serve
+	// sets them before running a handler; everywhere else they stay zero and the
+	// builtins answer null, which is what lets one file both serve a connection
+	// and run standalone. Worker VMs inherit them, so a handler that hands work
+	// to spawn or pmap does not lose its connection along the way.
+	// serveContextSet distinguishes "no context" from a context whose connection
+	// handle is 0, which is what net_spawn dispatches with -- a handler with no
+	// connection but a real shared arg. Without it, serve_conn() would answer
+	// null there instead of the 0 that case has always reported.
+	serveContextSet bool
+	serveConn       int64
+	serveArg        object.Object
 }
 
 var (
@@ -125,6 +165,8 @@ func New(bc *compiler.ByteCode) *VM {
 	integritySeed := deriveIntegritySeed(mainInstructions)
 
 	vm := &VM{
+		bytecode:        bc,
+		opcodeReverse:   normalizeOpcodeMap(bc.OpcodeMap),
 		constants:       bc.Constants,
 		stack:           make([]object.Object, initialStackCapacity),
 		stackPointer:    0,
@@ -148,6 +190,28 @@ func New(bc *compiler.ByteCode) *VM {
 	vm.nextIntegrityAt = 0
 	vm.nextSweepAt = vm.nextSweepInterval()
 	return vm
+}
+
+// normalizeOpcodeMap accepts a reverse opcode table only if it can address every
+// byte an instruction stream might hold. A short table would panic on the first
+// opcode past its end, and a table that is present but wrong is worse than none
+// -- so anything malformed is treated as absent, and the program runs as though
+// it had never been remapped. That fails loudly at the first instruction rather
+// than executing something else.
+func normalizeOpcodeMap(reverse []byte) []byte {
+	if len(reverse) != 256 {
+		return nil
+	}
+	return reverse
+}
+
+// decodeOpcode turns a byte read from an instruction stream into the opcode it
+// stands for, undoing polymorphic remapping when the program carries a table.
+func (vm *VM) decodeOpcode(b byte) code.Opcode {
+	if vm.opcodeReverse == nil {
+		return code.Opcode(b)
+	}
+	return code.Opcode(vm.opcodeReverse[b])
 }
 
 func convertStructDefs(structDefs map[string][]*ast.Identifier) map[string]interface{} {
@@ -357,47 +421,21 @@ func NewWithPassword(bc *compiler.ByteCode, password string) *VM {
 func NewWithPasswordMode(bc *compiler.ByteCode, password string, secureMode bool) *VM {
 	vm := New(bc)
 	vm.password = password
-	vm.stripEncryptedPolymorphicMarker()
+	// No polymorphic-marker trim here. The marker is compile-time metadata that
+	// generator.encode removes before anything is written, using the level the
+	// compiler reports -- so a marker never reaches the VM. What used to stand
+	// here guessed instead, treating a trailing [0xFF, n<=10] (in either order)
+	// as a marker and cutting two bytes. Ordinary bytecode produces that pattern:
+	// `OpConstant 255` is 0x00 0x00 0xFF, and a following OpPop makes 0xFF 0x01.
+	// Programs were truncated and failed on "not enough bytes for operand".
+	//
+	// If a marker ever did survive, 0xFF is not a defined opcode, so the VM
+	// reports an undecodable instruction -- a clean failure rather than a
+	// silently shortened program.
 	vm.secureMode = secureMode
 	vm.enforceSecurityCheckOpcodes = true
 	vm.ensureFrameBoundaries()
 	return vm
-}
-
-func (vm *VM) stripEncryptedPolymorphicMarker() {
-	if vm == nil || vm.password == "" || vm.currentFrame() == nil || vm.currentFrame().cl == nil || vm.currentFrame().cl.Fn == nil {
-		return
-	}
-
-	ins := vm.currentFrame().Instructions()
-	if len(ins) < 2 {
-		return
-	}
-
-	markerPos := len(ins) - 2
-	levelPos := len(ins) - 1
-
-	markerByte, err := security.SecureXOROneAt(ins[markerPos], int64(vm.inslen), vm.password, int64(markerPos))
-	if err != nil {
-		return
-	}
-	levelByte, err := security.SecureXOROneAt(ins[levelPos], int64(vm.inslen), vm.password, int64(levelPos))
-	if err != nil {
-		return
-	}
-
-	validMarker := (markerByte == 0xFF && levelByte <= 10) || (levelByte == 0xFF && markerByte <= 10)
-	if !validMarker {
-		return
-	}
-
-	trimmed := ins[:len(ins)-2]
-	vm.currentFrame().cl.Fn.Instructions = trimmed
-
-	if vm.frameIntegrity == nil {
-		vm.frameIntegrity = make(map[*object.CompiledFunction][32]byte)
-	}
-	vm.frameIntegrity[vm.currentFrame().cl.Fn] = sha256.Sum256(trimmed)
 }
 
 func NewWithGlobalStore(bc *compiler.ByteCode, globals []object.Object) *VM {
@@ -441,12 +479,19 @@ func (vm *VM) ensureFrameBoundaries() {
 		vm.frameBoundaries = make(map[*object.CompiledFunction]map[int]struct{})
 	}
 
+	// The main program's function is synthesised in New rather than taken from
+	// the constants pool, so it is mapped on its own.
 	if frame := vm.currentFrame(); frame != nil && frame.cl != nil && frame.cl.Fn != nil {
 		fn := frame.cl.Fn
 		if _, exists := vm.frameBoundaries[fn]; !exists {
-			vm.frameBoundaries[fn] = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[fn] = vm.buildInstructionBoundaries(fn.Instructions)
 		}
 	}
+
+	if vm.constantBoundariesMapped {
+		return
+	}
+	vm.constantBoundariesMapped = true
 
 	for _, constant := range vm.constants {
 		compiledFn, ok := constant.(*object.CompiledFunction)
@@ -454,25 +499,65 @@ func (vm *VM) ensureFrameBoundaries() {
 			continue
 		}
 		if _, exists := vm.frameBoundaries[compiledFn]; !exists {
-			vm.frameBoundaries[compiledFn] = buildInstructionBoundaries(compiledFn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[compiledFn] = vm.buildInstructionBoundaries(compiledFn.Instructions)
 		}
 	}
 }
 
-func buildInstructionBoundaries(ins code.Instructions, password string, length int) map[int]struct{} {
+// instructionStream returns the cached keystream for this VM's instructions,
+// deriving it on first use. Every instruction byte -- opcode, operand, and the
+// boundary map's decode pass -- is at a stream offset under the same (inslen,
+// password) pair, so the key and nonce are derived exactly once per VM instead
+// of twice per byte.
+func (vm *VM) instructionStream() *security.XORStream {
+	if vm.xorStream == nil {
+		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
+	}
+	return vm.xorStream
+}
+
+// readUint16 and readUint8 decode an operand at an absolute instruction offset.
+// They are the cached-stream equivalents of code.ReadUint16/code.ReadUint8,
+// which take the password and re-derive the key and nonce on every call -- two
+// SHA-256 hashes to decrypt two bytes, on a path the fetch loop walks for
+// nearly every instruction it executes.
+func (vm *VM) readUint16(ins code.Instructions, at int) (uint16, error) {
+	if at < 0 || at+2 > len(ins) {
+		return 0, fmt.Errorf("instruction slice too short for uint16")
+	}
+	dec, err := vm.instructionStream().XORAt(ins[at:at+2], int64(at))
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(dec), nil
+}
+
+func (vm *VM) readUint8(ins code.Instructions, at int) (uint8, error) {
+	if at < 0 || at >= len(ins) {
+		return 0, fmt.Errorf("instruction slice too short for uint8")
+	}
+	dec, err := vm.instructionStream().XOROneAt(ins[at], int64(at))
+	if err != nil {
+		return 0, err
+	}
+	return dec, nil
+}
+
+func (vm *VM) buildInstructionBoundaries(ins code.Instructions) map[int]struct{} {
 	boundaries := make(map[int]struct{})
-	if password == "" {
+	if vm.password == "" {
 		return boundaries
 	}
+	stream := vm.instructionStream()
 
 	for i := 0; i < len(ins); {
 		boundaries[i] = struct{}{}
-		opcodeByte, err := security.SecureXOROneAt(ins[i], int64(length), password, int64(i))
+		opcodeByte, err := stream.XOROneAt(ins[i], int64(i))
 		if err != nil {
 			break
 		}
 
-		def, err := code.Lookup(opcodeByte)
+		def, err := code.Lookup(byte(vm.decodeOpcode(opcodeByte)))
 		if err != nil {
 			break
 		}
@@ -501,7 +586,7 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 	fn := frame.cl.Fn
 	boundaries, exists := vm.frameBoundaries[fn]
 	if !exists {
-		boundaries = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+		boundaries = vm.buildInstructionBoundaries(fn.Instructions)
 		vm.frameBoundaries[fn] = boundaries
 	}
 
@@ -517,14 +602,17 @@ func (vm *VM) verifyFrameControlFlow(frame *Frame, stage string) error {
 	return nil
 }
 
-func (vm *VM) Run() error {
+// prepareForExecution performs the one-time setup execLoop depends on. Run()
+// does it before driving a whole program; a worker VM (see parallel.go) needs it
+// too, because it enters through CallClosureSync and never calls Run at all --
+// without this its xorStream is nil and the first opcode fetch dereferences it.
+func (vm *VM) prepareForExecution() {
 	vm.ensureFrameBoundaries()
+	vm.instructionStream()
+}
 
-	// Cache the opcode-decryption key/nonce once; seed (inslen) and password are
-	// constant for the whole run, so re-deriving per opcode byte was pure waste.
-	if vm.xorStream == nil {
-		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
-	}
+func (vm *VM) Run() error {
+	vm.prepareForExecution()
 
 	if err := vm.validateSecurityCheckOpcodes("before-execution"); err != nil {
 		return err
@@ -545,7 +633,20 @@ func (vm *VM) Run() error {
 // to baseFrameIndex. Run() drives the whole program via execLoop(0); the
 // closure-from-builtin bridge (CallClosureSync) re-enters with a higher base to
 // run exactly one closure to completion, then returns control to its caller.
-func (vm *VM) execLoop(baseFrameIndex int) error {
+//
+// It is also the fault boundary, which is why the loop body lives in a separate
+// function. Every path into the executor goes through here -- Run, and through
+// CallClosureSync also pmap, spawn and every net_serve handler -- so one recover
+// here is what makes bytecode the VM cannot decode report an error instead of
+// taking the process down. Those three had their own recovers already; the main
+// program path had none, so the same corrupt .mu file errored inside a worker
+// and panicked on the main thread. See vm/fault.go.
+func (vm *VM) execLoop(baseFrameIndex int) (err error) {
+	defer func() { containFault(recover(), &err) }()
+	return vm.runInstructions(baseFrameIndex)
+}
+
+func (vm *VM) runInstructions(baseFrameIndex int) error {
 	var ip int
 	var ins code.Instructions
 	var op code.Opcode
@@ -565,7 +666,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 		if err != nil {
 			return vm.runtimeErrorAt(ip, op, err)
 		}
-		op = code.Opcode(opcodeByte)
+		op = vm.decodeOpcode(opcodeByte)
 
 		switch op {
 		case code.OpChkDbg:
@@ -590,13 +691,17 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			constIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			constIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 			vm.currentFrame().ip += 2
 
-			if err := vm.push(vm.constants[constIndex]); err != nil {
+			constant, err := vm.constantAt(int(constIndex))
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			if err := vm.push(constant); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpBang:
@@ -623,12 +728,15 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
+			if vm.stackPointer-numElements < 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d elements (sp=%d)", numElements, vm.stackPointer)
+			}
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
 			vm.stackPointer = vm.stackPointer - numElements // pop the elements (OpHash does this; OpArray had omitted it)
 			if err := vm.push(array); err != nil {
@@ -638,12 +746,16 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 			numElements := int(res)
 			vm.currentFrame().ip += 2
+			// buildHash reads pairs, so an odd count would read one past the top.
+			if vm.stackPointer-numElements < 0 || numElements%2 != 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d key/value slots (sp=%d)", numElements, vm.stackPointer)
+			}
 			hash, err := vm.buildHash(vm.stackPointer-numElements, vm.stackPointer)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
@@ -660,7 +772,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJump: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -670,7 +782,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJumpFalse: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			res, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			res, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -684,7 +796,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpSetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			globalIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			globalIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -695,7 +807,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			globalIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			globalIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -708,25 +820,33 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpSetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			localIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			localIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip++
 			frame := vm.currentFrame()
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
 			obj := vm.pop()
-			vm.stack[frame.bp+int(localIndex)] = vm.encryptForStorage(obj)
+			vm.stack[slot] = vm.encryptForStorage(obj)
 		case code.OpGetLocal:
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			localIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			localIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip++
 			frame := vm.currentFrame()
-			if err := vm.push(vm.decryptForUse(vm.stack[frame.bp+int(localIndex)])); err != nil {
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
+			if err := vm.push(vm.decryptForUse(vm.stack[slot])); err != nil {
 				return err
 			}
 		case code.OpGetBuiltin:
@@ -735,7 +855,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetBuiltin: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			builtinIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			builtinIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -751,12 +871,15 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			freeIndex, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			freeIndex, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip++
 			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
 			if err := vm.push(vm.decryptForUse(currentClosure.Free[freeIndex])); err != nil {
 				return err
 			}
@@ -781,11 +904,11 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+3 >= len(ins) {
 				return fmt.Errorf("OpClosure: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			constIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			constIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			numFree, err := code.ReadUint8(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			numFree, err := vm.readUint8(ins, ip+3)
 			if err != nil {
 				return err
 			}
@@ -802,7 +925,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+1 >= len(ins) {
 				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
 			}
-			numArgs, err := code.ReadUint8(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			numArgs, err := vm.readUint8(ins, ip+1)
 			if err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -820,6 +943,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if err := vm.push(returnValue); err != nil {
 				return err
 			}
+			vm.settleProgramResult()
 		case code.OpReturn:
 			frame := vm.popFrame()
 			vm.stackPointer = frame.bp - 1
@@ -829,11 +953,12 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if err := vm.push(global.Null); err != nil {
 				return err
 			}
+			vm.settleProgramResult()
 		case code.OpMultiValue:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpMultiValue: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			count, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -866,7 +991,7 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpDestructure: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			count, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			count, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
@@ -893,20 +1018,20 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+3 >= len(ins) {
 				return fmt.Errorf("OpMakeStruct: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			typeIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			typeIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			fieldCountRaw, err := code.ReadUint8(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			fieldCountRaw, err := vm.readUint8(ins, ip+3)
 			if err != nil {
 				return err
 			}
 			fieldCount := int(fieldCountRaw)
 			vm.currentFrame().ip += 3
 
-			typeObj, ok := vm.decryptForUse(vm.constants[typeIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpMakeStruct: type constant is not string at index=%d", typeIndex)
+			typeObj, err := vm.constantString("OpMakeStruct: type constant", int(typeIndex))
+			if err != nil {
+				return err
 			}
 			typeName := typeObj.Value
 
@@ -944,15 +1069,15 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetField: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			fieldNameIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			fieldNameIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip += 2
 
-			fieldObj, ok := vm.decryptForUse(vm.constants[fieldNameIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpGetField: field constant is not string at index=%d", fieldNameIndex)
+			fieldObj, err := vm.constantString("OpGetField: field constant", int(fieldNameIndex))
+			if err != nil {
+				return err
 			}
 			fieldName := fieldObj.Value
 			obj := vm.pop()
@@ -973,15 +1098,15 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpSetField: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
 			}
-			fieldNameIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			fieldNameIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip += 2
 
-			fieldObj, ok := vm.decryptForUse(vm.constants[fieldNameIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpSetField: field constant is not string at index=%d", fieldNameIndex)
+			fieldObj, err := vm.constantString("OpSetField: field constant", int(fieldNameIndex))
+			if err != nil {
+				return err
 			}
 			fieldName := fieldObj.Value
 			value := vm.pop()
@@ -998,23 +1123,23 @@ func (vm *VM) execLoop(baseFrameIndex int) error {
 			if ip+4 >= len(ins) {
 				return fmt.Errorf("OpEnumValue: not enough bytes for operands at ip=%d, len=%d", ip, len(ins))
 			}
-			typeIndex, err := code.ReadUint16(ins[ip+1:], int64(vm.inslen), vm.password, int64(ip+1))
+			typeIndex, err := vm.readUint16(ins, ip+1)
 			if err != nil {
 				return err
 			}
-			tagIndex, err := code.ReadUint16(ins[ip+3:], int64(vm.inslen), vm.password, int64(ip+3))
+			tagIndex, err := vm.readUint16(ins, ip+3)
 			if err != nil {
 				return err
 			}
 			vm.currentFrame().ip += 4
 
-			typeObj, ok := vm.decryptForUse(vm.constants[typeIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpEnumValue: type constant is not string at index=%d", typeIndex)
+			typeObj, err := vm.constantString("OpEnumValue: type constant", int(typeIndex))
+			if err != nil {
+				return err
 			}
-			tagObj, ok := vm.decryptForUse(vm.constants[tagIndex]).(*object.String)
-			if !ok {
-				return fmt.Errorf("OpEnumValue: tag constant is not string at index=%d", tagIndex)
+			tagObj, err := vm.constantString("OpEnumValue: tag constant", int(tagIndex))
+			if err != nil {
+				return err
 			}
 			typeName := typeObj.Value
 			tagName := tagObj.Value
@@ -1115,14 +1240,15 @@ func (vm *VM) scanSecurityCheckOpcodes() (bool, bool, error) {
 func (vm *VM) scanInstructionsForSecurityCheckOpcodes(ins code.Instructions) (bool, bool, error) {
 	foundDbg := false
 	foundSnd := false
+	stream := vm.instructionStream()
 
 	for i := 0; i < len(ins); {
-		opcodeByte, err := security.SecureXOROneAt(ins[i], int64(vm.inslen), vm.password, int64(i))
+		opcodeByte, err := stream.XOROneAt(ins[i], int64(i))
 		if err != nil {
 			return false, false, err
 		}
 
-		op := code.Opcode(opcodeByte)
+		op := vm.decodeOpcode(opcodeByte)
 		if op == code.OpChkDbg {
 			foundDbg = true
 		}
@@ -1150,7 +1276,10 @@ func (vm *VM) runIntegrityProbes() error {
 		return nil
 	}
 
-	vm.ensureFrameBoundaries()
+	// Deliberately no ensureFrameBoundaries call here. This runs before every
+	// single opcode, and the only reader of the boundary map is
+	// verifyFrameControlFlow, which ensures (and, on a miss, builds) its own --
+	// so mapping here was both redundant and charged to every step.
 
 	if vm.stepCount >= vm.nextIntegrityAt {
 		if err := vm.verifyFrameControlFlow(vm.currentFrame(), "vm-cfi"); err != nil {
@@ -1175,6 +1304,27 @@ func (vm *VM) runIntegrityProbes() error {
 	return nil
 }
 
+// settleProgramResult puts the value of a top-level `return` where the rest of
+// the runtime looks for a program's result.
+//
+// Returning from the outermost frame ends the program, and nothing pops after
+// it -- so the returned value sat at stack[sp-1] while LastPoppedStackElement,
+// which the CLI prints and the REPL echoes, reads stack[sp]. That slot still
+// held whatever the last expression left behind, so `return 7;` at the top level
+// printed a leftover comparison operand rather than 7. Which leftover it was
+// depended on the exact instruction layout, which is how mutation could change a
+// program's printed result without changing what the program did.
+//
+// Dropping the pointer by one is exactly what OpPop does, so the value lands in
+// the slot everything already reads. Only the outermost frame is adjusted:
+// CallClosureSync enters with a base frame of its own and pops its result from
+// stack[sp-1], so a worker returning to it must be left alone.
+func (vm *VM) settleProgramResult() {
+	if vm.frameIndex == 0 && vm.stackPointer > 0 {
+		vm.stackPointer--
+	}
+}
+
 func (vm *VM) StackTop() object.Object {
 	if vm.stackPointer == 0 {
 		return nil
@@ -1183,15 +1333,71 @@ func (vm *VM) StackTop() object.Object {
 	return vm.decryptForUse(vm.stack[vm.stackPointer-1])
 }
 
+// LastPoppedStackElement reports the value the program finished with: the slot
+// just above the stack pointer, which the final OpPop vacated. It is what the
+// CLI prints and what the REPL echoes.
+//
+// Unlike everything else that reads the stack, this one runs after execution has
+// ended and outside the fault boundary -- runner, repl and webrepl call it on
+// the way to printing a result, with no error return between here and the
+// terminal. So an out-of-range read reports null rather than raising a fault: by
+// this point the program has either already succeeded or already reported why it
+// did not, and neither is improved by a panic on the way to printing it.
 func (vm *VM) LastPoppedStackElement() object.Object {
+	if vm.stackPointer < 0 || vm.stackPointer >= len(vm.stack) {
+		return global.Null
+	}
 	return vm.decryptForUse(vm.stack[vm.stackPointer])
 }
 
+// constantAt reads the constant an operand pointed at. The index is only as
+// trustworthy as the instruction stream it came out of, so it is bounded here
+// the way OpGetBuiltin bounds its own index -- the two are the same kind of
+// operand and were guarded inconsistently.
+func (vm *VM) constantAt(index int) (object.Object, error) {
+	if index < 0 || index >= len(vm.constants) {
+		return nil, fmt.Errorf("constant index %d out of range, len=%d", index, len(vm.constants))
+	}
+	return vm.constants[index], nil
+}
+
+// constantString reads a constant an opcode requires to be a string: a struct or
+// enum type name, a field name, an enum tag. what names the operand, so the
+// error says which one of an instruction's several constants was wrong.
+func (vm *VM) constantString(what string, index int) (*object.String, error) {
+	constant, err := vm.constantAt(index)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+
+	str, ok := vm.decryptForUse(constant).(*object.String)
+	if !ok {
+		return nil, fmt.Errorf("%s is not string at index=%d", what, index)
+	}
+	return str, nil
+}
+
+// freeCount reports how many values a closure captured, for an error message
+// raised on the path where the closure itself may be missing.
+func freeCount(cl *object.Closure) int {
+	if cl == nil {
+		return 0
+	}
+	return len(cl.Free)
+}
+
 func (vm *VM) pushClosure(constIndex, numFree int) error {
-	constant := vm.constants[constIndex]
+	constant, err := vm.constantAt(constIndex)
+	if err != nil {
+		return err
+	}
 	fun, ok := constant.(*object.CompiledFunction)
 	if !ok {
 		return fmt.Errorf("not a function: %+v", constant)
+	}
+
+	if numFree < 0 || vm.stackPointer-numFree < 0 {
+		return fmt.Errorf("free-variable count %d reaches below the stack floor (sp=%d)", numFree, vm.stackPointer)
 	}
 
 	free := make([]object.Object, numFree)
@@ -1214,7 +1420,15 @@ func (vm *VM) push(obj object.Object) error {
 	return nil
 }
 
+// pop takes the top of the stack. An empty stack is a fault rather than an
+// error return: pop is called from more than twenty places in the dispatch
+// switch, and it cannot happen for bytecode this toolchain produced. See
+// vm/fault.go for why that is a panic and where it is caught.
 func (vm *VM) pop() object.Object {
+	if vm.stackPointer <= 0 {
+		faultf("stack underflow: pop with nothing on the stack")
+	}
+
 	obj := vm.decryptForUse(vm.stack[vm.stackPointer-1])
 
 	vm.stackPointer--
@@ -1575,7 +1789,12 @@ func (vm *VM) buildHash(startIndex, endIndex int) (object.Object, error) {
 	return &object.Hash{Pairs: hashedPairs}, nil
 }
 
-func (vm *VM) currentFrame() *Frame { return vm.frames[vm.frameIndex-1] }
+func (vm *VM) currentFrame() *Frame {
+	if vm.frameIndex <= 0 {
+		faultf("frame underflow: no frame is executing")
+	}
+	return vm.frames[vm.frameIndex-1]
+}
 func (vm *VM) pushFrame(f *Frame) {
 	vm.ensureFrameCapacity(vm.frameIndex + 1)
 	vm.frames[vm.frameIndex] = f
@@ -1585,16 +1804,31 @@ func (vm *VM) pushFrame(f *Frame) {
 	}
 }
 func (vm *VM) popFrame() *Frame {
+	if vm.frameIndex <= 0 {
+		faultf("frame underflow: returning from no frame")
+	}
 	vm.frameIndex--
 	return vm.frames[vm.frameIndex]
 }
 
 func (vm *VM) execCall(numArgs int) error {
+	// numArgs arrives as an instruction operand, so it decides how far below the
+	// stack pointer the callee sits. A corrupted one reaches past the floor.
+	calleeIndex := vm.stackPointer - 1 - numArgs
+	if numArgs < 0 || calleeIndex < 0 || calleeIndex >= len(vm.stack) {
+		return fmt.Errorf("call with %d arguments reaches outside the stack (sp=%d)", numArgs, vm.stackPointer)
+	}
+
+	// A slot below the stack pointer can still be nil: callClosure raises the
+	// pointer over a frame's locals without writing them.
 	var callee object.Object
-	if vm.stack[vm.stackPointer-1-numArgs].Type() == object.CLOSURE_OBJ || vm.stack[vm.stackPointer-1-numArgs].Type() == object.BUILTIN_OBJ {
-		callee = vm.stack[vm.stackPointer-1-numArgs]
-	} else {
+	if at := vm.stack[calleeIndex]; at != nil && (at.Type() == object.CLOSURE_OBJ || at.Type() == object.BUILTIN_OBJ) {
+		callee = at
+	} else if len(vm.stack) > 0 {
 		callee = vm.stack[0]
+	}
+	if callee == nil {
+		return fmt.Errorf("calling non-function and non-built-in")
 	}
 
 	switch calleeType := callee.(type) {
@@ -1679,7 +1913,7 @@ func (vm *VM) registerFrameIntegrity(fn *object.CompiledFunction) {
 	}
 	if vm.password != "" {
 		if _, exists := vm.frameBoundaries[fn]; !exists {
-			vm.frameBoundaries[fn] = buildInstructionBoundaries(fn.Instructions, vm.password, vm.inslen)
+			vm.frameBoundaries[fn] = vm.buildInstructionBoundaries(fn.Instructions)
 		}
 	}
 }
@@ -1724,11 +1958,11 @@ func (vm *VM) verifyFrameIntegrity(frame *Frame, stage string) error {
 }
 
 func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
-	// Higher-order builtins (map/filter/reduce/each/sort_by) call user closures,
-	// which only the VM can do, so the VM handles them natively rather than
-	// invoking the placeholder Fn.
-	if kind := builtin.HigherOrderKind(bi); kind != "" {
-		return vm.callHigherOrder(kind, numArgs)
+	// Some builtins need something only the VM has -- the ability to call a user
+	// closure, or the running program's serve context -- so the VM runs them
+	// itself rather than invoking the registered Fn.
+	if kind := builtin.ExecutorNativeKind(bi); kind != "" {
+		return vm.callExecutorNative(kind, numArgs)
 	}
 
 	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
@@ -1749,15 +1983,16 @@ func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
 	return nil
 }
 
-// callHigherOrder gathers the builtin's arguments and dispatches to the VM-native
-// higher-order implementation, which drives user closures via CallClosureSync.
-func (vm *VM) callHigherOrder(kind string, numArgs int) error {
+// callExecutorNative gathers the builtin's arguments and dispatches to the
+// VM-native implementation, which is free to drive user closures via
+// CallClosureSync and to read the VM's own state.
+func (vm *VM) callExecutorNative(kind string, numArgs int) error {
 	storedArgs := vm.stack[vm.stackPointer-numArgs : vm.stackPointer]
 	args := make([]object.Object, len(storedArgs))
 	for i, arg := range storedArgs {
 		args[i] = vm.decryptForUse(arg)
 	}
-	result, err := vm.applyHigherOrder(kind, args)
+	result, err := vm.applyExecutorNative(kind, args)
 	if err != nil {
 		return err
 	}

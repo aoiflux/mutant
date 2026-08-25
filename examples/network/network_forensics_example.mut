@@ -22,8 +22,21 @@ let packets = [
 let flows, err = net_flow_reconstruct(packets);
 putln("net_flow_reconstruct:", flows, "err:", err);
 
-let capture, err = net_capture_raw();
-putln("net_capture_raw:", capture, "err:", err);
+// net_capture_raw and net_os_fingerprint both read an offline capture file:
+// live interface capture needs raw sockets, which pure Go cannot open, and the
+// fingerprint is a passive p0f-style heuristic over packets rather than a probe
+// sent to a host.
+let pcap_path = "examples/data/sample_capture.pcap";
+let present, err = fs_exists(pcap_path);
+if (err) {
+    putln("fs_exists error:", err);
+} else if (!present) {
+    putln("No sample PCAP found at", pcap_path);
+    putln("Place a .pcap file there or change pcap_path to your capture file.");
+} else {
+    let capture, err = net_capture_raw(pcap_path);
+    putln("net_capture_raw:", capture, "err:", err);
 
-let osfp, err = net_os_fingerprint("192.0.2.1", 500);
-putln("net_os_fingerprint:", osfp, "err:", err);
+    let osfp, err = net_os_fingerprint(pcap_path);
+    putln("net_os_fingerprint:", osfp, "err:", err);
+};

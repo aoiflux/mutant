@@ -23,8 +23,8 @@ Source of truth:
 | Core language           | Supported     | numbers (int/float), bool, string, arrays, hashes, if/for, functions           |
 | Struct/enum features    | Supported     | declarations, literals, field access/assignment                                |
 | Return/break/continue   | Supported     | control-flow propagation implemented                                           |
-| Macro system            | Not supported | macros and quote/unquote are intentionally excluded                            |
-| Builtins (browser-safe) | Supported     | 81 builtins across core, bytes, json, regex, text, policy, cache, in-memory db |
+| Macro system            | Supported     | macros expand before compilation here too, so quote/unquote behave as in the CLI |
+| Builtins (browser-safe) | Supported     | 213 of 409, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
 | Host-bound builtins     | Not supported | fs/process/exec/network/registry/memory/binary/disk-image families             |
 | Completion modes        | Supported     | supported (callable-now) and all (discoverability)                             |
 | Output model            | Supported     | buffered putf/putln + optional final expression append                         |
@@ -40,8 +40,8 @@ Source of truth:
 | Depend on registry/memory/binary host artifacts (reg__, mem__, bin_*) | Pre-collect artifacts outside WASM and feed parsed or raw content as Mutant values                              | These families require host forensic sources                                              |
 | Use db_open_disk                                                      | Use db_open (in-memory) and recreate needed state per session                                                   | Disk-backed handles are not browser-safe                                                  |
 | Expect all CLI builtins to be callable                                | Use mutantReplEval(...).builtins or mutantReplComplete(..., "supported") to discover callable set               | WASM intentionally exposes only browser-safe builtin subset                               |
-| Rely on MultiValue builtin pairs in script logic                      | Call builtins normally; WASM wrappers unwrap (value,error) and surface error as runtime failure                 | Browser REPL normalizes builtin results for interactive use                               |
-| Use macro/quote workflows                                             | Rewrite using plain functions/expressions                                                                       | Macros and quote/unquote are intentionally unsupported                                    |
+| Rely on MultiValue builtin pairs in script logic                      | Use the same `let value, err = ...` idiom you use in the CLI                                                    | The browser runs the real VM, so pair results behave exactly as they do in the CLI        |
+| Use macro/quote workflows                                             | Use them as-is                                                                                                  | Macros expand before compilation here too, so quote/unquote work                          |
 | Debug parser issues with escaped strings                              | Keep policy/module strings simple; avoid heavy escaping and nested quotes                                       | String literal handling is intentionally minimal and easier to break with complex escapes |
 | Need concise output only from putln/putf                              | End with null-producing statement if you do not want trailing expression echo                                   | REPL may append final non-null expression to buffer output                                |
 
@@ -56,8 +56,14 @@ Minimal migration checklist:
 
 ## 1) Runtime Model
 
-The WASM REPL runs a browser-safe evaluator and keeps one persistent session
-environment.
+The WASM REPL runs the same compiler and virtual machine the CLI runs, over a
+capability-restricted builtin set, and keeps one persistent session.
+
+It used to be a separate tree-walking interpreter, which is why earlier versions
+of this document listed language features as unsupported. They are supported
+now: the browser executes the same bytecode pipeline (parse, expand macros,
+compile, encrypt, run) as `mutant`, so language behaviour does not diverge. What
+remains restricted is *capability*, not syntax -- see Section 6.
 
 What this means:
 
@@ -205,16 +211,20 @@ Supported:
 - enum declarations and variant access
 - field access and field assignment on structs
 - return statements
+- macro declarations and `quote`/`unquote`, expanded before compilation
 - builtin calls listed in this guide
 
 Intentionally unsupported:
 
-- macros
-- quote/unquote macro expansion flow
+- the concurrency family (`spawn`, `task_*`, `chan_*`) and `sleep_ms`: a wasm
+  build has one thread, so a receive with no sender is not a slow call but a
+  fatal "all goroutines are asleep" that takes the whole session down instead
+  of returning an error the REPL could report. `pmap`/`peach` stay available,
+  because they only ever wait on work that is already running.
 
 ## 5) Builtin Support (Current)
 
-The full standard library is **399 builtins across 32 categories** — see the
+The full standard library is **409 builtins across 33 categories** — see the
 [Capability Reference](CAPABILITY_REFERENCE.md) for the complete catalog. In the
 browser WASM REPL, the **pure-compute** families run unchanged; the **host-facing**
 families (section 6) are unavailable because the WASM sandbox has no filesystem,
@@ -346,6 +356,12 @@ The families enumerated below were the original WASM set and remain supported.
 
 The following are intentionally unavailable in browser runtime.
 
+This list is descriptive, not the source of truth. Availability is derived at
+runtime from `builtin/metadata.go` (see `webrepl/browser_safe.go`): a builtin is
+excluded when its capability category needs the host, when it declares a
+filesystem-path parameter, or when it appears on a short explicit list. Query
+the live set with `mutantReplEval(...).builtins`.
+
 ### 6.1 Host filesystem/disk/image access
 
 - fs_*
@@ -360,15 +376,13 @@ Reason:
 ### 6.2 Host process/command/runtime security APIs
 
 - process_*
-- debug_status
-- sandbox_status
-- security_diagnostics
 - exec_string
 - cmd_*
 
 Reason:
 
-- Require process table, shell execution, or runtime host telemetry.
+- Require process table or shell execution. (Runtime telemetry builtins are
+  covered separately in 6.6.)
 
 ### 6.3 Network and live protocol access
 
@@ -385,32 +399,81 @@ Reason:
 - reg_*
 - mem_*
 - bin_*
-- email_*
 - detect_*
+- prefetch_parse, evtx_parse, lnk_parse, jumplist_parse, syslog_parse
+- amcache_parse, shimcache_parse, hive_*
+- browser_history, browser_cookies, browser_downloads, sqlite_query
+- hashset_*
+- bodyfile_parse, plist_parse, imphash
 
 Reason:
 
 - Depend on host files, memory dumps, registry hives, executable artifacts, or
   privileged environment context.
 
+Note: `email_*` is **available**. Those builtins parse a raw message string you
+hand them (`email_parse(raw)`) and never touch the host.
+
 ### 6.5 Lua runtime integration
 
-- lua_*
+- lua_run_file
+- lua_run_http
 
 Reason:
 
-- Current implementation expects host IO/network capabilities and full Lua
-  runtime setup beyond current WASM bridge scope.
+- One reads a host path, the other fetches over the network.
+
+Note: `lua_run_string` is **available**. It runs in a sandboxed interpreter
+started with `SkipOpenLibs` (no io/os libraries), captured print, and a
+five-second execution cap, so it is pure in-memory computation.
+
+### 6.6 Host runtime telemetry
+
+- debug_status
+- sandbox_status
+- security_diagnostics
+
+Reason:
+
+- They report on debugger presence, sandbox indicators, and runtime posture.
+  In a browser they would answer confidently about a machine they cannot
+  inspect, which is more misleading than being unavailable.
+
+### 6.7 Tasks and channels
+
+- spawn
+- task_wait
+- task_done
+- chan_new
+- chan_send
+- chan_recv
+- chan_try_recv
+- chan_close
+
+Reason:
+
+- A WASM build runs on a single thread. A receive with no sender is therefore
+  not a slow call but a fatal "all goroutines are asleep" that takes the whole
+  REPL session down, rather than an error the session can recover from. That is
+  the same line `sleep_ms` is already on.
+- `pmap` and `peach` stay available for exactly that reason: they never wait on
+  something the script has to arrange, so they always finish. Under WASM they
+  resolve to a single worker and return identical results.
 
 ## 7) CLI REPL vs WASM REPL Notes
 
 WASM aims for language parity where feasible, but there are runtime model
 differences:
 
-- Builtin wrapping: many builtins in CLI return value/error pairs as MultiValue.
-  In WASM wrappers unwrap pair results and surface error slot as runtime error.
-- Host-bound capabilities are excluded in WASM (see Section 6).
-- Macro/quote workflows are not part of WASM runtime.
+- Language behaviour is identical: the browser compiles and runs the same
+  bytecode on the same VM, so `(value, err)` pairs, macros, closures, structs,
+  index/field assignment, and operator semantics all match the CLI.
+- Host-bound capabilities are excluded in WASM (see Section 6). A host-bound
+  builtin is not merely blocked at runtime -- it is never defined, so calling one
+  fails while compiling with `undefined variable`.
+- Which builtins are available is derived from `builtin/metadata.go` rather than
+  hand-listed: a builtin is excluded when its capability category needs the host
+  or when it declares a filesystem-path parameter.
 
 ## 8) Completion and Help Behavior
 

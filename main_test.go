@@ -334,13 +334,14 @@ func TestRunDispatchesGenCommand(t *testing.T) {
 	var gotSeed int64
 	var gotRelease bool
 
-	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) {
+	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
 		called = true
 		gotSrc = src
 		gotPassword = password
 		gotMutation = mutationLevel
 		gotSeed = mutationSeed
 		gotRelease = release
+		return 0
 	}
 
 	exitCode := run([]string{"mutant", GENCMD, "hello.mut", "--password", "secret", "--mutation", "5", "--seed", "42"})
@@ -377,8 +378,9 @@ func TestRunDispatchesAssetsCommand(t *testing.T) {
 	t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
 
 	var gotOut string
-	runtimeDeps.generateReleaseAssets = func(out string) {
+	runtimeDeps.generateReleaseAssets = func(out string) int {
 		gotOut = out
+		return 0
 	}
 
 	exitCode := run([]string{"mutant", GENCMD, "assets", "--out", "build/releaseassets"})
@@ -404,13 +406,14 @@ func TestRunDispatchesReleaseCommand(t *testing.T) {
 	var gotPassword string
 	var gotRelease bool
 
-	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) {
+	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
 		called = true
 		gotSrc = src
 		gotOS = goos
 		gotArch = goarch
 		gotPassword = password
 		gotRelease = release
+		return 0
 	}
 
 	exitCode := run([]string{"mutant", RELEASECMD, "hello.mut", "--os", "windows", "--arch", "amd64", "--password", "secret"})
@@ -449,11 +452,12 @@ func TestRunDispatchesBytecodeInvocation(t *testing.T) {
 	var gotSrc, gotPassword string
 	var gotSecure, gotSignerAuth bool
 
-	runtimeDeps.runCode = func(src, password string, secureMode bool, enforceSignerAuth bool) {
+	runtimeDeps.runCode = func(src, password string, secureMode bool, enforceSignerAuth bool) int {
 		gotSrc = src
 		gotPassword = password
 		gotSecure = secureMode
 		gotSignerAuth = enforceSignerAuth
+		return 0
 	}
 
 	exitCode := run([]string{"mutant", "hello.mu", "--password", "secret", "--compat", "--signer-auth"})
@@ -534,9 +538,9 @@ func withRuntimeDeps(deps cliRuntime) func() {
 func stubRuntimeDeps() cliRuntime {
 	return cliRuntime{
 		runRepl:               func(string, bool, string) {},
-		compileCode:           func(string, string, string, bool, string, int, int64) {},
-		generateReleaseAssets: func(string) {},
-		runCode:               func(string, string, bool, bool) {},
+		compileCode:           func(string, string, string, bool, string, int, int64) int { return 0 },
+		generateReleaseAssets: func(string) int { return 0 },
+		runCode:               func(string, string, bool, bool) int { return 0 },
 		hasStandalonePayload:  func(string) (bool, error) { return false, nil },
 		executablePath:        func() (string, error) { return "", nil },
 		getPwd:                func() string { return "stub-password" },

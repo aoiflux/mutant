@@ -1,7 +1,7 @@
 let volume_path = "./disk.hfs";
 let opened, open_err = hfs_open(volume_path);
 if (open_err) {
-    putf("hfs_open failed: " + open_err);
+    putln("hfs_open failed:", open_err);
     return;
 }
 
@@ -10,7 +10,7 @@ putf("HFS opened: " + opened["path"] + " (handle=" + handle + ")");
 
 let items, list_err = hfs_list_files(handle, "/");
 if (list_err) {
-    putf("hfs_list_files failed: " + list_err);
+    putln("hfs_list_files failed:", list_err);
     return;
 }
 
@@ -29,7 +29,7 @@ if (!read_err) {
 
 let meta, meta_err = hfs_metadata(handle, target);
 if (meta_err) {
-    putf("hfs_metadata failed: " + meta_err);
+    putln("hfs_metadata failed:", meta_err);
     return;
 }
 
@@ -48,7 +48,7 @@ putf("  size=" + meta["size"]);
 
 let closed, close_err = hfs_close(handle);
 if (close_err) {
-    putf("hfs_close failed: " + close_err);
+    putln("hfs_close failed:", close_err);
     return;
 }
 

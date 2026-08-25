@@ -3,13 +3,13 @@ putln("Safe use: reads static metadata from examples/data/sample_win.exe");
 
 let check_err = fn(err, op) {
     if (err) {
-        putln("[error] " + op + ": " + err);
+        putln("[error]", op, ":", err);
     };
 };
 
 let fail_err = fn(err, op) {
     if (err) {
-        putln("[error] " + op + ": " + err);
+        putln("[error]", op, ":", err);
         return true;
     };
     return false;

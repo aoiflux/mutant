@@ -26,32 +26,50 @@ if security.IsSandboxed() {
 }
 ```
 
-### DetectSandboxType() (string, int)
+### DetectSandboxType() (string, int, error)
 
-Returns the most likely environment type and confidence in [0, 100].
+Returns the most likely environment type, confidence in [0, 100], and any error
+the platform detector reported.
 
 Behavior:
 
-- Returns ("none", 0) when no signal is present
+- Returns ("none", 0, nil) when no signal is present
 - Confidence is clamped to [0, 100]
 - Type is the highest-scoring class for current platform heuristics
 
 ```go
-sandboxType, confidence := security.DetectSandboxType()
-if confidence >= 70 {
+sandboxType, confidence, err := security.DetectSandboxType()
+if err == nil && confidence >= 70 {
     log.Printf("detected %s (%d%%)", sandboxType, confidence)
 }
 ```
 
-### GetSandboxIndicators() []string
+### GetSandboxIndicators() ([]string, error)
 
-Returns normalized, deduplicated indicator strings used by the detector.
+Returns normalized, deduplicated indicator strings used by the detector. The
+slice is a copy, so a caller cannot edit what later callers see.
 
 ```go
-for _, indicator := range security.GetSandboxIndicators() {
-    log.Println(indicator)
+indicators, err := security.GetSandboxIndicators()
+if err == nil {
+    for _, indicator := range indicators {
+        log.Println(indicator)
+    }
 }
 ```
+
+## Cost and caching
+
+Detection is expensive. The Windows detector alone spawns `tasklist`, three
+`wmic` queries, a `powershell` CIM query, and four `reg query` calls; together
+they take about a second. macOS shells out to `ps`, Linux reads a dozen files
+under /proc and /sys.
+
+The result is therefore computed once per process and cached. That is safe
+because the answer cannot change while the process runs -- a program does not
+move between a hypervisor and bare metal mid-execution -- and it is necessary
+because the VM calls the detector from its instruction stream (see below), so an
+uncached probe charged roughly a second per injected check a program reached.
 
 ## Implemented Detection Signals
 
@@ -80,8 +98,16 @@ VM/sandbox heuristics currently include:
 - Process markers from tasklist: vmtoolsd.exe, vmwaretray.exe, vboxservice.exe,
   vboxtray.exe, xenservice.exe, qemu-ga.exe, sbiectrl.exe,
   sandboxiedcomlaunch.exe
+- Parent-process and working-directory markers for WSL, and the WDAG account and
+  profile path for Windows Sandbox
+- CPUID hypervisor vendor leaf
+- Baseboard and computer-system manufacturer/model, via wmic with a powershell
+  Get-CimInstance fallback
+- PnP device names, raw SMBIOS firmware table, and registry markers under
+  HKLM\SOFTWARE\Microsoft\VirtualMachine and HKLM\HARDWARE\DESCRIPTION\System\BIOS
 
-Potential types include: VMware, VirtualBox, Xen, KVM/QEMU, Sandboxie, Cuckoo
+Potential types include: VMware, VirtualBox, Xen, KVM/QEMU, Sandboxie, Cuckoo,
+Hyper-V, WSL, Windows Sandbox
 
 ### macOS
 
@@ -111,6 +137,12 @@ Current flow:
 4. Anti-debug pre-execution
 5. Anti-sandbox pre-execution
 6. VM run
+
+Detection is also enforced *inside* the VM: the compiler injects OpChkSnd
+instructions, and executing one calls `security.IsSandboxed()`. That is a second
+enforcement point, reached however many times the program's control flow reaches
+an injected check -- which is why the detector is cached (see "Cost and
+caching").
 
 On sandbox detection:
 

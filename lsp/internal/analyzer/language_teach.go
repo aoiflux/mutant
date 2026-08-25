@@ -57,48 +57,38 @@ func macroSpecialFormSignatureInformation(name string) (lsp.SignatureInformation
 	}, true
 }
 
+// builtinHoverText renders the hover card for a builtin.
+//
+// Every registered builtin has a teaching doc — metadata_return_test.go and
+// metadata_param_test.go both fail otherwise — so there is no degraded path
+// here any more. The family-summary and "Builtin function." fallbacks this used
+// to carry became unreachable once coverage reached all 399, and leaving them in
+// would have hidden a future gap behind a card that looked almost right.
 func builtinHoverText(name string) (string, bool) {
-	suffix := builtinCategoryAndPlatformSuffix(name)
-
-	if signature, summary, params, ok := builtin.TeachingDoc(name); ok {
-		if len(params) == 0 {
-			return fmt.Sprintf("builtin `%s`\n\n%s%s", signature, summary, suffix), true
-		}
-
-		parts := make([]string, 0, len(params))
-		for _, p := range params {
-			parts = append(parts, fmt.Sprintf("- `%s`: %s", p.Name, p.Doc))
-		}
-		return fmt.Sprintf("builtin `%s`\n\n%s\n\n%s%s", signature, summary, strings.Join(parts, "\n"), suffix), true
+	card, ok := builtinCard(name)
+	if !ok {
+		return "", false
 	}
-
-	if summary, ok := builtin.TeachingFamilySummary(name); ok {
-		return fmt.Sprintf("builtin `%s(...)`\n\n%s%s", name, summary, suffix), true
-	}
-	if builtin.GetBuiltinByName(name) != nil {
-		return fmt.Sprintf("builtin `%s(...)`\n\nBuiltin function.%s", name, suffix), true
-	}
-
-	return "", false
+	return card.render(), true
 }
 
-// builtinCategoryAndPlatformSuffix builds the trailing hover metadata: the
-// capability category the builtin belongs to and, for platform-constrained
-// builtins, the supported OS set and/or a behavioral caveat. Returns "" for a
-// plain, cross-platform builtin with no category (rare) so hover stays clean.
-func builtinCategoryAndPlatformSuffix(name string) string {
-	var b strings.Builder
+// builtinFooter builds the card's trailing lines: the capability category the
+// builtin belongs to and, for platform-constrained builtins, the supported OS
+// set and/or a behavioural caveat.
+func builtinFooter(name string) []string {
+	var lines []string
 	if category := builtin.CapabilityCategory(name); category != "" {
-		fmt.Fprintf(&b, "\n\n_Category: %s_", category)
+		lines = append(lines, fmt.Sprintf("_Category: %s_", category))
 	}
 	platforms, note := builtin.PlatformSupport(name)
 	if len(platforms) > 0 {
-		fmt.Fprintf(&b, "\n\n**Platforms:** %s — not supported on other operating systems.", strings.Join(platforms, ", "))
+		lines = append(lines, fmt.Sprintf("**Platforms:** %s — not supported on other operating systems.",
+			strings.Join(platforms, ", ")))
 	}
 	if note != "" {
-		fmt.Fprintf(&b, "\n\n_Note: %s_", note)
+		lines = append(lines, fmt.Sprintf("_Note: %s_", note))
 	}
-	return b.String()
+	return lines
 }
 
 func keywordHoverText(keyword string) (string, bool) {
@@ -213,18 +203,23 @@ func languageSnippetCompletionItems() []lsp.CompletionItem {
 }
 
 func builtinSignatureInformation(name string) (lsp.SignatureInformation, bool) {
-	if signature, summary, params, ok := builtin.TeachingDoc(name); ok {
-		sig := lsp.SignatureInformation{Label: signature}
+	if _, summary, params, ok := builtin.TeachingDoc(name); ok {
+		label, spans, _ := builtinSignatureLabel(name)
+		sig := lsp.SignatureInformation{Label: label}
 		sig.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: summary}
 		if len(params) == 0 {
 			return sig, true
 		}
 
+		// Parameters are addressed by offset rather than by name. A string
+		// label has to be a substring of the signature label and is matched by
+		// first occurrence, which the type annotations would make ambiguous;
+		// the offset pair says exactly which span to highlight.
 		paramInfos := make([]lsp.ParameterInformation, 0, len(params))
-		for _, p := range params {
-			param := lsp.ParameterInformation{Label: p.Name}
-			if p.Doc != "" {
-				param.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: p.Doc}
+		for i, p := range params {
+			param := lsp.ParameterInformation{Label: spans[i]}
+			if doc := paramDocumentation(p); doc != "" {
+				param.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
 			}
 			paramInfos = append(paramInfos, param)
 		}
