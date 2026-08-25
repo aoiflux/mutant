@@ -29,7 +29,7 @@ const (
 	FMTCMD     = "fmt"
 	LINTCMD    = "lint"
 	TESTCMD    = "test"
-	VERSION    = "Version: 2.5.0"
+	VERSION    = "Version: 2.4.0"
 )
 
 type cliRuntime struct {
