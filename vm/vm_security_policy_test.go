@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -181,5 +182,61 @@ func TestControlFlowIntegrityAllowsInitialFrameSentinel(t *testing.T) {
 	snapshot := security.SecurityTelemetrySnapshot()
 	if snapshot["integrity_failed"] != 0 {
 		t.Fatalf("expected no integrity failure telemetry for initial sentinel ip")
+	}
+}
+
+// The mirror of TestVMDevModeWarnsOnSecurityOpcodes. Outside dev mode a
+// detector that fires is a halt, and until now nothing pinned that -- the only
+// coverage of the secure-mode branch was accidental, supplied by whichever CI
+// runner happened to be a virtual machine, which is how it came to be
+// discovered as a build failure rather than as a test.
+func TestVMSecureModeHaltsOnSecurityOpcodes(t *testing.T) {
+	prevDebugger := isDebuggerPresent
+	prevSandbox := isSandboxed
+	defer func() {
+		isDebuggerPresent = prevDebugger
+		isSandboxed = prevSandbox
+	}()
+
+	// Both opcodes have to be in the stream either way: secure mode scans for
+	// them before it runs anything, so a program carrying only the one under
+	// test would be rejected before reaching it.
+	ins := append(code.Make(code.OpChkDbg), code.Make(code.OpChkSnd)...)
+	ins = append(ins, code.Make(code.OpNull)...)
+
+	cases := []struct {
+		name     string
+		debugger bool
+		sandbox  bool
+		want     error
+	}{
+		{"debugger", true, false, security.ErrDebuggerDetected},
+		{"sandbox", false, true, security.ErrSandboxDetected},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isDebuggerPresent = func() bool { return tc.debugger }
+			isSandboxed = func() bool { return tc.sandbox }
+
+			bc := &compiler.ByteCode{Instructions: append([]byte(nil), ins...)}
+			encrypted := mutil.EncryptByteCode(bc, "testpwd")
+
+			err := NewWithPasswordMode(encrypted, "testpwd", true).Run()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("secure mode returned %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	// Neither detector firing must leave the same program running normally --
+	// otherwise the two cases above would pass for a program that never runs.
+	isDebuggerPresent = func() bool { return false }
+	isSandboxed = func() bool { return false }
+
+	bc := &compiler.ByteCode{Instructions: append([]byte(nil), ins...)}
+	encrypted := mutil.EncryptByteCode(bc, "testpwd")
+	if err := NewWithPasswordMode(encrypted, "testpwd", true).Run(); err != nil {
+		t.Fatalf("a clean host must still run the program, got: %v", err)
 	}
 }
