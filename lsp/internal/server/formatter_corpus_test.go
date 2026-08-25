@@ -209,9 +209,14 @@ func TestCanonicalRenderingDetectsRealChanges(t *testing.T) {
 // canonicalRendering makes an AST rendering comparable by sorting the members
 // of every brace group.
 //
-// HashLiteral.Pairs is a Go map and its String() ranges over it directly, so
-// the same tree renders its pairs in a different order every run. Sorting is
-// safe because braces are the one construct whose order carries no meaning:
+// HashLiteral.Pairs is a Go map, so the authored order of a hash literal does
+// not survive parsing and something has to choose one. HashLiteral.String()
+// sorts by key, so one tree now renders the same way every run -- this used to
+// be the thing that made the comparison below meaningless, and is no longer.
+// The sorting here stays because the two sides are not always rendered the same
+// way: the formatter restores the authored order from source ranges, which the
+// parser does not record for every key. Sorting is safe because braces are the
+// one construct whose order carries no meaning:
 // BlockStatement.String() concatenates its statements with no braces at all,
 // and arrays — where order does matter — render with brackets. (Only tests
 // render an AST; the compiler sorts hash keys before emitting, so bytecode is
