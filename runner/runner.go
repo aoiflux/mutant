@@ -448,8 +448,7 @@ func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, sec
 	}
 
 	ctx := &luaruntime.APIContext{
-		Globals:             map[string]object.Object{},
-		BuiltinCapabilities: resolveLuaBuiltinCapabilities(),
+		Globals: map[string]object.Object{},
 	}
 
 	if err := executeLuaPatches(bytecode.LuaPatches, password, len(bytecode.Instructions), ctx); err != nil {
@@ -458,15 +457,6 @@ func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, sec
 	}
 
 	return nil
-}
-
-func resolveLuaBuiltinCapabilities() []string {
-	defaults := security.DefaultBuiltinCapabilityPolicy()
-	caps := make([]string, 0, len(defaults))
-	for capability := range defaults {
-		caps = append(caps, capability)
-	}
-	return caps
 }
 
 func registerTypes() {

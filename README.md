@@ -348,6 +348,7 @@ snippet completions), see:
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
 - [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)
+- [docs/GAP_ANALYSIS_AND_ROADMAP.md](docs/GAP_ANALYSIS_AND_ROADMAP.md) — gap analysis, priority matrix & roadmap
 
 ## License
 

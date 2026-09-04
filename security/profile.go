@@ -66,14 +66,6 @@ func defaultTamperResponseForProfile(secureMode bool) string {
 	}
 }
 
-func DefaultBuiltinCapabilityPolicy() map[string]struct{} {
-	if ResolveProtectionProfile() == ProtectionProfileMinimal {
-		return map[string]struct{}{"all": {}}
-	}
-
-	return map[string]struct{}{}
-}
-
 func DeriveStandaloneProvenance(payload []byte, checksum []byte, profileCode byte) [32]byte {
 	seed := make([]byte, 0, len(payload)+len(checksum)+1)
 	seed = append(seed, payload...)

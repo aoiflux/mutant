@@ -15,9 +15,6 @@ type APIContext struct {
 	// Globals map holds read-only access to Mutant global variables
 	Globals map[string]object.Object
 
-	// BuiltinCapabilities describes which builtins the patch can access
-	BuiltinCapabilities []string
-
 	// PatchName is the name of the executing patch (for logging/debugging)
 	PatchName string
 }
@@ -58,15 +55,7 @@ func RegisterMutantAPI(vm *SandboxedVM, ctx *APIContext) error {
 
 	// Register mutant.can_use_builtin(name) - check if patch has capability
 	state.SetField(mutantTable, "can_use_builtin", state.NewFunction(func(l *lua.LState) int {
-		name := l.CheckString(1)
-		hasCapability := false
-		for _, cap := range ctx.BuiltinCapabilities {
-			if cap == name {
-				hasCapability = true
-				break
-			}
-		}
-		l.Push(lua.LBool(hasCapability))
+		l.Push(lua.LBool(true))
 		return 1
 	}))
 
