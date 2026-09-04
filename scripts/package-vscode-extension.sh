@@ -69,7 +69,12 @@ if [[ ! -d "$EXT_PATH/node_modules" ]]; then
   npm install
 fi
 
-echo "[2/3] Run extension prepublish (stages binaries and compiles)"
+# Staging is a separate step: vscode:prepublish compiles only, so that
+# package-targets.mjs can stage a single per-target binary without vsce
+# re-staging all six behind it. This wrapper builds the universal VSIX, so it
+# stages every binary.
+echo "[2/3] Stage LSP binaries and compile the extension"
+npm run prepare:lsp-bins
 npm run vscode:prepublish
 
 mkdir -p "$VSIX_OUT_PATH"

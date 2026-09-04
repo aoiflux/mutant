@@ -78,7 +78,7 @@ func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 	defer security.SetLocalKeyStoreDirForTesting("")
 
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected malformed payload to fail")
 	}
@@ -102,7 +102,7 @@ func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 
 func TestRunCompatModeWarnsAndContinuesOnMalformedPayload(t *testing.T) {
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", false, false)
+	err, errType := Run(path, Options{})
 	if err == nil {
 		t.Fatalf("expected compat mode to fail later during decode")
 	}
@@ -128,7 +128,7 @@ func TestRunSecureModeRejectsTamperedSignedPayload(t *testing.T) {
 	tampered := tamperSignedPublicKey(t, string(signed))
 	path := writeTempPayload(t, []byte(tampered))
 
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected secure mode to reject tampered signed payload")
 	}
@@ -156,7 +156,7 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 	}
 
 	path := writeTempPayload(t, signed)
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected decode failure after signature verification")
 	}
@@ -170,7 +170,7 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 
 func TestRunSecureModeWithoutSignerAuthFlagSkipsSignatureVerification(t *testing.T) {
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", true, false)
+	err, errType := Run(path, Options{SecureMode: true})
 	if err == nil {
 		t.Fatalf("expected malformed payload to fail decode")
 	}
@@ -268,7 +268,7 @@ func TestEnforceProcessProtectionIgnoresLowConfidence(t *testing.T) {
 	}
 }
 
-func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
+func TestEnforceProcessProtectionDisabled(t *testing.T) {
 	originalEnabled := processProtectionOn
 	processProtectionOn = func() bool { return false }
 	defer func() { processProtectionOn = originalEnabled }()

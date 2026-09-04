@@ -97,9 +97,14 @@ Planned:
 
 Decision (2026-07):
 
-1. Keep `runtime` mode as default VM global storage path to preserve throughput.
-2. Keep `wrapper` mode as opt-in hardening path behind
-   `MUTANT_VM_GLOBAL_MEMORY_MODE=wrapper`.
+1. Keep `runtime` mode as the VM global storage path to preserve throughput.
+   `resolveVMGlobalMemoryMode` returns it unconditionally
+   ([vm/vm.go](../vm/vm.go)); there is no way to select another mode, and no
+   plan to add one. Mutant takes no configuration from the environment, and a
+   memory-hardening mode is not a per-run decision. See
+   [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
+2. Keep the `wrapper` code path in the tree as the seam a future hardening mode
+   would use. It is not reachable today.
 3. Do not add new secure-memory helper types in this release beyond existing
    wrappers (`SecureGlobal`, `SecureStack`, `SecureConstantPool`).
 4. Revisit additional helpers only if a new threat model requires object classes

@@ -94,53 +94,49 @@ CLI precedence is "last matching mode flag wins" due to linear arg scanning.
 
 ### 4.2 Tamper Response Policy
 
-Policy source: env variable `MUTANT_TAMPER_RESPONSE`.
+Policy source: the execution mode, from the command line. Nothing else.
+`ResolveTamperResponse(secureMode)` in `security/response_policy.go` is a pure
+function of it.
 
-Valid values:
+Possible values:
 
 - `warn`: log and continue
 - `delay`: sleep then continue
 - `terminate`: return error/fail
 
-Defaults:
+Resolution:
 
-- secure mode: `terminate`
-- compatibility/dev mode: `warn`
+- dev mode (`--dev`): `warn`
+- compatibility mode (`--compat`): `warn`
+- secure mode (the default): `terminate`
 
-Delay tuning:
-
-- `MUTANT_TAMPER_DELAY_MS` in `[0..5000]`
-- fallback default: `250ms`
+`delay` is implemented in `ApplyTamperResponse` and sleeps
+`DefaultTamperDelayMs` (a `250` ms constant, clamped to `[0..5000]` by
+`MinTamperDelayMs`/`MaxTamperDelayMs`), but no mode selects it. It survives as
+the seam a future response policy would use.
 
 ### 4.3 Protection Profiles
 
-Mutant also supports a protection profile layer via `MUTANT_PROTECTION_PROFILE`.
+**Fixed at `standard`.** `ResolveProtectionProfile()` in `security/profile.go`
+returns the constant `defaultProtectionProfile`; there is no selector, and no
+precedence chain to reason about. Mutant takes no configuration from environment
+variables, and posture is not a per-run decision. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-Supported values:
+The three profile values remain as an on-disk encoding:
 
-1. `minimal`
+1. `minimal` (code `1`)
+2. `standard` (code `2`) -- what `ResolveProtectionProfileCode()` always returns,
+   and therefore what every V3 release trailer this build writes contains.
+3. `paranoid` (code `3`)
 
-- Favors compatibility and operator convenience.
-- Defaults tamper policy to `warn`.
-- Defaults risky builtin groups to allow-all unless an explicit capability list
-  is set.
+`ProtectionProfileFromCode` maps a trailer byte back to a name, which is why all
+three must stay: a trailer written by an older build can carry code `1` or `3`
+and must still be readable.
 
-2. `standard`
-
-- Default profile when the env var is unset or invalid.
-- Keeps secure mode fail-closed and compatibility mode warn-by-default.
-
-3. `paranoid`
-
-- Favors maximum tamper resistance.
-- Defaults tamper policy to `terminate` when this profile is selected.
-- Explicit `MUTANT_TAMPER_RESPONSE` still has higher precedence.
-
-Profile precedence:
-
-- Explicit `MUTANT_TAMPER_RESPONSE` still wins when set.
-- Explicit `MUTANT_BUILTIN_CAPABILITIES` still wins when set.
-- Profile selection only controls defaults.
+`defaultTamperResponseForProfile` still switches on the profile, so its
+`minimal` and `paranoid` arms exist in the source. They are unreachable at
+runtime, because the value it switches on is a constant.
 
 ---
 
@@ -392,8 +388,10 @@ Security implication:
 2. Secure verification (`VerifyCodeWithTrustedPublicKey`):
 
 - Parses embedded public key/signature.
-- Loads trusted key from env `MUTANT_TRUSTED_PUBLIC_KEY_HEX` when set.
-- Falls back to local key bootstrap resolution when env is absent.
+- Loads the trusted key from the file named by `--trusted-key <path>` when
+  given. A missing, malformed or wrong-sized file is a hard error, never a
+  silent fallback.
+- Falls back to local key bootstrap resolution when the flag is absent.
 - Constant-time compares embedded key with trusted key.
 - On mismatch returns `ErrUntrustedSigner`.
 - Verifies signature using trusted key.
@@ -402,14 +400,23 @@ Security implication:
 
 Build/signing key source:
 
-- `MUTANT_SIGNING_PRIVATE_KEY_HEX` preferred for stable signer identity.
-- If absent, local persistent keypair is loaded or bootstrapped from local
-  keystore.
+- The local persistent keypair under `<home>/.mutant/keys`, loaded or
+  bootstrapped by `EnsureLocalSigningKeyPair`
+  (`generator/generate.go` -> `loadOrBootstrapSigningPrivateKey`). Creating it
+  prints both paths to stderr.
+- A caller of `generator.Generate` may pass a `privateKey` directly. Nothing on
+  the CLI path does.
+
+Signing key material never comes from the environment: it is the most sensitive
+value in the system, and an environment variable is inherited by every child
+process and invisible in the invocation. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 Operational risk:
 
 - unmanaged local bootstrap keys can diverge from official release trust anchors
-  if not governed by deployment policy.
+  if not governed by deployment policy. Verifying with `--trusted-key` pinned to
+  the approved signer is what closes this.
 
 ---
 
@@ -479,8 +486,10 @@ sequenceDiagram
 
 ### 9.1 Telemetry Export Hook
 
-If `MUTANT_SECURITY_TELEMETRY_FILE` is set, runner defers telemetry JSON export
-at function exit.
+None. `ExportSecurityTelemetry(path)` exists and writes the counter snapshot as
+JSON, but the runner does not call it and no flag selects a path. Counters are
+readable in-process through `SecurityTelemetrySnapshot()` and
+`SecurityTelemetryJSON()`.
 
 ### 9.2 Standalone Trailer Validation
 
@@ -512,15 +521,15 @@ Failure handling:
 
 At both `pre-decode` and `pre-execution` stages, runner evaluates process
 protection probes (`process_injection`, `trampoline`, `iat_got`,
-`module_integrity`, `memory_page_anomaly`) when
-`MUTANT_ENABLE_ANTITAMPER_PROBE=1`.
+`module_integrity`, `memory_page_anomaly`). `antiTamperProbeEnabled` is a
+compile-time `true`, so they always run.
 
 Rollout gate:
 
-- `MUTANT_ENABLE_PROCESS_PROTECTION` controls whether runner executes
-  process-protection enforcement.
-- default is enabled when unset.
-- disable values: `0`, `false`, `off`, `no`.
+- `isProcessProtectionEnabled()` (`runner/runner.go`) controls whether the runner
+  executes process-protection enforcement. It returns `true`.
+- Not configurable. The runner reaches it through the `processProtectionOn`
+  package variable, which tests replace to exercise the skip path.
 
 Enforcement threshold:
 
@@ -538,10 +547,14 @@ Response path:
 Runner executes `RunRemoteProcessScan` at both `pre-decode` and `pre-execution`
 stages.
 
-Gates and modes:
+Gates and modes -- all from `remoteScanConfigState`
+(`security/processscan_config.go`), which ships disabled and is writable only by
+`SetRemoteScanConfigForTesting`:
 
-1. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN=1` enables scan execution.
-2. `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce` controls decision behavior.
+1. `Enabled` gates scan execution. It is `false`, so a shipped binary never
+   scans.
+2. `Mode` (`off|observe|enforce`, default `observe`) controls decision
+   behaviour.
 3. Scanner errors are telemetry-visible and non-blocking.
 
 Current enforcement behavior:
@@ -556,6 +569,9 @@ Current implementation status:
    implemented.
 2. `ScanRemoteProcessesWindows` currently returns no verdicts (safe no-op), so
    remote verdict generation is scaffolding-ready but not yet signal-rich.
+3. There is no way to switch it on outside a test. When one is added it will be
+   a flag, not an environment variable. See
+   [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 ---
 
@@ -599,25 +615,12 @@ If current instruction hash differs from expected baseline:
 Important implementation detail:
 
 - VM currently calls tamper response with `secureMode=true` for integrity
-  failures, making secure defaults (`terminate`) apply unless env override
-  downgrades policy.
+  failures, so the secure default (`terminate`) applies to an integrity failure
+  even under `--compat`. Nothing downgrades it.
 
-### 10.5 Builtin Capability Gating
+### 10.5 Builtin Capability Configuration
 
-Risky builtins are gated by explicit capability names and default policy from
-the selected protection profile.
-
-Current capability groups:
-
-1. `command_exec`
-2. `filesystem`
-3. `network`
-
-Behavior:
-
-- `minimal` profile defaults to allow-all.
-- `standard` and `paranoid` profiles default-deny the risky groups.
-- Explicit `MUTANT_BUILTIN_CAPABILITIES` overrides the profile default.
+Under design. No interface is specified.
 
 ```mermaid
 stateDiagram-v2
@@ -676,10 +679,10 @@ Current wiring note:
 
 Current policy gate:
 
-- `MUTANT_VM_GLOBAL_MEMORY_MODE=runtime|wrapper`
-- default is `runtime` for performance-safe operation
-- `wrapper` enables optional global wrapper usage where object types are
-  supported
+- None. `resolveVMGlobalMemoryMode()` (`vm/vm.go`) returns `runtime`
+  unconditionally, the performance-safe path.
+- `wrapper` exists as a named constant and an unreached branch. It is the seam a
+  future hardening mode would use; there is no way to select it.
 
 Current helper-scope decision:
 
@@ -794,58 +797,15 @@ Atomic counters:
 
 ### 13.3 Audit Stream
 
-If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
-
-`[security-audit] ts=<unix> event=<...> stage=<...>`
-
----
-
-## 14. Environment Variable Contract
-
-### 14.1 Trust and Keys
-
-1. `MUTANT_TRUSTED_PUBLIC_KEY_HEX`
-
-- required in secure runtime mode
-- trusted signer pinning key (ed25519 public key, hex)
-
-2. `MUTANT_SIGNING_PRIVATE_KEY_HEX`
-
-- optional generator signing private key
-- stable artifact signer identity when set
-
-3. `MUTANT_KEYSTORE_DIR`
-
-- optional override for local key bootstrap directory
-- defaults to `<home>/.mutant/keys`
-
-### 14.2 Tamper Policy
-
-1. `MUTANT_TAMPER_RESPONSE` = `warn|delay|terminate`
-2. `MUTANT_TAMPER_DELAY_MS` = integer ms in `[0..5000]`
-
-### 14.3 Probe and Process-Scan Gates
-
-1. `MUTANT_ENABLE_ANTITAMPER_PROBE` = `1` enables anti-tamper probe execution.
-2. `MUTANT_ENABLE_PROCESS_PROTECTION` gates runner enforcement of the focused
-   5-probe process-protection set.
-3. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN` = `1` enables remote process scan
-   manager.
-4. `MUTANT_REMOTE_SCAN_MODE` = `off|observe|enforce`.
-5. `MUTANT_REMOTE_SCAN_MAX_PROCESSES` = positive integer, default `32`.
-6. `MUTANT_REMOTE_SCAN_INTERVAL_MS` = positive integer, default `1000`.
-7. `MUTANT_REMOTE_SCAN_ALLOWLIST` = comma-separated process names.
-
-### 14.4 Observability
-
-1. `MUTANT_SECURITY_AUDIT` = `1` to enable stderr audit lines
-2. `MUTANT_SECURITY_TELEMETRY_FILE` = output path for telemetry JSON
+Not implemented. `auditEvent(event, stage)` is called by every `Record*` counter
+function but its body discards both arguments. The stderr line format it once
+emitted was `[security-audit] ts=<unix> event=<...> stage=<...>`.
 
 ---
 
-## 15. Error and Failure Semantics
+## 14. Error and Failure Semantics
 
-### 15.1 Canonical Security Errors
+### 14.1 Canonical Security Errors
 
 1. `ErrWrongSignature`
 2. `ErrPasswordRequired`
@@ -855,7 +815,7 @@ If `MUTANT_SECURITY_AUDIT=1`, writes stderr event lines:
 6. `ErrProcessProtectionDetected`
 7. `ErrUntrustedSigner`
 
-### 15.2 Policy-Dependent Behavior
+### 14.2 Policy-Dependent Behavior
 
 Same event can either:
 
@@ -863,7 +823,7 @@ Same event can either:
 2. continue with warning (`warn`)
 3. continue after delay (`delay`)
 
-### 15.3 Design Tradeoff
+### 14.3 Design Tradeoff
 
 - Secure defaults maximize resistance but may impact debuggability.
 - Compatibility/dev improves operator ergonomics but weakens security
@@ -871,7 +831,7 @@ Same event can either:
 
 ---
 
-## 16. Detailed Dataflow
+## 15. Detailed Dataflow
 
 ```mermaid
 flowchart TD
@@ -901,9 +861,9 @@ flowchart TD
 
 ---
 
-## 17. Testing and Verification Strategy
+## 16. Testing and Verification Strategy
 
-### 17.1 Unit/Integration Coverage Highlights
+### 16.1 Unit/Integration Coverage Highlights
 
 1. `security/security_test.go`
 
@@ -927,7 +887,7 @@ flowchart TD
 
 - integrity tamper behavior under `warn`, `delay`, `terminate`
 
-### 17.2 CI Security Profile
+### 16.2 CI Security Profile
 
 Workflow `.github/workflows/security-profile.yml`:
 
@@ -937,7 +897,7 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ---
 
-## 18. Security Invariants (Must Hold)
+## 17. Security Invariants (Must Hold)
 
 1. When `--signer-auth` is enabled in secure mode, trusted signer verification
    must be enforced (trusted env key or local bootstrap trusted key).
@@ -950,7 +910,7 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ---
 
-## 19. Residual Risks and Limitations
+## 18. Residual Risks and Limitations
 
 1. Compatibility/dev mode can be misused in production if not controlled.
 2. Env-driven policy downgrades (`warn`/`delay`) can reduce enforcement.
@@ -962,25 +922,34 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ---
 
-## 20. Operational Guidance
+## 19. Operational Guidance
 
-### 20.1 Recommended Production Baseline
+Mutant takes no configuration from environment variables, so an operational
+baseline is a command line and nothing else. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-1. Launch with `--secure` only.
-2. Set `MUTANT_TRUSTED_PUBLIC_KEY_HEX` to release signer key.
-3. Set `MUTANT_TAMPER_RESPONSE=terminate`.
-4. Set `MUTANT_TAMPER_DELAY_MS=0` unless delay strategy is intentional.
-5. Enable telemetry export and audit in monitored environments.
+### 19.1 Recommended Production Baseline
 
-### 20.2 Developer Baseline
+1. Launch with `--secure --signer-auth`.
+2. Pass `--trusted-key <path>` naming the release signer's public key file.
+   Without it, verification falls back to a locally bootstrapped keypair, which
+   trusts whatever signed the artifact on this host.
+3. Do not pass `--compat` or `--dev`. Secure mode already resolves the tamper
+   response to `terminate`, and those flags are the only thing that changes it.
+4. Record the full command line with the artifact. It is the complete
+   description of how the run was configured.
+
+### 19.2 Developer Baseline
 
 1. Use `--dev` for local test convenience only.
 2. Avoid using `--dev` artifacts/behavior as production acceptance signal.
-3. Keep test environment policy explicit to avoid accidental drift.
+3. Because every switch is a flag, the difference between a dev run and a
+   production run is visible in the two command lines. There is no ambient
+   state to drift.
 
 ---
 
-## 21. Future Hardening Backlog (LLD-Level)
+## 20. Future Hardening Backlog (LLD-Level)
 
 1. Add compile-sign-run-tamper-rerun end-to-end suites.
 2. Add real Windows runner-based anti-debug integration tests.
@@ -993,7 +962,7 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ---
 
-## 22. Appendix A: Key Functions by Responsibility
+## 21. Appendix A: Key Functions by Responsibility
 
 ### Build-Time
 
@@ -1024,17 +993,23 @@ Workflow `.github/workflows/security-profile.yml`:
 
 ---
 
-## 23. Appendix B: Mode/Policy Decision Table
+## 22. Appendix B: Mode/Policy Decision Table
 
 | Execution Posture          | Signature Verification Path  | Default Policy | Wrong Signature / Untrusted Key        | Debugger Hit                           | Integrity Mismatch                     |
 | -------------------------- | ---------------------------- | -------------- | -------------------------------------- | -------------------------------------- | -------------------------------------- |
-| Secure (`--secure`)        | Trusted key pinning required | terminate      | stop by default (unless env downgrade) | stop by default (unless env downgrade) | stop by default (unless env downgrade) |
-| Compatibility (`--compat`) | Embedded key verification    | warn           | continue/log by default                | continue/log by default                | continue/log by default                |
-| Developer (`--dev`)        | Compatibility path forced    | warn           | continue/log by default                | continue/log by default                | continue/log by default                |
+| Secure (`--secure`)        | Trusted key pinning required | terminate      | stop                                   | stop                                   | stop                                   |
+| Compatibility (`--compat`) | Embedded key verification    | warn           | continue/log                           | continue/log                           | stop (VM forces secure policy)         |
+| Developer (`--dev`)        | Compatibility path forced    | warn           | continue/log                           | continue/log                           | stop (VM forces secure policy)         |
+
+The posture column is the whole input. There is no downgrade path that is not
+one of these three flags -- see §4.2 and
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md). Integrity mismatch is the
+exception to the mode rule: the VM calls `ApplyTamperResponse` with
+`secureMode=true` regardless of the launch mode (§10.4).
 
 ---
 
-## 24. Appendix C: Design Review Checklist
+## 23. Appendix C: Design Review Checklist
 
 1. Any new security check records telemetry before response.
 2. Any new response path uses `ApplyTamperResponse` consistently.

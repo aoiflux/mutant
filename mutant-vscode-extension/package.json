@@ -363,7 +363,7 @@
         "compile": "node ./esbuild.mjs --production",
         "watch": "node ./esbuild.mjs --watch",
         "compile-tests": "tsc -p ./",
-        "vscode:prepublish": "npm run prepare:lsp-bins && npm run compile",
+        "vscode:prepublish": "npm run compile",
         "lint": "eslint src --ext ts",
         "pretest": "npm run compile-tests && npm run lint",
         "test": "node ./out/test/runTest.js",

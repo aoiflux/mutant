@@ -70,14 +70,14 @@ func GenerateReleaseAssets(outputPath string) int {
 // 0 whatever happened -- a runtime error, a missing file, or a wrong password.
 // Nothing calling it could tell a successful run from a failed one, and a
 // released standalone binary reported success after refusing to decrypt.
-func RunCode(src string, password string, secureMode bool, enforceSignerAuth bool) int {
+func RunCode(src string, opts runner.Options) int {
 	srcpath, err := filepath.Abs(src)
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
 
-	if err, errtype := runner.Run(srcpath, password, secureMode, enforceSignerAuth); err != nil {
+	if err, errtype := runner.Run(srcpath, opts); err != nil {
 		switch errtype {
 		case errrs.ERROR:
 			fmt.Println(err)

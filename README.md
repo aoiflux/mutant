@@ -315,12 +315,11 @@ Artifacts are written under `example_output/`.
 ### Command execution requirements
 
 `persistence_triage_commands.mut` uses `cmd_builder`, `cmd_add`, and `cmd_run`.
-Those are policy controlled.
-
-Optional policy tuning:
-
-- `MUTANT_COMMAND_EXEC_TIMEOUT_MS`
-- `MUTANT_COMMAND_EXEC_MAX_OUTPUT_BYTES`
+Those are policy controlled, with fixed limits: a 3000 ms per-command timeout
+and 8192 bytes of captured output, after which the output is truncated. Neither
+is tunable -- Mutant takes no configuration from environment variables, and
+these are not per-run decisions. See
+[docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).
 
 ## Featured In
 

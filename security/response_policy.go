@@ -8,10 +8,6 @@ import (
 )
 
 const (
-	// Deprecated compatibility constants: env overrides are no longer used.
-	TamperResponseEnv = "MUTANT_TAMPER_RESPONSE"
-	TamperDelayMsEnv  = "MUTANT_TAMPER_DELAY_MS"
-
 	TamperResponseWarn      = "warn"
 	TamperResponseDelay     = "delay"
 	TamperResponseTerminate = "terminate"

@@ -36,17 +36,32 @@ var (
 
 const processProtectionTerminateConfidence = 80
 
+// Options carries the per-run switches resolved from the command line. Mutant
+// takes no configuration from environment variables, so everything that shapes
+// a run arrives here from argv and is therefore visible in the invocation an
+// analyst records. See docs/CONFIGURATION_POLICY.md.
+type Options struct {
+	Password          string
+	SecureMode        bool
+	EnforceSignerAuth bool
+	Timing            bool
+
+	// TrustedKeyPath names a file holding the hex-encoded ed25519 public key to
+	// verify against. Empty means the local keystore. A path, never key material.
+	TrustedKeyPath string
+}
+
 // stopwatch prints elapsed-since-start to stderr for each labelled stage when
-// MUTANT_TIMING is set. Zero overhead otherwise. (dev-sec-platform-upgrades)
+// --timing is passed. Zero overhead otherwise. (dev-sec-platform-upgrades)
 type stopwatch struct {
 	on    bool
 	start time.Time
 	last  time.Time
 }
 
-func newStopwatch() *stopwatch {
+func newStopwatch(on bool) *stopwatch {
 	now := time.Now()
-	return &stopwatch{on: os.Getenv("MUTANT_TIMING") != "", start: now, last: now}
+	return &stopwatch{on: on, start: now, last: now}
 }
 
 func (s *stopwatch) mark(label string) {
@@ -59,8 +74,10 @@ func (s *stopwatch) mark(label string) {
 	s.last = now
 }
 
-func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
-	sw := newStopwatch()
+func Run(srcpath string, opts Options) (error, errrs.ErrorType) {
+	password, secureMode, enforceSignerAuth := opts.Password, opts.SecureMode, opts.EnforceSignerAuth
+
+	sw := newStopwatch(opts.Timing)
 	signedCode, err := os.ReadFile(srcpath)
 	if err != nil {
 		return err, errrs.ERROR
@@ -74,7 +91,7 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 	defer security.SecureZero(signedCode)
 
 	if secureMode && enforceSignerAuth {
-		trustedPublicKey, generated, keyDir, keyErr := security.ResolveTrustedPublicKeyHex()
+		trustedPublicKey, generated, keyDir, keyErr := security.ResolveTrustedPublicKeyHexFromPath(opts.TrustedKeyPath)
 		if keyErr != nil {
 			return fmt.Errorf("failed to resolve trusted public key: %w", keyErr), errrs.ERROR
 		}

@@ -33,7 +33,7 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 
 	// Generate signing key if not provided
 	if privateKey == nil {
-		privateKey, err = loadSigningPrivateKeyFromEnv()
+		privateKey, err = loadOrBootstrapSigningPrivateKey()
 		if err != nil {
 			return err, errrs.ERROR, nil
 		}
@@ -73,7 +73,11 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 	return nil, "", nil
 }
 
-func loadSigningPrivateKeyFromEnv() ([]byte, error) {
+// loadOrBootstrapSigningPrivateKey returns the host's persistent signing key,
+// creating the local keypair on first use. It reads no environment variable --
+// the name it used to carry said otherwise, and there has been nothing to read
+// for some time. See docs/CONFIGURATION_POLICY.md.
+func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 	privateKey, _, created, keyDir, err := security.EnsureLocalSigningKeyPair()
 	if err != nil {
 		return nil, err

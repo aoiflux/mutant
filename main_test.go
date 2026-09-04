@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"mutant/global"
+	"mutant/runner"
 )
 
 func TestShouldAttemptEmbeddedRun(t *testing.T) {
@@ -449,14 +450,12 @@ func TestRunDispatchesReleaseCommand(t *testing.T) {
 func TestRunDispatchesBytecodeInvocation(t *testing.T) {
 	t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
 
-	var gotSrc, gotPassword string
-	var gotSecure, gotSignerAuth bool
+	var gotSrc string
+	var gotOpts runner.Options
 
-	runtimeDeps.runCode = func(src, password string, secureMode bool, enforceSignerAuth bool) int {
+	runtimeDeps.runCode = func(src string, opts runner.Options) int {
 		gotSrc = src
-		gotPassword = password
-		gotSecure = secureMode
-		gotSignerAuth = enforceSignerAuth
+		gotOpts = opts
 		return 0
 	}
 
@@ -468,14 +467,71 @@ func TestRunDispatchesBytecodeInvocation(t *testing.T) {
 	if gotSrc != "hello.mu" {
 		t.Fatalf("src = %q, want %q", gotSrc, "hello.mu")
 	}
-	if gotPassword != "secret" {
-		t.Fatalf("password = %q, want %q", gotPassword, "secret")
+	if gotOpts.Password != "secret" {
+		t.Fatalf("password = %q, want %q", gotOpts.Password, "secret")
 	}
-	if gotSecure {
-		t.Fatalf("secureMode = %t, want false", gotSecure)
+	if gotOpts.SecureMode {
+		t.Fatalf("secureMode = %t, want false", gotOpts.SecureMode)
 	}
-	if !gotSignerAuth {
-		t.Fatalf("enforceSignerAuth = %t, want true", gotSignerAuth)
+	if !gotOpts.EnforceSignerAuth {
+		t.Fatalf("enforceSignerAuth = %t, want true", gotOpts.EnforceSignerAuth)
+	}
+	if gotOpts.Timing {
+		t.Fatalf("timing = %t, want false", gotOpts.Timing)
+	}
+}
+
+// Timing used to be switched on by an environment variable, which meant a run
+// could not be reproduced from the command line an analyst wrote down. It is a
+// flag now, and nothing in the toolchain reads the environment for configuration.
+func TestTimingIsCarriedFromTheCommandLine(t *testing.T) {
+	t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
+
+	var gotOpts runner.Options
+	runtimeDeps.runCode = func(_ string, opts runner.Options) int {
+		gotOpts = opts
+		return 0
+	}
+
+	if exitCode := run([]string{"mutant", "hello.mu", "--timing", "--password", "secret"}); exitCode != 0 {
+		t.Fatalf("run returned exit code %d, want 0", exitCode)
+	}
+
+	if !gotOpts.Timing {
+		t.Fatalf("timing = %t, want true", gotOpts.Timing)
+	}
+}
+
+// The trusted verification key arrives as a path on the command line, never as
+// key material in the environment. See docs/CONFIGURATION_POLICY.md.
+func TestTrustedKeyPathIsCarriedFromTheCommandLine(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"separated", []string{"mutant", "hello.mu", "--trusted-key", "keys/pub.hex"}, "keys/pub.hex"},
+		{"joined", []string{"mutant", "hello.mu", "--trusted-key=keys/pub.hex"}, "keys/pub.hex"},
+		{"absent", []string{"mutant", "hello.mu"}, ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
+
+			var gotOpts runner.Options
+			runtimeDeps.runCode = func(_ string, opts runner.Options) int {
+				gotOpts = opts
+				return 0
+			}
+
+			if exitCode := run(tc.args); exitCode != 0 {
+				t.Fatalf("run returned exit code %d, want 0", exitCode)
+			}
+			if gotOpts.TrustedKeyPath != tc.want {
+				t.Fatalf("trustedKeyPath = %q, want %q", gotOpts.TrustedKeyPath, tc.want)
+			}
+		})
 	}
 }
 
@@ -540,7 +596,7 @@ func stubRuntimeDeps() cliRuntime {
 		runRepl:               func(string, bool, string) {},
 		compileCode:           func(string, string, string, bool, string, int, int64) int { return 0 },
 		generateReleaseAssets: func(string) int { return 0 },
-		runCode:               func(string, string, bool, bool) int { return 0 },
+		runCode:               func(string, runner.Options) int { return 0 },
 		hasStandalonePayload:  func(string) (bool, error) { return false, nil },
 		executablePath:        func() (string, error) { return "", nil },
 		getPwd:                func() string { return "stub-password" },

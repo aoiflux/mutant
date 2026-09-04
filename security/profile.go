@@ -5,9 +5,6 @@ import (
 )
 
 const (
-	// Deprecated compatibility constant: env-driven profile selection removed.
-	ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
-
 	ProtectionProfileMinimal  = "minimal"
 	ProtectionProfileStandard = "standard"
 	ProtectionProfileParanoid = "paranoid"

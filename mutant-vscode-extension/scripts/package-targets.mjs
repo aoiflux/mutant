@@ -2,9 +2,12 @@ import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
 
-// Builds one platform-specific .vsix per target. Each vsce invocation runs
-// vscode:prepublish, where stage-lsp-binaries.mjs reads MUTANT_TARGET and stages
-// exactly one mlsp binary, so every package ships only its own platform's server.
+// Builds one platform-specific .vsix per target. Staging runs here, once per
+// target, rather than inside vscode:prepublish -- a prepublish hook cannot be
+// told which target vsce is packaging except through the environment, and Mutant
+// takes no configuration from the environment. See docs/CONFIGURATION_POLICY.md.
+// vscode:prepublish is compile-only for the same reason: were it still staging,
+// vsce would re-stage all six binaries and clobber the single one placed here.
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
 
@@ -22,10 +25,8 @@ mkdirSync("dist", { recursive: true });
 for (const target of targets) {
   const out = `dist/mutant-language-tools-${target}-${version}.vsix`;
   console.log(`\n=== Packaging ${target} -> ${out} ===`);
-  execSync(`npx @vscode/vsce package --target ${target} -o ${out}`, {
-    stdio: "inherit",
-    env: { ...process.env, MUTANT_TARGET: target },
-  });
+  execSync(`node ./scripts/stage-lsp-binaries.mjs --target ${target}`, { stdio: "inherit" });
+  execSync(`npx @vscode/vsce package --target ${target} -o ${out}`, { stdio: "inherit" });
 }
 
 console.log(`\nPackaged ${targets.length} platform VSIXs into dist/.`);

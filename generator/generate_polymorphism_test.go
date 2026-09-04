@@ -38,7 +38,7 @@ func TestGenerateCompiledMacroProgramRuns(t *testing.T) {
 	}
 
 	compiledPath := dst + global.MutantByteCodeCompiledFileExtension
-	if err, errType := runner.Run(compiledPath, password, false, false); err != nil {
+	if err, errType := runner.Run(compiledPath, runner.Options{Password: password}); err != nil {
 		t.Fatalf("compiled macro run failed: type=%s err=%v", errType, err)
 	}
 }

@@ -39,24 +39,30 @@ Verification paths:
 
 ## 3. Signer Trust Resolution
 
-Trusted key resolution order when signer-auth path is used:
+Trusted key resolution order when signer-auth path is used
+(`ResolveTrustedPublicKeyHexFromPath`, security/key_bootstrap.go):
 
-1. If `MUTANT_TRUSTED_PUBLIC_KEY_HEX` is set, use it.
-2. Otherwise bootstrap/load local keypair in keystore and trust local public
-   key.
+1. If `--trusted-key <path>` was given, read the hex-encoded public key from
+   that file. A malformed, wrong-sized or missing file is a hard failure: there
+   is no silent fallback to the keystore, because verifying against a key the
+   operator did not name is worse than refusing to run.
+2. Otherwise bootstrap/load the local keypair in the keystore and trust the
+   local public key.
+
+The flag carries a *path*, never key material. Key material in an environment
+variable is invisible in the command an analyst records and is inherited by
+every child process; a path is safe to write into case notes. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 Key files:
 
 1. `ed25519_private_key.hex`
 2. `ed25519_public_key.hex`
 
-Default key dir:
+Key dir:
 
-`<home>/.mutant/keys`
-
-Override:
-
-`MUTANT_KEYSTORE_DIR`
+`<home>/.mutant/keys`, fixed. `SetLocalKeyStoreDirForTesting` redirects it for
+tests only.
 
 ## 4. Runtime Signature Decision Matrix
 
@@ -131,19 +137,29 @@ When signature verification runs and fails:
 
 Telemetry export:
 
-1. Optional on process exit via `MUTANT_SECURITY_TELEMETRY_FILE`.
-2. Optional audit stream via `MUTANT_SECURITY_AUDIT=1`.
+1. In-process only. `SecurityTelemetrySnapshot()` and
+   `SecurityTelemetryJSON()` read the counters;
+   `ExportSecurityTelemetry(path)` writes them to a file, but nothing in the
+   runner calls it.
+2. There is no audit stream: `auditEvent` is a no-op.
 
 ## 8. Operational Pitfalls
 
 1. Secure mode does not imply signer-auth unless `--signer-auth` is supplied.
-2. Compatibility mode can continue past signature failures under warn/delay.
-3. Local key bootstrap is convenient but must be governed for production trust.
-4. Environment policy overrides can intentionally downgrade response severity.
+2. Compatibility mode can continue past signature failures under warn.
+3. Local key bootstrap is convenient, but a bootstrapped key trusts whatever
+   signed the artifact on this machine. Pass `--trusted-key` to pin a real
+   signer.
+4. `--compat` and `--dev` downgrade the tamper response to a warning. This is
+   the only way to soften it, it is visible in the command line, and it cannot
+   be done behind an operator's back.
 
 ## 9. Recommended Production Posture
 
 1. Use `--secure --signer-auth`.
-2. Set `MUTANT_TRUSTED_PUBLIC_KEY_HEX` to approved release signer.
-3. Set `MUTANT_TAMPER_RESPONSE=terminate`.
-4. Enable `MUTANT_SECURITY_AUDIT=1` and telemetry export.
+2. Pass `--trusted-key <path>` naming the approved release signer's public key.
+3. Do not pass `--compat` or `--dev`: secure mode already terminates on a tamper
+   event, and that is the only way to get `terminate`.
+4. Record the full command line alongside the artifact. It is the complete
+   description of how the run was configured -- nothing is read from the
+   environment. See [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).

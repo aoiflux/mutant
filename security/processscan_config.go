@@ -1,9 +1,5 @@
 package security
 
-import (
-	"strings"
-)
-
 const (
 	defaultRemoteScanMaxProcesses = 32
 	defaultRemoteScanIntervalMs   = 1000
@@ -77,18 +73,11 @@ func resolveRemoteProcessScanMode() string {
 	return remoteScanConfigState.Mode
 }
 
+// parseRemoteProcessAllowlist returns the set of process names exempt from the
+// remote scan. There is no allowlist source today: the env variable it used to
+// parse is gone, and no flag has replaced it, so the set is always empty. Kept
+// as the single seam a future --scan-allowlist file would fill.
+// See docs/CONFIGURATION_POLICY.md.
 func parseRemoteProcessAllowlist() map[string]struct{} {
-	allow := map[string]struct{}{}
-	raw := ""
-	if raw == "" {
-		return allow
-	}
-	for _, part := range strings.Split(raw, ",") {
-		name := strings.TrimSpace(strings.ToLower(part))
-		if name == "" {
-			continue
-		}
-		allow[name] = struct{}{}
-	}
-	return allow
+	return map[string]struct{}{}
 }

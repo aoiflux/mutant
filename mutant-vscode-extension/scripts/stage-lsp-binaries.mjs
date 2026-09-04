@@ -38,18 +38,38 @@ if (process.argv.includes("--check")) {
   process.exit(0);
 }
 
-// Determine which binaries to stage: one for MUTANT_TARGET, else all six.
-const target = process.env.MUTANT_TARGET;
+// Determine which binaries to stage: one for --target <t>, else all six.
+// The target arrives on argv rather than in the environment so the command that
+// produced a given VSIX is visible in the build log and reproducible from it.
+// See docs/CONFIGURATION_POLICY.md.
+const target = readTargetArg(process.argv.slice(2));
 let binariesToStage;
 if (target) {
   const name = targetToBinary[target];
   if (!name) {
-    console.error(`Unknown MUTANT_TARGET "${target}". Expected one of: ${Object.keys(targetToBinary).join(", ")}`);
+    console.error(`Unknown --target "${target}". Expected one of: ${Object.keys(targetToBinary).join(", ")}`);
     process.exit(1);
   }
   binariesToStage = [name];
 } else {
   binariesToStage = allBinaries;
+}
+
+// Accepts both `--target win32-x64` and `--target=win32-x64`.
+function readTargetArg(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--target") {
+      if (i + 1 >= args.length) {
+        console.error("--target requires a value.");
+        process.exit(1);
+      }
+      return args[i + 1];
+    }
+    if (args[i].startsWith("--target=")) {
+      return args[i].slice("--target=".length);
+    }
+  }
+  return undefined;
 }
 
 // Verify every required source binary exists.

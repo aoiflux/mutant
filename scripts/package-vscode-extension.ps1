@@ -47,7 +47,14 @@ try {
         }
     }
 
-    Write-Host "[2/3] Run extension prepublish (stages binaries and compiles)" -ForegroundColor Cyan
+    # Staging is a separate step: vscode:prepublish compiles only, so that
+    # package-targets.mjs can stage a single per-target binary without vsce
+    # re-staging all six behind it. This wrapper builds the universal VSIX, so
+    # it stages every binary.
+    Write-Host "[2/3] Stage LSP binaries and compile the extension" -ForegroundColor Cyan
+    Invoke-Checked -What "Stage LSP binaries" -Command {
+        npm run prepare:lsp-bins
+    }
     Invoke-Checked -What "Extension prepublish" -Command {
         npm run vscode:prepublish
     }

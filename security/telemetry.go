@@ -6,9 +6,6 @@ import (
 	"sync/atomic"
 )
 
-const SecurityAuditEnv = "MUTANT_SECURITY_AUDIT"
-const SecurityTelemetryFileEnv = "MUTANT_SECURITY_TELEMETRY_FILE"
-
 var (
 	telemetryDebuggerDetected uint64
 	telemetryIntegrityFailed  uint64

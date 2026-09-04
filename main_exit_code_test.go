@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"mutant/runner"
+)
 
 // A failed compile or a failed run has to leave a non-zero exit code. Both used
 // to print the error and then report success, so nothing calling mutant -- a
@@ -33,7 +37,7 @@ func TestFailedCompileExitsNonZero(t *testing.T) {
 
 func TestFailedRunExitsNonZero(t *testing.T) {
 	deps := stubRuntimeDeps()
-	deps.runCode = func(string, string, bool, bool) int { return 1 }
+	deps.runCode = func(string, runner.Options) int { return 1 }
 	defer withRuntimeDeps(deps)()
 
 	if got := run([]string{"mutant", "hello.mu", "--password", "secret"}); got != 1 {
@@ -47,7 +51,7 @@ func TestFailedEmbeddedPayloadRunExitsNonZero(t *testing.T) {
 	deps := stubRuntimeDeps()
 	deps.hasStandalonePayload = func(string) (bool, error) { return true, nil }
 	deps.executablePath = func() (string, error) { return "mutant-release.exe", nil }
-	deps.runCode = func(string, string, bool, bool) int { return 1 }
+	deps.runCode = func(string, runner.Options) int { return 1 }
 	defer withRuntimeDeps(deps)()
 
 	if got := run([]string{"mutant-release.exe", "--password", "secret"}); got != 1 {

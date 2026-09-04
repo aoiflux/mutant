@@ -36,7 +36,7 @@ type cliRuntime struct {
 	runRepl               func(string, bool, string)
 	compileCode           func(string, string, string, bool, string, int, int64) int
 	generateReleaseAssets func(string) int
-	runCode               func(string, string, bool, bool) int
+	runCode               func(string, runner.Options) int
 	hasStandalonePayload  func(string) (bool, error)
 	executablePath        func() (string, error)
 	getPwd                func() string
@@ -100,26 +100,33 @@ func tryEmbeddedPayloadRun(args []string) (bool, int) {
 }
 
 func runEmbeddedPayload(executablePath string, args []string) int {
-	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
+	opts, devMode := resolveRuntimeExecutionOptions(args)
 
 	configureSecurityLogging(args, devMode)
-	if password == "" && devMode {
-		password = runtimeDeps.getPwd()
+	if opts.Password == "" && devMode {
+		opts.Password = runtimeDeps.getPwd()
 	}
 
-	return runtimeDeps.runCode(executablePath, password, secureMode, enforceSignerAuth)
+	return runtimeDeps.runCode(executablePath, opts)
 }
 
-func resolveRuntimeExecutionOptions(args []string) (string, bool, bool, bool) {
-	password := extractPasswordArg(args)
+// resolveRuntimeExecutionOptions returns the run options carried by args, plus
+// whether --dev was among them. devMode is not part of runner.Options: it shapes
+// security logging and the password fallback here, not the run itself.
+func resolveRuntimeExecutionOptions(args []string) (runner.Options, bool) {
 	devMode := hasDevModeArg(args)
 	secureMode := extractSecurityModeArg(args)
 	if devMode {
 		secureMode = false
 	}
 
-	enforceSignerAuth := extractSignerAuthArg(args)
-	return password, devMode, secureMode, enforceSignerAuth
+	return runner.Options{
+		Password:          extractPasswordArg(args),
+		SecureMode:        secureMode,
+		EnforceSignerAuth: extractSignerAuthArg(args),
+		Timing:            hasTimingArg(args),
+		TrustedKeyPath:    extractTrustedKeyArg(args),
+	}, devMode
 }
 
 func runCommandFlow(args []string) int {
@@ -201,6 +208,35 @@ func hasDevModeArg(args []string) bool {
 	return false
 }
 
+func hasTimingArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "--timing" || arg == "-timing" {
+			return true
+		}
+	}
+	return false
+}
+
+// extractTrustedKeyArg returns the --trusted-key path, in either the separated
+// or the =-joined spelling. A path only: key material never comes in on the
+// command line, and never from the environment. See docs/CONFIGURATION_POLICY.md.
+func extractTrustedKeyArg(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--trusted-key" || args[i] == "-trusted-key" {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--trusted-key=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "--trusted-key="))
+		}
+		if strings.HasPrefix(args[i], "-trusted-key=") {
+			return strings.TrimSpace(strings.TrimPrefix(args[i], "-trusted-key="))
+		}
+	}
+	return ""
+}
+
 func extractSecurityLogLevelArg(args []string) string {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "--security-log-level" || args[i] == "-security-log-level" || args[i] == "--log-level" || args[i] == "-log-level" {
@@ -275,19 +311,19 @@ func isBuiltinCommand(arg string) bool {
 // executeProgramFile reports whether it handled the invocation, and the exit
 // code to leave with when it did.
 func executeProgramFile(args []string, fileArg string) (bool, int) {
-	password, devMode, secureMode, enforceSignerAuth := resolveRuntimeExecutionOptions(args)
+	opts, devMode := resolveRuntimeExecutionOptions(args)
 	configureSecurityLogging(args, devMode)
 
 	if strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention) {
-		return true, runtimeDeps.compileCode(fileArg, "", "", false, password, defaultPolymorphicLevel, time.Now().UnixNano())
+		return true, runtimeDeps.compileCode(fileArg, "", "", false, opts.Password, defaultPolymorphicLevel, time.Now().UnixNano())
 	}
 
 	if !strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension) {
 		return false, 0
 	}
 
-	password = resolveProgramRunPassword(args, password, devMode)
-	return true, runtimeDeps.runCode(fileArg, password, secureMode, enforceSignerAuth)
+	opts.Password = resolveProgramRunPassword(args, opts.Password, devMode)
+	return true, runtimeDeps.runCode(fileArg, opts)
 }
 
 func resolveProgramRunPassword(args []string, password string, devMode bool) string {
@@ -432,8 +468,10 @@ Runtime options:
   --dev                      Developer mode. Implies compatibility mode and local password fallback.
   --signer-auth              Require trusted signer verification in secure mode.
   --no-signer-auth           Disable signer verification.
+  --trusted-key PATH         Verify against the public key in PATH (hex-encoded).
   --security-log-level LEVEL Set security logging in dev mode.
   --log-level LEVEL          Alias for --security-log-level.
+  --timing                   Print per-stage run timing to stderr.
 
 Examples:
   mutant
@@ -442,6 +480,7 @@ Examples:
   mutant --enable-macros --repl-theme sunset
   mutant hello.mut --password "My$tr0ngPass!"
   mutant hello.mu --secure --signer-auth --password "My$tr0ngPass!"
+  mutant hello.mu --timing --password "My$tr0ngPass!"
   mutant gen --src hello.mut --password "My$tr0ngPass!"
   mutant gen assets --out ./releaseassets
   mutant release --src hello.mut --os windows --arch amd64 --mutation 5
