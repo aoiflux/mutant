@@ -187,6 +187,7 @@ func encodedSize(t *testing.T, bytecode *ByteCode) int {
 	registerConstantTypes.Do(func() {
 		gob.Register(&object.CompiledFunction{})
 		gob.Register(&object.String{})
+		gob.Register(&object.Bytes{})
 		gob.Register(&object.Integer{})
 		gob.Register(&object.Float{})
 		gob.Register(&object.Boolean{})

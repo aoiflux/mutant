@@ -96,6 +96,10 @@ func hashKeyLess(a, b Object) bool {
 		if right, ok := b.(*String); ok {
 			return left.Value < right.Value
 		}
+	case *Bytes:
+		if right, ok := b.(*Bytes); ok {
+			return bytes.Compare(left.Value, right.Value) < 0
+		}
 	case *Boolean:
 		if right, ok := b.(*Boolean); ok {
 			return !left.Value && right.Value

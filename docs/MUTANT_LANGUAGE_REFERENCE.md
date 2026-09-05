@@ -22,6 +22,7 @@ Mutant supports:
 - Infix operators: `+ - * / % < > <= >= == != && ||`
 - Assignment: `=`, compound assignment `+= -= *= /= %=`, and postfix `++` / `--`
 - Indexing and field access
+- A distinct `bytes` type for binary data, with explicit conversions to and from text
 - Conditionals: `if` / `else`
 - Loops: `for`, with `break` and `continue`
 - First-class functions, closures, and function calls
@@ -300,6 +301,57 @@ interactive REPL only defines macros when started with `-em` /
 `--enable-macros`; it then expands and compiles them on the same path the CLI
 uses, so the flag does not change what the language means.
 
+### Binary data: the `bytes` type
+
+A `bytes` value is a byte buffer — a disk sector, a PE section, a memory page, a
+socket read. It exists because a Go string holds arbitrary bytes perfectly well,
+so nothing was ever corrupted at rest, but no builtin could tell binary from
+text: `str_reverse` rune-reverses and turns every byte that is not valid UTF-8
+into U+FFFD, `str_substr` and `str_char_at` index by rune so their offsets
+disagree with `bytes_get`'s, and the `regex_*` family reads invalid bytes as
+U+FFFD. None of those fail. They return a plausible wrong answer.
+
+There are no `bytes` literals. A buffer comes from a producer or a conversion:
+
+```
+let raw, err = fs_read_bytes("disk.img");   # a native producer
+let mz, e2   = string_to_bytes("4d5a", "hex");
+let same, e3 = string_to_bytes(fs_read(p), "raw");  # bridges any older producer
+```
+
+The conversions are explicit and name an encoding — `"raw"`, `"utf8"`
+(validated, not substituted), `"latin1"`, `"hex"`, `"base64"` — because the step
+between binary and text is the one worth being deliberate about. There is no
+implicit coercion in either direction.
+
+What a buffer supports:
+
+| Operation | Behaviour |
+| --------- | --------- |
+| `b[i]` | the byte at `i` as an **integer 0-255** (not a one-byte buffer) |
+| `b[i] = n` | writes one byte in place; `n` must be 0-255 |
+| `a + b` | concatenation, into a fresh buffer |
+| `==`, `!=` | by content; a buffer is never equal to a value of another type |
+| `len(b)` | the byte count |
+| truthiness | an empty buffer is falsy |
+| hash key | yes, in a keyspace disjoint from strings |
+| `putln(b)` | full lowercase hex, untruncated |
+
+`<` and `>` are not defined on buffers.
+
+**Nothing that returns a string today started returning a buffer.** The type
+arrived additively: `fs_read` still returns a string, and `fs_read_bytes` is the
+new name. The same holds for `hex_decode_bytes`, `base64_decode_bytes`,
+`gunzip_bytes`, `zlib_decompress_bytes`, `aes_decrypt_bytes`,
+`net_conn_read_bytes`, and the `*_read_file_bytes` / `*_read_at_bytes` image
+readers. Consumers went the other way and widened: the whole `bytes_*` family,
+`fs_write`, `fs_append`, every `hash_*`, `hmac`, and the encoders accept either
+representation, and the `bytes_*` family is shape-preserving — `bytes_slice` of
+a buffer is a buffer, of a string a string.
+
+The language server knows the type. Passing a buffer to a text builtin raises
+`builtinArgType` before the program runs, and the message names the conversion.
+
 ### Notes
 - String literals are simple quoted strings; escape-sequence behavior is intentionally limited.
 - **Semicolons are required to terminate statements** — including statements whose value is a block, e.g. `let f = fn() { ... };` and `if (c) { ... };`. The language server's formatter enforces this canonically (it repairs missing semicolons and removes redundant ones on format), and the `semicolon` diagnostic flags them while you type.
@@ -322,7 +374,7 @@ uses, so the flag does not change what the language means.
 
 ## Builtins
 
-**Total builtins currently registered: 409**, across 33 capability categories.
+**Total builtins currently registered: 427**, across 33 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 

@@ -27,6 +27,7 @@ var (
 	tFloat  = Type{Kind: TypeFloat}
 	tBool   = Type{Kind: TypeBool}
 	tString = Type{Kind: TypeString}
+	tBytes  = Type{Kind: TypeBytes}
 	tHash   = Type{Kind: TypeHash}
 	tArray  = Type{Kind: TypeArray}
 )
@@ -77,6 +78,8 @@ func typeForParamKind(kind builtin.ParamKind) (Type, bool) {
 		return tBool, true
 	case builtin.ParamString:
 		return tString, true
+	case builtin.ParamBytes:
+		return tBytes, true
 	case builtin.ParamArray:
 		return tArray, true
 	case builtin.ParamHash:

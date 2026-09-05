@@ -252,6 +252,14 @@ func renderArgValue(obj object.Object) string {
 		return "<unset>"
 	}
 
+	// Bytes renders as full hex deliberately, because Inspect doubles as the
+	// identity function for equality and deduplication. A traceback is the one
+	// caller that only ever wanted a preview, so it asks for one rather than
+	// materialising a megabyte of hex to then cut it back to forty characters.
+	if buf, ok := obj.(*object.Bytes); ok {
+		return buf.Preview(maxRenderedArgValue / 4)
+	}
+
 	text := strings.Join(strings.Fields(obj.Inspect()), " ")
 	if len(text) > maxRenderedArgValue {
 		text = text[:maxRenderedArgValue-3] + "..."

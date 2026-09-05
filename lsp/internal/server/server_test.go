@@ -1723,7 +1723,7 @@ func TestSignatureHelpForBuiltinCall(t *testing.T) {
 	}
 	// The label carries the kinds len accepts, and the parameter is addressed
 	// by offsets into that label rather than by a substring of it.
-	wantLabel := "len(value: STRING|ARRAY|HASH) -> INTEGER"
+	wantLabel := "len(value: STRING|BYTES|ARRAY|HASH) -> INTEGER"
 	if help.Signatures[0].Label != wantLabel {
 		t.Fatalf("signature label = %q, want %q", help.Signatures[0].Label, wantLabel)
 	}
@@ -1734,7 +1734,7 @@ func TestSignatureHelpForBuiltinCall(t *testing.T) {
 	if !ok {
 		t.Fatalf("signature param label = %#v, want an offset pair", help.Signatures[0].Parameters[0].Label)
 	}
-	if got := wantLabel[span[0]:span[1]]; got != "value: STRING|ARRAY|HASH" {
+	if got := wantLabel[span[0]:span[1]]; got != "value: STRING|BYTES|ARRAY|HASH" {
 		t.Fatalf("signature param span %v covers %q, want the whole parameter", span, got)
 	}
 	if doc, ok := help.Signatures[0].Documentation.(lsp.MarkupContent); !ok || !strings.Contains(doc.Value, "Returns the length") {
@@ -3390,7 +3390,7 @@ func TestHoverOnBuiltinIdentifierIncludesTeachingInfo(t *testing.T) {
 	if !ok {
 		t.Fatalf("hover contents type = %T, want MarkupContent", hover.Contents)
 	}
-	if !strings.Contains(contents.Value, "builtin `len(value: STRING|ARRAY|HASH) -> INTEGER`") {
+	if !strings.Contains(contents.Value, "builtin `len(value: STRING|BYTES|ARRAY|HASH) -> INTEGER`") {
 		t.Fatalf("hover contents = %q, want builtin signature", contents.Value)
 	}
 	if !strings.Contains(contents.Value, "Returns the length") {

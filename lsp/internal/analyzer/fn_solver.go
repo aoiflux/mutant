@@ -32,6 +32,7 @@ type kindSet uint16
 
 const (
 	ksString kindSet = 1 << iota
+	ksBytes
 	ksInt
 	ksFloat
 	ksBool
@@ -44,14 +45,18 @@ const (
 )
 
 // ksAny is the top of the lattice: a parameter nothing has constrained.
-const ksAny = ksString | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum
+const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum
 
 // The operand domains below are read off the VM, not assumed.
 //
 //   - execBinaryOperation (vm.go) accepts INTEGER×INTEGER, STRING×STRING, or
 //     numeric×numeric, and execBinaryStringOperation rejects every operator but
 //     OpAdd — so `+` admits strings and the rest do not.
+//   - execBinaryBytesOperation likewise rejects every operator but OpAdd, so
+//     buffers concatenate and do nothing else.
 //   - execComparison accepts INTEGER×INTEGER or numeric×numeric.
+//     execBytesComparison handles a bytes on either side, but only for equality,
+//     so bytes are deliberately absent from ksComparable.
 //   - execMinusOperation asserts INTEGER or FLOAT.
 //
 // `!`, `==` and `!=` accept anything, and so appear nowhere here: truthiness and
@@ -59,12 +64,13 @@ const ksAny = ksString | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ks
 // is worth no code.
 const (
 	ksNumeric    = ksInt | ksFloat
-	ksAddable    = ksInt | ksFloat | ksString
+	ksAddable    = ksInt | ksFloat | ksString | ksBytes
 	ksComparable = ksInt | ksFloat
 )
 
 var kindBits = map[builtin.ParamKind]kindSet{
 	builtin.ParamString: ksString,
+	builtin.ParamBytes:  ksBytes,
 	builtin.ParamInt:    ksInt,
 	builtin.ParamFloat:  ksFloat,
 	builtin.ParamBool:   ksBool,

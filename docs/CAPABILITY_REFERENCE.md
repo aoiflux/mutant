@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **409 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **427 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -27,7 +27,7 @@ Almost every builtin is cross-platform. The exceptions:
 
 ---
 
-## Standard Library (56)
+## Standard Library (57)
 
 Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.
 
@@ -56,7 +56,7 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `is_null(v) -> BOOLEAN` | all | Returns whether v is NULL. |
 | `keys(hash: HASH) -> ARRAY` | all | Returns the hash keys as an array (sorted for determinism). |
 | `last(array: ARRAY) -> ANY` | all | Returns the last element of an array. |
-| `len(value: STRING\|ARRAY\|HASH) -> INTEGER` | all | Returns the length of a string, array, hash, or bytes value. |
+| `len(value: STRING\|BYTES\|ARRAY\|HASH) -> INTEGER` | all | Returns the length of a string, buffer, array, or hash. |
 | `map(array: ARRAY, fn: FUNCTION) -> ARRAY` | all | Returns a new array of fn applied to each element. fn takes (element) or (element, index). |
 | `max(value: INTEGER\|FLOAT, ...values: INTEGER\|FLOAT) -> INTEGER\|FLOAT` | all | Returns the largest of the numeric arguments (original type preserved). |
 | `merge(a: HASH, b: HASH) -> HASH` | all | Returns a new hash combining a and b (b wins on key conflicts). |
@@ -84,6 +84,7 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `sort(array: ARRAY) -> ARRAY` | all | Returns a sorted copy of an array (all numbers or all strings). |
 | `sort_by(array: ARRAY, fn: FUNCTION) -> ARRAY` | all | Returns a new array stably sorted by the key fn returns for each element (INTEGER/FLOAT/STRING keys). |
 | `sqrt(x: INTEGER\|FLOAT) -> FLOAT` | all | Returns the square root of x (FLOAT); errors on negative x. |
+| `string_to_bytes(s: STRING, encoding: STRING) -> (BYTES, ERROR)` | all | Converts text to a BYTES buffer under a named encoding: "raw", "utf8" (validated), "latin1", "hex" or "base64". Returns (bytes, err). |
 | `sum(array: ARRAY) -> INTEGER\|FLOAT` | all | Sum of a numeric array (INTEGER if all elements are integers). |
 | `type_of(v) -> STRING` | all | Returns the object type name of v (e.g. INTEGER, STRING, ARRAY). |
 | `unique(array: ARRAY) -> ARRAY` | all | Returns a new array with duplicate values removed (order preserved). |
@@ -151,25 +152,28 @@ Substring search, splitting/replacing, regular expressions, and fuzzy matching (
 | `text_similarity(left: STRING, right: STRING) -> FLOAT` | all | Computes normalized Levenshtein similarity between two strings. |
 | `text_split(text: STRING, sep: STRING) -> []STRING` | all | Splits text by separator and returns an array of parts. |
 
-## Structured Data (25)
+## Structured Data (29)
 
 JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zlib compression, base conversion, and type conversion. See [STRUCTURED_DATA.md](STRUCTURED_DATA.md).
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `base32_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes standard base32; returns (bytes, err). |
-| `base32_encode(s: STRING) -> STRING` | all | Standard base32-encodes s. |
+| `base32_encode(s: STRING\|BYTES) -> STRING` | all | Standard base32-encodes s. |
 | `base64_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes standard base64; returns (bytes, err). |
-| `base64_encode(s: STRING) -> STRING` | all | Standard base64-encodes s. |
+| `base64_decode_bytes(s: STRING) -> (BYTES, ERROR)` | all | Decodes standard base64 into a BYTES buffer; returns (bytes, err). |
+| `base64_encode(s: STRING\|BYTES) -> STRING` | all | Standard base64-encodes s. |
 | `base64url_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes URL-safe base64; returns (bytes, err). |
-| `base64url_encode(s: STRING) -> STRING` | all | URL-safe base64-encodes s. |
+| `base64url_encode(s: STRING\|BYTES) -> STRING` | all | URL-safe base64-encodes s. |
 | `from_base(s: STRING, base: INTEGER) -> (INTEGER, ERROR)` | all | Parses s as an integer in the given base (2–36); returns (int, err). |
-| `gunzip(s: STRING) -> (STRING, ERROR)` | all | Gzip-decompresses s; returns (bytes, err). |
-| `gzip(s: STRING) -> STRING` | all | Gzip-compresses s (returns a byte string). |
+| `gunzip(s: STRING\|BYTES) -> (STRING, ERROR)` | all | Gzip-decompresses s; returns (bytes, err). |
+| `gunzip_bytes(s: STRING\|BYTES) -> (BYTES, ERROR)` | all | Gzip-decompresses s into a BYTES buffer; returns (bytes, err). |
+| `gzip(s: STRING\|BYTES) -> STRING` | all | Gzip-compresses s (returns a byte string). |
 | `hex_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes a hex string to bytes; returns (bytes, err). |
-| `hex_encode(s: STRING) -> STRING` | all | Hex-encodes a byte string to lowercase hex. |
+| `hex_decode_bytes(s: STRING) -> (BYTES, ERROR)` | all | Decodes a hex string into a BYTES buffer; returns (bytes, err). |
+| `hex_encode(s: STRING\|BYTES) -> STRING` | all | Hex-encodes a byte string to lowercase hex. |
 | `json_parse(text: STRING) -> (ANY, ERROR)` | all | Parses JSON text into Mutant values. |
-| `json_stringify(value: STRING\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH) -> (STRING, ERROR)` | all | Serializes Mutant values into JSON text. |
+| `json_stringify(value: STRING\|BYTES\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH) -> (STRING, ERROR)` | all | Serializes Mutant values into JSON text. |
 | `parse_float(s: STRING) -> (FLOAT, ERROR)` | all | Parses s as a float; returns (float, err). |
 | `parse_int(s: STRING, base: INTEGER) -> (INTEGER, ERROR)` | all | Parses s as an integer in base (0 auto-detects); returns (int, err). |
 | `plist_parse(path: STRING) -> (ANY, ERROR)` | all | Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err). |
@@ -180,8 +184,9 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `to_string(v) -> STRING` | all | Converts any value to its STRING representation. |
 | `url_decode(s: STRING) -> (STRING, ERROR)` | all | URL query-unescapes s; returns (value, err). |
 | `url_encode(s: STRING) -> STRING` | all | URL query-escapes s. |
-| `zlib_compress(s: STRING) -> STRING` | all | Zlib-compresses s (returns a byte string). |
-| `zlib_decompress(s: STRING) -> (STRING, ERROR)` | all | Zlib-decompresses s; returns (bytes, err). |
+| `zlib_compress(s: STRING\|BYTES) -> STRING` | all | Zlib-compresses s (returns a byte string). |
+| `zlib_decompress(s: STRING\|BYTES) -> (STRING, ERROR)` | all | Zlib-decompresses s; returns (bytes, err). |
+| `zlib_decompress_bytes(s: STRING\|BYTES) -> (BYTES, ERROR)` | all | Zlib-decompresses s into a BYTES buffer; returns (bytes, err). |
 
 ## Math (5)
 
@@ -201,13 +206,13 @@ Cryptographic and checksum digests (MD5/SHA-1/SHA-256/SHA-512/CRC-32/BLAKE2), HM
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `hash_blake2(s: STRING) -> STRING` | all | Returns the lowercase hex BLAKE2b-256 digest of s. |
-| `hash_crc32(s: STRING) -> STRING` | all | Returns the CRC-32 (IEEE) checksum of s as 8 hex chars. |
-| `hash_md5(s: STRING) -> STRING` | all | Returns the lowercase hex MD5 digest of s. |
-| `hash_sha1(s: STRING) -> STRING` | all | Returns the lowercase hex SHA-1 digest of s. |
-| `hash_sha256(s: STRING) -> STRING` | all | Returns the lowercase hex SHA-256 digest of s. |
-| `hash_sha512(s: STRING) -> STRING` | all | Returns the lowercase hex SHA-512 digest of s. |
-| `hmac(key: STRING, message: STRING, algo: STRING) -> STRING` | all | Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512. |
+| `hash_blake2(s: STRING\|BYTES) -> STRING` | all | Returns the lowercase hex BLAKE2b-256 digest of s. |
+| `hash_crc32(s: STRING\|BYTES) -> STRING` | all | Returns the CRC-32 (IEEE) checksum of s as 8 hex chars. |
+| `hash_md5(s: STRING\|BYTES) -> STRING` | all | Returns the lowercase hex MD5 digest of s. |
+| `hash_sha1(s: STRING\|BYTES) -> STRING` | all | Returns the lowercase hex SHA-1 digest of s. |
+| `hash_sha256(s: STRING\|BYTES) -> STRING` | all | Returns the lowercase hex SHA-256 digest of s. |
+| `hash_sha512(s: STRING\|BYTES) -> STRING` | all | Returns the lowercase hex SHA-512 digest of s. |
+| `hmac(key: STRING\|BYTES, message: STRING\|BYTES, algo: STRING) -> STRING` | all | Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512. |
 | `nanoid(n: INTEGER) -> STRING` | all | Returns a URL-safe random identifier of length n. |
 | `random_hex(n: INTEGER) -> STRING` | all | Returns n cryptographically-random bytes as a 2n-char hex string. |
 | `uuid_v4() -> STRING` | all | Returns a random (v4) UUID string. |
@@ -227,16 +232,16 @@ Unix timestamps, formatting, parsing, and arithmetic (UTC).
 | `time_parse(value: STRING, layout: STRING) -> (INTEGER, ERROR)` | all | Parses value with a Go reference layout; returns (unixSeconds, err). |
 | `time_unix() -> INTEGER` | all | Returns the current Unix time in seconds. |
 
-## Bytes (30)
+## Bytes (31)
 
 Binary buffer inspection and construction: fixed-width integer reads/writes (LE/BE), a streaming cursor, slicing, and byte/char conversions.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `bytes_char_from_int(value: INTEGER) -> (STRING, ERROR)` | all | Converts an integer byte value to a single-character string. |
-| `bytes_cstr_at(data: STRING, offset: INTEGER, maxLength: INTEGER) -> (STRING, ERROR)` | all | Reads null-terminated string from bytes at offset. |
+| `bytes_cstr_at(data: STRING\|BYTES, offset: INTEGER, maxLength: INTEGER) -> (STRING, ERROR)` | all | Reads null-terminated string from bytes at offset. |
 | `bytes_cursor_eof(cursor: HASH) -> (BOOLEAN, ERROR)` | all | Returns whether cursor is at end-of-buffer. |
-| `bytes_cursor_new(data: STRING) -> (HASH, ERROR)` | all | Creates a cursor for structured byte parsing. |
+| `bytes_cursor_new(data: STRING\|BYTES) -> (HASH, ERROR)` | all | Creates a cursor for structured byte parsing. |
 | `bytes_cursor_read_u16_be(cursor: HASH) -> (HASH, ERROR)` | all | Reads unsigned 16-bit big-endian integer from cursor. |
 | `bytes_cursor_read_u16_le(cursor: HASH) -> (HASH, ERROR)` | all | Reads unsigned 16-bit little-endian integer from cursor. |
 | `bytes_cursor_read_u32_be(cursor: HASH) -> (HASH, ERROR)` | all | Reads unsigned 32-bit big-endian integer from cursor. |
@@ -246,31 +251,32 @@ Binary buffer inspection and construction: fixed-width integer reads/writes (LE/
 | `bytes_cursor_read_u8(cursor: HASH) -> (HASH, ERROR)` | all | Reads one unsigned byte from cursor. |
 | `bytes_cursor_seek(cursor: HASH, offset: INTEGER) -> (HASH, ERROR)` | all | Moves cursor to an absolute offset. |
 | `bytes_cursor_tell(cursor: HASH) -> (INTEGER, ERROR)` | all | Returns current cursor position. |
-| `bytes_get(data: STRING, index: INTEGER) -> (INTEGER, ERROR)` | all | Reads one byte at index as integer. |
+| `bytes_get(data: STRING\|BYTES, index: INTEGER) -> (INTEGER, ERROR)` | all | Reads one byte at index as integer. |
 | `bytes_hex(value: INTEGER, width: INTEGER) -> (STRING, ERROR)` | all | Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> "0x00001234"). This formats a number; it does not hex-encode a byte string. |
 | `bytes_int_from_char(char: STRING) -> (INTEGER, ERROR)` | all | Converts a single-character string to its integer byte value. |
-| `bytes_len(data: STRING) -> (INTEGER, ERROR)` | all | Returns length of a bytes value. |
-| `bytes_read_u16_be(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 16-bit big-endian integer from bytes at offset. |
-| `bytes_read_u16_le(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 16-bit little-endian integer from bytes at offset. |
-| `bytes_read_u32_be(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 32-bit big-endian integer from bytes at offset. |
-| `bytes_read_u32_le(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 32-bit little-endian integer from bytes at offset. |
-| `bytes_read_u64_be(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 64-bit big-endian integer from bytes at offset. |
-| `bytes_read_u64_le(data: STRING, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 64-bit little-endian integer from bytes at offset. |
-| `bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)` | all | Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]). |
-| `bytes_write_u16_be(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 16-bit big-endian integer into bytes at offset. |
-| `bytes_write_u16_le(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 16-bit little-endian integer into bytes at offset. |
-| `bytes_write_u32_be(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 32-bit big-endian integer into bytes at offset. |
-| `bytes_write_u32_le(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 32-bit little-endian integer into bytes at offset. |
-| `bytes_write_u64_be(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 64-bit big-endian integer into bytes at offset. |
-| `bytes_write_u64_le(data: STRING, offset: INTEGER, value: INTEGER) -> (STRING, ERROR)` | all | Writes unsigned 64-bit little-endian integer into bytes at offset. |
+| `bytes_len(data: STRING\|BYTES) -> (INTEGER, ERROR)` | all | Returns length of a bytes value. |
+| `bytes_read_u16_be(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 16-bit big-endian integer from bytes at offset. |
+| `bytes_read_u16_le(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 16-bit little-endian integer from bytes at offset. |
+| `bytes_read_u32_be(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 32-bit big-endian integer from bytes at offset. |
+| `bytes_read_u32_le(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 32-bit little-endian integer from bytes at offset. |
+| `bytes_read_u64_be(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 64-bit big-endian integer from bytes at offset. |
+| `bytes_read_u64_le(data: STRING\|BYTES, offset: INTEGER) -> (INTEGER, ERROR)` | all | Reads unsigned 64-bit little-endian integer from bytes at offset. |
+| `bytes_slice(data: STRING\|BYTES, start: INTEGER, length: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]). |
+| `bytes_to_string(b: STRING\|BYTES, encoding: STRING) -> (STRING, ERROR)` | all | Converts a buffer to text under a named encoding: "raw", "utf8" (validated), "latin1", "hex" or "base64". Returns (string, err). |
+| `bytes_write_u16_be(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 16-bit big-endian integer into bytes at offset. |
+| `bytes_write_u16_le(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 16-bit little-endian integer into bytes at offset. |
+| `bytes_write_u32_be(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 32-bit big-endian integer into bytes at offset. |
+| `bytes_write_u32_le(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 32-bit little-endian integer into bytes at offset. |
+| `bytes_write_u64_be(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 64-bit big-endian integer into bytes at offset. |
+| `bytes_write_u64_le(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 64-bit little-endian integer into bytes at offset. |
 
-## Filesystem (19)
+## Filesystem (20)
 
 Read/write/manage files and directories, plus file-level forensics: hashing, entropy, string extraction, magic-type detection, carving, diffing, and NTFS deleted-file recovery.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `fs_append(path: STRING, data: STRING) -> (BOOLEAN, ERROR)` | all | Appends data to the end of a file. |
+| `fs_append(path: STRING, data: STRING\|BYTES) -> (BOOLEAN, ERROR)` | all | Appends data to the end of a file. |
 | `fs_carve(path: STRING, type: STRING) -> ([]HASH, ERROR)` | all | Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length. |
 | `fs_copy(src: STRING, dst: STRING) -> (BOOLEAN, ERROR)` | all | Copies a file from source path to destination path. |
 | `fs_delete(path: STRING) -> (BOOLEAN, ERROR)` | all | Deletes a file from disk. |
@@ -286,11 +292,12 @@ Read/write/manage files and directories, plus file-level forensics: hashing, ent
 | `fs_mkdir(path: STRING) -> (BOOLEAN, ERROR)` | all | Creates a directory path. |
 | `fs_move(src: STRING, dst: STRING) -> (BOOLEAN, ERROR)` | all | Moves or renames a file or directory. |
 | `fs_read(path: STRING) -> (STRING, ERROR)` | all | Reads file contents from disk. |
+| `fs_read_bytes(path: STRING) -> (BYTES, ERROR)` | all | Reads file contents from disk as a BYTES buffer. Use this rather than fs_read whenever the file is not known to be text. |
 | `fs_stat(path: STRING) -> (HASH, ERROR)` | all | Returns file metadata such as size and timestamps. |
 | `fs_walk(root: STRING, maxDepth?: INTEGER) -> ([]HASH, ERROR)` | all | Walks a directory tree and returns discovered paths. |
-| `fs_write(path: STRING, data: STRING) -> (BOOLEAN, ERROR)` | all | Writes data to a file, replacing existing contents. |
+| `fs_write(path: STRING, data: STRING\|BYTES) -> (BOOLEAN, ERROR)` | all | Writes data to a file, replacing existing contents. |
 
-## Network (32)
+## Network (33)
 
 Sockets and TLS sessions, an in-process X.509 CA, HTTP-message inspection, listeners/serve loops, WebSocket framing, scanning, and offline pcap analysis. See [SECURE_NETWORKING.md](SECURE_NETWORKING.md).
 
@@ -302,6 +309,7 @@ Sockets and TLS sessions, an in-process X.509 CA, HTTP-message inspection, liste
 | `net_conn_close(handle: INTEGER) -> (BOOLEAN, ERROR)` | all | Closes a connection and releases its handle. |
 | `net_conn_info(handle: INTEGER) -> (HASH, ERROR)` | all | Returns addressing and negotiated TLS session details for a connection. |
 | `net_conn_read(handle: INTEGER, maxBytes: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field. |
+| `net_conn_read_bytes(handle: INTEGER, maxBytes: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Reads up to maxBytes from a connection with `data` as a BYTES buffer; otherwise identical to net_conn_read. |
 | `net_conn_write(handle: INTEGER, data: STRING, timeout_ms?: INTEGER) -> (INTEGER, ERROR)` | all | Writes bytes to a connection and returns the number written. A write deadline (default 30s, or timeout_ms; <=0 blocks forever) prevents a stalled peer from hanging the write. |
 | `net_connect(address: STRING, timeoutMs: INTEGER) -> (INTEGER, ERROR)` | all | Opens a persistent TCP connection and returns a connection handle. |
 | `net_connect_scan(host: STRING, startPort: INTEGER, endPort: INTEGER, timeoutMs: INTEGER) -> (HASH, ERROR)` | all | Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges). |
@@ -416,14 +424,15 @@ Guarded execution of external commands, subject to the `command_exec` capability
 | `cmd_run(builder: HASH) -> (HASH, ERROR)` | all | Executes a composed command and returns run output metadata. |
 | `exec_string(command: STRING, shell?: STRING) -> (HASH, ERROR)` | all | Executes a shell command string via security-guarded command execution. |
 
-## Cryptography (5)
+## Cryptography (6)
 
 X.509 certificate parsing, JWT decoding, PEM decoding, and authenticated AES-GCM encryption/decryption.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `aes_decrypt(key: STRING, ciphertext: STRING) -> (STRING, ERROR)` | all | AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering. |
-| `aes_encrypt(key: STRING, plaintext: STRING) -> (STRING, ERROR)` | all | AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err). |
+| `aes_decrypt_bytes(key: STRING, ciphertext: STRING\|BYTES) -> (BYTES, ERROR)` | all | AES-GCM decrypts into a BYTES buffer. Recovered plaintext is binary until something proves otherwise, and a buffer is also the form the VM can wipe. Returns (plaintext, err). |
+| `aes_encrypt(key: STRING, plaintext: STRING\|BYTES) -> (STRING, ERROR)` | all | AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err). |
 | `jwt_decode(token: STRING) -> (HASH, ERROR)` | all | Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err). |
 | `pem_decode(s: STRING) -> (HASH, ERROR)` | all | Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err). |
 | `x509_parse(pem_or_der: STRING) -> (HASH, ERROR)` | all | Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err). |
@@ -541,7 +550,7 @@ Windows registry across three sources via one polymorphic API (regf hive file, h
 | `reg_timeline(handle: STRING) -> (ARRAY, ERROR)` | all | Returns timeline entries. Populated only for the JSON source (its timeline field); empty for real hive files and live registry. |
 | `shimcache_parse(path: STRING) -> (HASH, ERROR)` | all | Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err). |
 
-## Filesystem Forensics (31)
+## Filesystem Forensics (37)
 
 Read-only filesystem parsers for NTFS/FAT/exFAT/ext/HFS+/XFS images and standalone $MFT timelines, with rich MAC timestamps and metadata.
 
@@ -552,34 +561,40 @@ Read-only filesystem parsers for NTFS/FAT/exFAT/ext/HFS+/XFS images and standalo
 | `ext_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete). |
 | `ext_open(image: STRING) -> (HASH, ERROR)` | all | Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err). |
 | `ext_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened ext image. |
+| `ext_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened ext image as a BYTES buffer. |
 | `fat_close(handle: STRING) -> (HASH, ERROR)` | all | Closes a FAT handle and releases its file. |
 | `fat_list_files(handle: STRING, dir: STRING) -> ([]HASH, ERROR)` | all | Lists entries under a directory in an opened FAT image. |
 | `fat_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a path in an opened FAT image. |
 | `fat_open(image: STRING) -> (HASH, ERROR)` | all | Opens a FAT filesystem image and returns a handle. Returns (result, err). |
 | `fat_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened FAT image. |
+| `fat_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened FAT image as a BYTES buffer. |
 | `hfs_close(handle: STRING) -> (HASH, ERROR)` | all | Closes an HFS+ handle and releases its file. |
 | `hfs_list_files(handle: STRING, dir: STRING) -> ([]HASH, ERROR)` | all | Lists entries under a directory in an opened HFS+ image. |
 | `hfs_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size. |
 | `hfs_open(image: STRING) -> (HASH, ERROR)` | all | Opens an HFS+ filesystem image and returns a handle. Returns (result, err). |
 | `hfs_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened HFS+ image. |
+| `hfs_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened HFS+ image as a BYTES buffer. |
 | `mft_parse(path: STRING) -> (HASH, ERROR)` | all | Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
 | `ntfs_close(handle: STRING) -> (HASH, ERROR)` | all | Closes an NTFS handle and releases its file. |
 | `ntfs_list_files(handle: STRING, dir: STRING) -> ([]HASH, ERROR)` | all | Lists entries under a directory in an opened NTFS image. |
 | `ntfs_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error). |
 | `ntfs_open(image: STRING) -> (HASH, ERROR)` | all | Opens an NTFS filesystem image and returns a handle. Returns (result, err). |
 | `ntfs_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened NTFS image. |
+| `ntfs_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened NTFS image as a BYTES buffer. |
 | `xfat_close(handle: STRING) -> (HASH, ERROR)` | all | Closes an exFAT handle and releases its file. |
 | `xfat_list_files(handle: STRING, dir: STRING) -> ([]HASH, ERROR)` | all | Lists entries under a directory in an opened exFAT image, with created_at/modified_at/accessed_at, per-timestamp *_utc_offset_valid flags, attributes and valid_data_size. A nameless entry is reported as "(unnamed)". |
 | `xfat_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack). |
 | `xfat_open(image: STRING) -> (HASH, ERROR)` | all | Opens an exFAT filesystem image and returns a handle. Returns (result, err). |
 | `xfat_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened exFAT image. Content is staged through a temporary file because libxfat extracts to a path, so reads are capped at 32 MiB. |
+| `xfat_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened exFAT image as a BYTES buffer. Content is staged through a temporary file, so reads are capped at 32 MiB. |
 | `xfs_close(handle: STRING) -> (HASH, ERROR)` | all | Closes an XFS handle and releases its file. |
 | `xfs_list_files(handle: STRING, dir: STRING) -> ([]HASH, ERROR)` | all | Lists entries under a directory in an opened XFS image, with file_type from the directory record. A damaged inode no longer aborts the listing: that entry is reported with inode_error set and size 0. |
 | `xfs_metadata(handle: STRING, path: STRING) -> (HASH, ERROR)` | all | Returns metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion). |
 | `xfs_open(image: STRING) -> (HASH, ERROR)` | all | Opens an XFS filesystem image and returns a handle. Returns (result, err). |
 | `xfs_read_file(handle: STRING, path: STRING) -> (STRING, ERROR)` | all | Reads a file's bytes from an opened XFS image. |
+| `xfs_read_file_bytes(handle: STRING, path: STRING) -> (BYTES, ERROR)` | all | Reads a file from an opened XFS image as a BYTES buffer. |
 
-## Disk Image Forensics (17)
+## Disk Image Forensics (20)
 
 Container and partition-table parsers: raw images, EWF/E01, VHD/VHDX (with differencing chains), and MBR/GPT partition tables.
 
@@ -589,10 +604,12 @@ Container and partition-table parsers: raw images, EWF/E01, VHD/VHDX (with diffe
 | `ewf_metadata(handle: STRING) -> (HASH, ERROR)` | all | Returns EWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method). chunk_tables_invalid counts chunk-table groups that failed both their primary and backup checksum — their data decoded unverified and should be treated as suspect; chunk_tables_recovered, observed_chunk_count and acquisition_error_count report the rest of the integrity picture. |
 | `ewf_open(segments: STRING\|ARRAY) -> (HASH, ERROR)` | all | Opens an EWF/E01 image (a segment path or an array of segment paths). Returns (result, err). |
 | `ewf_read_at(handle: STRING, offset: INTEGER, length: INTEGER) -> (STRING, ERROR)` | all | Reads length bytes at an offset from an EWF image (length capped at 32 MiB). |
+| `ewf_read_at_bytes(handle: STRING, offset: INTEGER, length: INTEGER) -> (BYTES, ERROR)` | all | Reads length bytes at an offset from an EWF image as a BYTES buffer (length capped at 32 MiB). |
 | `raw_close(handle: STRING) -> (HASH, ERROR)` | all | Closes a raw image handle. |
 | `raw_metadata(handle: STRING) -> (HASH, ERROR)` | all | Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata). |
 | `raw_open(image: STRING) -> (HASH, ERROR)` | all | Opens a raw disk image and returns a handle. Returns (result, err). |
 | `raw_read_at(handle: STRING, offset: INTEGER, length: INTEGER) -> (STRING, ERROR)` | all | Reads length bytes at an offset from a raw image (length capped at 32 MiB). |
+| `raw_read_at_bytes(handle: STRING, offset: INTEGER, length: INTEGER) -> (BYTES, ERROR)` | all | Reads length bytes at an offset from a raw image as a BYTES buffer (length capped at 32 MiB). |
 | `table_close(handle: STRING) -> (HASH, ERROR)` | all | Closes a partition-table handle. |
 | `table_list_partitions(handle: STRING) -> ([]HASH, ERROR)` | all | Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset. |
 | `table_open(image: STRING) -> (HASH, ERROR)` | all | Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err). |
@@ -602,6 +619,7 @@ Container and partition-table parsers: raw images, EWF/E01, VHD/VHDX (with diffe
 | `vhdi_metadata(handle: STRING) -> (HASH, ERROR)` | all | Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed). |
 | `vhdi_open(image: STRING) -> (HASH, ERROR)` | all | Opens a VHD/VHDX disk image and returns a handle. Returns (result, err). |
 | `vhdi_read_at(handle: STRING, offset: INTEGER, length: INTEGER) -> (STRING, ERROR)` | all | Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB). |
+| `vhdi_read_at_bytes(handle: STRING, offset: INTEGER, length: INTEGER) -> (BYTES, ERROR)` | all | Reads length bytes at a virtual offset from a VHD/VHDX image as a BYTES buffer (length capped at 32 MiB). |
 
 ## Windows Artifacts (4)
 

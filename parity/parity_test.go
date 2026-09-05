@@ -114,6 +114,8 @@ func normalize(o object.Object) string {
 		return fmt.Sprintf("BOOLEAN(%t)", v.Value)
 	case *object.String:
 		return fmt.Sprintf("STRING(%q)", v.Value)
+	case *object.Bytes:
+		return fmt.Sprintf("BYTES(%x)", v.Value)
 	case *object.Error:
 		// Error message wording differs across engines by design; only the fact
 		// that both engines errored is what parity requires here.

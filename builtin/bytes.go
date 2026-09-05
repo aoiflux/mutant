@@ -70,7 +70,7 @@ func BytesSlice(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("bytes_slice: requested range start=%d length=%d exceeds buffer length %d", start, length, len(value)))
 	}
 
-	return resultAndError(stringObj(value[start:start+length]), nil)
+	return resultAndError(binaryLike(args[0], value[start:start+length]), nil)
 }
 
 func BytesReadU16LE(args ...object.Object) object.Object {
@@ -231,7 +231,7 @@ func BytesCursorNew(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	return resultAndError(makeBytesCursor(data, 0), nil)
+	return resultAndError(makeBytesCursor(data, 0, isBinaryObject(args[0])), nil)
 }
 
 func BytesCursorTell(args ...object.Object) object.Object {
@@ -239,7 +239,7 @@ func BytesCursorTell(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	_, offset, _, errObj := requireBytesCursor("bytes_cursor_tell", args[0], 1)
+	_, offset, _, _, errObj := requireBytesCursor("bytes_cursor_tell", args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -252,7 +252,7 @@ func BytesCursorSeek(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	data, _, cursorLen, errObj := requireBytesCursor("bytes_cursor_seek", args[0], 1)
+	data, _, cursorLen, binary, errObj := requireBytesCursor("bytes_cursor_seek", args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -266,7 +266,7 @@ func BytesCursorSeek(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("bytes_cursor_seek: offset %d out of range for buffer length %d", offset, cursorLen))
 	}
 
-	return resultAndError(makeBytesCursor(data, offset), nil)
+	return resultAndError(makeBytesCursor(data, offset, binary), nil)
 }
 
 func BytesCursorEOF(args ...object.Object) object.Object {
@@ -274,7 +274,7 @@ func BytesCursorEOF(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	_, offset, cursorLen, errObj := requireBytesCursor("bytes_cursor_eof", args[0], 1)
+	_, offset, cursorLen, _, errObj := requireBytesCursor("bytes_cursor_eof", args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -342,7 +342,7 @@ func bytesCursorReadUnsigned(args []object.Object, opName string, size int, bigE
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	data, offset, cursorLen, errObj := requireBytesCursor(opName, args[0], 1)
+	data, offset, cursorLen, binary, errObj := requireBytesCursor(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -356,7 +356,7 @@ func bytesCursorReadUnsigned(args []object.Object, opName string, size int, bigE
 		return resultAndError(nil, errObj)
 	}
 
-	nextCursor := makeBytesCursor(data, offset+size)
+	nextCursor := makeBytesCursor(data, offset+size, binary)
 	readResult := makeHashObject(map[string]object.Object{
 		"cursor": nextCursor,
 		"value":  intObj(int64(result)),
@@ -423,7 +423,7 @@ func bytesWriteUnsigned(args []object.Object, opName string, size int, bigEndian
 		}
 	}
 
-	return resultAndError(stringObj(string(buf)), nil)
+	return resultAndError(binaryLike(args[0], string(buf)), nil)
 }
 
 func maxValueForByteSize(size int) uint64 {
@@ -439,12 +439,40 @@ func maxValueForByteSize(size int) uint64 {
 	}
 }
 
+// requireBytesStringArg accepts a buffer in either representation.
+//
+// BYTES is the type that says "this is binary"; STRING is what every producer
+// returned before that type existed, and what every .mut script written until
+// now passes here. Accepting both is what lets the family bridge the two without
+// breaking a single existing program.
 func requireBytesStringArg(opName string, arg object.Object, position int) (string, *object.Error) {
-	str, ok := arg.(*object.String)
-	if !ok {
-		return "", newError("argument %d to `%s` must be STRING, got %s", position, opName, arg.Type())
+	switch v := arg.(type) {
+	case *object.Bytes:
+		return string(v.Value), nil
+	case *object.String:
+		return v.Value, nil
+	default:
+		return "", newError("argument %d to `%s` must be BYTES or STRING, got %s", position, opName, arg.Type())
 	}
-	return str.Value, nil
+}
+
+// isBinaryObject reports whether an argument arrived as a BYTES.
+func isBinaryObject(arg object.Object) bool {
+	_, ok := arg.(*object.Bytes)
+	return ok
+}
+
+// binaryLike returns value in the same representation source arrived in.
+//
+// The bytes_* family is shape-preserving on purpose: bytes_slice of a BYTES is a
+// BYTES, and of a STRING is a STRING. That is what makes the family usable as
+// the bridge in both directions -- a program that has migrated to buffers stays
+// in buffers, and one that has not sees no change at all.
+func binaryLike(source object.Object, value string) object.Object {
+	if isBinaryObject(source) {
+		return &object.Bytes{Value: []byte(value)}
+	}
+	return stringObj(value)
 }
 
 func requireNonNegativeOffset(opName string, arg object.Object, position int) (int, *object.Error) {
@@ -476,48 +504,56 @@ func requireIntegerWithinRange(opName string, arg object.Object, position int, m
 	return value, nil
 }
 
-func requireBytesCursor(opName string, arg object.Object, position int) (string, int, int, *object.Error) {
+// requireBytesCursor validates a cursor hash and reports the representation its
+// `data` field is in, so a cursor built over a BYTES stays a BYTES cursor as it
+// is advanced.
+func requireBytesCursor(opName string, arg object.Object, position int) (data string, offset, cursorLen int, binary bool, err *object.Error) {
 	cursor, ok := arg.(*object.Hash)
 	if !ok {
-		return "", 0, 0, newError("argument %d to `%s` must be HASH, got %s", position, opName, arg.Type())
+		return "", 0, 0, false, newError("argument %d to `%s` must be HASH, got %s", position, opName, arg.Type())
 	}
 
 	dataObj, ok := hashValueByStringKey(cursor, "data")
 	if !ok {
-		return "", 0, 0, newError("%s: cursor missing `data` field", opName)
+		return "", 0, 0, false, newError("%s: cursor missing `data` field", opName)
 	}
-	dataStr, ok := dataObj.(*object.String)
-	if !ok {
-		return "", 0, 0, newError("%s: cursor field `data` must be STRING, got %s", opName, dataObj.Type())
+	dataValue, errObj := requireBytesStringArg(opName+" cursor field `data`", dataObj, position)
+	if errObj != nil {
+		return "", 0, 0, false, newError("%s: cursor field `data` must be BYTES or STRING, got %s", opName, dataObj.Type())
 	}
+	binary = isBinaryObject(dataObj)
 
 	offsetObj, ok := hashValueByStringKey(cursor, "offset")
 	if !ok {
-		return "", 0, 0, newError("%s: cursor missing `offset` field", opName)
+		return "", 0, 0, false, newError("%s: cursor missing `offset` field", opName)
 	}
 	offsetInt, ok := offsetObj.(*object.Integer)
 	if !ok {
-		return "", 0, 0, newError("%s: cursor field `offset` must be INTEGER, got %s", opName, offsetObj.Type())
+		return "", 0, 0, false, newError("%s: cursor field `offset` must be INTEGER, got %s", opName, offsetObj.Type())
 	}
 	if offsetInt.Value < 0 {
-		return "", 0, 0, newError("%s: cursor offset must be >= 0, got %d", opName, offsetInt.Value)
+		return "", 0, 0, false, newError("%s: cursor offset must be >= 0, got %d", opName, offsetInt.Value)
 	}
 	if offsetInt.Value > 1<<31-1 {
-		return "", 0, 0, newError("%s: cursor offset is too large", opName)
+		return "", 0, 0, false, newError("%s: cursor offset is too large", opName)
 	}
 
-	offset := int(offsetInt.Value)
-	cursorLen := len(dataStr.Value)
+	offset = int(offsetInt.Value)
+	cursorLen = len(dataValue)
 	if offset > cursorLen {
-		return "", 0, 0, newError("%s: cursor offset %d out of range for buffer length %d", opName, offset, cursorLen)
+		return "", 0, 0, false, newError("%s: cursor offset %d out of range for buffer length %d", opName, offset, cursorLen)
 	}
 
-	return dataStr.Value, offset, cursorLen, nil
+	return dataValue, offset, cursorLen, binary, nil
 }
 
-func makeBytesCursor(data string, offset int) *object.Hash {
+func makeBytesCursor(data string, offset int, binary bool) *object.Hash {
+	dataObj := object.Object(stringObj(data))
+	if binary {
+		dataObj = &object.Bytes{Value: []byte(data)}
+	}
 	return makeHashObject(map[string]object.Object{
-		"data":   stringObj(data),
+		"data":   dataObj,
 		"offset": intObj(int64(offset)),
 	})
 }

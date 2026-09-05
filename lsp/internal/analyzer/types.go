@@ -16,6 +16,7 @@ const (
 	TypeFloat
 	TypeBool
 	TypeString
+	TypeBytes
 	TypeArray
 	TypeHash
 	TypeStruct
@@ -66,6 +67,8 @@ func (t Type) String() string {
 		return "bool"
 	case TypeString:
 		return "string"
+	case TypeBytes:
+		return "bytes"
 	case TypeHash:
 		return "hash"
 	case TypeFunction:

@@ -11,6 +11,8 @@ func Len(args ...object.Object) object.Object {
 		return &object.Integer{Value: int64(len(arg.Elements))}
 	case *object.String:
 		return &object.Integer{Value: int64(len(arg.Value))}
+	case *object.Bytes:
+		return &object.Integer{Value: int64(len(arg.Value))}
 	case *object.Hash:
 		return &object.Integer{Value: int64(len(arg.Pairs))}
 	default:

@@ -256,27 +256,37 @@ func NetConnWrite(args ...object.Object) object.Object {
 // max_bytes is capped at maxConnReadBytes so a script cannot ask for an
 // arbitrarily large buffer.
 func NetConnRead(args ...object.Object) object.Object {
+	return netConnRead(args, "net_conn_read", false)
+}
+
+// NetConnReadBytes reads from a connection with the `data` field as a buffer.
+// Everything else about the returned hash is identical.
+func NetConnReadBytes(args ...object.Object) object.Object {
+	return netConnRead(args, "net_conn_read_bytes", true)
+}
+
+func netConnRead(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 	handle, ok := args[0].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `net_conn_read` must be INTEGER, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `%s` must be INTEGER, got %s", opName, args[0].Type()))
 	}
 	maxBytes, ok := args[1].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `net_conn_read` must be INTEGER, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be INTEGER, got %s", opName, args[1].Type()))
 	}
 	timeoutMs, ok := args[2].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 3 to `net_conn_read` must be INTEGER, got %s", args[2].Type()))
+		return resultAndError(nil, newError("argument 3 to `%s` must be INTEGER, got %s", opName, args[2].Type()))
 	}
 	if maxBytes.Value <= 0 || maxBytes.Value > maxConnReadBytes {
-		return resultAndError(nil, newError("argument 2 to `net_conn_read` must be between 1 and %d, got %d", maxConnReadBytes, maxBytes.Value))
+		return resultAndError(nil, newError("argument 2 to `%s` must be between 1 and %d, got %d", opName, maxConnReadBytes, maxBytes.Value))
 	}
 	mc, ok := lookupConn(handle.Value)
 	if !ok {
-		return resultAndError(nil, newError("net_conn_read: unknown connection handle %d", handle.Value))
+		return resultAndError(nil, newError("%s: unknown connection handle %d", opName, handle.Value))
 	}
 
 	if timeoutMs.Value > 0 {
@@ -295,7 +305,7 @@ func NetConnRead(args ...object.Object) object.Object {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"data":  stringObj(string(buf[:n])),
+		"data":  binaryResult(binary, buf[:n]),
 		"bytes": intObj(int64(n)),
 		"eof":   boolObj(eof),
 		"error": stringObj(errMsg),

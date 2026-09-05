@@ -267,6 +267,7 @@ func registerTypes() {
 	gob.Register(&object.Error{})
 	gob.Register(&object.Function{})
 	gob.Register(&object.String{})
+	gob.Register(&object.Bytes{})
 	gob.Register(&builtin.BuiltIn{})
 	gob.Register(&object.Array{})
 	gob.Register(&object.Hash{})

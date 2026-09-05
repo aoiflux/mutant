@@ -89,6 +89,24 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 			Seed:    int64(length),
 		}
 
+	// A byte buffer is the value type most likely to hold something worth
+	// encrypting -- a key, a decoded section, a captured page. Without this arm
+	// it would fall to the default below, and because both callers of this
+	// function discard the error and keep the plaintext object, it would travel
+	// unencrypted with nothing said.
+	case object.BYTES_OBJ:
+		val := obj.(*object.Bytes).Value
+		xored, err := security.SecureXOR(val, int64(length), password)
+		if err != nil {
+			return nil, err
+		}
+
+		encObj = &object.Encrypted{
+			EncType: object.BYTES_OBJ,
+			Value:   xored,
+			Seed:    int64(length),
+		}
+
 	case object.BOOLEAN_OBJ:
 		val := obj.(*object.Boolean).Value
 		str := strconv.FormatBool(val)
@@ -245,6 +263,9 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 
 		case object.STRING_OBJ:
 			decObj = &object.String{Value: string(xored)}
+
+		case object.BYTES_OBJ:
+			decObj = &object.Bytes{Value: xored}
 
 		case object.BOOLEAN_OBJ:
 			str := strings.ToLower(string(xored))

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 
@@ -209,6 +210,10 @@ func objectKeyLess(a, b object.Object) (bool, *object.Error) {
 	case *object.String:
 		if bv, ok := b.(*object.String); ok {
 			return av.Value < bv.Value, nil
+		}
+	case *object.Bytes:
+		if bv, ok := b.(*object.Bytes); ok {
+			return bytes.Compare(av.Value, bv.Value) < 0, nil
 		}
 	}
 	return false, vmErrorf("sort_by: cannot compare keys of type %s and %s", a.Type(), b.Type())

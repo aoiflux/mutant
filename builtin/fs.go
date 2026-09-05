@@ -8,19 +8,31 @@ import (
 	"mutant/object"
 )
 
-func FsRead(args ...object.Object) object.Object {
+// FsRead reads a whole file as text.
+//
+// It has always returned byte-exact content -- a Go string holds arbitrary bytes
+// -- so it is not itself lossy. What it cannot do is tell the rest of the
+// program that the content is binary, which is what fs_read_bytes is for.
+func FsRead(args ...object.Object) object.Object { return fsRead(args, "fs_read", false) }
+
+// FsReadBytes reads a whole file as a buffer.
+func FsReadBytes(args ...object.Object) object.Object {
+	return fsRead(args, "fs_read_bytes", true)
+}
+
+func fsRead(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 	path, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument to `fs_read` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument to `%s` must be STRING, got %s", opName, args[0].Type()))
 	}
 	data, err := os.ReadFile(path.Value)
 	if err != nil {
-		return resultAndError(nil, newError("fs_read: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(data)), nil)
+	return resultAndError(binaryResult(binary, data), nil)
 }
 
 func FsWrite(args ...object.Object) object.Object {
@@ -31,11 +43,11 @@ func FsWrite(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `fs_write` must be STRING, got %s", args[0].Type()))
 	}
-	content, ok := args[1].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 2 to `fs_write` must be STRING, got %s", args[1].Type()))
+	content, errObj := requireBinaryArg("fs_write", args[1], 2)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
-	err := os.WriteFile(path.Value, []byte(content.Value), 0644)
+	err := os.WriteFile(path.Value, content, 0644)
 	if err != nil {
 		return resultAndError(nil, newError("fs_write: %s", err.Error()))
 	}
@@ -50,16 +62,16 @@ func FsAppend(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `fs_append` must be STRING, got %s", args[0].Type()))
 	}
-	content, ok := args[1].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 2 to `fs_append` must be STRING, got %s", args[1].Type()))
+	content, errObj := requireBinaryArg("fs_append", args[1], 2)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 	f, err := os.OpenFile(path.Value, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return resultAndError(nil, newError("fs_append2: %s", err.Error()))
 	}
 	defer f.Close()
-	_, err = f.WriteString(content.Value)
+	_, err = f.Write(content)
 	if err != nil {
 		return resultAndError(nil, newError("fs_append: %s", err.Error()))
 	}

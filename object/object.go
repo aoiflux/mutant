@@ -12,6 +12,7 @@ const (
 	ERROR_OBJ        = "ERROR_OBJ"
 	FUNCTION_OBJ     = "FUNCTION"
 	STRING_OBJ       = "STRING"
+	BYTES_OBJ        = "BYTES"
 	BUILTIN_OBJ      = "BUILTIN"
 	ARRAY_OBJ        = "ARRAY"
 	HASH_OBJ         = "HASH"

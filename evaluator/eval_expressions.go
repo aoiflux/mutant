@@ -1,6 +1,8 @@
 package evaluator
 
 import (
+	"bytes"
+
 	"mutant/ast"
 	"mutant/object"
 )
@@ -60,6 +62,10 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 		// Numeric arithmetic/comparison is shared with the WASM REPL via
 		// object.NumericInfix so the two tree-walking interpreters can't drift.
 		return object.NumericInfix(operator, left, right)
+	// Bytes are compared before the Inspect fallback below, which would
+	// otherwise make a buffer equal to the string spelling its own hex.
+	case left.Type() == object.BYTES_OBJ || right.Type() == object.BYTES_OBJ:
+		return evalBytesInfixExpression(operator, left, right)
 	case operator == "==":
 		return nativeBoolToBoolObject(left.Inspect() == right.Inspect())
 	case operator == "!=":
@@ -80,6 +86,34 @@ func evalStringInfixExpression(operator string, left, right object.Object) objec
 	lval := left.(*object.String).Value
 	rval := right.(*object.String).Value
 	return &object.String{Value: lval + rval}
+}
+
+// evalBytesInfixExpression handles every operator with a bytes on either side:
+// `+` concatenates two buffers, `==` and `!=` compare their contents, and a
+// bytes is never equal to a value of another type. This mirrors the VM's
+// execBinaryBytesOperation and execBytesComparison; parity/ asserts they agree.
+func evalBytesInfixExpression(operator string, left, right object.Object) object.Object {
+	leftBytes, leftOK := left.(*object.Bytes)
+	rightBytes, rightOK := right.(*object.Bytes)
+
+	switch operator {
+	case "==":
+		return nativeBoolToBoolObject(leftOK && rightOK && bytes.Equal(leftBytes.Value, rightBytes.Value))
+	case "!=":
+		return nativeBoolToBoolObject(!(leftOK && rightOK && bytes.Equal(leftBytes.Value, rightBytes.Value)))
+	}
+
+	if !leftOK || !rightOK {
+		return newError("type mismatch: %s%s%s", left.Type(), operator, right.Type())
+	}
+	if operator != "+" {
+		return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
+	}
+
+	joined := make([]byte, 0, len(leftBytes.Value)+len(rightBytes.Value))
+	joined = append(joined, leftBytes.Value...)
+	joined = append(joined, rightBytes.Value...)
+	return &object.Bytes{Value: joined}
 }
 
 func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Object {
@@ -135,9 +169,34 @@ func evalIndexExpression(left, index object.Object) object.Object {
 		return evalArrayIndexExpression(left, index)
 	case left.Type() == object.MULTI_VALUE_OBJ && index.Type() == object.INTEGER_OBJ:
 		return evalMultiValueIndexExpression(left, index)
+	case left.Type() == object.BYTES_OBJ && index.Type() == object.INTEGER_OBJ:
+		return evalBytesIndexExpression(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
 	default:
 		return newError("index operator not supported: %s", left.Type())
 	}
+}
+
+// evalBytesIndexExpression yields the byte at i as an INTEGER 0-255, matching
+// the VM's execBytesIndex.
+//
+// The evaluator has never indexed strings -- the VM does, and that divergence
+// predates this type. Implementing bytes indexing in both engines is what stops
+// the new type from inheriting it.
+func evalBytesIndexExpression(buf, index object.Object) object.Object {
+	data := buf.(*object.Bytes).Value
+	i := index.(*object.Integer).Value
+	max := int64(len(data) - 1)
+
+	if i > max {
+		return NULL
+	}
+	if i < 0 {
+		if max+i+1 < 0 {
+			return NULL
+		}
+		return &object.Integer{Value: int64(data[max+i+1])}
+	}
+	return &object.Integer{Value: int64(data[i])}
 }

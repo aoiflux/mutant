@@ -362,6 +362,8 @@ func isTruthy(obj object.Object) bool {
 		return false
 	case *object.String:
 		return len(o.Value) != 0
+	case *object.Bytes:
+		return len(o.Value) != 0
 	case *object.Integer:
 		return o.Value != 0
 	case *object.Float:

@@ -23,11 +23,20 @@ func hashHexOf(newHash func() hash.Hash, data []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// hashOneString takes the single argument every hash_* builtin hashes.
+//
+// It accepts a buffer as readily as text: a hash consumes bytes and has no
+// opinion about what they mean, which is exactly the case where refusing a
+// BYTES would be arbitrary. Hashing a disk image is the reason the type exists.
 func hashOneString(op string, args []object.Object) (string, *object.Error) {
 	if len(args) != 1 {
 		return "", newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	return requireStringArg(op, args[0], 1)
+	data, errObj := requireBinaryArg(op, args[0], 1)
+	if errObj != nil {
+		return "", errObj
+	}
+	return string(data), nil
 }
 
 func HashMD5(args ...object.Object) object.Object {
@@ -85,14 +94,18 @@ func HMAC(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3", len(args))
 	}
-	key, errObj := requireStringArg("hmac", args[0], 1)
+	// Both the key and the message may be binary: an HMAC key is bytes, and
+	// the thing being authenticated is very often a buffer.
+	keyBytes, errObj := requireBinaryArg("hmac", args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	msg, errObj := requireStringArg("hmac", args[1], 2)
+	key := string(keyBytes)
+	msgBytes, errObj := requireBinaryArg("hmac", args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
+	msg := string(msgBytes)
 	algo, errObj := requireStringArg("hmac", args[2], 3)
 	if errObj != nil {
 		return errObj

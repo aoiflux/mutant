@@ -1384,6 +1384,7 @@ type Object interface {
 | `BOOLEAN_OBJ`         | `*Boolean`          | `Value bool`; singletons `global.True`, `global.False` |
 | `NULL_OBJ`            | `*Null`             | singleton `global.Null`                                |
 | `STRING_OBJ`          | `*String`           | `Value string`                                         |
+| `BYTES_OBJ`           | `*Bytes`            | `Value []byte` — a byte buffer; `Inspect()` is full hex |
 | `ARRAY_OBJ`           | `*Array`            | `Elements []Object`                                    |
 | `HASH_OBJ`            | `*Hash`             | `Pairs map[HashKey]HashPair`                           |
 | `COMPILED_FN_OBJ`     | `*CompiledFunction` | `Instructions`, `NumLocals`, `NumParams`               |

@@ -1,6 +1,7 @@
 package evaluator
 
 import (
+	"bytes"
 	"errors"
 	"sort"
 
@@ -206,6 +207,10 @@ func sortKeyLess(a, b object.Object) (bool, object.Object) {
 	case *object.String:
 		if bv, ok := b.(*object.String); ok {
 			return av.Value < bv.Value, nil
+		}
+	case *object.Bytes:
+		if bv, ok := b.(*object.Bytes); ok {
+			return bytes.Compare(av.Value, bv.Value) < 0, nil
 		}
 	}
 	return false, newError("sort_by: cannot compare keys of type %s and %s", a.Type(), b.Type())

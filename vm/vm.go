@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -376,6 +377,12 @@ func (vm *VM) clearObjectSensitiveData(obj object.Object) {
 	case *object.Encrypted:
 		security.SecureZero(o.Value)
 		o.Value = nil
+	// A bytes is the one value type whose payload can actually be wiped: a
+	// string's bytes are immutable, so the conversion needed to zero them
+	// produces a copy and clears that instead. Key material held in a buffer is
+	// therefore gone here, not merely dereferenced.
+	case *object.Bytes:
+		o.Zero()
 	case *object.Array:
 		for i := range o.Elements {
 			vm.clearObjectSensitiveData(o.Elements[i])
@@ -1534,6 +1541,8 @@ func (vm *VM) execBinaryOperation(op code.Opcode) error {
 		return vm.execBinaryIntegerOperation(op, left, right)
 	case rtype == object.STRING_OBJ && ltype == object.STRING_OBJ:
 		return vm.execBinaryStringOperation(op, left, right)
+	case rtype == object.BYTES_OBJ && ltype == object.BYTES_OBJ:
+		return vm.execBinaryBytesOperation(op, left, right)
 	}
 
 	ans1 := mutil.AssertObjectTypes(string(rtype), object.INTEGER_OBJ, object.FLOAT_OBJ)
@@ -1625,6 +1634,27 @@ func (vm *VM) execBinaryStringOperation(op code.Opcode, left, right object.Objec
 
 // execSetIndex mutates a container in place for `container[index] = value` and
 // returns the (same) container so the caller can persist it to its variable slot.
+// execBinaryBytesOperation concatenates two buffers. Bytes deliberately support
+// no other operator: subtraction and division of buffers mean nothing, and the
+// alternative to refusing them is inventing a semantic nobody asked for.
+//
+// The result is a fresh buffer rather than an append onto the left operand,
+// because `a + b` must not mutate `a` -- append would when a has spare capacity.
+func (vm *VM) execBinaryBytesOperation(op code.Opcode, left, right object.Object) error {
+	if op != code.OpAdd {
+		return fmt.Errorf("unknown bytes operator: %d", op)
+	}
+
+	lval := left.(*object.Bytes).Value
+	rval := right.(*object.Bytes).Value
+
+	joined := make([]byte, 0, len(lval)+len(rval))
+	joined = append(joined, lval...)
+	joined = append(joined, rval...)
+
+	return vm.push(&object.Bytes{Value: joined})
+}
+
 func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object, error) {
 	switch c := container.(type) {
 	case *object.Array:
@@ -1636,6 +1666,26 @@ func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object
 			return nil, fmt.Errorf("array index out of bounds: %d (len %d)", idx.Value, len(c.Elements))
 		}
 		c.Elements[idx.Value] = value
+		return c, nil
+	case *object.Bytes:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return nil, fmt.Errorf("bytes index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Value)) {
+			return nil, fmt.Errorf("bytes index out of bounds: %d (len %d)", idx.Value, len(c.Value))
+		}
+		// A buffer holds bytes, so the only thing that can be stored in one is a
+		// value that is a byte. Truncating a larger integer silently would make
+		// b[0] = 256 write a zero.
+		val, ok := value.(*object.Integer)
+		if !ok {
+			return nil, fmt.Errorf("bytes element must be INTEGER, got %s", value.Type())
+		}
+		if val.Value < 0 || val.Value > 255 {
+			return nil, fmt.Errorf("bytes element out of range: %d (want 0-255)", val.Value)
+		}
+		c.Value[idx.Value] = byte(val.Value)
 		return c, nil
 	case *object.Hash:
 		hashKey, ok := index.(object.Hashable)
@@ -1660,6 +1710,8 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 		return vm.execMultiValueIndex(left, index)
 	case left.Type() == object.STRING_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execStringIndex(left, index)
+	case left.Type() == object.BYTES_OBJ && index.Type() == object.INTEGER_OBJ:
+		return vm.execBytesIndex(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return vm.execHashIndex(left, index)
 	default:
@@ -1689,6 +1741,29 @@ func (vm *VM) execStringIndex(str, index object.Object) error {
 	}
 	strObj := &object.String{Value: string(strVal[i])}
 	return vm.push(strObj)
+}
+
+// execBytesIndex yields the byte at i as an INTEGER 0-255.
+//
+// This is where bytes deliberately part company with strings, which yield a
+// one-character string. A buffer is indexed to compare a value -- b[0] == 0x4d
+// -- and returning a one-byte buffer would make every such test go through a
+// conversion. Negative indices count from the end, as they do everywhere else.
+func (vm *VM) execBytesIndex(buf, index object.Object) error {
+	data := buf.(*object.Bytes).Value
+	i := index.(*object.Integer).Value
+	max := int64(len(data) - 1)
+
+	if i > max {
+		return vm.push(global.Null)
+	}
+	if i < 0 {
+		if max+i+1 < 0 {
+			return vm.push(global.Null)
+		}
+		return vm.push(&object.Integer{Value: int64(data[max+i+1])})
+	}
+	return vm.push(&object.Integer{Value: int64(data[i])})
 }
 
 func (vm *VM) execArrayIndex(array, index object.Object) error {
@@ -1769,11 +1844,40 @@ func (vm *VM) execComparison(op code.Opcode) error {
 		return vm.execFloatComparison(op, left, right)
 	}
 
+	// The fallback below compares rendered forms, and Bytes renders as hex, so
+	// without this a buffer would equal the string spelling its own hex.
+	if ltype == object.BYTES_OBJ || rtype == object.BYTES_OBJ {
+		return vm.execBytesComparison(op, left, right)
+	}
+
 	switch op {
 	case code.OpEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() == left.Inspect()))
 	case code.OpUnEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() != left.Inspect()))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execBytesComparison decides equality for any comparison with a bytes on
+// either side. Only two buffers can be equal: a bytes is never equal to a value
+// of another type, whatever it renders as.
+//
+// Ordering is not defined. `<` on two buffers has an obvious lexicographic
+// answer, but the operand domains the analyzer derives from this function are
+// what its diagnostics are built on, so widening the operator set is a language
+// decision rather than a convenience.
+func (vm *VM) execBytesComparison(op code.Opcode, left, right object.Object) error {
+	leftBytes, leftOK := left.(*object.Bytes)
+	rightBytes, rightOK := right.(*object.Bytes)
+	equal := leftOK && rightOK && bytes.Equal(leftBytes.Value, rightBytes.Value)
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
 	default:
 		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
 	}
@@ -2105,6 +2209,8 @@ func isTruthy(obj object.Object) bool {
 	case *object.Null:
 		return false
 	case *object.String:
+		return len(o.Value) != 0
+	case *object.Bytes:
 		return len(o.Value) != 0
 	case *object.Integer:
 		return o.Value != 0

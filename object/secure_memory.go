@@ -76,6 +76,9 @@ func encryptObjectSecure(obj Object, seed int64, password string) ([]byte, error
 	case STRING_OBJ:
 		data = []byte(obj.(*String).Value)
 
+	case BYTES_OBJ:
+		data = obj.(*Bytes).Value
+
 	case BOOLEAN_OBJ:
 		val := obj.(*Boolean).Value
 		data = []byte(strconv.FormatBool(val))
@@ -109,6 +112,9 @@ func decryptObjectSecure(encrypted []byte, objType ObjectType, seed int64, passw
 	case STRING_OBJ:
 		return &String{Value: string(data)}, nil
 
+	case BYTES_OBJ:
+		return &Bytes{Value: data}, nil
+
 	case BOOLEAN_OBJ:
 		val, err := strconv.ParseBool(string(data))
 		if err != nil {
@@ -129,6 +135,8 @@ func objectStreamOffset(objType ObjectType) int64 {
 		return 128
 	case BOOLEAN_OBJ:
 		return 192
+	case BYTES_OBJ:
+		return 320
 	default:
 		return 256
 	}
@@ -230,10 +238,17 @@ func (ss *SecureStack) AutoProtect() {
 func (ss *SecureStack) clearObject(obj Object) {
 	switch v := obj.(type) {
 	case *String:
-		// Zero out string data
-		bytes := []byte(v.Value)
-		security.SecureZero(bytes)
+		// []byte(v.Value) is a copy Go makes at the conversion, so this zeroes
+		// the copy and the string itself lives on until it is collected. Go
+		// strings are immutable; there is no way to wipe one in place. Dropping
+		// the reference is all this can honestly do -- which is precisely why a
+		// buffer that holds key material belongs in a Bytes.
+		security.SecureZero([]byte(v.Value))
 		v.Value = ""
+
+	case *Bytes:
+		// A Bytes, unlike a String, really can be wiped.
+		v.Zero()
 
 	case *Integer:
 		v.Value = 0

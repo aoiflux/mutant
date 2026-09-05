@@ -31,7 +31,7 @@ func TestBuiltinArgTypeFiresOnWrongKind(t *testing.T) {
 		want string
 	}{
 		{"integer for a string parameter", "str_upper(42);\n", "argument 1 to `str_upper` must be STRING, got INTEGER"},
-		{"boolean for a union parameter", "len(true);\n", "argument 1 to `len` must be STRING, ARRAY, or HASH, got BOOLEAN"},
+		{"boolean for a union parameter", "len(true);\n", "argument 1 to `len` must be STRING, BYTES, ARRAY, or HASH, got BOOLEAN"},
 		{"string for an array parameter", "str_join(\"abc\", \",\");\n", "argument 1 to `str_join` must be ARRAY, got STRING"},
 		{"hash for an array parameter", "sort({\"a\": 1});\n", "argument 1 to `sort` must be ARRAY, got HASH"},
 		{"wrong kind in a later position", "str_repeat(\"ab\", \"3\");\n", "argument 2 to `str_repeat` must be INTEGER, got STRING"},
@@ -201,7 +201,7 @@ func TestBuiltinArgTypeCatchesStructsAndEnums(t *testing.T) {
 			// and hashes, and errors on anything else — structs included.
 			name: "a struct where JSON expects a serialisable value",
 			src:  "struct Point { x; };\nlet p = Point{x: 1};\njson_stringify(p);\n",
-			want: "argument 1 to `json_stringify` must be STRING, INTEGER, FLOAT, BOOLEAN, NULL, ARRAY, or HASH, got STRUCT",
+			want: "argument 1 to `json_stringify` must be STRING, BYTES, INTEGER, FLOAT, BOOLEAN, NULL, ARRAY, or HASH, got STRUCT",
 		},
 		{
 			// builtin/db.go dbNodeTypeFromObject: "must be INTEGER or ENUM_VALUE".

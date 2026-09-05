@@ -481,6 +481,16 @@ func infixType(operator string, lt, rt Type) Type {
 	case "<", ">", "<=", ">=", "==", "!=", "&&", "||":
 		return tBool
 	case "+":
+		// Two buffers concatenate to a buffer. A buffer and a string do not add
+		// at all -- execBinaryOperation has no mixed arm -- so that case falls
+		// through to numericResultType and lands on Any, which is the honest
+		// answer for an expression the VM will refuse.
+		if lt.Kind == TypeBytes || rt.Kind == TypeBytes {
+			if lt.Kind == TypeBytes && rt.Kind == TypeBytes {
+				return tBytes
+			}
+			return AnyType
+		}
 		if lt.Kind == TypeString || rt.Kind == TypeString {
 			return tString
 		}

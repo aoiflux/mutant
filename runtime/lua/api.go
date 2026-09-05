@@ -104,6 +104,14 @@ func objectToLuaValue(obj object.Object) (lua.LValue, bool) {
 		strObj := obj.(*object.String)
 		return lua.LString(strObj.Value), true
 
+	// Lua strings are 8-bit clean byte sequences, so a buffer crosses exactly.
+	// The conversion back is lossy in the other direction -- a Lua string
+	// becomes a Mutant STRING -- but that is the pre-existing shape of this
+	// bridge, not something the buffer introduces.
+	case object.BYTES_OBJ:
+		bytesObj := obj.(*object.Bytes)
+		return lua.LString(string(bytesObj.Value)), true
+
 	case object.NULL_OBJ:
 		return lua.LNil, true
 

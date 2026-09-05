@@ -12,6 +12,7 @@ var validParamKinds = map[ParamKind]struct{}{
 	ParamInt:    {},
 	ParamFloat:  {},
 	ParamString: {},
+	ParamBytes:  {},
 	ParamBool:   {},
 	ParamArray:  {},
 	ParamHash:   {},
@@ -206,8 +207,8 @@ func TestTypedSignature(t *testing.T) {
 		want string
 	}{
 		{"gets", "gets() -> STRING"},
-		{"len", "len(value: STRING|ARRAY|HASH) -> INTEGER"},
-		{"bytes_slice", "bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)"},
+		{"len", "len(value: STRING|BYTES|ARRAY|HASH) -> INTEGER"},
+		{"bytes_slice", "bytes_slice(data: STRING|BYTES, start: INTEGER, length: INTEGER) -> (STRING|BYTES, ERROR)"},
 		{"help", "help(topic?: STRING, mode?: STRING) -> STRING"},
 		{"min", "min(value: INTEGER|FLOAT, ...values: INTEGER|FLOAT) -> INTEGER|FLOAT"},
 		{"putf", "putf(format, ...values) -> NULL"},

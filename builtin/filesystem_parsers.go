@@ -541,27 +541,42 @@ func NtfsListFiles(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: items}, nil)
 }
 
+// NtfsReadFile reads a file out of the image as text, and NtfsReadFileBytes reads it as a
+// buffer. The pair shares one implementation and differs only in the type of
+// the value it returns.
+//
+// A file recovered from a disk image is binary until something says otherwise,
+// so the Bytes form is the one that tells the truth about most reads. The text
+// form stays because every program written before the type existed calls it.
 func NtfsReadFile(args ...object.Object) object.Object {
+	return ntfsReadFile(args, "ntfs_read_file", false)
+}
+
+func NtfsReadFileBytes(args ...object.Object) object.Object {
+	return ntfsReadFile(args, "ntfs_read_file_bytes", true)
+}
+
+func ntfsReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveNTFSHandle(args[0], "ntfs_read_file")
+	state, errObj := resolveNTFSHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `ntfs_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("ntfs_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func NtfsMetadata(args ...object.Object) object.Object {
@@ -724,26 +739,34 @@ func FatListFiles(args ...object.Object) object.Object {
 }
 
 func FatReadFile(args ...object.Object) object.Object {
+	return fatReadFile(args, "fat_read_file", false)
+}
+
+func FatReadFileBytes(args ...object.Object) object.Object {
+	return fatReadFile(args, "fat_read_file_bytes", true)
+}
+
+func fatReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveFATHandle(args[0], "fat_read_file")
+	state, errObj := resolveFATHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `fat_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("fat_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func FatMetadata(args ...object.Object) object.Object {
@@ -907,26 +930,34 @@ func XFATListFiles(args ...object.Object) object.Object {
 }
 
 func XFATReadFile(args ...object.Object) object.Object {
+	return xfatReadFile(args, "xfat_read_file", false)
+}
+
+func XFATReadFileBytes(args ...object.Object) object.Object {
+	return xfatReadFile(args, "xfat_read_file_bytes", true)
+}
+
+func xfatReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFATHandle(args[0], "xfat_read_file")
+	state, errObj := resolveXFATHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `xfat_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("xfat_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func XFATMetadata(args ...object.Object) object.Object {
@@ -1085,26 +1116,34 @@ func ExtListFiles(args ...object.Object) object.Object {
 }
 
 func ExtReadFile(args ...object.Object) object.Object {
+	return extReadFile(args, "ext_read_file", false)
+}
+
+func ExtReadFileBytes(args ...object.Object) object.Object {
+	return extReadFile(args, "ext_read_file_bytes", true)
+}
+
+func extReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveEXTHandle(args[0], "ext_read_file")
+	state, errObj := resolveEXTHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `ext_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("ext_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func ExtMetadata(args ...object.Object) object.Object {
@@ -1255,26 +1294,34 @@ func HFSListFiles(args ...object.Object) object.Object {
 }
 
 func HFSReadFile(args ...object.Object) object.Object {
+	return hfsReadFile(args, "hfs_read_file", false)
+}
+
+func HFSReadFileBytes(args ...object.Object) object.Object {
+	return hfsReadFile(args, "hfs_read_file_bytes", true)
+}
+
+func hfsReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveHFSHandle(args[0], "hfs_read_file")
+	state, errObj := resolveHFSHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `hfs_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("hfs_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func HFSMetadata(args ...object.Object) object.Object {
@@ -1434,26 +1481,34 @@ func XFSListFiles(args ...object.Object) object.Object {
 }
 
 func XFSReadFile(args ...object.Object) object.Object {
+	return xfsReadFile(args, "xfs_read_file", false)
+}
+
+func XFSReadFileBytes(args ...object.Object) object.Object {
+	return xfsReadFile(args, "xfs_read_file_bytes", true)
+}
+
+func xfsReadFile(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFSHandle(args[0], "xfs_read_file")
+	state, errObj := resolveXFSHandle(args[0], opName)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[1].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `xfs_read_file` must be STRING, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be STRING, got %s", opName, args[1].Type()))
 	}
 
 	content, err := state.Session.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("xfs_read_file: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
-	return resultAndError(stringObj(string(content)), nil)
+	return resultAndError(binaryResult(binary, content), nil)
 }
 
 func XFSMetadata(args ...object.Object) object.Object {

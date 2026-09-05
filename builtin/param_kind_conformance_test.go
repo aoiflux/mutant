@@ -48,6 +48,8 @@ func sampleForKind(kind ParamKind) object.Object {
 	switch kind {
 	case ParamString:
 		return &object.String{Value: "mutant-probe"}
+	case ParamBytes:
+		return &object.Bytes{Value: []byte("mutant-probe")}
 	case ParamInt:
 		return &object.Integer{Value: 1}
 	case ParamFloat:
@@ -66,7 +68,11 @@ func sampleForKind(kind ParamKind) object.Object {
 // rejectedKindFor picks a kind the parameter does not accept, preferring one
 // that is unlikely to be coerced.
 func rejectedKindFor(p BuiltinParamDoc) (ParamKind, bool) {
-	for _, candidate := range []ParamKind{ParamBool, ParamArray, ParamHash, ParamString, ParamInt} {
+	// BYTES is probed first. It is the newest kind and the one most likely to be
+	// under-declared: a builtin that quietly accepts a buffer while its metadata
+	// says STRING is precisely the mismatch that would make the binary-into-text
+	// diagnostic fire on working code.
+	for _, candidate := range []ParamKind{ParamBytes, ParamBool, ParamArray, ParamHash, ParamString, ParamInt} {
 		if !p.Accepts(candidate) {
 			return candidate, true
 		}
