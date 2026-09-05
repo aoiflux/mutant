@@ -20,6 +20,18 @@ type regEntry struct {
 	name string
 	typ  string
 	data object.Object
+	// raw is the value's stored bytes, set only when data is a hex rendering of
+	// them -- REG_BINARY, and any type the backend did not recognise. Every other
+	// type already reaches the caller faithfully: a REG_DWORD is an Integer, a
+	// REG_MULTI_SZ an Array of strings. There is no hex there to undo.
+	//
+	// nil is meaningful rather than merely absent. It is what the JSON backend
+	// always reports, because a hive-JSON file is a transcription of a hive and
+	// not the artifact: registryTypeName maps its values to REG_SZ, REG_DWORD,
+	// REG_QWORD and REG_MULTI_SZ, and there is no case that yields REG_BINARY.
+	// Encoding a JSON string as UTF-16LE to fill the field would hand an examiner
+	// bytes that were never on any disk.
+	raw []byte
 }
 
 type registryBackend interface {
@@ -224,12 +236,25 @@ func RegClose(args ...object.Object) object.Object {
 	}), nil)
 }
 
+// regEntryHash renders one registry value the way every reg_* and hive_* reader
+// returns it.
+//
+// data_bytes is present exactly when data is hex -- see regEntry.raw. It is
+// conditional rather than always-present on purpose: an empty buffer would be
+// indistinguishable from a REG_BINARY that really is empty, which is the same
+// content-decides-the-representation trap sqlite_query still has. A caller does
+// not have to probe for the key either, because the type field sitting beside it
+// says whether to expect it.
 func regEntryHash(e regEntry) object.Object {
-	return makeHashObject(map[string]object.Object{
+	fields := map[string]object.Object{
 		"name": stringObj(e.name),
 		"type": stringObj(e.typ),
 		"data": e.data,
-	})
+	}
+	if e.raw != nil {
+		fields["data_bytes"] = &object.Bytes{Value: e.raw}
+	}
+	return makeHashObject(fields)
 }
 
 func registryHandleAndPath(op string, args []object.Object) (registryBackend, string, *object.Error) {
@@ -376,12 +401,12 @@ func (b *hiveRegistryBackend) enumValues(path string) ([]regEntry, error) {
 	}
 	entries := make([]regEntry, 0)
 	for _, vk := range b.hive.values(nk) {
-		tname, data := b.hive.valueData(vk)
+		tname, data, raw := b.hive.valueData(vk)
 		name := vk.name
 		if name == "" {
 			name = "(default)"
 		}
-		entries = append(entries, regEntry{name: name, typ: tname, data: data})
+		entries = append(entries, regEntry{name: name, typ: tname, data: data, raw: raw})
 	}
 	return entries, nil
 }
@@ -393,8 +418,8 @@ func (b *hiveRegistryBackend) getValue(path, name string) (regEntry, error) {
 	}
 	for _, vk := range b.hive.values(nk) {
 		if strings.EqualFold(vk.name, name) {
-			tname, data := b.hive.valueData(vk)
-			return regEntry{name: vk.name, typ: tname, data: data}, nil
+			tname, data, raw := b.hive.valueData(vk)
+			return regEntry{name: vk.name, typ: tname, data: data, raw: raw}, nil
 		}
 	}
 	return regEntry{}, fmt.Errorf("value not found: %s", name)

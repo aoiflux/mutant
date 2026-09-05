@@ -143,9 +143,14 @@ func readLiveRegistryValue(k registry.Key, name string) regEntry {
 		}
 		return regEntry{name: displayName, typ: "REG_MULTI_SZ", data: &object.Array{Elements: elems}}
 	case registry.BINARY:
+		// GetBinaryValue allocates a fresh buffer per call, so raw is owned already
+		// and needs no clone the way the regf backend's window into the hive does.
 		buf, _, _ := k.GetBinaryValue(name)
-		return regEntry{name: displayName, typ: "REG_BINARY", data: stringObj(hex.EncodeToString(buf))}
+		return regEntry{name: displayName, typ: "REG_BINARY", data: stringObj(hex.EncodeToString(buf)), raw: buf}
 	default:
+		// An unrecognised type reports no data on a live key, so there are no bytes
+		// to attach either. The regf backend hex-encodes the same types instead of
+		// dropping them; that difference predates this and is left alone here.
 		return regEntry{name: displayName, typ: fmt.Sprintf("REG_TYPE(%d)", valType), data: stringObj("")}
 	}
 }

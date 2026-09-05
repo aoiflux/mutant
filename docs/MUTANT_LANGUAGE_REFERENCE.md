@@ -351,12 +351,23 @@ a buffer is a buffer, of a string a string.
 
 Some builtins predate the type and hex-encode their binary output defensively,
 because there was once no other way to carry it. Those are being given direct
-routes the same additive way — `mem_read_bytes` alongside `mem_read`, and a
-`resident_data_bytes` field alongside `fs_deleted`'s hex `resident_data`, so
-recovering a deleted file is `fs_write(out, e["resident_data_bytes"])` rather
-than a `string_to_bytes` statement first. The hex fields stay exactly as they
-were. `sqlite_query` and `evtx_parse` still hex-encode: their binary values sit
-under keys taken from the file being parsed, so there is nowhere to put a second
+routes the same additive way — `mem_read_bytes` alongside `mem_read`, a
+`resident_data_bytes` field alongside `fs_deleted`'s hex `resident_data`, and a
+`data_bytes` field on the values `reg_get_value`, `reg_enum_values`,
+`hive_get_value` and `hive_list_values` return. Recovering a deleted file is
+`fs_write(out, e["resident_data_bytes"])` rather than a `string_to_bytes`
+statement first, and a REG_BINARY blob is parsed straight out of
+`v["data_bytes"]`. The hex fields stay exactly as they were.
+
+`data_bytes` is present exactly when `data` is hex — REG_BINARY, and value
+types the reader does not recognise. Other types are already carried faithfully
+(a REG_DWORD is an integer, a REG_MULTI_SZ an array), so there is no hex to
+undo, and the `type` field beside it says which case you are in. A registry
+opened from a hive-JSON file never reports it: that format is a transcription of
+a hive rather than the artifact, and has no binary type to transcribe.
+
+`sqlite_query` and `evtx_parse` still hex-encode: their binary values sit under
+keys taken from the file being parsed, so there is nowhere to put a second
 representation without changing the first.
 
 The language server knows the type. Passing a buffer to a text builtin raises
