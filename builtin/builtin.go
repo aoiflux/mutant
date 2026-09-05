@@ -270,7 +270,7 @@ var Builtins = []BuiltinDefinition{
 	// entry may be added anywhere, renamed (leaving an entry in Aliases), or
 	// retired. Ordinals still matter to artifacts compiled before v2.5, and they
 	// read the frozen snapshot in legacy_ordinals.go rather than this slice, so
-	// nothing done here can rebind a call in a program already written. (L-1)
+	// nothing done here can rebind a call in a program already written.
 	{BuiltinNameNetConnect, &BuiltIn{NetConnect}},
 	{BuiltinNameNetTlsConnect, &BuiltIn{NetTLSConnect}},
 	{BuiltinNameNetConnWrite, &BuiltIn{NetConnWrite}},

@@ -87,7 +87,7 @@ func registryOrdinalOf(t *testing.T, name string) int {
 	return -1
 }
 
-// TestOrdinalEraBytecodeStillRuns is L-1's compatibility contract: a .mu written
+// TestOrdinalEraBytecodeStillRuns is the compatibility contract: a .mu written
 // before builtin names travelled with the program still runs. Its operands are
 // registry positions and it has no Version field at all, which gob decodes to 0.
 func TestOrdinalEraBytecodeStillRuns(t *testing.T) {
@@ -147,8 +147,8 @@ func TestNamedBytecodeResolvesThroughItsOwnTable(t *testing.T) {
 	}
 }
 
-// TestUnknownBuiltinFailsBeforeAnythingRuns is the other half of L-1's
-// done_when. The instruction stream is empty, so nothing ever reaches the
+// TestUnknownBuiltinFailsBeforeAnythingRuns is the other half of that
+// contract. The instruction stream is empty, so nothing ever reaches the
 // missing builtin -- and the program must still refuse to run, naming it.
 // Failing at the call site instead would hide a missing dependency behind
 // whichever branch happened not to be taken.
@@ -184,7 +184,7 @@ func TestUntaggedOperandInANamedContainerIsRefused(t *testing.T) {
 	}
 }
 
-// TestAnArtifactNamingARetiredBuiltinRunsThroughItsAlias is L-1's done_when for
+// TestAnArtifactNamingARetiredBuiltinRunsThroughItsAlias is the same guarantee for
 // renaming, exercised through the VM: an artifact that names a builtin this
 // runtime no longer registers still runs, because an alias says what replaced it.
 //

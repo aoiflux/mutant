@@ -103,7 +103,7 @@ type ByteCode struct {
 	// disambiguate.
 	//
 	// They are removed from artifacts that leave the machine: see
-	// StripDebugInfo. (L-3)
+	// StripDebugInfo.
 	SourceFile string
 	LineTable  code.LineTable
 	MacroTable code.LineTable
@@ -1018,7 +1018,7 @@ func (c *Compiler) loadSymbol(s Symbol) {
 		// stream makes the registry append-only forever: nothing can be renamed,
 		// retired or reordered without rebinding every call in every .mu already
 		// written. The operand indexes this program's own table of names
-		// instead, which the runtime resolves by name at load. (L-1)
+		// instead, which the runtime resolves by name at load.
 		//
 		// The high bit marks the operand as a name-table index. It costs nothing
 		// here and makes a pre-v2.5 runtime handed this program stop on its own

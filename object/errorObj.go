@@ -39,7 +39,7 @@ type Error struct {
 	// absent from Inspect: errors are ordinary values in Mutant's (value, err)
 	// idiom, so a program that catches one and prints it in a loop would emit
 	// a full traceback per iteration. The stack is for the report a program
-	// dies with, not for every error a program handles. (L-3)
+	// dies with, not for every error a program handles.
 	Stack []string
 }
 

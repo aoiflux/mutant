@@ -7,7 +7,7 @@ package vm
 // closure it is running and the offset it is running at. What was missing was
 // anything to resolve that offset against. Each CompiledFunction now carries a
 // line table, so a frame's ip becomes a line, and a stack of frames becomes a
-// stack of lines. See code/linetable.go and roadmap item L-3.
+// stack of lines. See code/linetable.go.
 //
 // Frames render innermost first, so the failure site sits directly beneath the
 // error message rather than at the end of a list the reader has to scroll.

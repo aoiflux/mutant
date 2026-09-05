@@ -58,7 +58,7 @@ func New() *REPL {
 	// rather than reaching a filesystem or socket that does not exist in a
 	// browser. The index passed here is the registry ordinal, which is no longer
 	// what OpGetBuiltin carries -- the compiler interns the symbol's name and
-	// emits a position in the program's own table (L-1) -- so it only has to be
+	// emits a position in the program's own table -- so it only has to be
 	// unique, and the true ordinal remains the obvious choice.
 	for i, b := range builtin.Builtins {
 		if BrowserSafe(b.Name) {

@@ -68,7 +68,7 @@ func operandsOf(t *testing.T, ins code.Instructions) []int {
 	return operands
 }
 
-// TestBuiltinOperandIsNotARegistryOrdinal is the whole point of L-1 stated as an
+// TestBuiltinOperandIsNotARegistryOrdinal is the whole point stated as an
 // assertion: the instruction stream must not carry a position in the global
 // builtin registry, because that is what made the registry append-only forever.
 //

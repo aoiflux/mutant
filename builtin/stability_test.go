@@ -65,7 +65,7 @@ func TestDeprecatedByIsFalseForLiveBuiltins(t *testing.T) {
 	}
 }
 
-// TestTheDeprecatedAliasIsDeclared pins the one builtin L-1 names: net_syn_scan
+// TestTheDeprecatedAliasIsDeclared pins the one builtin that needs it: net_syn_scan
 // was kept in the registry purely to hold an ordinal, since an ordinal in the
 // bytecode could never be vacated. Now that operands carry names, the tier says
 // so out loud.

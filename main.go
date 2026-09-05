@@ -49,7 +49,7 @@ type cliRuntime struct {
 // purpose: tests replace runtimeDeps with a whole struct literal, so a new field
 // there defaults to nil and every test that does not know about it panics on the
 // first password resolution. A separate var stays wired unless a test
-// deliberately overrides it. (S-2)
+// deliberately overrides it.
 var (
 	defaultPasswordResolver = &credential.Resolver{}
 	resolvePassword         = defaultPasswordResolver.Resolve
@@ -117,7 +117,7 @@ func runEmbeddedPayload(executablePath string, args []string) int {
 
 	configureSecurityLogging(args, devMode)
 
-	// A standalone payload only ever decrypts, so it never confirms. (S-2)
+	// A standalone payload only ever decrypts, so it never confirms.
 	password, err := resolveProgramPassword(extractPasswordRequest(args, false), devMode)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -345,7 +345,7 @@ func executeProgramFile(args []string, fileArg string) (bool, int) {
 	//
 	// isSource decides whether to confirm: compiling encrypts, and a mistyped
 	// password there produces an artifact nobody can ever open. Running only
-	// decrypts, where a wrong password simply fails. (S-2)
+	// decrypts, where a wrong password simply fails.
 	password, err := resolveProgramPassword(extractPasswordRequest(args, isSource), devMode)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -392,7 +392,7 @@ func resolveProgramPassword(req credential.Request, devMode bool) (string, error
 	// The string conversion copies the password into immutable memory that can
 	// never be erased; zeroing the byte slice closes the half of the window that
 	// is closable today. Removing the other half means threading []byte through
-	// the encryption pipeline end to end -- see credential.Zero. (S-2)
+	// the encryption pipeline end to end -- see credential.Zero.
 	defer credential.Zero(secret)
 	return string(secret), nil
 }
@@ -852,7 +852,7 @@ func extractSignerAuthArg(args []string) bool {
 
 // extractPasswordRequest collects every password source named on the command
 // line. It reports what was asked for; credential.Resolver decides what that
-// means, including rejecting a command line that names more than one. (S-2)
+// means, including rejecting a command line that names more than one.
 func extractPasswordRequest(args []string, confirm bool) credential.Request {
 	return credential.Request{
 		Inline:   extractFlagValue(args, "password", "pwd"),
@@ -896,7 +896,7 @@ func hasBoolFlag(args []string, name string) bool {
 // command line, so it stays the single place that knows how a password source
 // is spelled. These declarations exist so the FlagSet -- which runs with
 // flag.ExitOnError -- does not abort on a flag it has never heard of, and so
-// they appear in the subcommand's own -h output. (S-2)
+// they appear in the subcommand's own -h output.
 func registerPasswordFlags(fs *flag.FlagSet) {
 	var (
 		discardString string
@@ -932,7 +932,7 @@ func prepareRelease(args []string) (string, string, string, credential.Request, 
 		src = findSourceArg(args[2:])
 	}
 
-	// release compiles, so it confirms an interactively typed password. (S-2)
+	// release compiles, so it confirms an interactively typed password.
 	request := extractPasswordRequest(args, true)
 	if request.Inline == "" {
 		request.Inline = password
@@ -980,7 +980,7 @@ func prepareGenRun(args []string) (string, credential.Request, int, int64, error
 		src = findSourceArg(args[2:])
 	}
 
-	// gen compiles, so it confirms an interactively typed password. (S-2)
+	// gen compiles, so it confirms an interactively typed password.
 	request := extractPasswordRequest(args, true)
 	if request.Inline == "" {
 		request.Inline = password

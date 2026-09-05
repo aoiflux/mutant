@@ -146,8 +146,8 @@ func TestCompiledFunctionsCarryTheirOwnTable(t *testing.T) {
 // deliberately -- they are what turn "line 74" into an underline under the
 // division that failed -- and both are gone from a release build.
 //
-// The roadmap's "single-digit percent" described the start-position-only table
-// this began as. Against the instruction stream rather than the artifact these
+// The "single-digit percent" this was first budgeted at described the
+// start-position-only table it began as. Against the instruction stream rather than the artifact these
 // tables run well over 100%: Mutant instructions are two or three bytes, so a
 // source line buys far fewer of them than a line of Go buys machine
 // instructions.

@@ -67,7 +67,7 @@ type Program struct {
 	// reports the line the user actually wrote. That alone is not enough to
 	// debug macro-heavy code -- when the generated code is wrong, the line the
 	// user wrote is not where the bug is -- so the definition site is kept
-	// here alongside it. (L-3)
+	// here alongside it.
 	MacroExpansions map[Node]MacroOrigin
 }
 

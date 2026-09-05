@@ -169,7 +169,7 @@ func TestPrepareGenRun(t *testing.T) {
 			}
 			// prepareGenRun now returns the *request* rather than a resolved
 			// password: an argv password is one source among four, and resolving it
-			// is credential.Resolver's job. (S-2)
+			// is credential.Resolver's job.
 			if request.Inline != test.wantPassword {
 				t.Fatalf("request.Inline = %q, want %q", request.Inline, test.wantPassword)
 			}
@@ -651,7 +651,7 @@ func TestDefaultModeNeverUsesTheDevelopmentKey(t *testing.T) {
 			}
 			// Each option is asserted in full. Checking for "--password" alone
 			// would pass on the substring inside "--password-file" and stop
-			// proving anything the moment that flag was added. (S-2)
+			// proving anything the moment that flag was added.
 			for _, wayOut := range []string{"--password-file", "--password-stdin", "--dev"} {
 				assertContains(t, output, wayOut)
 			}

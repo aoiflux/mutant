@@ -46,7 +46,7 @@ func parse(input string) ast.Node {
 
 // registryOrdinal is the builtin's position in the global registry -- which is
 // exactly what an OpGetBuiltin operand is NOT, and the tests below exist partly
-// to keep it that way. Kept so a test can assert the two differ. (L-1)
+// to keep it that way. Kept so a test can assert the two differ.
 func registryOrdinal(t *testing.T, name string) int {
 	t.Helper()
 	for i, b := range builtin.Builtins {

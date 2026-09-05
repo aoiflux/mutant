@@ -49,7 +49,7 @@ type VM struct {
 	// construction: from the program's own name table, or -- for bytecode
 	// predating names -- from the frozen ordinal snapshot. builtinsErr holds a
 	// resolution failure until Run can return it, because the constructors
-	// cannot. (L-1)
+	// cannot.
 	builtins        []*builtin.BuiltIn
 	builtinsErr     error
 	builtinsVersion int
@@ -949,7 +949,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			// Indexes the table resolved at construction -- this program's own
 			// referenced-builtin names, or the frozen ordinal snapshot for
 			// bytecode compiled before names travelled with the program. Never
-			// the live registry, whose order is no longer part of the ABI. (L-1)
+			// the live registry, whose order is no longer part of the ABI.
 			index, err := vm.builtinTableIndex(builtinIndex)
 			if err != nil {
 				return err

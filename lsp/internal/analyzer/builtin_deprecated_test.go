@@ -28,8 +28,8 @@ func deprecatedDiagnostics(t *testing.T, src string, config LintConfig) []lsp.Di
 
 // aDeprecatedBuiltin is whatever the metadata currently marks deprecated. The
 // test reads it rather than hard-coding net_syn_scan so that retiring that alias
-// -- which L-1 finally makes possible -- does not leave a test asserting a rule
-// against a builtin that no longer exists.
+// -- which named builtin operands finally make possible -- does not leave a
+// test asserting a rule against a builtin that no longer exists.
 func aDeprecatedBuiltin(t *testing.T) (name, replacement string) {
 	t.Helper()
 	for _, def := range builtin.Builtins {

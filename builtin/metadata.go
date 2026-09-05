@@ -249,7 +249,7 @@ type builtinDoc struct {
 	// default and 400-odd entries stay unchanged.
 	stability Stability
 	// replacement names what to use instead, and is meaningful only alongside
-	// StabilityDeprecated. It is the "<replacement>" half of the roadmap's
+	// StabilityDeprecated. It is the "<replacement>" half of the
 	// `deprecated:<replacement>` spelling, kept as its own field so a consumer
 	// need not parse the tier string. TestDeprecatedBuiltinsNameTheirReplacement
 	// requires it.
@@ -277,7 +277,7 @@ type builtinParamDoc struct {
 // expressible only once bytecode stopped addressing builtins by registry
 // ordinal: while an ordinal was baked into every artifact, nothing could be
 // renamed or retired, so every builtin was permanent whether or not that was
-// intended. (L-1)
+// intended.
 type Stability string
 
 const (

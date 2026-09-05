@@ -1559,7 +1559,7 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 //
 // It is reported at the call and never suppressed by the arity or type rules:
 // the call may be perfectly well-formed, and usually is. The tag is what makes
-// editors strike the name through. (L-1)
+// editors strike the name through.
 func (c *builtinCallCollector) checkDeprecated(ident *mast.Identifier) {
 	if c == nil || c.deprecatedSev == nil || ident == nil {
 		return

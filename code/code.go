@@ -305,5 +305,5 @@ func ReadUint8(ins Instructions, length int64, password string, offset int64) (u
 // Setting the high bit puts every new operand far above the registry's length,
 // so an old runtime trips its own bounds check and stops with
 // "OpGetBuiltin: invalid builtin index=32768" instead. The tag is permanent: it
-// cannot be retired without breaking the artifacts it protects. (L-1)
+// cannot be retired without breaking the artifacts it protects.
 const BuiltinNameTableFlag = 0x8000

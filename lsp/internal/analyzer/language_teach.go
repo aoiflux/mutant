@@ -100,7 +100,7 @@ func builtinFooter(name string) []string {
 //
 // The tier is worth showing because it is now true rather than aspirational:
 // until bytecode stopped addressing builtins by registry ordinal, nothing could
-// be renamed or retired, so "deprecated" was advice with no path behind it. (L-1)
+// be renamed or retired, so "deprecated" was advice with no path behind it.
 func stabilityFooterLine(name string) string {
 	stability, ok := builtin.StabilityOf(name)
 	if !ok {

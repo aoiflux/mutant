@@ -112,7 +112,7 @@ func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 // from. stripDebug removes that name and every line table before encoding: line
 // tables are a reverse-engineering aid, and a release artifact is the thing that
 // leaves the machine. Polymorphism strips them too, unconditionally and for a
-// second reason -- see ByteCode.StripDebugInfo. (L-3)
+// second reason -- see ByteCode.StripDebugInfo.
 func compile(data []byte, srcpath string, stripDebug bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
 	constants := []object.Object{}
 	symbolTable := compiler.NewSymbolTable()

@@ -10,8 +10,6 @@ package builtin
 // New builtins do not belong here. Bytecode from BytecodeVersionNamedBuiltins
 // onward carries the names it referenced and never consults this table, so the
 // snapshot has no reason to grow. TestLegacyBuiltinOrdinalsAreFrozen pins it.
-//
-// See docs/GAP_ANALYSIS_AND_ROADMAP.md item L-1.
 var legacyBuiltinOrdinals = []string{
 	"len",                          // 0
 	"putf",                         // 1

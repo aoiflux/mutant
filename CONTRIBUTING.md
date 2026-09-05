@@ -13,10 +13,9 @@ Security issues do **not** go through the normal issue tracker — see
 - **Small fixes** — typo, obvious bug, missing test — open a pull request
   directly.
 - **Anything larger** — a new builtin family, a language feature, a change to
-  the bytecode container, an LSP diagnostic — open an issue first. Mutant has a
-  written roadmap in
-  [docs/GAP_ANALYSIS_AND_ROADMAP.md](docs/GAP_ANALYSIS_AND_ROADMAP.md); saying
-  what you intend before building it usually saves a rewrite.
+  the bytecode container, an LSP diagnostic — open an issue first. Scope and
+  design are the maintainer's call, so saying what you intend before building
+  it usually saves a rewrite.
 
 ## Getting set up
 
@@ -214,7 +213,7 @@ for at least one minor release first.
 ## Releases and governance
 
 Releases are cut from `main` and tagged `vMAJOR.MINOR.PATCH`, roughly every
-four to eight weeks — cadence follows the roadmap, not the calendar, and there
+four to eight weeks — cadence follows what is ready, not the calendar, and there
 is no fixed release date. Each release updates [CHANGELOG.md](CHANGELOG.md),
 which is the canonical record; longer narrative notes live in `plans/`.
 

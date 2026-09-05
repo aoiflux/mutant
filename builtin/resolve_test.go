@@ -112,7 +112,7 @@ func TestResolveNamesReturnsTheFunctionsInOrder(t *testing.T) {
 	}
 }
 
-// TestARenamedBuiltinResolvesThroughItsAlias is L-1's done_when for renaming: a
+// TestARenamedBuiltinResolvesThroughItsAlias is the renaming contract: a
 // builtin can be given a new name and bytecode that calls it by the old one
 // still loads.
 func TestARenamedBuiltinResolvesThroughItsAlias(t *testing.T) {

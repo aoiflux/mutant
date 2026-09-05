@@ -15,7 +15,7 @@ const (
 	BytecodeVersionOrdinalBuiltins = 1
 
 	// BytecodeVersionNamedBuiltins is bytecode that carries ByteCode.BuiltinNames
-	// and whose OpGetBuiltin operand indexes that table. (L-1)
+	// and whose OpGetBuiltin operand indexes that table.
 	BytecodeVersionNamedBuiltins = 2
 
 	// BytecodeVersion is what this build emits.
