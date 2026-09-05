@@ -261,6 +261,12 @@ type ByteCode struct {
     LuaPatches   map[string]*object.LuaPatch    // Lua security hook patches
     Version      int                            // Container version (see §4.1)
     BuiltinNames []string                       // Builtins this program calls (§4.1)
+    OpcodeMap    []byte                         // Undoes opcode permutation (§16)
+    SourceFile   string                         // Path this was compiled from (§4.2)
+    SourceText   string                         // The program's own source (§4.2)
+    LineTable    code.LineTable                 // Offset -> start line/col (§4.2)
+    EndTable     code.LineTable                 // Offset -> end line/col (§4.2)
+    MacroTable   code.LineTable                 // Offset -> macro definition site (§4.2)
 }
 ```
 
@@ -305,6 +311,78 @@ registry's length, so the old runtime trips its own bounds check
 (`OpGetBuiltin: invalid builtin index=32768`) instead of silently calling the
 wrong builtin. It is permanent: it cannot be retired without breaking the
 artifacts it protects.
+
+### 4.2 Source positions
+
+`LineTable` maps an offset in an instruction stream back to the line and column
+that produced it. There is one per stream: `ByteCode.LineTable` covers
+`Instructions`, and every `object.CompiledFunction` carries its own alongside
+its `Name`. That is what makes a VM frame resolvable — a frame knows its
+closure and its offset, and the closure's function owns the table those are
+read against.
+
+```
+entry := uvarint(ipDelta) varint(lineDelta) varint(colDelta)
+```
+
+Deltas are against the previous entry; the line and column deltas are signed
+because positions move backwards routinely (a loop's jump is emitted after the
+body but belongs to the `for` above it). An entry is written only where the
+position changes.
+
+There are two position tables per stream. `LineTable` gives where a construct
+starts, `EndTable` where it ends. A start alone names a line, which is where
+most languages stop; both ends let the reporter underline the span that failed,
+so `total / count(xs)` says *which* division. `EndTable` is a separate field in
+the same encoding, so it can be dropped on its own.
+
+**Statements, calls, infix expressions and index expressions anchor a
+position.** Everything else inherits from the node enclosing it. Attributing a
+position to every expression node sounds more precise and is not: measured, it
+costs one entry per instruction, a table the size of the stream it describes.
+The four kinds that do anchor are the ones a reader lands on: a frame is a call,
+a statement is the unit a fault sits inside, and infix and index expressions are
+where a well-formed program actually fails at runtime -- division by zero, a
+type mismatch across an operator, an index past the end.
+
+**Debug info is not cheap and is not meant to be.** The tables come to roughly a
+fifth of an encoded artifact, and `SourceText` roughly doubles what is left, so a
+local `.mu` runs about 1.7x the size of the same program built for release. That
+is the trade `-g` makes in a C toolchain, and it is paid only by artifacts that
+never leave the machine.
+
+**Parameter names travel too**, on `CompiledFunction.Params`, so a traceback can
+print the arguments a frame received rather than only its name. They are gated on
+debug info for a second reason besides size: stack values are encrypted at rest,
+and rendering them decrypts them. A stripped build prints its frames without
+printing the program's own runtime values.
+
+**Macro expansions record two sites.** `MacroTable` has the same encoding and is
+populated only over instructions a macro produced. `LineTable` gives the call
+the user wrote; `MacroTable` gives the macro's definition. Both are needed: when
+generated code is wrong, the call site contains none of the logic that failed.
+The parser's `ast.Program.MacroExpansions` side-table carries this from
+expansion to compilation.
+
+**Versioning.** These fields needed no `Version` bump, unlike `BuiltinNames`.
+gob omits zero values and ignores fields it does not know, so a new runtime
+reading an old artifact sees empty tables — which is exactly true of it — and an
+old runtime reading a new artifact ignores them. Absence is already the correct
+reading in both directions. A program with no tables reports frames by name and
+no lines.
+
+**Stripping.** `ByteCode.StripDebugInfo()` removes the file name, the embedded
+source, every table, and every function and parameter name. `generator.compile` calls it for release builds: those are
+what leave the machine, and a map from an artifact's bytecode back to its source
+is worth withholding from them. A `.mu` compiled to run locally keeps its
+positions.
+
+Polymorphism does **not** strip. Mutation is on by default — `mutant prog.mut`
+compiles at level 5 — so dropping positions there would mean no ordinary run
+ever had them. Instead `PolymorphicEngine.spliceFillers` carries the tables
+through the same offset remap it already builds to repoint jumps
+(`LineTable.Remap`). A stream the engine declines to pad keeps its table
+unchanged, because nothing moved.
 
 ---
 

@@ -470,8 +470,33 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	}
 	io.WriteString(os.Stdout, last.Inspect())
 	io.WriteString(os.Stdout, "\n")
+	reportUncaughtError(last)
 
 	return nil, ""
+}
+
+// reportUncaughtError expands on an error a program ended on.
+//
+// Errors are ordinary values here, so a program whose last expression is one
+// has not crashed and its exit status does not change. But an error that
+// reaches the end unhandled is almost always the thing the analyst wants to
+// look at, and Inspect deliberately carries only a position: a full stack
+// printed by Inspect would repeat on every caught error a loop prints.
+//
+// The detail goes to stderr so the program's value on stdout stays exactly what
+// it was and stays pipeable. It appears only when the error carries a stack,
+// which means only in a build that kept its debug info.
+func reportUncaughtError(value object.Object) {
+	errObj, ok := value.(*object.Error)
+	if !ok || errObj == nil || len(errObj.Stack) == 0 {
+		return
+	}
+
+	if snippet := errObj.Snippet(); snippet != "" {
+		io.WriteString(os.Stderr, "\n"+snippet+"\n")
+	}
+	io.WriteString(os.Stderr, "\nraised at (most recent call first):\n")
+	io.WriteString(os.Stderr, errObj.Traceback()+"\n")
 }
 
 func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, secureMode bool) error {

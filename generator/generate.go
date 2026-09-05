@@ -57,7 +57,10 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 		}
 	}
 
-	bytecode, err, errtype, errors := compile(data, password, mutationLevel, mutationSeed, privateKey)
+	// Release artifacts ship without source positions; see stripDebugInfo in
+	// compile. A local compile keeps them, because the program is about to run
+	// on the machine that holds the source anyway.
+	bytecode, err, errtype, errors := compile(data, srcpath, release, password, mutationLevel, mutationSeed, privateKey)
 	if err != nil {
 		return err, errtype, errors
 	}
@@ -103,7 +106,14 @@ func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 	return privateKey, nil
 }
 
-func compile(data []byte, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
+// compile turns source into an encoded, encrypted bytecode image.
+//
+// srcpath is recorded in the image so a runtime error can name the file it came
+// from. stripDebug removes that name and every line table before encoding: line
+// tables are a reverse-engineering aid, and a release artifact is the thing that
+// leaves the machine. Polymorphism strips them too, unconditionally and for a
+// second reason -- see ByteCode.StripDebugInfo. (L-3)
+func compile(data []byte, srcpath string, stripDebug bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
 	constants := []object.Object{}
 	symbolTable := compiler.NewSymbolTable()
 	for i, v := range builtin.Builtins {
@@ -130,6 +140,8 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 	}
 
 	comp := compiler.NewWithState(symbolTable, constants)
+	comp.SetSourceFile(srcpath)
+	comp.SetSourceText(string(data))
 	comp.EnableSecurityOpcodeInjection()
 	// The same seed the polymorphic engine gets, applied whatever the mutation
 	// level: the injected security checks are part of what --seed has to
@@ -140,7 +152,12 @@ func compile(data []byte, password string, mutationLevel int, mutationSeed int64
 		return nil, err, errrs.COMPILER_ERROR, nil
 	}
 
-	encodedByteCode, err := encode(comp.ByteCode(), comp.PolymorphicLevel(), password, privateKey)
+	bytecode := comp.ByteCode()
+	if stripDebug {
+		bytecode.StripDebugInfo()
+	}
+
+	encodedByteCode, err := encode(bytecode, comp.PolymorphicLevel(), password, privateKey)
 	if err != nil {
 		return nil, err, errrs.ERROR, nil
 	}

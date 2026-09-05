@@ -21,3 +21,7 @@ example_dir/
 example_graph_data*/
 
 !releaseassets/data/placeholder.bin
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

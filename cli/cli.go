@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"mutant/errrs"
 	"mutant/generator"
 	"mutant/global"
 	"mutant/repl"
 	"mutant/runner"
+	"mutant/vm"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +84,15 @@ func RunCode(src string, opts runner.Options) int {
 		case errrs.ERROR:
 			fmt.Println(err)
 		case errrs.VM_ERROR:
-			errrs.PrintMachineError(os.Stdout, err.Error())
+			// A VM failure carries the frame stack it happened on when the
+			// program was compiled with positions. Without them this is the
+			// same one-line report as before.
+			var runtimeErr *vm.RuntimeError
+			if errors.As(err, &runtimeErr) {
+				errrs.PrintMachineTraceback(os.Stdout, err.Error(), runtimeErr.Traceback())
+			} else {
+				errrs.PrintMachineError(os.Stdout, err.Error())
+			}
 		default:
 			fmt.Println(err)
 		}

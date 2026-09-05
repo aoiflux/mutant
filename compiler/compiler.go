@@ -30,6 +30,25 @@ type Compiler struct {
 	securityRNG *mathrand.Rand
 
 	polymorphicEngine *PolymorphicEngine // Optional bytecode mutation engine
+
+	// positions is the parser's node-to-range side table, merged in from every
+	// Program compiled. macroOrigins is its sibling for nodes a macro produced.
+	// Both are keyed by node pointer, so they are accumulated rather than
+	// replaced: the REPL compiles one Program per line against a symbol table
+	// and constant pool that outlive it, and a closure compiled on line 1 is
+	// still callable on line 3.
+	positions    map[ast.Node]ast.Range
+	macroOrigins map[ast.Node]ast.MacroOrigin
+
+	// The position instructions are currently being attributed to, maintained
+	// by Compile as it descends. macroLine/macroCol are the definition site of
+	// the macro the current node was expanded from, and are zero outside one.
+	posLine, posCol       int
+	posEndLine, posEndCol int
+	macroLine, macroCol   int
+
+	sourceFile string
+	sourceText string
 }
 
 type ByteCode struct {
@@ -71,6 +90,74 @@ type ByteCode struct {
 	// The field is gob-encoded with the rest of ByteCode. An older .mu simply has
 	// no entry for it and decodes to nil, which is the unmutated case.
 	OpcodeMap []byte
+
+	// SourceFile, LineTable and MacroTable are what turn a failing instruction
+	// pointer back into something an analyst can act on. LineTable annotates
+	// Instructions; each CompiledFunction in Constants carries its own.
+	//
+	// These need no Version bump, unlike BuiltinNames above. gob omits zero
+	// values and ignores fields it does not know, so a new runtime reading an
+	// old artifact sees empty tables -- which is exactly true of it -- and an
+	// old runtime reading a new artifact ignores them. Absence is already the
+	// correct reading in both directions, so there is nothing for a version to
+	// disambiguate.
+	//
+	// They are removed from artifacts that leave the machine: see
+	// StripDebugInfo. (L-3)
+	SourceFile string
+	LineTable  code.LineTable
+	MacroTable code.LineTable
+
+	// EndTable records where each attributed construct ends, so a report can
+	// underline the span that failed rather than pointing at its first
+	// character. Same encoding as LineTable, separately strippable.
+	EndTable code.LineTable
+
+	// SourceText is the program's own source, carried so a failing artifact
+	// can quote the line it died on without reading anything off disk. A .mu
+	// gets copied to the machine that runs it far more often than its .mut
+	// does, and a VM that opens files at fault time to find out where it is
+	// would be a worse idea than the bytes it saves.
+	//
+	// Stripped for release along with everything else here.
+	SourceText string
+}
+
+// StripDebugInfo removes every source position from the program: the file name,
+// both tables on the main stream, and the name and tables of every compiled
+// function reachable through the constant pool.
+//
+// It is called for release artifacts: those are what leave the machine, and a
+// map from an artifact's bytecode back to its source lines is a
+// reverse-engineering aid worth withholding from them. A .mu compiled to run
+// locally keeps its positions, because the machine running it already holds the
+// source.
+//
+// Polymorphism does not strip. The engine moves every instruction, which would
+// leave a table built at emit time describing the wrong lines, so it carries the
+// tables through the same offset remap it uses to repoint jumps -- see
+// PolymorphicEngine.spliceFillers. Dropping them there instead would have meant
+// no ordinary run ever had positions, since mutation is on by default.
+func (bc *ByteCode) StripDebugInfo() {
+	if bc == nil {
+		return
+	}
+
+	bc.SourceFile = ""
+	bc.SourceText = ""
+	bc.LineTable = nil
+	bc.MacroTable = nil
+	bc.EndTable = nil
+
+	for _, constant := range bc.Constants {
+		if fn, ok := constant.(*object.CompiledFunction); ok {
+			fn.Name = ""
+			fn.Params = nil
+			fn.LineTable = nil
+			fn.MacroTable = nil
+			fn.EndTable = nil
+		}
+	}
 }
 
 type EmittedInstruction struct {
@@ -82,6 +169,22 @@ type CompilationScope struct {
 	instructions    code.Instructions
 	lastInstruction EmittedInstruction
 	prevInstruction EmittedInstruction
+
+	// One line table per instruction stream, built as the stream is emitted.
+	// Value types, so a zero CompilationScope is usable and the two existing
+	// composite literals did not have to change.
+	lines  code.LineTableBuilder
+	ends   code.LineTableBuilder
+	macros code.LineTableBuilder
+}
+
+// scopeDebug is everything a finished scope hands back besides its
+// instructions. It exists so leaveScope stays a two-value call as the number of
+// tables grows.
+type scopeDebug struct {
+	lines  code.LineTable
+	ends   code.LineTable
+	macros code.LineTable
 }
 
 type LoopContext struct {
@@ -183,7 +286,135 @@ func (c *Compiler) EnablePolymorphismWithSeed(level int, seed int64) {
 	}
 }
 
+// Compile emits code for node, tracking the source position instructions are
+// attributed to.
+//
+// The position bookkeeping lives here rather than inside the dispatch switch so
+// that the switch -- which is the compiler -- stays about compiling. A node with
+// no recorded range does not reset the current position, it inherits the
+// enclosing one, which is the right answer for the nodes the compiler
+// synthesises on its own behalf: they belong to whatever the user wrote that
+// caused them.
 func (c *Compiler) Compile(node ast.Node) error {
+	if program, ok := node.(*ast.Program); ok {
+		c.absorbPositions(program)
+	}
+
+	origin, fromMacro := c.macroOrigins[node]
+
+	rng, ok := c.positions[node]
+	if !ok || !rng.Start.IsValid() || (!fromMacro && !anchorsPosition(node)) {
+		return c.compileNode(node)
+	}
+
+	savedLine, savedCol := c.posLine, c.posCol
+	savedEndLine, savedEndCol := c.posEndLine, c.posEndCol
+	savedMacroLine, savedMacroCol := c.macroLine, c.macroCol
+
+	c.posLine, c.posCol = rng.Start.Line, rng.Start.Column
+
+	// The end is optional: a node whose range the parser only half filled in
+	// still gets a usable start, and the reporter falls back to a caret on the
+	// start column rather than underlining a span it cannot trust.
+	c.posEndLine, c.posEndCol = 0, 0
+	if rng.End.IsValid() {
+		c.posEndLine, c.posEndCol = rng.End.Line, rng.End.Column
+	}
+
+	if fromMacro && origin.Definition.Start.IsValid() {
+		c.macroLine, c.macroCol = origin.Definition.Start.Line, origin.Definition.Start.Column
+	}
+
+	err := c.compileNode(node)
+
+	c.posLine, c.posCol = savedLine, savedCol
+	c.posEndLine, c.posEndCol = savedEndLine, savedEndCol
+	c.macroLine, c.macroCol = savedMacroLine, savedMacroCol
+	return err
+}
+
+// anchorsPosition reports whether a node should move the position instructions
+// are attributed to, or leave it where its parent set it.
+//
+// Only statements and calls anchor. Attributing every expression node its own
+// position sounds more precise and is not: it costs one table entry per
+// instruction -- measured at parity with the instruction stream itself, against
+// the single-digit percent this is supposed to cost -- and buys a column inside
+// an expression that no traceback frame reports anyway. A frame is a call, and a
+// fault is somewhere in a statement; those are the two granularities that get
+// read, so those are the two that get recorded.
+//
+// Infix and index expressions anchor as well, and they are the exception that
+// proves the rule: they are where a well-formed program actually fails at
+// runtime -- division by zero, a type mismatch across an operator, an index
+// past the end -- so they are the two places a caret under the sub-expression
+// is worth more than the entries it costs. `total / count(xs)` names which
+// division rather than which line.
+//
+// A node a macro produced anchors regardless, because it is the only place its
+// origin can be attached.
+func anchorsPosition(node ast.Node) bool {
+	switch node.(type) {
+	case ast.Statement, *ast.CallExpression, *ast.InfixExpression, *ast.IndexExpression:
+		return true
+	}
+	return false
+}
+
+// absorbPositions merges a Program's position side-tables into the compiler's.
+// Merging rather than assigning is what makes the REPL work: each line is its
+// own Program, and code compiled from an earlier one is still live.
+func (c *Compiler) absorbPositions(program *ast.Program) {
+	if program == nil {
+		return
+	}
+
+	if len(program.NodePositions) > 0 {
+		if c.positions == nil {
+			c.positions = make(map[ast.Node]ast.Range, len(program.NodePositions))
+		}
+		for node, rng := range program.NodePositions {
+			c.positions[node] = rng
+		}
+	}
+
+	if len(program.MacroExpansions) > 0 {
+		if c.macroOrigins == nil {
+			c.macroOrigins = make(map[ast.Node]ast.MacroOrigin, len(program.MacroExpansions))
+		}
+		for node, origin := range program.MacroExpansions {
+			c.macroOrigins[node] = origin
+		}
+	}
+}
+
+// SetSourceFile records the path reported in tracebacks and on errors. It is
+// stripped along with the line tables from anything built for distribution.
+func (c *Compiler) SetSourceFile(path string) { c.sourceFile = path }
+
+// SetSourceText embeds the program's source so a failing artifact can quote the
+// line it died on. Stripped for release along with the position tables.
+func (c *Compiler) SetSourceText(text string) { c.sourceText = text }
+
+// parameterNames pulls the declared names out of a function literal so a
+// traceback can label the arguments it finds on the stack. A nil parameter --
+// which a hand-built AST in a test can produce -- becomes an empty name, and
+// the renderer falls back to the position for that one argument.
+func parameterNames(params []*ast.Identifier) []string {
+	if len(params) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(params))
+	for i, param := range params {
+		if param != nil {
+			names[i] = param.Value
+		}
+	}
+	return names
+}
+
+func (c *Compiler) compileNode(node ast.Node) error {
 	switch node := node.(type) {
 	case *ast.Program:
 		for _, s := range node.Statements {
@@ -424,7 +655,7 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 		freeSymbols := c.symbolTable.FreeSymbols
 		numLocals := c.symbolTable.numDefinitions
-		insts := c.leaveScope()
+		insts, debug := c.leaveScope()
 
 		for _, sym := range freeSymbols {
 			c.loadSymbol(sym)
@@ -434,6 +665,11 @@ func (c *Compiler) Compile(node ast.Node) error {
 			Instructions: insts,
 			NumLocals:    numLocals,
 			NumParams:    len(node.Parameters),
+			Name:         node.Name,
+			Params:       parameterNames(node.Parameters),
+			LineTable:    debug.lines,
+			MacroTable:   debug.macros,
+			EndTable:     debug.ends,
 		}
 
 		fnIndex := c.addConstant(compiledFun)
@@ -550,9 +786,18 @@ func (c *Compiler) ByteCode() *ByteCode {
 		LuaPatches:   make(map[string]*object.LuaPatch),
 		Version:      BytecodeVersion,
 		BuiltinNames: c.symbolTable.ReferencedBuiltins(),
+		SourceFile:   c.sourceFile,
+		SourceText:   c.sourceText,
+		LineTable:    c.scopes[c.scopeIndex].lines.Build(),
+		MacroTable:   c.scopes[c.scopeIndex].macros.Build(),
+		EndTable:     c.scopes[c.scopeIndex].ends.Build(),
 	}
 
-	// Apply polymorphic mutations if engine is enabled
+	// Apply polymorphic mutations if engine is enabled. The engine carries the
+	// line tables through its own offset remap, because mutation is on by
+	// default -- `mutant prog.mut` compiles at level 5 -- and dropping
+	// positions here would mean no ordinary run ever had them. What actually
+	// removes them is building for release; see generator.compile.
 	if c.polymorphicEngine != nil {
 		bytecode = c.polymorphicEngine.Mutate(bytecode)
 	}
@@ -630,8 +875,19 @@ func (c *Compiler) addConstant(obj object.Object) int {
 func (c *Compiler) emit(op code.Opcode, operands ...int) int {
 	ins := code.Make(op, operands...)
 	pos := c.addInstruction(ins)
+	c.recordPosition(pos)
 	c.setLastInstruction(op, pos)
 	return pos
+}
+
+// recordPosition notes where the instruction beginning at ip came from. Both
+// builders drop the call when there is no position to record, so an instruction
+// outside any macro costs nothing in the macro table.
+func (c *Compiler) recordPosition(ip int) {
+	scope := &c.scopes[c.scopeIndex]
+	scope.lines.Add(ip, c.posLine, c.posCol)
+	scope.ends.Add(ip, c.posEndLine, c.posEndCol)
+	scope.macros.Add(ip, c.macroLine, c.macroCol)
 }
 
 func (c *Compiler) addInstruction(ins []byte) int {
@@ -736,12 +992,18 @@ func (c *Compiler) enterScope() {
 	c.symbolTable = NewEnclosedSymbolTable(c.symbolTable)
 }
 
-func (c *Compiler) leaveScope() code.Instructions {
+func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
 	instructions := c.currentInstructions()
+	debug := scopeDebug{
+		lines:  c.scopes[c.scopeIndex].lines.Build(),
+		ends:   c.scopes[c.scopeIndex].ends.Build(),
+		macros: c.scopes[c.scopeIndex].macros.Build(),
+	}
+
 	c.scopes = c.scopes[:len(c.scopes)-1]
 	c.scopeIndex--
 	c.symbolTable = c.symbolTable.Outer
-	return instructions
+	return instructions, debug
 }
 
 func (c *Compiler) loadSymbol(s Symbol) {

@@ -162,7 +162,16 @@ func (vm *VM) nextSweepInterval() uint64 {
 
 func New(bc *compiler.ByteCode) *VM {
 	mainInstructions := bc.Instructions
-	mainfn := &object.CompiledFunction{Instructions: mainInstructions}
+	// Named and given the program's own line table so that frame 0 is an
+	// ordinary frame: Traceback walks every frame the same way instead of
+	// special-casing the bottom of the stack.
+	mainfn := &object.CompiledFunction{
+		Instructions: mainInstructions,
+		Name:         mainFrameName,
+		LineTable:    bc.LineTable,
+		MacroTable:   bc.MacroTable,
+		EndTable:     bc.EndTable,
+	}
 	frames := make([]*Frame, initialFrameCapacity)
 
 	mainClosure := &object.Closure{Fn: mainfn}
@@ -706,7 +715,13 @@ func (vm *VM) Run() error {
 // program path had none, so the same corrupt .mu file errored inside a worker
 // and panicked on the main thread. See vm/fault.go.
 func (vm *VM) execLoop(baseFrameIndex int) (err error) {
-	defer func() { containFault(recover(), &err) }()
+	defer func() {
+		containFault(recover(), &err)
+		// After containFault, so a fault is given a location too, and inside
+		// the same defer because the VM's frame stack still describes the
+		// failure at this point -- returning first would be too late.
+		err = vm.attachTraceback(err)
+	}()
 	return vm.runInstructions(baseFrameIndex)
 }
 
@@ -2043,6 +2058,7 @@ func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
 	if result == nil {
 		result = global.Null
 	}
+	result = vm.decorateError(result)
 
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 
@@ -2067,6 +2083,7 @@ func (vm *VM) callExecutorNative(kind string, numArgs int) error {
 	if result == nil {
 		result = global.Null
 	}
+	result = vm.decorateError(result)
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 	return vm.push(result)
 }
