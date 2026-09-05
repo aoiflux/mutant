@@ -44,7 +44,10 @@ func parse(input string) ast.Node {
 	return p.ParseProgram()
 }
 
-func builtinIndex(t *testing.T, name string) int {
+// registryOrdinal is the builtin's position in the global registry -- which is
+// exactly what an OpGetBuiltin operand is NOT, and the tests below exist partly
+// to keep it that way. Kept so a test can assert the two differ. (L-1)
+func registryOrdinal(t *testing.T, name string) int {
 	t.Helper()
 	for i, b := range builtin.Builtins {
 		if b.Name == name {
@@ -832,11 +835,24 @@ func TestSecurityOpcodeInjection(t *testing.T) {
 	}
 }
 
+// TestBuiltins pins the operand OpGetBuiltin carries: a position in the
+// program's own table of referenced builtin names, assigned in first-use order,
+// starting at 0 for every compilation.
+//
+// It used to expect the builtin's ordinal in the global registry, which is what
+// made the registry append-only forever. TestBuiltinOperandIsNotARegistryOrdinal
+// asserts the difference rather than leaving it implied by these literals.
 func TestBuiltins(t *testing.T) {
-	lenIdx := builtinIndex(t, "len")
-	pushIdx := builtinIndex(t, "push")
-	debugIdx := builtinIndex(t, "debug_status")
-	sandboxIdx := builtinIndex(t, "sandbox_status")
+	// Every name-table operand carries code.BuiltinNameTableFlag; see the
+	// constant for why.
+	const (
+		firstReferenced  = code.BuiltinNameTableFlag | 0
+		secondReferenced = code.BuiltinNameTableFlag | 1
+	)
+	lenIdx := firstReferenced
+	pushIdx := secondReferenced
+	debugIdx := firstReferenced
+	sandboxIdx := secondReferenced
 
 	tests := []compilerTestCase{
 		{

@@ -212,7 +212,7 @@ fixed** by the declaration order below, so do not reorder them.
 | 24 | `OpCall`           | `argc` (1)                      | `argN…arg0, fn →` result | Call function with `argc` arguments                              |
 | 25 | `OpReturnValue`    | —                               | `val → (caller frame)`   | Pop return value, restore frame, push value                      |
 | 26 | `OpReturn`         | —                               | `(caller frame)`         | Void return; restores frame, pushes `Null`                       |
-| 27 | `OpGetBuiltin`     | `idx` (1)                       | `→ fn`                   | Push built-in function at `Builtins[idx]`                        |
+| 27 | `OpGetBuiltin`     | `idx` (2)                       | `→ fn`                   | Push the builtin at `BuiltinNames[idx & 0x7FFF]` (see §4.1)       |
 | 28 | `OpClosure`        | `fnIdx` (2), `numFree` (1)      | `fN…f0 → closure`        | Pop `numFree` free vars; wrap `constants[fnIdx]` in a `Closure`  |
 | 29 | `OpGetFree`        | `idx` (1)                       | `→ val`                  | Push `currentClosure.Free[idx]` (decrypted)                      |
 | 30 | `OpCurrentClosure` | —                               | `→ closure`              | Push the currently executing closure (for named recursion)       |
@@ -259,6 +259,8 @@ type ByteCode struct {
     StructDefs   map[string][]*ast.Identifier   // Field name lists per struct type
     EnumDefs     map[string][]string            // Tag name lists per enum type
     LuaPatches   map[string]*object.LuaPatch    // Lua security hook patches
+    Version      int                            // Container version (see §4.1)
+    BuiltinNames []string                       // Builtins this program calls (§4.1)
 }
 ```
 
@@ -267,6 +269,42 @@ after construction (the VM clones nothing; it reads the slices directly).
 
 The `LuaPatches` field is populated by the Lua integration layer, not by the
 core compiler. See `builtin/lua.go` for context.
+
+### 4.1 Container versions and builtin resolution
+
+| Version | Emitted by | `OpGetBuiltin` operand |
+| --- | --- | --- |
+| absent (decodes to 0, normalised to 1) | up to v2.4.0 | an ordinal into the global `builtin.Builtins` registry |
+| 2 | v2.5.0 onward | `0x8000 \| i`, where `i` indexes this program's own `BuiltinNames` |
+
+Version 1 made the registry append-only forever. An ordinal baked into an
+artifact means that entry can never be renamed, retired or reordered, because
+doing so would rebind every call in every `.mu` already written — which is why
+`net_syn_scan` stayed registered long after it was documented as deprecated.
+
+Version 2 puts the *names* in the artifact. The compiler interns each builtin it
+references (`SymbolTable.ReferenceBuiltin`) and emits a position in that table;
+`vm.resolveBuiltins` binds every name to a function at construction, before a
+single instruction runs, and reports a name this runtime does not have rather
+than failing at whichever call site happens to be reached. Only referenced
+builtins are listed, so retiring an unrelated one cannot stop a program loading.
+
+Version 1 artifacts still run. Their operands resolve through
+`builtin/legacy_ordinals.go`, a frozen snapshot of the registry as it stood at
+v2.4.0 — frozen because those indices are baked into files that cannot be
+recompiled. A builtin that is renamed adds an entry to `builtin.Aliases`, which
+keeps the old name resolvable for old bytecode without keeping it callable from
+new source.
+
+The `0x8000` tag on version 2 operands (`code.BuiltinNameTableFlag`) is for the
+one case the version field cannot cover. A pre-v2.5 runtime does not know to
+read `Version`, so gob hands it a name-table index and it reads that as a
+registry ordinal — and a small index is a perfectly plausible ordinal, so it
+calls whatever sits there. The tag puts every version 2 operand far above the
+registry's length, so the old runtime trips its own bounds check
+(`OpGetBuiltin: invalid builtin index=32768`) instead of silently calling the
+wrong builtin. It is permanent: it cannot be retired without breaking the
+artifacts it protects.
 
 ---
 
@@ -488,7 +526,8 @@ func (c *Compiler) loadSymbol(s Symbol) {
     switch s.Scope {
     case GlobalScope:   c.emit(code.OpGetGlobal,  s.Index)
     case LocalScope:    c.emit(code.OpGetLocal,   s.Index)
-    case BuiltinScope:  c.emit(code.OpGetBuiltin, s.Index)
+    case BuiltinScope:  c.emit(code.OpGetBuiltin,
+                            code.BuiltinNameTableFlag|c.symbolTable.ReferenceBuiltin(s.Name))
     case FreeScope:     c.emit(code.OpGetFree,    s.Index)
     case FunctionScope: c.emit(code.OpCurrentClosure)
     }
@@ -664,7 +703,7 @@ case code.OpJump:
 | `OpCall`                  | +1                            | pop argc args + fn; push new frame            |
 | `OpReturnValue`           | —                             | pop return val; pop frame; push val           |
 | `OpReturn`                | —                             | pop frame; push Null                          |
-| `OpGetBuiltin`            | +1                            | push `Builtins[idx]`                          |
+| `OpGetBuiltin`            | +1                            | push the builtin resolved from `BuiltinNames[idx & 0x7FFF]` |
 | `OpClosure`               | +3                            | pop numFree values; push Closure              |
 | `OpGetFree`               | +1                            | push `currentClosure.Free[idx]`               |
 | `OpCurrentClosure`        | 0                             | push current Closure                          |

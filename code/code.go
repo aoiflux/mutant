@@ -288,3 +288,22 @@ func ReadUint8(ins Instructions, length int64, password string, offset int64) (u
 
 	return uint8(dec), nil
 }
+
+// BuiltinNameTableFlag is set on every OpGetBuiltin operand a program compiled
+// for BytecodeVersionNamedBuiltins emits, and cleared before the low bits are
+// used as an index into that program's builtin-name table.
+//
+// It exists for one case the version field cannot cover: a mutant built before
+// versioning existed does not know to look for ByteCode.Version, so gob hands it
+// a name-table index and it reads it as a position in the global builtin
+// registry. Nothing about that is detectable from the operand's value -- a small
+// index is a perfectly valid ordinal -- and the program goes on to call whatever
+// builtin happens to sit there. Most such calls die on argument count, but two
+// builtins with the same shape produce a wrong answer in silence, which for a
+// forensic tool is the worse outcome by a distance.
+//
+// Setting the high bit puts every new operand far above the registry's length,
+// so an old runtime trips its own bounds check and stops with
+// "OpGetBuiltin: invalid builtin index=32768" instead. The tag is permanent: it
+// cannot be retired without breaking the artifacts it protects. (L-1)
+const BuiltinNameTableFlag = 0x8000

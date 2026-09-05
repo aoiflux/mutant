@@ -47,6 +47,7 @@ type LintConfig struct {
 	BuiltinArgType               LintSeverity
 	BuiltinSingleReturn          LintSeverity
 	BuiltinPairReturn            LintSeverity
+	BuiltinDeprecated            LintSeverity
 	SpawnGlobalWrite             LintSeverity
 }
 
@@ -81,6 +82,10 @@ func DefaultLintConfig() LintConfig {
 		// is the same mistake from the other side: the name holds the pair, so
 		// the program keeps running with a MULTI_VALUE where it meant a value.
 		BuiltinPairReturn: LintSeverityWarning,
+		// A deprecated builtin still works -- that is the only reason it is
+		// still registered -- so this is a hint, not a warning. It is the one
+		// builtin rule that reports something the program does correctly.
+		BuiltinDeprecated: LintSeverityHint,
 		// Writing a global from a spawned callback is the same shape: the write
 		// lands in that worker's copy of the globals and is gone when it
 		// finishes, and nothing at all reports it.
@@ -113,6 +118,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinSingleReturn
 	case "builtinPairReturn":
 		severityName = c.BuiltinPairReturn
+	case "builtinDeprecated":
+		severityName = c.BuiltinDeprecated
 	case "spawnGlobalWrite":
 		severityName = c.SpawnGlobalWrite
 	default:
@@ -1283,7 +1290,8 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
 	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
 	pairSeverity, pairEnabled := lintConfig.severityForRule("builtinPairReturn")
-	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled {
+	deprecatedSeverity, deprecatedEnabled := lintConfig.severityForRule("builtinDeprecated")
+	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled && !deprecatedEnabled {
 		return nil
 	}
 	if !arityEnabled {
@@ -1297,6 +1305,9 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	}
 	if !pairEnabled {
 		pairSeverity = nil
+	}
+	if !deprecatedEnabled {
+		deprecatedSeverity = nil
 	}
 
 	source := "mutant-lint"
@@ -1314,6 +1325,7 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		argTypeSeverity: argTypeSeverity,
 		returnSeverity:  returnSeverity,
 		pairSeverity:    pairSeverity,
+		deprecatedSev:   deprecatedSeverity,
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
@@ -1346,6 +1358,7 @@ type builtinCallCollector struct {
 	argTypeSeverity *lsp.DiagnosticSeverity
 	returnSeverity  *lsp.DiagnosticSeverity
 	pairSeverity    *lsp.DiagnosticSeverity
+	deprecatedSev   *lsp.DiagnosticSeverity
 	source          *string
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
@@ -1541,6 +1554,40 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 // must be an unshadowed live builtin, and it must carry a declared return
 // contract. A builtin whose contract says pair, or one with no contract at all,
 // is never reported.
+// checkDeprecated reports a call to a builtin that is kept only for
+// compatibility, and names what replaced it.
+//
+// It is reported at the call and never suppressed by the arity or type rules:
+// the call may be perfectly well-formed, and usually is. The tag is what makes
+// editors strike the name through. (L-1)
+func (c *builtinCallCollector) checkDeprecated(ident *mast.Identifier) {
+	if c == nil || c.deprecatedSev == nil || ident == nil {
+		return
+	}
+	replacement, deprecated := builtin.DeprecatedBy(ident.Value)
+	if !deprecated {
+		return
+	}
+	rng, ok := c.snapshot.Program.RangeOf(ident)
+	if !ok {
+		return
+	}
+
+	message := fmt.Sprintf("%s is deprecated.", ident.Value)
+	if replacement != "" {
+		message = fmt.Sprintf("%s is deprecated -- use %s instead. The old name keeps working, so this is safe to change at your own pace.",
+			ident.Value, replacement)
+	}
+
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.deprecatedSev,
+		Source:   c.source,
+		Tags:     []lsp.DiagnosticTag{lsp.DiagnosticTagDeprecated},
+		Message:  message,
+	})
+}
+
 func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression, current *declarationScope) {
 	if c == nil || c.returnSeverity == nil || len(names) < 2 || value == nil {
 		return
@@ -1605,6 +1652,8 @@ func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Exp
 	if _, ok := c.builtins[ident.Value]; !ok {
 		return
 	}
+
+	c.checkDeprecated(ident)
 
 	if arity, ok := builtinArityFor(ident.Value); ok && !arity.accepts(len(args)) {
 		// The count is wrong whether or not the rule that reports it is on, so

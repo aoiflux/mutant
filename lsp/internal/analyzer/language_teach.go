@@ -88,7 +88,35 @@ func builtinFooter(name string) []string {
 	if note != "" {
 		lines = append(lines, fmt.Sprintf("_Note: %s_", note))
 	}
+	if line := stabilityFooterLine(name); line != "" {
+		lines = append(lines, line)
+	}
 	return lines
+}
+
+// stabilityFooterLine states a builtin's stability tier, and says nothing at all
+// for the stable ones -- which is almost all of them, and where a line saying so
+// would be noise on every hover in the language.
+//
+// The tier is worth showing because it is now true rather than aspirational:
+// until bytecode stopped addressing builtins by registry ordinal, nothing could
+// be renamed or retired, so "deprecated" was advice with no path behind it. (L-1)
+func stabilityFooterLine(name string) string {
+	stability, ok := builtin.StabilityOf(name)
+	if !ok {
+		return ""
+	}
+	switch stability {
+	case builtin.StabilityDeprecated:
+		if replacement, deprecated := builtin.DeprecatedBy(name); deprecated && replacement != "" {
+			return fmt.Sprintf("**Deprecated** — use `%s` instead. This name keeps working so existing programs still run.", replacement)
+		}
+		return "**Deprecated** — kept only so existing programs still run."
+	case builtin.StabilityExperimental:
+		return "**Experimental** — this builtin's name and arguments may change in a minor release."
+	default:
+		return ""
+	}
 }
 
 func keywordHoverText(keyword string) (string, bool) {

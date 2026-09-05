@@ -312,6 +312,18 @@
                     ],
                     "description": "Severity for pair-return binding diagnostics: warns when one name is bound from a builtin that returns a (value, err) pair (for example let data = fs_read(path)). The name holds the pair rather than the value, and nothing fails at the binding — a pair prints as its value, so the mistake surfaces somewhere else or not at all. Silent when the program does something with the name that only makes sense for a pair, such as indexing it or returning it. Set to 'off' to suppress the rule."
                 },
+                "mutant.lint.rules.builtinDeprecated.severity": {
+                    "type": "string",
+                    "default": "hint",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for deprecated-builtin diagnostics: reports a call to a builtin that is kept only so existing programs keep working, and names its replacement (for example net_syn_scan, replaced by net_connect_scan). The call is correct and still runs, which is why this defaults to a hint rather than a warning. Set to 'off' to suppress the rule."
+                },
                 "mutant.lint.rules.spawnGlobalWrite.severity": {
                     "type": "string",
                     "default": "warning",

@@ -44,6 +44,15 @@ type VM struct {
 	enumDefs        map[string]any // Enum definitions (tag names)
 	memoryMode      string
 
+	// builtins is what an OpGetBuiltin operand indexes, resolved once at
+	// construction: from the program's own name table, or -- for bytecode
+	// predating names -- from the frozen ordinal snapshot. builtinsErr holds a
+	// resolution failure until Run can return it, because the constructors
+	// cannot. (L-1)
+	builtins        []*builtin.BuiltIn
+	builtinsErr     error
+	builtinsVersion int
+
 	enforceSecurityCheckOpcodes bool
 
 	// opcodeReverse undoes the polymorphic engine's opcode permutation, indexed
@@ -189,7 +198,56 @@ func New(bc *compiler.ByteCode) *VM {
 	}
 	vm.nextIntegrityAt = 0
 	vm.nextSweepAt = vm.nextSweepInterval()
+	if bc != nil {
+		vm.builtinsVersion = bc.Version
+	}
+	vm.builtins, vm.builtinsErr = resolveBuiltins(bc)
 	return vm
+}
+
+// resolveBuiltins binds the builtin names a program references to the functions
+// this runtime actually has, before a single instruction runs.
+//
+// Doing it eagerly is the point: a missing builtin is a property of the artifact,
+// not of the path taken through it, and resolving lazily at the call site would
+// hide it behind whichever branch happens not to be exercised.
+func resolveBuiltins(bc *compiler.ByteCode) ([]*builtin.BuiltIn, error) {
+	if bc == nil {
+		return nil, nil
+	}
+	switch version := compiler.NormalizeVersion(bc.Version); {
+	case version > compiler.BytecodeVersion:
+		return nil, fmt.Errorf(
+			"this program uses bytecode container v%d; this mutant runtime reads up to v%d -- upgrade mutant, or recompile the program from source",
+			version, compiler.BytecodeVersion)
+	case version >= compiler.BytecodeVersionNamedBuiltins:
+		return builtin.ResolveNames(bc.BuiltinNames)
+	default:
+		return builtin.ResolveLegacyOrdinals()
+	}
+}
+
+// builtinTableIndex turns a raw OpGetBuiltin operand into a position in the
+// table resolved at construction.
+//
+// In a name-indexed program the operand carries code.BuiltinNameTableFlag, and
+// its absence means the container claims one format while its instructions were
+// written in the other -- a mismatch worth reporting rather than reading the
+// operand as though it were a registry ordinal.
+func (vm *VM) builtinTableIndex(operand uint16) (int, error) {
+	index := int(operand)
+	if compiler.NormalizeVersion(vm.builtinsVersion) >= compiler.BytecodeVersionNamedBuiltins {
+		if index&code.BuiltinNameTableFlag == 0 {
+			return 0, fmt.Errorf(
+				"OpGetBuiltin: operand %d is not a name-table index, but this program declares bytecode container v%d; the file is corrupt or was assembled by hand",
+				index, compiler.NormalizeVersion(vm.builtinsVersion))
+		}
+		index &^= code.BuiltinNameTableFlag
+	}
+	if index >= len(vm.builtins) {
+		return 0, fmt.Errorf("OpGetBuiltin: invalid builtin index=%d, len=%d", index, len(vm.builtins))
+	}
+	return index, nil
 }
 
 // normalizeOpcodeMap accepts a reverse opcode table only if it can address every
@@ -612,6 +670,12 @@ func (vm *VM) prepareForExecution() {
 }
 
 func (vm *VM) Run() error {
+	// Reported before anything executes: a builtin this runtime does not have is
+	// a fact about the program, and running half of it first tells the user less.
+	if vm.builtinsErr != nil {
+		return vm.builtinsErr
+	}
+
 	vm.prepareForExecution()
 
 	if err := vm.validateSecurityCheckOpcodes("before-execution"); err != nil {
@@ -860,11 +924,15 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 				return err
 			}
 			vm.currentFrame().ip += 2
-			if int(builtinIndex) >= len(builtin.Builtins) {
-				return fmt.Errorf("OpGetBuiltin: invalid builtin index=%d, len=%d", builtinIndex, len(builtin.Builtins))
+			// Indexes the table resolved at construction -- this program's own
+			// referenced-builtin names, or the frozen ordinal snapshot for
+			// bytecode compiled before names travelled with the program. Never
+			// the live registry, whose order is no longer part of the ABI. (L-1)
+			index, err := vm.builtinTableIndex(builtinIndex)
+			if err != nil {
+				return err
 			}
-			definition := builtin.Builtins[builtinIndex]
-			if err := vm.push(definition.Builtin); err != nil {
+			if err := vm.push(vm.builtins[index]); err != nil {
 				return err
 			}
 		case code.OpGetFree:

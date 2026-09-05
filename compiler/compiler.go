@@ -39,6 +39,25 @@ type ByteCode struct {
 	EnumDefs     map[string][]string
 	LuaPatches   map[string]*object.LuaPatch
 
+	// Version is the bytecode container version. It is absent from anything
+	// compiled before versioning existed, which gob decodes to 0 -- so 0 means
+	// BytecodeVersionOrdinalBuiltins and is normalised to it on load.
+	Version int
+
+	// BuiltinNames is what an OpGetBuiltin operand indexes: the builtins this
+	// program referenced, in the order the compiler first saw them. Carrying the
+	// names rather than registry ordinals is what lets a builtin be renamed,
+	// retired or reordered without invalidating artifacts already compiled --
+	// they name what they call, and the runtime resolves those names at load.
+	//
+	// Only referenced builtins are listed, not the whole registry. A program
+	// that calls three builtins should not fail to load because an unrelated
+	// four hundredth was retired.
+	//
+	// Empty for BytecodeVersionOrdinalBuiltins, where the operand is a registry
+	// ordinal resolved through builtin.ResolveLegacyOrdinals instead.
+	BuiltinNames []string
+
 	// OpcodeMap undoes the polymorphic engine's opcode permutation: it is
 	// indexed by the byte found in the instruction stream and yields the real
 	// opcode. 256 entries, or nil when the program was not remapped.
@@ -529,6 +548,8 @@ func (c *Compiler) ByteCode() *ByteCode {
 		StructDefs:   c.structDefinitions,
 		EnumDefs:     c.enumDefinitions,
 		LuaPatches:   make(map[string]*object.LuaPatch),
+		Version:      BytecodeVersion,
+		BuiltinNames: c.symbolTable.ReferencedBuiltins(),
 	}
 
 	// Apply polymorphic mutations if engine is enabled
@@ -730,7 +751,18 @@ func (c *Compiler) loadSymbol(s Symbol) {
 	case LocalScope:
 		c.emit(code.OpGetLocal, s.Index)
 	case BuiltinScope:
-		c.emit(code.OpGetBuiltin, s.Index)
+		// s.Index is the builtin's ordinal in the global registry, and that is
+		// deliberately not what gets emitted. An ordinal in the instruction
+		// stream makes the registry append-only forever: nothing can be renamed,
+		// retired or reordered without rebinding every call in every .mu already
+		// written. The operand indexes this program's own table of names
+		// instead, which the runtime resolves by name at load. (L-1)
+		//
+		// The high bit marks the operand as a name-table index. It costs nothing
+		// here and makes a pre-v2.5 runtime handed this program stop on its own
+		// bounds check rather than silently call whichever builtin sits at that
+		// registry ordinal; see code.BuiltinNameTableFlag.
+		c.emit(code.OpGetBuiltin, code.BuiltinNameTableFlag|c.symbolTable.ReferenceBuiltin(s.Name))
 	case FreeScope:
 		c.emit(code.OpGetFree, s.Index)
 	case FunctionScope:

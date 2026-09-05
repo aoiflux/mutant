@@ -56,8 +56,10 @@ func New() *REPL {
 	// Define only browser-safe builtins. A host-bound name is then simply not a
 	// symbol, so calling it fails at compile time with "undefined variable"
 	// rather than reaching a filesystem or socket that does not exist in a
-	// browser. Indexes stay the true builtin.Builtins indexes, which is what
-	// OpGetBuiltin resolves against.
+	// browser. The index passed here is the registry ordinal, which is no longer
+	// what OpGetBuiltin carries -- the compiler interns the symbol's name and
+	// emits a position in the program's own table (L-1) -- so it only has to be
+	// unique, and the true ordinal remains the obvious choice.
 	for i, b := range builtin.Builtins {
 		if BrowserSafe(b.Name) {
 			symbolTable.DefineBuiltin(i, b.Name)

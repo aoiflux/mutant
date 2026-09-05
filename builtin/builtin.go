@@ -159,7 +159,7 @@ var Builtins = []BuiltinDefinition{
 	// network
 	{BuiltinNameNetResolve, &BuiltIn{NetResolve}},
 	{BuiltinNameNetDial, &BuiltIn{NetDial}},
-	{BuiltinNameNetSynScan, &BuiltIn{NetConnectScan}}, // deprecated alias; index kept stable
+	{BuiltinNameNetSynScan, &BuiltIn{NetConnectScan}}, // deprecated alias of net_connect_scan
 	{BuiltinNameNetUdpScan, &BuiltIn{NetUDPScan}},
 	{BuiltinNameNetBanner, &BuiltIn{NetBanner}},
 	{BuiltinNameNetTlsFingerprint, &BuiltIn{NetTLSFingerprint}},
@@ -253,8 +253,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameBytesCursorReadU64Le, &BuiltIn{BytesCursorReadU64LE}},
 	{BuiltinNameBytesCursorReadU64Be, &BuiltIn{BytesCursorReadU64BE}},
 	// secure networking: sockets, TLS, listeners (dev-sec)
-	// NOTE: builtins are resolved by slice index, so new entries MUST be
-	// appended here at the end to keep previously compiled bytecode valid.
+	// This list's order is no longer part of the ABI. Bytecode names the
+	// builtins it calls and the runtime resolves those names at load, so an
+	// entry may be added anywhere, renamed (leaving an entry in Aliases), or
+	// retired. Ordinals still matter to artifacts compiled before v2.5, and they
+	// read the frozen snapshot in legacy_ordinals.go rather than this slice, so
+	// nothing done here can rebind a call in a program already written. (L-1)
 	{BuiltinNameNetConnect, &BuiltIn{NetConnect}},
 	{BuiltinNameNetTlsConnect, &BuiltIn{NetTLSConnect}},
 	{BuiltinNameNetConnWrite, &BuiltIn{NetConnWrite}},
@@ -278,7 +282,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameHttpBuildResponse, &BuiltIn{HTTPBuildResponse}},
 	{BuiltinNameHttpConnReadRequest, &BuiltIn{HTTPConnReadRequest}},
 	{BuiltinNameHttpConnReadResponse, &BuiltIn{HTTPConnReadResponse}},
-	// concurrency (dev-sec-platform-upgrades) — append-only, keep last.
+	// concurrency (dev-sec-platform-upgrades)
 	{BuiltinNameNetServe, &BuiltIn{NetServe}},
 	{BuiltinNameNetSpawn, &BuiltIn{NetSpawn}},
 	{BuiltinNameServeConn, serveConnBuiltin},
@@ -290,7 +294,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameWsWriteFrame, &BuiltIn{WSWriteFrame}},
 	{BuiltinNameHttpConnReadRequestHead, &BuiltIn{HTTPConnReadRequestHead}},
 	{BuiltinNameHttpConnReadResponseHead, &BuiltIn{HTTPConnReadResponseHead}},
-	// generic standard library: strings (append-only)
+	// generic standard library: strings
 	{BuiltinNameStrUpper, &BuiltIn{StrUpper}},
 	{BuiltinNameStrLower, &BuiltIn{StrLower}},
 	{BuiltinNameStrTrim, &BuiltIn{StrTrim}},
@@ -309,7 +313,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameStrCharAt, &BuiltIn{StrCharAt}},
 	{BuiltinNameStrFormat, &BuiltIn{StrFormat}},
 	{BuiltinNameStrTitle, &BuiltIn{StrTitle}},
-	// generic standard library: hashing & IDs (append-only)
+	// generic standard library: hashing & IDs
 	{BuiltinNameHashMD5, &BuiltIn{HashMD5}},
 	{BuiltinNameHashSHA1, &BuiltIn{HashSHA1}},
 	{BuiltinNameHashSHA256, &BuiltIn{HashSHA256}},
@@ -321,7 +325,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameUUIDv7, &BuiltIn{UUIDv7}},
 	{BuiltinNameRandomHex, &BuiltIn{RandomHex}},
 	{BuiltinNameNanoID, &BuiltIn{NanoID}},
-	// generic standard library: math (append-only)
+	// generic standard library: math
 	{BuiltinNameAbs, &BuiltIn{Abs}},
 	{BuiltinNameMin, &BuiltIn{Min}},
 	{BuiltinNameMax, &BuiltIn{Max}},
@@ -339,7 +343,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameRandBytes, &BuiltIn{RandBytes}},
 	{BuiltinNameMathPi, &BuiltIn{MathPi}},
 	{BuiltinNameMathE, &BuiltIn{MathE}},
-	// generic standard library: encoding (append-only)
+	// generic standard library: encoding
 	{BuiltinNameBase64Encode, &BuiltIn{Base64Encode}},
 	{BuiltinNameBase64Decode, &BuiltIn{Base64Decode}},
 	{BuiltinNameBase64URLEncode, &BuiltIn{Base64URLEncode}},
@@ -356,7 +360,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameZlibDecompress, &BuiltIn{ZlibDecompress}},
 	{BuiltinNameToBase, &BuiltIn{ToBase}},
 	{BuiltinNameFromBase, &BuiltIn{FromBase}},
-	// generic standard library: type conversion (append-only)
+	// generic standard library: type conversion
 	{BuiltinNameToInt, &BuiltIn{ToInt}},
 	{BuiltinNameToFloat, &BuiltIn{ToFloat}},
 	{BuiltinNameToString, &BuiltIn{ToString}},
@@ -365,14 +369,14 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameParseFloat, &BuiltIn{ParseFloat}},
 	{BuiltinNameTypeOf, &BuiltIn{TypeOf}},
 	{BuiltinNameIsNull, &BuiltIn{IsNull}},
-	// generic standard library: time & date (append-only)
+	// generic standard library: time & date
 	{BuiltinNameTimeNow, &BuiltIn{TimeNow}},
 	{BuiltinNameTimeUnix, &BuiltIn{TimeUnix}},
 	{BuiltinNameTimeFormat, &BuiltIn{TimeFormat}},
 	{BuiltinNameTimeParse, &BuiltIn{TimeParse}},
 	{BuiltinNameTimeDiff, &BuiltIn{TimeDiff}},
 	{BuiltinNameTimeAdd, &BuiltIn{TimeAdd}},
-	// generic standard library: collections (append-only)
+	// generic standard library: collections
 	{BuiltinNameSort, &BuiltIn{Sort}},
 	{BuiltinNameReverseArray, &BuiltIn{ReverseArray}},
 	{BuiltinNameContains, &BuiltIn{Contains}},
@@ -391,11 +395,11 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameSet, &BuiltIn{Set}},
 	{BuiltinNameMerge, &BuiltIn{Merge}},
 	{BuiltinNameDelete, &BuiltIn{Delete}},
-	// security: Go binary analysis via GoReSym (append-only)
+	// security: Go binary analysis via GoReSym
 	{BuiltinNameGoBuildInfo, &BuiltIn{GoBuildInfo}},
 	{BuiltinNameGoBuildID, &BuiltIn{GoBuildID}},
 	{BuiltinNameGoSymbols, &BuiltIn{GoSymbols}},
-	// security: IOC / network intelligence (append-only)
+	// security: IOC / network intelligence
 	{BuiltinNameDefang, &BuiltIn{Defang}},
 	{BuiltinNameRefang, &BuiltIn{Refang}},
 	{BuiltinNameIPIsPrivate, &BuiltIn{IPIsPrivate}},
@@ -408,19 +412,19 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTLDExtract, &BuiltIn{TLDExtract}},
 	{BuiltinNameIsValidDomain, &BuiltIn{IsValidDomain}},
 	{BuiltinNameExtractIOCs, &BuiltIn{ExtractIOCs}},
-	// forensic: hash sets (append-only)
+	// forensic: hash sets
 	{BuiltinNameHashsetLoad, &BuiltIn{HashsetLoad}},
 	{BuiltinNameHashsetContains, &BuiltIn{HashsetContains}},
 	{BuiltinNameHashsetClose, &BuiltIn{HashsetClose}},
-	// forensic: timeline (append-only)
+	// forensic: timeline
 	{BuiltinNameTimestampNormalize, &BuiltIn{TimestampNormalize}},
 	{BuiltinNameTimelineSort, &BuiltIn{TimelineSort}},
 	{BuiltinNameTimelineMerge, &BuiltIn{TimelineMerge}},
 	{BuiltinNameBodyfileParse, &BuiltIn{BodyfileParse}},
 	{BuiltinNameMactime, &BuiltIn{Mactime}},
-	// forensic: Windows artifacts (append-only)
+	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
-	// forensic: real registry hive parsing (append-only)
+	// forensic: real registry hive parsing
 	{BuiltinNameHiveOpen, &BuiltIn{HiveOpen}},
 	{BuiltinNameHiveClose, &BuiltIn{HiveClose}},
 	{BuiltinNameHiveKeyInfo, &BuiltIn{HiveKeyInfo}},
@@ -429,41 +433,41 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameHiveGetValue, &BuiltIn{HiveGetValue}},
 	{BuiltinNameAmcacheParse, &BuiltIn{AmcacheParse}},
 	{BuiltinNameShimcacheParse, &BuiltIn{ShimcacheParse}},
-	// forensic: macOS/iOS artifacts (append-only)
+	// forensic: macOS/iOS artifacts
 	{BuiltinNamePlistParse, &BuiltIn{PlistParse}},
-	// security: fingerprinting (append-only)
+	// security: fingerprinting
 	{BuiltinNameImphash, &BuiltIn{Imphash}},
 	{BuiltinNameNTHash, &BuiltIn{NTHash}},
 	{BuiltinNameLMHash, &BuiltIn{LMHash}},
-	// security: crypto (append-only)
+	// security: crypto
 	{BuiltinNameX509Parse, &BuiltIn{X509Parse}},
 	{BuiltinNameJWTDecode, &BuiltIn{JWTDecode}},
 	{BuiltinNameAESEncrypt, &BuiltIn{AESEncrypt}},
 	{BuiltinNameAESDecrypt, &BuiltIn{AESDecrypt}},
 	{BuiltinNamePEMDecode, &BuiltIn{PEMDecode}},
-	// forensic: Windows artifacts (append-only)
+	// forensic: Windows artifacts
 	{BuiltinNamePrefetchParse, &BuiltIn{PrefetchParse}},
 	{BuiltinNameMftParse, &BuiltIn{MftParse}},
 	{BuiltinNameEvtxParse, &BuiltIn{EvtxParse}},
-	// binary analysis: Mach-O (append-only)
+	// binary analysis: Mach-O
 	{BuiltinNameBinMachoParse, &BuiltIn{BinMachOParse}},
-	// forensic: Windows jump lists (append-only)
+	// forensic: Windows jump lists
 	{BuiltinNameJumplistParse, &BuiltIn{JumplistParse}},
-	// forensic: Unix syslog (append-only)
+	// forensic: Unix syslog
 	{BuiltinNameSyslogParse, &BuiltIn{SyslogParse}},
-	// security: Go binary analysis (append-only)
+	// security: Go binary analysis
 	{BuiltinNameGoTypes, &BuiltIn{GoTypes}},
 	{BuiltinNameBinIsGo, &BuiltIn{BinIsGo}},
-	// forensic: SQLite / browser artifacts (append-only)
+	// forensic: SQLite / browser artifacts
 	{BuiltinNameSqliteQuery, &BuiltIn{SqliteQuery}},
 	{BuiltinNameBrowserHistory, &BuiltIn{BrowserHistory}},
 	{BuiltinNameBrowserCookies, &BuiltIn{BrowserCookies}},
 	{BuiltinNameBrowserDownloads, &BuiltIn{BrowserDownloads}},
-	// forensic: filesystem recovery (append-only)
+	// forensic: filesystem recovery
 	{BuiltinNameFsDeleted, &BuiltIn{FsDeleted}},
-	// security: TLS fingerprinting (append-only)
+	// security: TLS fingerprinting
 	{BuiltinNameJA3, &BuiltIn{JA3}},
-	// collections: higher-order (executor-native; append-only)
+	// collections: higher-order (executor-native)
 	{BuiltinNameMap, mapBuiltin},
 	{BuiltinNameFilter, filterBuiltin},
 	{BuiltinNameReduce, reduceBuiltin},
@@ -473,7 +477,7 @@ var Builtins = []BuiltinDefinition{
 	// net: truthful primary name for the connect-scan (net_syn_scan alias above)
 	{BuiltinNameNetConnectScan, &BuiltIn{NetConnectScan}},
 
-	// collections: parallel higher-order (executor-native; append-only)
+	// collections: parallel higher-order (executor-native)
 	{BuiltinNamePMap, pmapBuiltin},
 	{BuiltinNamePEach, peachBuiltin},
 	{BuiltinNameSpawn, spawnBuiltin},

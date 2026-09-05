@@ -240,6 +240,16 @@ type builtinDoc struct {
 	// availability gate) — e.g. a builtin that works everywhere but whose behavior
 	// differs per OS, or one path of which is platform-specific.
 	platformNote string
+	// stability is the promise the builtin's name and shape carry. Empty means
+	// StabilityStable, so the field is written only where the answer is not the
+	// default and 400-odd entries stay unchanged.
+	stability Stability
+	// replacement names what to use instead, and is meaningful only alongside
+	// StabilityDeprecated. It is the "<replacement>" half of the roadmap's
+	// `deprecated:<replacement>` spelling, kept as its own field so a consumer
+	// need not parse the tier string. TestDeprecatedBuiltinsNameTheirReplacement
+	// requires it.
+	replacement string
 }
 
 // builtinParamDoc is the internal, hand-authored form of one parameter.
@@ -257,6 +267,56 @@ type builtinParamDoc struct {
 	// only for the builtins that actually check them. Like kinds, it is a union
 	// and an empty one means "never checked".
 	elem []ParamKind
+}
+
+// Stability is the promise a builtin's name and shape carry. It became
+// expressible only once bytecode stopped addressing builtins by registry
+// ordinal: while an ordinal was baked into every artifact, nothing could be
+// renamed or retired, so every builtin was permanent whether or not that was
+// intended. (L-1)
+type Stability string
+
+const (
+	// StabilityStable is the default and the unwritten value: the name, the
+	// arguments and the shape of the result will not change under a program
+	// already written against them.
+	StabilityStable Stability = "stable"
+
+	// StabilityExperimental marks a builtin whose contract is still moving. It
+	// works, and it may be renamed or reshaped in a minor release. Editors show
+	// the tier; nothing refuses to compile it.
+	StabilityExperimental Stability = "experimental"
+
+	// StabilityDeprecated marks a builtin kept only so existing programs keep
+	// working. It names its replacement, and calling it earns a diagnostic
+	// rather than a failure -- the whole point of keeping it is that old code
+	// still runs.
+	StabilityDeprecated Stability = "deprecated"
+)
+
+// StabilityOf reports the tier a builtin declares, and whether the builtin has a
+// teaching doc to declare one at all. An undocumented builtin reports
+// StabilityStable: absent evidence of a promise being withdrawn, an editor
+// should say nothing.
+func StabilityOf(name string) (Stability, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return StabilityStable, false
+	}
+	if doc.stability == "" {
+		return StabilityStable, true
+	}
+	return doc.stability, true
+}
+
+// DeprecatedBy returns the builtin that replaces a deprecated one. The bool is
+// false for anything not deprecated, so a caller can use it as the whole test.
+func DeprecatedBy(name string) (string, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok || doc.stability != StabilityDeprecated {
+		return "", false
+	}
+	return doc.replacement, true
 }
 
 // hashableKinds is the set of kinds that implement object.Hashable, and so the
@@ -1314,7 +1374,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 		returns:   pairRet("one hash per section", ParamHash), params: []builtinParamDoc{param("path", "Path to the binary.", ParamString)}},
-	BuiltinNameNetSynScan:     {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
+	BuiltinNameNetSynScan:     {stability: StabilityDeprecated, replacement: BuiltinNameNetConnectScan, signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
 	BuiltinNameNetConnectScan: {signature: "net_connect_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges).", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
 	BuiltinNameNetUdpScan:     {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port timeout in ms.", ParamInt)}, returns: pairRet("which ports responded, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "responsive_ports", "scanned", "start_port")},
 	BuiltinNameNetBanner:      {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{param("address", "host:port endpoint.", ParamString), param("timeoutMs", "Read timeout in ms.", ParamInt)}, returns: pairRet("the banner text the service sent", ParamHash).withFields("banner", "error", "ok")},

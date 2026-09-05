@@ -261,6 +261,13 @@ Current lint rules (rule id -> default severity):
   rule that cannot decide at the call site: holding a pair on purpose is legal,
   so the walk collects candidates and drops any name the program later indexes,
   returns, or destructures)
+- `builtinDeprecated` -> hint (a call to a builtin kept only so existing
+  programs keep working; the message names its replacement, from
+  `builtin.DeprecatedBy`). A hint rather than a warning because the call is
+  correct and still runs. It carries `DiagnosticTagDeprecated`, which is what
+  makes editors strike the name through. Independent of the arity and type
+  rules: a wrong-arity call to a deprecated builtin is still a call to a
+  deprecated builtin, so both are reported.
 - `spawnGlobalWrite` -> warning (a `spawn`/`pmap`/`peach` callback assigning to
   a top-level name. Those callbacks run on a worker VM with a *snapshot* of the
   globals, so the write lands in a copy that is discarded when the callback
