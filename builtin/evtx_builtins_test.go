@@ -45,7 +45,7 @@ func TestEvtxRecordToHash(t *testing.T) {
 		Header: evtx.EventRecordHeader{RecordID: 42, FileTime: ft},
 		Event:  evtxSampleEvent(),
 	}
-	h := evtxRecordToHash(rec).(*object.Hash)
+	h := evtxRecordToHash(rec, false).(*object.Hash)
 
 	if got := hInt(t, h, "record_id"); got != 42 {
 		t.Errorf("record_id = %d, want 42", got)
@@ -91,7 +91,7 @@ func TestEvtxEventIDAsDict(t *testing.T) {
 	event := ordereddict.NewDict().Set("Event", ordereddict.NewDict().Set("System", system))
 	rec := &evtx.EventRecord{Header: evtx.EventRecordHeader{RecordID: 1}, Event: event}
 
-	h := evtxRecordToHash(rec).(*object.Hash)
+	h := evtxRecordToHash(rec, false).(*object.Hash)
 	if got := hInt(t, h, "event_id"); got != 1102 {
 		t.Errorf("event_id (dict form) = %d, want 1102", got)
 	}

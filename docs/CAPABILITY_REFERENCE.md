@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **428 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **430 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -622,13 +622,14 @@ Container and partition-table parsers: raw images, EWF/E01, VHD/VHDX (with diffe
 | `vhdi_read_at(handle: STRING, offset: INTEGER, length: INTEGER) -> (STRING, ERROR)` | all | Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB). |
 | `vhdi_read_at_bytes(handle: STRING, offset: INTEGER, length: INTEGER) -> (BYTES, ERROR)` | all | Reads length bytes at a virtual offset from a VHD/VHDX image as a BYTES buffer (length capped at 32 MiB). |
 
-## Windows Artifacts (4)
+## Windows Artifacts (5)
 
 Execution and shell-activity artifacts: Prefetch, Windows Event Logs (EVTX), shell links (LNK), and Jump Lists.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
 | `evtx_parse(path: STRING) -> (HASH, ERROR)` | all | Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err). |
+| `evtx_parse_bytes(path: STRING) -> (HASH, ERROR)` | all | Parses a Windows Event Log (.evtx) exactly as evtx_parse does, except that binary event values (EVTX BinaryType) come back as BYTES buffers instead of hex strings. Everything else -- the record tree, the summary fields, the return shape -- is identical. Use this when an event carries a binary payload you intend to read rather than print. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err). |
 | `jumplist_parse(path: STRING) -> (HASH, ERROR)` | all | Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err). |
 | `lnk_parse(path: STRING) -> (HASH, ERROR)` | all | Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err). |
 | `prefetch_parse(path: STRING) -> (HASH, ERROR)` | all | Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err). |
@@ -641,7 +642,7 @@ Unix log artifacts: RFC 5424 / RFC 3164 syslog parsing.
 | --- | --- | --- |
 | `syslog_parse(path: STRING) -> (HASH, ERROR)` | all | Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err). |
 
-## Browser Artifacts (4)
+## Browser Artifacts (5)
 
 Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite querying (forensically safe: originals are never modified).
 
@@ -651,6 +652,7 @@ Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite 
 | `browser_downloads(path: STRING) -> (HASH, ERROR)` | all | Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err). |
 | `browser_history(path: STRING) -> (HASH, ERROR)` | all | Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err). |
 | `sqlite_query(path: STRING, sql: STRING, params?: ARRAY) -> (HASH, ERROR)` | all | Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err). |
+| `sqlite_query_bytes(path: STRING, sql: STRING, params?: ARRAY) -> (HASH, ERROR)` | all | Runs a read-only SQL query exactly as sqlite_query does, except that BLOB columns come back as BYTES buffers. sqlite_query asks whether a BLOB happens to be valid UTF-8 and returns a string if so and hex if not, so one column's type varies row by row with its content; here a BLOB is a buffer whatever it holds. Other column types are unchanged: INTEGER is an INT, TEXT a STRING, NULL a NULL. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err). |
 
 ## Forensic Timeline (5)
 

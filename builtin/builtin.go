@@ -468,6 +468,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNamePrefetchParse, &BuiltIn{PrefetchParse}},
 	{BuiltinNameMftParse, &BuiltIn{MftParse}},
 	{BuiltinNameEvtxParse, &BuiltIn{EvtxParse}},
+	{BuiltinNameEvtxParseBytes, &BuiltIn{EvtxParseBytes}},
 	// binary analysis: Mach-O
 	{BuiltinNameBinMachoParse, &BuiltIn{BinMachOParse}},
 	// forensic: Windows jump lists
@@ -479,6 +480,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameBinIsGo, &BuiltIn{BinIsGo}},
 	// forensic: SQLite / browser artifacts
 	{BuiltinNameSqliteQuery, &BuiltIn{SqliteQuery}},
+	{BuiltinNameSqliteQueryBytes, &BuiltIn{SqliteQueryBytes}},
 	{BuiltinNameBrowserHistory, &BuiltIn{BrowserHistory}},
 	{BuiltinNameBrowserCookies, &BuiltIn{BrowserCookies}},
 	{BuiltinNameBrowserDownloads, &BuiltIn{BrowserDownloads}},

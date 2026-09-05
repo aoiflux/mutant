@@ -366,9 +366,19 @@ undo, and the `type` field beside it says which case you are in. A registry
 opened from a hive-JSON file never reports it: that format is a transcription of
 a hive rather than the artifact, and has no binary type to transcribe.
 
-`sqlite_query` and `evtx_parse` still hex-encode: their binary values sit under
-keys taken from the file being parsed, so there is nowhere to put a second
-representation without changing the first.
+`sqlite_query` and `evtx_parse` get a whole second builtin rather than a second
+field, because their binary values sit under keys taken from the file being
+parsed — column names, BinXML element names — so there is no key we own to hang
+an alternative rendering on. `sqlite_query_bytes` and `evtx_parse_bytes` answer
+the same questions with the same return shapes; only the binary changes.
+
+`sqlite_query_bytes` also settles a question its older twin has to guess at.
+`sqlite_query` asks whether a BLOB happens to be valid UTF-8 and returns a
+string if it is and hex if it is not, so one column's type varies row by row
+with its content and a BLOB that decoded is indistinguishable from a TEXT that
+did not. In `sqlite_query_bytes` a BLOB is a buffer whatever bytes it holds:
+the column's type decides, not the value inside it. Other column types are
+untouched — an INTEGER is still an integer, a TEXT still a string.
 
 The language server knows the type. Passing a buffer to a text builtin raises
 `builtinArgType` before the program runs, and the message names the conversion.
@@ -395,7 +405,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 
 ## Builtins
 
-**Total builtins currently registered: 428**, across 33 capability categories.
+**Total builtins currently registered: 430**, across 33 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 

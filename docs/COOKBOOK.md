@@ -837,7 +837,7 @@ as strings across platforms, normalise first.
 ## Where to go next
 
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
-- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 428 builtins,
+- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 430 builtins,
   with signatures and return shapes
 - **[MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md)** — syntax and
   semantics
