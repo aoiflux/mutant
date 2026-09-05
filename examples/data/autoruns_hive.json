@@ -1,0 +1,38 @@
+{
+  "_comment": "Hive-JSON fixture for docs/COOKBOOK.md recipe 12 (persistence hunt). Models a Run/RunOnce autoruns set on a compromised host. Synthetic: no real host data.",
+  "keys": [
+    {
+      "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "last_write": "2026-03-14T02:12:55Z",
+      "values": {
+        "SecurityHealth": "%windir%\\system32\\SecurityHealthSystray.exe",
+        "OneDrive": "\"C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe\" /background",
+        "UpdateSvc": "C:\\Users\\deploy\\AppData\\Roaming\\svc.exe -q"
+      }
+    },
+    {
+      "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "last_write": "2026-03-14T02:13:10Z",
+      "values": {
+        "Cleanup": "cmd.exe /c del C:\\Users\\deploy\\AppData\\Roaming\\stage.tmp"
+      }
+    }
+  ],
+  "deleted_keys": [
+    "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\StagerV1"
+  ],
+  "timeline": [
+    {
+      "timestamp": "2026-03-14T02:12:55Z",
+      "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "action": "set_value",
+      "name": "UpdateSvc"
+    },
+    {
+      "timestamp": "2026-03-14T02:13:10Z",
+      "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "action": "set_value",
+      "name": "Cleanup"
+    }
+  ]
+}

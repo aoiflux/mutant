@@ -10,7 +10,7 @@ This is the canonical, category-grouped catalog of every Mutant builtin. There a
 ## How to read this reference
 
 - **Fallible builtins return a `(value, err)` pair**, matching the language idiom `let value, err = some_call(...);`. Check `err` before using `value`. Infallible helpers return a bare value.
-- **Parameter types are shown inline** in each signature, e.g. `str_repeat(s: STRING, n: INTEGER)`. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the `builtinArgType` diagnostic), and the same words the runtime uses when a call fails. Note that a "bytes" value is a `STRING`: Mutant carries byte buffers in strings and has no separate bytes type.
+- **Parameter types are shown inline** in each signature, e.g. `str_repeat(s: STRING, n: INTEGER)`. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the `builtinArgType` diagnostic), and the same words the runtime uses when a call fails. A parameter shown as `BYTES|STRING` accepts either representation and the builtin hands back the one it was given; `string_to_bytes(s, "raw")` converts losslessly from a builtin that still returns text.
 - **The Platforms column** lists the operating systems a builtin actually works on. `all` means it is pure-Go and cross-platform (it operates on captured artifacts, so it runs on any host). A restricted set (e.g. `windows/linux`) means the builtin fails honestly elsewhere — and the language server will flag such a call when you are editing on an unsupported OS (the `platformSupport` diagnostic).
 - **Pure-Go, no cgo.** The entire standard library builds and runs with `CGO_ENABLED=0` on Windows, Linux, and macOS.
 
@@ -673,7 +673,7 @@ Parse raw email into headers/body/attachments/URLs and cryptographically verify 
 | `email_headers(raw: STRING) -> (HASH, ERROR)` | all | Parses and returns message headers from raw email input. |
 | `email_parse(raw: STRING) -> (HASH, ERROR)` | all | Parses a raw email message into headers, body parts, and attachments. |
 | `email_spf_dkim(raw: STRING) -> (HASH, ERROR)` | all | Cryptographically verifies DKIM signatures (public key via DNS) and reports SPF/DMARC. SPF is reported as recorded by the receiving MTA; DMARC combines the reported result with DKIM alignment. |
-| `email_urls(raw: STRING) -> ([]STRING, ERROR)` | all | Extracts and normalizes URLs from email headers and body. |
+| `email_urls(raw: STRING) -> ([]HASH, ERROR)` | all | Extracts and normalizes URLs from email headers and body. |
 
 ## Hash-Set Forensics (3)
 

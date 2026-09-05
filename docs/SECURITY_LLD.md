@@ -70,8 +70,9 @@ Mutant currently has three practical launch postures:
 - Runtime posture defaults to secure execution gates.
 - Trusted signer pinning is enforced only when `--signer-auth` is enabled.
 - Default tamper response is `terminate`.
-- If trusted key env is not set, runtime bootstraps a local persistent keypair
-  and uses the local public key as trusted key for signer-auth verification.
+- If `--trusted-key <path>` is not passed, the runtime bootstraps a local
+  persistent keypair and uses the local public key as the trusted key for
+  signer-auth verification.
 
 2. Compatibility mode (`--compat`):
 
@@ -350,8 +351,8 @@ Security implication:
 
 - The build mode becomes auditable in the emitted artifact.
 - Trailer provenance mismatch is treated as tamper.
-- Runtime behavior still honors explicit environment overrides for policy
-  controls.
+- Policy controls are fixed or flag-driven; nothing in the environment can
+  override them.
 
 ### 7.4 Deterministic Local Password Fallback
 
@@ -891,7 +892,7 @@ flowchart TD
 
 Workflow `.github/workflows/security-profile.yml`:
 
-- strict env defaults (`terminate`, delay=0, audit=1)
+- strict defaults (`terminate`, delay=0, audit=1)
 - targeted security packages + VM policy test
 - optional telemetry artifact upload
 
@@ -900,9 +901,10 @@ Workflow `.github/workflows/security-profile.yml`:
 ## 17. Security Invariants (Must Hold)
 
 1. When `--signer-auth` is enabled in secure mode, trusted signer verification
-   must be enforced (trusted env key or local bootstrap trusted key).
+   must be enforced (the key given by `--trusted-key`, or the local bootstrap
+   trusted key).
 2. In signer-auth path, signature mismatch/untrusted signer must fail unless
-   policy is explicitly downgraded by env.
+   policy is explicitly downgraded by launch mode (`--compat` / `--dev`).
 3. Integrity mismatch must always record telemetry before policy action.
 4. Metadata parser must reject malformed Argon2 parameters.
 5. Opcode/operand decode must stay offset-aware.
@@ -955,7 +957,7 @@ baseline is a command line and nothing else. See
 2. Add real Windows runner-based anti-debug integration tests.
 3. Add signer key rotation and multi-key trust set support.
 4. Add self-integrity hashing of selected runtime text/function regions.
-5. Add policy lock mode to ignore environment downgrades in production builds.
+5. Add policy lock mode to ignore mode-based downgrades in production builds.
 6. Consider hardware-backed key protection for signing workflows.
 7. Expand telemetry schema with per-event reason codes and monotonic sequence
    IDs.

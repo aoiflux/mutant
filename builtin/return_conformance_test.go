@@ -260,6 +260,18 @@ func TestReturnKindsMatchImplementation(t *testing.T) {
 				name, spec.KindsText(), got)
 			continue
 		}
+		// The element kind is the half of an array contract the editor reads
+		// when it types an indexed element, and until now nothing checked it:
+		// a declaration of []STRING over an implementation that builds hashes
+		// renders a hover that is confidently wrong. An empty array says
+		// nothing either way, so it is neither confirmed nor a violation.
+		if arr, isArray := value.(*object.Array); isArray && len(spec.Elem) > 0 && len(arr.Elements) > 0 {
+			if gotElem := kindOf(arr.Elements[0]); gotElem != "" && !spec.allowsElem(gotElem) {
+				t.Errorf("%s: contract says its elements are %s, but a valid call returned %s",
+					name, elemKindsText(spec.Elem), gotElem)
+				continue
+			}
+		}
 		confirmed = append(confirmed, name)
 	}
 
@@ -271,6 +283,28 @@ func TestReturnKindsMatchImplementation(t *testing.T) {
 	if len(confirmed) == 0 {
 		t.Fatal("no builtin was confirmed; the probe is not exercising anything")
 	}
+}
+
+// allowsElem reports whether an array element kind satisfies the declared
+// element set. A null element is never a violation, for the same reason a null
+// value is not: a valid call can be probed into a case the implementation
+// fills with null.
+func (r BuiltinReturnDoc) allowsElem(kind ParamKind) bool {
+	for _, declared := range r.Elem {
+		if declared == ParamAny || declared == kind {
+			return true
+		}
+	}
+	return kind == ParamNull
+}
+
+// elemKindsText renders a declared element set for a failure message.
+func elemKindsText(kinds []ParamKind) string {
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		parts = append(parts, string(kind))
+	}
+	return strings.Join(parts, "|")
 }
 
 // allows reports whether a kind satisfies the declared return.

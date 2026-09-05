@@ -1495,7 +1495,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "email_urls(raw)",
 		summary:   "Extracts and normalizes URLs from email headers and body.",
 		params:    []builtinParamDoc{param("raw", "RFC822-style raw email text.", ParamString)},
-		returns:   pairRet("the normalized URLs found in the message", ParamArray).ofElem(ParamString)},
+		returns:   pairRet("one hash per URL found in the message", ParamArray).ofElem(ParamHash).withFields("host", "scheme", "url")},
 	BuiltinNameMemMap: {
 		signature: "mem_map(path)",
 		summary:   "Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported.",

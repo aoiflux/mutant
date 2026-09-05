@@ -358,6 +358,12 @@ For all things mutant, please visit the
 For VS Code language tooling specifics (teaching hovers, signature help, and
 snippet completions), see:
 
+- [docs/TUTORIAL_30_MIN.md](docs/TUTORIAL_30_MIN.md) — Mutant in 30 minutes,
+  the guided path from install to a standalone binary
+- [docs/COOKBOOK.md](docs/COOKBOOK.md) — recipes organised by investigation:
+  file triage, IOC extraction, beacon detection, timelines, reporting
+- [docs/COMPARISON.md](docs/COMPARISON.md) — Mutant next to Python+plaso,
+  Velociraptor, osquery and YARA+Sigma, including where it is the wrong tool
 - [docs/WHAT_IS_MUTANT.md](docs/WHAT_IS_MUTANT.md)
 - [docs/MUTANT_LANGUAGE_REFERENCE.md](docs/MUTANT_LANGUAGE_REFERENCE.md)
 - [docs/CAPABILITY_REFERENCE.md](docs/CAPABILITY_REFERENCE.md) — full builtin catalog
@@ -367,8 +373,16 @@ snippet completions), see:
 - [docs/STRUCTURED_DATA.md](docs/STRUCTURED_DATA.md)
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
-- [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)
 - [docs/GAP_ANALYSIS_AND_ROADMAP.md](docs/GAP_ANALYSIS_AND_ROADMAP.md) — gap analysis, priority matrix & roadmap
+
+## Contributing
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — build, the pure-Go/cross-platform
+  constraints, the no-environment-variables policy, and the compatibility rules
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability, and what is in
+  scope for a security project
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

