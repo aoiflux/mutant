@@ -5,12 +5,12 @@ import (
 	"encoding/gob"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"mutant/ast"
 	"mutant/evaluator"
 	"mutant/object"
+	"mutant/serialize"
 )
 
 // parseWithMacros runs the same define-then-expand pass the generator runs
@@ -50,8 +50,6 @@ func compileWithPositions(t *testing.T, src string) *ByteCode {
 	}
 	return c.ByteCode()
 }
-
-var registerConstantTypes sync.Once
 
 // linesIn returns every distinct line the table attributes an instruction to.
 func linesIn(table interface{ At(int) (int, int, bool) }, streamLen int) map[int]bool {
@@ -183,18 +181,8 @@ func encodedSize(t *testing.T, bytecode *ByteCode) int {
 	t.Helper()
 
 	// The constant pool holds objects behind an interface, so gob needs the
-	// concrete types the same way the generator registers them.
-	registerConstantTypes.Do(func() {
-		gob.Register(&object.CompiledFunction{})
-		gob.Register(&object.String{})
-		gob.Register(&object.Bytes{})
-		gob.Register(&object.Integer{})
-		gob.Register(&object.Float{})
-		gob.Register(&object.Boolean{})
-		gob.Register(&object.Null{})
-		gob.Register(&object.Array{})
-		gob.Register(&object.Hash{})
-	})
+	// concrete types. Same list the generator and runner register.
+	serialize.RegisterGobTypes()
 
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(bytecode); err != nil {

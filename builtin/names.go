@@ -164,6 +164,7 @@ const (
 	BuiltinNameEmailUrls             = "email_urls"
 	BuiltinNameMemMap                = "mem_map"
 	BuiltinNameMemRead               = "mem_read"
+	BuiltinNameMemReadBytes          = "mem_read_bytes"
 	BuiltinNameMemScan               = "mem_scan"
 	BuiltinNameMemStrings            = "mem_strings"
 	BuiltinNameMemFindPe             = "mem_find_pe"

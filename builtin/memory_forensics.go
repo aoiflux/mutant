@@ -48,40 +48,70 @@ func MemMap(args ...object.Object) object.Object {
 	return resultAndError(&object.Array{Elements: segments}, nil)
 }
 
-func MemRead(args ...object.Object) object.Object {
+// MemRead reads a byte range from a memory image and reports it hex-encoded.
+//
+// The hex predates the BYTES type: a memory range is arbitrary binary, and there
+// was no representation that could carry it without something downstream reading
+// it as text. It is kept because scripts depend on the {offset, size, hex} shape.
+// mem_read_bytes is the direct route.
+func MemRead(args ...object.Object) object.Object { return memRead(args, "mem_read", false) }
+
+// MemReadBytes reads a byte range from a memory image as a buffer.
+//
+// It hands back the buffer itself rather than mem_read's hash, matching every
+// other *_bytes producer: the caller already knows the offset it asked for, and
+// a short read at end-of-image shows up as a shorter len() -- which is the same
+// thing mem_read's size field reports.
+//
+// The reason to prefer it is not only type honesty. Reading n bytes through
+// mem_read materialises the hex (2n) and then whatever the caller decodes it
+// back into (n) -- and that decode has to go through string_to_bytes, which
+// returns a multi-value, so it cannot be written inline.
+func MemReadBytes(args ...object.Object) object.Object {
+	return memRead(args, "mem_read_bytes", true)
+}
+
+func memRead(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 	pathObj, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `mem_read` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `%s` must be STRING, got %s", opName, args[0].Type()))
 	}
 	offsetObj, ok := args[1].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `mem_read` must be INTEGER, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be INTEGER, got %s", opName, args[1].Type()))
 	}
 	lengthObj, ok := args[2].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 3 to `mem_read` must be INTEGER, got %s", args[2].Type()))
+		return resultAndError(nil, newError("argument 3 to `%s` must be INTEGER, got %s", opName, args[2].Type()))
 	}
 	if offsetObj.Value < 0 || lengthObj.Value < 0 {
-		return resultAndError(nil, newError("mem_read: offset and length must be >= 0"))
+		return resultAndError(nil, newError("%s: offset and length must be >= 0", opName))
 	}
 
 	data, err := os.ReadFile(pathObj.Value)
 	if err != nil {
-		return resultAndError(nil, newError("mem_read: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 
 	start := int(offsetObj.Value)
 	if start > len(data) {
-		return resultAndError(nil, newError("mem_read: offset out of range"))
+		return resultAndError(nil, newError("%s: offset out of range", opName))
 	}
 	end := start + int(lengthObj.Value)
 	if end > len(data) {
 		end = len(data)
 	}
 	slice := data[start:end]
+
+	if binary {
+		// Cloned, not aliased. slice points into the whole image, so retaining it
+		// would keep a multi-gigabyte dump reachable for the life of a 4 KiB read.
+		// The hex path never had this problem because encoding copies.
+		return resultAndError(&object.Bytes{Value: bytes.Clone(slice)}, nil)
+	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"offset": intObj(offsetObj.Value),

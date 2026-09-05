@@ -343,11 +343,21 @@ What a buffer supports:
 arrived additively: `fs_read` still returns a string, and `fs_read_bytes` is the
 new name. The same holds for `hex_decode_bytes`, `base64_decode_bytes`,
 `gunzip_bytes`, `zlib_decompress_bytes`, `aes_decrypt_bytes`,
-`net_conn_read_bytes`, and the `*_read_file_bytes` / `*_read_at_bytes` image
-readers. Consumers went the other way and widened: the whole `bytes_*` family,
+`net_conn_read_bytes`, `mem_read_bytes`, and the `*_read_file_bytes` /
+`*_read_at_bytes` image readers. Consumers went the other way and widened: the whole `bytes_*` family,
 `fs_write`, `fs_append`, every `hash_*`, `hmac`, and the encoders accept either
 representation, and the `bytes_*` family is shape-preserving — `bytes_slice` of
 a buffer is a buffer, of a string a string.
+
+Some builtins predate the type and hex-encode their binary output defensively,
+because there was once no other way to carry it. Those are being given direct
+routes the same additive way — `mem_read_bytes` alongside `mem_read`, and a
+`resident_data_bytes` field alongside `fs_deleted`'s hex `resident_data`, so
+recovering a deleted file is `fs_write(out, e["resident_data_bytes"])` rather
+than a `string_to_bytes` statement first. The hex fields stay exactly as they
+were. `sqlite_query` and `evtx_parse` still hex-encode: their binary values sit
+under keys taken from the file being parsed, so there is nowhere to put a second
+representation without changing the first.
 
 The language server knows the type. Passing a buffer to a text builtin raises
 `builtinArgType` before the program runs, and the message names the conversion.
@@ -374,7 +384,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 
 ## Builtins
 
-**Total builtins currently registered: 427**, across 33 capability categories.
+**Total builtins currently registered: 428**, across 33 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 

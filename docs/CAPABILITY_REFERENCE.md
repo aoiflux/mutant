@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **427 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **428 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -280,7 +280,7 @@ Read/write/manage files and directories, plus file-level forensics: hashing, ent
 | `fs_carve(path: STRING, type: STRING) -> ([]HASH, ERROR)` | all | Scans a file for a known artifact signature and returns the byte offsets where it starts. It reports offsets only; it does not extract (carve out) the artifact bytes or determine their length. |
 | `fs_copy(src: STRING, dst: STRING) -> (BOOLEAN, ERROR)` | all | Copies a file from source path to destination path. |
 | `fs_delete(path: STRING) -> (BOOLEAN, ERROR)` | all | Deletes a file from disk. |
-| `fs_deleted(path: STRING) -> (HASH, ERROR)` | all | Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
+| `fs_deleted(path: STRING) -> (HASH, ERROR)` | all | Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered, as hex (resident_data) and as a buffer (resident_data_bytes) carrying the same bytes; larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, resident_data_bytes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err). |
 | `fs_diff(leftPath: STRING, rightPath: STRING) -> (HASH, ERROR)` | all | Compares two files (not directories) and reports differences. |
 | `fs_entropy(path: STRING) -> (HASH, ERROR)` | all | Computes file entropy for packed/encrypted artifact detection. |
 | `fs_exists(path: STRING) -> (BOOLEAN, ERROR)` | all | Returns whether a file or directory exists. |
@@ -494,7 +494,7 @@ Live process inspection: enumeration, tree, environment, open files, threads, mo
 | `process_threads(pid?: INTEGER) -> (HASH, ERROR)` | all | Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux). |
 | `process_tree(rootPid?: INTEGER) -> (HASH, ERROR)` | all | Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. |
 
-## Memory Forensics (6)
+## Memory Forensics (7)
 
 Memory-dump analysis: segmentation with entropy, string extraction, pattern scanning, and PE/shellcode discovery.
 
@@ -504,6 +504,7 @@ Memory-dump analysis: segmentation with entropy, string extraction, pattern scan
 | `mem_find_shellcode(path: STRING) -> ([]HASH, ERROR)` | all | Scans a memory dump file for common shellcode byte signatures. |
 | `mem_map(path: STRING) -> ([]HASH, ERROR)` | all | Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported. |
 | `mem_read(path: STRING, offset: INTEGER, size: INTEGER) -> (HASH, ERROR)` | all | Reads a byte range from a memory image. |
+| `mem_read_bytes(path: STRING, offset: INTEGER, size: INTEGER) -> (BYTES, ERROR)` | all | Reads a byte range from a memory image as a BYTES buffer. Unlike mem_read it returns the buffer itself rather than a hash: the offset is the one you asked for, and a short read at end-of-image is simply a shorter length. Prefer this whenever the range is going to be parsed rather than printed. |
 | `mem_scan(path: STRING, pattern: STRING) -> (HASH, ERROR)` | all | Scans a memory image for a string/byte pattern. |
 | `mem_strings(path: STRING, minLen?: INTEGER) -> ([]STRING, ERROR)` | all | Extracts printable strings from memory image data. |
 

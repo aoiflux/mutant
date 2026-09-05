@@ -17,6 +17,7 @@ import (
 	"mutant/object"
 	luaruntime "mutant/runtime/lua"
 	"mutant/security"
+	"mutant/serialize"
 	"mutant/vm"
 	"os"
 	"path/filepath"
@@ -278,7 +279,7 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	reader := bytes.NewReader(inflatedData)
 
 	var bytecode *compiler.ByteCode
-	registerTypes()
+	serialize.RegisterGobTypes()
 	dec := gob.NewDecoder(reader)
 	if err := dec.Decode(&bytecode); err != nil {
 		return nil, err
@@ -514,28 +515,4 @@ func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, sec
 	}
 
 	return nil
-}
-
-func registerTypes() {
-	gob.Register(&object.Float{})
-	gob.Register(&object.Integer{})
-	gob.Register(&object.Boolean{})
-	gob.Register(&object.Null{})
-	gob.Register(&object.ReturnValue{})
-	gob.Register(&object.MultiValue{})
-	gob.Register(&object.Error{})
-	gob.Register(&object.Function{})
-	gob.Register(&object.String{})
-	gob.Register(&object.Bytes{})
-	gob.Register(&builtin.BuiltIn{})
-	gob.Register(&object.Array{})
-	gob.Register(&object.Hash{})
-	gob.Register(&object.Quote{})
-	gob.Register(&object.Macro{})
-	gob.Register(&object.CompiledFunction{})
-	gob.Register(&object.Closure{})
-	gob.Register(&object.Encrypted{})
-	gob.Register(&object.Struct{})
-	gob.Register(&object.EnumValue{})
-	gob.Register(&object.LuaPatch{})
 }

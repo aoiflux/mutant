@@ -15,6 +15,7 @@ import (
 	"mutant/object"
 	"mutant/parser"
 	"mutant/security"
+	"mutant/serialize"
 	"os"
 	"path/filepath"
 	"time"
@@ -201,7 +202,7 @@ func encode(compByteCode *compiler.ByteCode, polymorphicLevel int, password stri
 
 	compByteCode = mutil.EncryptByteCode(compByteCode, password)
 
-	registerTypes()
+	serialize.RegisterGobTypes()
 	enc := gob.NewEncoder(&content)
 	if err := enc.Encode(compByteCode); err != nil {
 		return nil, err
@@ -255,25 +256,4 @@ func encryptCode(b64ByteCode []byte, password string, privateKey []byte) ([]byte
 	}
 
 	return signedCode, nil
-}
-
-func registerTypes() {
-	gob.Register(&object.Float{})
-	gob.Register(&object.Integer{})
-	gob.Register(&object.Boolean{})
-	gob.Register(&object.Null{})
-	gob.Register(&object.ReturnValue{})
-	gob.Register(&object.MultiValue{})
-	gob.Register(&object.Error{})
-	gob.Register(&object.Function{})
-	gob.Register(&object.String{})
-	gob.Register(&object.Bytes{})
-	gob.Register(&builtin.BuiltIn{})
-	gob.Register(&object.Array{})
-	gob.Register(&object.Hash{})
-	gob.Register(&object.Quote{})
-	gob.Register(&object.Macro{})
-	gob.Register(&object.CompiledFunction{})
-	gob.Register(&object.Closure{})
-	gob.Register(&object.Encrypted{})
 }

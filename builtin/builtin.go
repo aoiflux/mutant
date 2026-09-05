@@ -195,6 +195,7 @@ var Builtins = []BuiltinDefinition{
 	// memory forensics
 	{BuiltinNameMemMap, &BuiltIn{MemMap}},
 	{BuiltinNameMemRead, &BuiltIn{MemRead}},
+	{BuiltinNameMemReadBytes, &BuiltIn{MemReadBytes}},
 	{BuiltinNameMemScan, &BuiltIn{MemScan}},
 	{BuiltinNameMemStrings, &BuiltIn{MemStrings}},
 	{BuiltinNameMemFindPe, &BuiltIn{MemFindPE}},

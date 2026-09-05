@@ -534,7 +534,7 @@ LSP/server tests:
 
 Extension:
 
-- `cd vscode-extension`
+- `cd mutant-vscode-extension`
 - `npm install`
 - `npm run compile`
 - `npm test`

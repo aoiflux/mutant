@@ -1,8 +1,10 @@
 package mutil
 
 import (
+	"bytes"
 	"crypto/sha512"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"math"
@@ -49,6 +51,28 @@ func EncryptByteCode(byteCode *compiler.ByteCode, password string) *compiler.Byt
 	return byteCode
 }
 
+// xorPayload encrypts a value's bytes, treating an empty payload as its own
+// ciphertext rather than as an error.
+//
+// security.SecureXOR rejects empty input. That is a reasonable guard where a
+// caller passing nothing is a mistake, and the wrong answer here: XOR over zero
+// bytes is zero bytes, so there is nothing to protect and nothing to get wrong.
+// The error it returned instead was load-bearing in the worst direction. Both
+// callers of EncryptObject keep the plaintext object when it fails, and the
+// container arms below propagate a child's failure to the whole container -- so
+// a single empty string in an array left every sibling in the clear:
+//
+//	let g = ["", "secret"];   // the whole array stored unencrypted
+//
+// The NULL arm has always short-circuited for the same reason; strings, byte
+// buffers and Lua payloads simply never got the same treatment.
+func xorPayload(data []byte, length int, password string) ([]byte, error) {
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
+	return security.SecureXOR(data, int64(length), password)
+}
+
 func EncryptObject(obj object.Object, length int, password string) (object.Object, error) {
 	if obj == nil {
 		return nil, errors.New("nil obj")
@@ -78,7 +102,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 
 	case object.STRING_OBJ:
 		val := obj.(*object.String).Value
-		xored, err := security.SecureXOR([]byte(val), int64(length), password)
+		xored, err := xorPayload([]byte(val), length, password)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +120,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 	// unencrypted with nothing said.
 	case object.BYTES_OBJ:
 		val := obj.(*object.Bytes).Value
-		xored, err := security.SecureXOR(val, int64(length), password)
+		xored, err := xorPayload(val, length, password)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +233,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 
 	case object.LUA_PATCH_OBJ:
 		patchObj := obj.(*object.LuaPatch)
-		xored, err := security.SecureXOR(patchObj.EncryptedPayload, int64(length), password)
+		xored, err := xorPayload(patchObj.EncryptedPayload, length, password)
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +243,57 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 			ChecksumExpected: patchObj.ChecksumExpected,
 		}
 
-	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ:
+	// A multi-value is a list of values wearing a different name, and it reaches
+	// storage the same way an array does: Mutant's whole (value, err) idiom
+	// produces one, and `let r = f();` binds it to a global. Without this arm it
+	// fell to the default below and was stored in the clear -- along with, via the
+	// container arms above, any array or struct that happened to hold one.
+	case object.MULTI_VALUE_OBJ:
+		multiObj := obj.(*object.MultiValue)
+		values := make([]object.Object, len(multiObj.Values))
+		for i, value := range multiObj.Values {
+			encValue, encErr := EncryptObject(value, length, password)
+			if encErr != nil {
+				return nil, encErr
+			}
+			values[i] = encValue
+		}
+		encObj = &object.MultiValue{Values: values}
+
+	// An error is an ordinary value in this language, so `let v, e = fs_read(p);`
+	// binds one to a global and it sits there for the life of the program. It is
+	// also the value most worth covering: its Message carries the path that
+	// failed, and SourceLine carries a line of the program itself.
+	//
+	// It is encoded whole rather than field by field. Error has eleven fields and
+	// gains more over time; encrypting a chosen few would leave the rest in the
+	// clear and would go stale the next time one is added.
+	case object.ERROR_OBJ:
+		encoded, encErr := encodeError(obj.(*object.Error))
+		if encErr != nil {
+			return nil, encErr
+		}
+		xored, xorErr := xorPayload(encoded, length, password)
+		if xorErr != nil {
+			return nil, xorErr
+		}
+
+		encObj = &object.Encrypted{
+			EncType: object.ERROR_OBJ,
+			Value:   xored,
+			Seed:    int64(length),
+		}
+
+	// Code and control flow, not data at rest: there is nothing in a compiled
+	// function, a builtin, an evaluator function, a macro, a quoted node or a
+	// loop-control singleton that encrypting would protect. The last five are
+	// evaluator-only and unreachable from here today, since the evaluator never
+	// calls this function -- they are named anyway, because `default` is the arm
+	// that silently leaves a value in plaintext (both callers discard the error),
+	// and an unreachable default is the only kind that cannot do that.
+	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ, object.FUNCTION_OBJ,
+		object.MACRO_OBJ, object.QUOTE_OBJ, object.RETURN_VALUE_OBJ,
+		object.BREAK_OBJ, object.CONTINUE_OBJ:
 		encObj = obj
 
 	default:
@@ -227,6 +301,31 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 	}
 
 	return encObj, err
+}
+
+// encodeError and decodeError serialise an *object.Error so it can be covered
+// by the same XOR every other stored value gets. gob is used rather than a
+// hand-rolled layout because Error is a plain struct of concrete types, so the
+// encoding stays correct as fields are added -- which is the failure mode a
+// hand-rolled one would have.
+//
+// No gob.Register is needed: the value is encoded as a concrete *object.Error,
+// never through an interface. That is also why this does not belong in the
+// serialize package, whose list exists for the constant pool's interface field.
+func encodeError(errObj *object.Error) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(errObj); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func decodeError(encoded []byte) (*object.Error, error) {
+	var errObj object.Error
+	if err := gob.NewDecoder(bytes.NewReader(encoded)).Decode(&errObj); err != nil {
+		return nil, err
+	}
+	return &errObj, nil
 }
 
 func DecryptObject(obj object.Object, length int, password string) (object.Object, error) {
@@ -241,6 +340,20 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		encrypted := decObj.(*object.Encrypted)
 		if encrypted.EncType == object.NULL_OBJ {
 			return global.Null, nil
+		}
+
+		// The mirror of xorPayload. An empty payload is legitimate for exactly the
+		// two variable-length types and impossible for the rest -- an integer is
+		// always eight bytes, a boolean always "true" or "false" -- so the
+		// short-circuit is deliberately narrow. Widening it would turn a corrupt
+		// integer into a silent zero instead of an error.
+		if len(encrypted.Value) == 0 {
+			switch encrypted.EncType {
+			case object.STRING_OBJ:
+				return &object.String{Value: ""}, nil
+			case object.BYTES_OBJ:
+				return &object.Bytes{Value: []byte{}}, nil
+			}
 		}
 
 		seed := int64(length)
@@ -281,6 +394,13 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 
 		case object.NULL_OBJ:
 			decObj = global.Null
+
+		case object.ERROR_OBJ:
+			errObj, decErr := decodeError(xored)
+			if decErr != nil {
+				return nil, decErr
+			}
+			decObj = errObj
 		}
 
 		return decObj, nil
@@ -341,7 +461,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 
 	case object.LUA_PATCH_OBJ:
 		patchObj := decObj.(*object.LuaPatch)
-		xored, err := security.SecureXOR(patchObj.EncryptedPayload, int64(length), password)
+		xored, err := xorPayload(patchObj.EncryptedPayload, length, password)
 		if err != nil {
 			return nil, err
 		}
@@ -363,7 +483,23 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		}
 		return &object.Closure{Fn: closureObj.Fn, Free: free}, nil
 
-	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ:
+	case object.MULTI_VALUE_OBJ:
+		multiObj := decObj.(*object.MultiValue)
+		values := make([]object.Object, len(multiObj.Values))
+		for i, value := range multiObj.Values {
+			decValue, decErr := DecryptObject(value, length, password)
+			if decErr != nil {
+				return nil, decErr
+			}
+			values[i] = decValue
+		}
+		return &object.MultiValue{Values: values}, nil
+
+	// The mirror of the pass-through group in EncryptObject; see the comment
+	// there for why the evaluator-only types are named rather than defaulted.
+	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ, object.FUNCTION_OBJ,
+		object.MACRO_OBJ, object.QUOTE_OBJ, object.RETURN_VALUE_OBJ,
+		object.BREAK_OBJ, object.CONTINUE_OBJ:
 		return decObj, nil
 	}
 

@@ -16,15 +16,15 @@ assignees: []
 ## Read Before Starting
 
 - [ ] Read
-      [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](../docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
-- [ ] Read [docs/LSP_EXTENSION_LLD.md](../docs/LSP_EXTENSION_LLD.md)
+      [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](../../docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
+- [ ] Read [docs/LSP_EXTENSION_LLD.md](../../docs/LSP_EXTENSION_LLD.md)
 
 ## Environment Setup
 
 - [ ] `go test ./lsp/internal/analyzer -v` passes
 - [ ] `go test ./lsp/internal/server -v` passes
 - [ ] `go test ./...` passes
-- [ ] `cd vscode-extension && npm install && npm run compile && npm test` passes
+- [ ] `cd mutant-vscode-extension && npm install && npm run compile && npm test` passes
 - [ ] Extension Development Host launches via `F5`
 
 ## Operational Familiarity
@@ -38,20 +38,20 @@ assignees: []
 ## Request-Flow Understanding
 
 - [ ] Trace completion path in code:
-  - [ ] [vscode-extension/src/extension.ts](../vscode-extension/src/extension.ts)
-  - [ ] [lsp/internal/server/server.go](../lsp/internal/server/server.go)
-  - [ ] [lsp/internal/analyzer/analyzer.go](../lsp/internal/analyzer/analyzer.go)
+  - [ ] [mutant-vscode-extension/src/extension.ts](../../mutant-vscode-extension/src/extension.ts)
+  - [ ] [lsp/internal/server/server.go](../../lsp/internal/server/server.go)
+  - [ ] [lsp/internal/analyzer/analyzer.go](../../lsp/internal/analyzer/analyzer.go)
 - [ ] Explain how deterministic completion order is enforced
 - [ ] Explain when workspace symbol index is used as fallback
 
 ## First Contribution (Pick One)
 
 - [ ] Add/update a snippet in
-      [lsp/internal/analyzer/language_teach.go](../lsp/internal/analyzer/language_teach.go)
+      [lsp/internal/analyzer/language_teach.go](../../lsp/internal/analyzer/language_teach.go)
 - [ ] Add a builtin + teaching update in
-      [builtin/builtin.go](../builtin/builtin.go)
+      [builtin/builtin.go](../../builtin/builtin.go)
 - [ ] Add or tune a lint rule in
-      [lsp/internal/analyzer/diagnostics.go](../lsp/internal/analyzer/diagnostics.go)
+      [lsp/internal/analyzer/diagnostics.go](../../lsp/internal/analyzer/diagnostics.go)
 
 ## Contribution Quality Gates
 

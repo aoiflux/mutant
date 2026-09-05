@@ -24,7 +24,7 @@ Source of truth:
 | Struct/enum features    | Supported     | declarations, literals, field access/assignment                                |
 | Return/break/continue   | Supported     | control-flow propagation implemented                                           |
 | Macro system            | Supported     | macros expand before compilation here too, so quote/unquote behave as in the CLI |
-| Builtins (browser-safe) | Supported     | 213 of 427, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
+| Builtins (browser-safe) | Supported     | 213 of 428, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
 | Host-bound builtins     | Not supported | fs/process/exec/network/registry/memory/binary/disk-image families             |
 | Completion modes        | Supported     | supported (callable-now) and all (discoverability)                             |
 | Output model            | Supported     | buffered putf/putln + optional final expression append                         |
@@ -224,7 +224,7 @@ Intentionally unsupported:
 
 ## 5) Builtin Support (Current)
 
-The full standard library is **427 builtins across 33 categories** — see the
+The full standard library is **428 builtins across 33 categories** — see the
 [Capability Reference](CAPABILITY_REFERENCE.md) for the complete catalog. In the
 browser WASM REPL, the **pure-compute** families run unchanged; the **host-facing**
 families (section 6) are unavailable because the WASM sandbox has no filesystem,
