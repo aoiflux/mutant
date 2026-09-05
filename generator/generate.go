@@ -22,9 +22,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Generate function takes a `string`, it's the path for the source code
-// password: optional password for encryption (empty string for deterministic encryption)
-// privateKey: Ed25519 private key for signing (if nil, a temporary key is generated)
+// Generate compiles the source at srcpath and writes the encrypted, signed
+// artifact to dstpath.
+//
+// password is required, not optional: the encryption layer rejects an empty key
+// outright ("password cannot be empty"). This comment used to say an empty
+// string selected deterministic encryption, which was never true of the code it
+// documents -- and it is the reason passwordless --dev looked implemented while
+// no program could actually be compiled without a password. Callers that want
+// the development key must resolve it before calling. (M-1)
+//
+// privateKey: Ed25519 private key for signing (if nil, one is loaded or bootstrapped)
 func Generate(srcpath, dstpath, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) (error, errrs.ErrorType, []string) {
 	data, err := os.ReadFile(srcpath)
 	if err != nil {

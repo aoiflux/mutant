@@ -168,17 +168,56 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 	}
 }
 
-func TestRunSecureModeWithoutSignerAuthFlagSkipsSignatureVerification(t *testing.T) {
+// Secure mode without --signer-auth used to match neither verification branch
+// and so verify nothing, while --compat self-verified: the most secure-sounding
+// invocation performed the fewest checks. Self-verification is now the floor in
+// every mode, and --signer-auth upgrades it to trusted-key verification. (M-4)
+func TestSecureModeSelfVerifiesWithoutSignerAuth(t *testing.T) {
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
+
 	err, errType := Run(path, Options{SecureMode: true})
 	if err == nil {
-		t.Fatalf("expected malformed payload to fail decode")
+		t.Fatalf("expected a malformed payload to fail")
 	}
 	if errType != errrs.ERROR {
 		t.Fatalf("expected errrs.ERROR, got %q", errType)
 	}
-	if errors.Is(err, security.ErrWrongSignature) || errors.Is(err, security.ErrUntrustedSigner) {
-		t.Fatalf("expected secure mode to skip signer verification by default, got: %v", err)
+	if !errors.Is(err, security.ErrWrongSignature) && !errors.Is(err, security.ErrUntrustedSigner) {
+		t.Fatalf("expected secure mode to self-verify and reject the payload, got: %v", err)
+	}
+}
+
+// The security guarantee has to be monotonic in the mode: every check a weaker
+// mode performs, a stronger one performs too. Asserting on the returned error
+// alone cannot show this, because compat's tamper response is `warn` -- it
+// records the failure and continues, so the error that surfaces is the later
+// decode failure. The telemetry counter records the attempt itself, which is
+// the thing that must never be skipped. (M-4)
+func TestSignatureVerificationRunsInEveryMode(t *testing.T) {
+	modes := []struct {
+		name string
+		opts Options
+	}{
+		{"compat", Options{SecureMode: false}},
+		{"default (secure)", Options{SecureMode: true}},
+		{"secure with signer-auth", Options{SecureMode: true, EnforceSignerAuth: true}},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			before := security.SecurityTelemetrySnapshot()["signature_failed"]
+
+			path := writeTempPayload(t, []byte("legacy-format-payload"))
+			if err, _ := Run(path, mode.opts); err == nil {
+				t.Fatalf("expected a malformed payload to fail")
+			}
+
+			after := security.SecurityTelemetrySnapshot()["signature_failed"]
+			if after == before {
+				t.Fatalf("no signature verification was attempted in %s mode: "+
+					"the checks a mode performs must be a superset of every weaker mode's", mode.name)
+			}
+		})
 	}
 }
 

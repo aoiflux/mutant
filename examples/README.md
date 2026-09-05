@@ -9,8 +9,8 @@ compiling first, then running the `.mu` the compile writes beside the source.
 From the repository root:
 
 ```bash
-mutant gen --src examples/text/text_matching_example.mut --password <password>
-mutant examples/text/text_matching_example.mu --dev --password <password>
+mutant gen --src examples/text/text_matching_example.mut --dev
+mutant examples/text/text_matching_example.mu --dev
 ```
 
 Some examples use fixture files in:

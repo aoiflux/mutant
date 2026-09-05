@@ -111,10 +111,25 @@ func Run(srcpath string, opts Options) (error, errrs.ErrorType) {
 				return responseErr, errrs.ERROR
 			}
 		}
-	} else if !secureMode {
+	} else {
+		// Self-verification is the floor: it runs in every mode. --signer-auth in
+		// secure mode upgrades it to verification against a trusted public key.
+		//
+		// This branch used to read `else if !secureMode`, which left secure mode
+		// without --signer-auth -- a plain `mutant prog.mu` -- matching neither
+		// branch and verifying nothing at all, while --compat self-verified. The
+		// most secure-sounding invocation performed the fewest checks. Security is
+		// now monotonic in the mode. (M-4)
+		stage := "compat-mode-verify"
+		if secureMode {
+			stage = "secure-mode-self-verify"
+			fmt.Fprintln(os.Stderr, "[security] self-verification only; add --signer-auth "+
+				"(with --trusted-key <path>) to verify against a trusted public key")
+		}
+
 		if err := security.VerifyCode(signedCode); err != nil {
-			security.RecordSignatureFailure("compat-mode-verify")
-			if responseErr := security.ApplyTamperResponse("signature_failed", "compat-mode-verify", secureMode, err); responseErr != nil {
+			security.RecordSignatureFailure(stage)
+			if responseErr := security.ApplyTamperResponse("signature_failed", stage, secureMode, err); responseErr != nil {
 				return responseErr, errrs.ERROR
 			}
 		}

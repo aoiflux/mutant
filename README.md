@@ -86,24 +86,45 @@ generation, release packaging, and help.
 
 ```bash
 mutant
-mutant hello.mut --password "My$tr0ngPass!"
-mutant hello.mu --dev --password "My$tr0ngPass!"
+mutant hello.mut
+mutant hello.mu
 mutant help
 mutant help gen
 mutant help release
 ```
 
 - `mutant` starts the REPL
-- `mutant hello.mut --password ...` compiles source into encrypted bytecode,
-  writing `hello.mu` beside it. A password is required.
-- `mutant hello.mu --password ...` runs compiled bytecode in the Mutant VM
+- `mutant hello.mut` compiles source into encrypted bytecode, writing `hello.mu`
+  beside it. It prompts for a password (twice, since a typo here produces an
+  artifact nobody can open).
+- `mutant hello.mu` runs compiled bytecode in the Mutant VM, prompting for the
+  password it was encrypted with.
+
+#### Supplying the password
+
+A password is required, and by default it is never typed on the command line.
+
+| Option                    | Use it for                                                            |
+| ------------------------- | --------------------------------------------------------------------- |
+| _(nothing)_               | Interactive use. Prompts with terminal echo disabled.                 |
+| `--password-file <path>`  | Unattended runs. Refused if the file is readable by other users.      |
+| `--password-stdin`        | CI and pipelines: `mutant hello.mu --password-stdin < secret`.        |
+| `--dev`                   | Local development only. Uses a built-in key that is **not secret**.   |
+| `--password <value>`      | **Deprecated.** Visible in `ps` and shell history; warns on use.      |
+
+`--password` still works this release, but it puts the credential in argv where
+every local user can read it out of the process table. It will require an
+explicit `--password-insecure` in the next minor release.
+
+There is deliberately no environment-variable form. See
+[docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).
 
 ### Bytecode generation
 
 ```bash
-mutant gen --src hello.mut --password "My$tr0ngPass!"
-mutant gen hello.mut --password "My$tr0ngPass!"
-mutant gen hello.mut --password "My$tr0ngPass!" --mutation 5 --seed 42
+mutant gen --src hello.mut
+mutant gen hello.mut --password-file ~/.mutant/case-42.key
+mutant gen hello.mut --password-stdin --mutation 5 --seed 42 < ./secret
 ```
 
 ### Release asset generation
@@ -124,7 +145,7 @@ mutant gen --release-assets --out ./releaseassets
 ```bash
 mutant release --src hello.mut
 mutant release hello.mut --os windows --arch amd64
-mutant release hello.mut --password "My$tr0ngPass!" --mutation 5
+mutant release hello.mut --password-file ~/.mutant/release.key --mutation 5
 ```
 
 Supported release targets:
@@ -297,17 +318,17 @@ Suggested run sequence:
 
 ```bash
 # Compile, then run the bytecode each compile writes beside its source.
-mutant gen --src examples/security/security_environment_report.mut --password <password>
-mutant examples/security/security_environment_report.mu --dev --password <password>
+mutant gen --src examples/security/security_environment_report.mut --dev
+mutant examples/security/security_environment_report.mu --dev
 
-mutant gen --src examples/network/network_service_recon_graph.mut --password <password>
-mutant examples/network/network_service_recon_graph.mu --dev --password <password>
+mutant gen --src examples/network/network_service_recon_graph.mut --dev
+mutant examples/network/network_service_recon_graph.mu --dev
 
-mutant gen --src examples/binary/ioc_event_triage.mut --password <password>
-mutant examples/binary/ioc_event_triage.mu --dev --password <password>
+mutant gen --src examples/binary/ioc_event_triage.mut --dev
+mutant examples/binary/ioc_event_triage.mu --dev
 
-mutant gen --src examples/registry/persistence_triage_commands.mut --password <password>
-mutant examples/registry/persistence_triage_commands.mu --dev --password <password>
+mutant gen --src examples/registry/persistence_triage_commands.mut --dev
+mutant examples/registry/persistence_triage_commands.mu --dev
 ```
 
 Artifacts are written under `example_output/`.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mutant/cli"
+	"mutant/credential"
 	"mutant/global"
 	"mutant/mutil"
 	"mutant/runner"
@@ -41,6 +42,18 @@ type cliRuntime struct {
 	executablePath        func() (string, error)
 	getPwd                func() string
 }
+
+// defaultPasswordResolver reads the real terminal and filesystem.
+//
+// resolvePassword is a package-level var rather than a cliRuntime field on
+// purpose: tests replace runtimeDeps with a whole struct literal, so a new field
+// there defaults to nil and every test that does not know about it panics on the
+// first password resolution. A separate var stays wired unless a test
+// deliberately overrides it. (S-2)
+var (
+	defaultPasswordResolver = &credential.Resolver{}
+	resolvePassword         = defaultPasswordResolver.Resolve
+)
 
 var runtimeDeps = cliRuntime{
 	runRepl:               cli.RunRepl,
@@ -103,9 +116,14 @@ func runEmbeddedPayload(executablePath string, args []string) int {
 	opts, devMode := resolveRuntimeExecutionOptions(args)
 
 	configureSecurityLogging(args, devMode)
-	if opts.Password == "" && devMode {
-		opts.Password = runtimeDeps.getPwd()
+
+	// A standalone payload only ever decrypts, so it never confirms. (S-2)
+	password, err := resolveProgramPassword(extractPasswordRequest(args, false), devMode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
+	opts.Password = password
 
 	return runtimeDeps.runCode(executablePath, opts)
 }
@@ -121,7 +139,6 @@ func resolveRuntimeExecutionOptions(args []string) (runner.Options, bool) {
 	}
 
 	return runner.Options{
-		Password:          extractPasswordArg(args),
 		SecureMode:        secureMode,
 		EnforceSignerAuth: extractSignerAuthArg(args),
 		Timing:            hasTimingArg(args),
@@ -311,31 +328,87 @@ func isBuiltinCommand(arg string) bool {
 // executeProgramFile reports whether it handled the invocation, and the exit
 // code to leave with when it did.
 func executeProgramFile(args []string, fileArg string) (bool, int) {
-	opts, devMode := resolveRuntimeExecutionOptions(args)
-	configureSecurityLogging(args, devMode)
-
-	if strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention) {
-		return true, runtimeDeps.compileCode(fileArg, "", "", false, opts.Password, defaultPolymorphicLevel, time.Now().UnixNano())
-	}
-
-	if !strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension) {
+	isSource := strings.HasSuffix(fileArg, global.MutantSourceCodeFileExtention)
+	isCompiled := strings.HasSuffix(fileArg, global.MutantByteCodeCompiledFileExtension)
+	if !isSource && !isCompiled {
 		return false, 0
 	}
 
-	opts.Password = resolveProgramRunPassword(args, opts.Password, devMode)
+	opts, devMode := resolveRuntimeExecutionOptions(args)
+	configureSecurityLogging(args, devMode)
+
+	// The password is resolved before the extension branch rather than after it.
+	// It used to be resolved only on the .mu run path, so the .mut compile branch
+	// ran with whatever argv held -- and the encryption layer rejects an empty
+	// key. That made --dev's no-password contract unreachable: no Mutant program
+	// could be compiled without a password by any means. (M-1)
+	//
+	// isSource decides whether to confirm: compiling encrypts, and a mistyped
+	// password there produces an artifact nobody can ever open. Running only
+	// decrypts, where a wrong password simply fails. (S-2)
+	password, err := resolveProgramPassword(extractPasswordRequest(args, isSource), devMode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return true, 1
+	}
+	opts.Password = password
+
+	if isSource {
+		return true, runtimeDeps.compileCode(fileArg, "", "", false, opts.Password, defaultPolymorphicLevel, time.Now().UnixNano())
+	}
+
 	return true, runtimeDeps.runCode(fileArg, opts)
 }
 
-func resolveProgramRunPassword(args []string, password string, devMode bool) string {
-	if password == "" && devMode {
-		return runtimeDeps.getPwd()
+// resolveProgramPassword returns the password a compile or run should use, or an
+// error naming the fix when one is required and absent.
+//
+// The development-key fallback is gated on --dev alone. It used to fire whenever
+// argv happened to be exactly two items, which handed the built-in development
+// key to default (secure) mode with no flag typed and nothing printed. Because
+// the test was positional, adding a supposedly no-op --secure changed which key
+// decrypted the artifact: `mutant prog.mu` and `mutant prog.mu --secure` were
+// the same request with different keys. (M-2)
+func resolveProgramPassword(req credential.Request, devMode bool) (string, error) {
+	// --dev's built-in key applies only when the command line named no password
+	// source at all. Checking Any() rather than an empty string is what keeps
+	// --dev from silently overriding an explicit --password-file whose read
+	// failed, and what stops a dev-mode run from prompting. (M-1, M-3)
+	if !req.Any() && devMode {
+		// GetPwd() is a fixed HKDF derivation over three string constants compiled
+		// into the binary, so every Mutant binary ever built derives the identical
+		// key. Anything encrypted under it is readable by anyone holding a copy of
+		// the binary. That is a fine local convenience and it must never be silent. (M-3)
+		fmt.Fprintln(os.Stderr,
+			"[dev] no password supplied; using the built-in development key -- not for release artifacts")
+		return runtimeDeps.getPwd(), nil
 	}
 
-	if password == "" && len(args) == 2 {
-		return runtimeDeps.getPwd()
+	secret, _, err := resolvePassword(req)
+	if err != nil {
+		return "", err
 	}
 
-	return password
+	// The string conversion copies the password into immutable memory that can
+	// never be erased; zeroing the byte slice closes the half of the window that
+	// is closable today. Removing the other half means threading []byte through
+	// the encryption pipeline end to end -- see credential.Zero. (S-2)
+	defer credential.Zero(secret)
+	return string(secret), nil
+}
+
+// refuseDevModeForRelease rejects --dev on any command that produces a release
+// artifact. The development key is public by construction, so an artifact built
+// under it has no confidentiality -- acceptable in an edit-compile-run loop,
+// never in something shipped. (M-3)
+func refuseDevModeForRelease(args []string) error {
+	if !hasDevModeArg(args) {
+		return nil
+	}
+
+	return errors.New("--dev cannot be used when producing a release artifact: the development " +
+		"key is a compile-time constant shared by every Mutant binary, so the artifact would " +
+		"have no confidentiality. Pass --password <value> instead")
 }
 
 func handleGenCommand(args []string) int {
@@ -357,6 +430,11 @@ func handleReleaseCommand(args []string) int {
 		return 0
 	}
 
+	if err := refuseDevModeForRelease(args); err != nil {
+		printCommandError(err, RELEASECMD)
+		return 1
+	}
+
 	return handleReleaseCompileCommand(args)
 }
 
@@ -370,6 +448,11 @@ func printGenCommandHelp(args []string) {
 }
 
 func handleGenAssetsCommand(args []string) int {
+	if err := refuseDevModeForRelease(args); err != nil {
+		printCommandError(err, "gen assets")
+		return 1
+	}
+
 	out, err := prepareReleaseAssetsGeneration(args)
 	if err != nil {
 		printCommandError(err, "gen assets")
@@ -382,10 +465,25 @@ func handleGenAssetsCommand(args []string) int {
 }
 
 func handleGenCompileCommand(args []string) int {
-	src, password, mutationLevel, mutationSeed, err := prepareGenRun(args)
+	src, request, mutationLevel, mutationSeed, err := prepareGenRun(args)
 	if err != nil {
 		printCommandError(err, args[1])
 		printGenHelp(args[1] == RUNCMD)
+		return 1
+	}
+
+	// Resolved after argument validation so a malformed command line fails on
+	// the malformed part rather than prompting for a password it will not use.
+	//
+	// --dev is honoured here for the same reason it is on `mutant file.mut`:
+	// the two are the same operation typed two ways, and having one of them
+	// accept the development key while the other silently prompted was a
+	// difference nobody could have predicted from the flag. `gen` produces a
+	// .mu for local use; `release` and `gen assets` still refuse --dev, because
+	// those produce artifacts that ship. (M-1, S-2)
+	password, err := resolveProgramPassword(request, hasDevModeArg(args))
+	if err != nil {
+		printCommandError(err, args[1])
 		return 1
 	}
 
@@ -395,10 +493,16 @@ func handleGenCompileCommand(args []string) int {
 
 func handleReleaseCompileCommand(args []string) int {
 
-	src, goos, goarch, password, mutationLevel, mutationSeed, err := prepareRelease(args)
+	src, goos, goarch, request, mutationLevel, mutationSeed, err := prepareRelease(args)
 	if err != nil {
 		printCommandError(err, RELEASECMD)
 		printReleaseHelp()
+		return 1
+	}
+
+	password, err := resolveProgramPassword(request, false)
+	if err != nil {
+		printCommandError(err, RELEASECMD)
 		return 1
 	}
 
@@ -437,8 +541,8 @@ Secure-by-default programming language and toolchain.
 
 Usage:
   mutant
-  mutant <file.mut> --password <value>
-  mutant <file.mu> [runtime options]
+  mutant <file.mut> [password options]
+  mutant <file.mu> [runtime options] [password options]
   mutant gen [options] --src <file.mut>
   mutant gen assets [options]
   mutant release [options] --src <file.mut>
@@ -462,6 +566,16 @@ Global options:
   -em, --enable-macros       Start the REPL with experimental macros enabled.
   --repl-theme <name>        REPL theme: default, neon, pastel, forest, sunset.
 
+Password options:
+  (none)                     Prompt on the terminal with echo off. Preferred.
+  --password-file PATH       Read the password from PATH. Refused if the file is
+                             readable by other users (POSIX permissions only).
+  --password-stdin           Read the password from stdin, for CI and pipelines.
+  --password <value>         DEPRECATED: visible in the process table and shell
+                             history. Warns on use; will require
+                             --password-insecure in the next minor release.
+  --password-insecure <v>    Same as --password, opted into explicitly.
+
 Runtime options:
   --secure                   Enforce secure mode. Default behavior.
   --compat                   Use compatibility mode with weaker security checks.
@@ -478,10 +592,12 @@ Examples:
   mutant --enable-macros
   mutant --repl-theme neon
   mutant --enable-macros --repl-theme sunset
-  mutant hello.mut --password "My$tr0ngPass!"
-  mutant hello.mu --secure --signer-auth --password "My$tr0ngPass!"
-  mutant hello.mu --timing --password "My$tr0ngPass!"
-  mutant gen --src hello.mut --password "My$tr0ngPass!"
+  mutant hello.mut                       (prompts, and confirms, for a password)
+  mutant hello.mu                        (prompts for a password)
+  mutant hello.mu --secure --signer-auth
+  mutant hello.mu --timing
+  mutant hello.mu --password-file ~/.mutant/case-42.key
+  mutant gen --src hello.mut --password-stdin < ./secret
   mutant gen assets --out ./releaseassets
   mutant release --src hello.mut --os windows --arch amd64 --mutation 5
   mutant fmt examples/
@@ -511,7 +627,9 @@ Usage:
 
 Options:
   --src <file>         Path to the .mut source file.
-  --password <value>   Encrypt output with a password. Required.
+  --password-file PATH Read the encryption password from PATH.
+  --password-stdin     Read the encryption password from stdin.
+  --password <value>   DEPRECATED: visible in the process table. Warns on use.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
   --seed <int64>       Build seed: reproduces the bytecode (mutations and
@@ -519,13 +637,16 @@ Options:
                        every build. Default: current timestamp.
   -h, --help           Show command help.
 
+With no password option the password is prompted for twice, so a typo cannot
+produce an artifact nobody can open.
+
 Examples:
-  mutant %s --src hello.mut --password "My$tr0ngPass!"
-  mutant %s hello.mut --password "My$tr0ngPass!"
-  mutant %s hello.mut --password "My$tr0ngPass!" --mutation 5 --seed 42
+  mutant %s --src hello.mut
+  mutant %s hello.mut --password-file ~/.mutant/case-42.key
+  mutant %s hello.mut --password-stdin --mutation 5 --seed 42 < ./secret
 
 The compiled .mu lands beside the source. Run it with:
-  mutant hello.mu --dev --password "My$tr0ngPass!"
+  mutant hello.mu --password-file ~/.mutant/case-42.key
 `, commandName, description, commandName, commandName, defaultPolymorphicLevel, commandName, commandName, commandName)
 }
 
@@ -562,7 +683,9 @@ Options:
   --src <file>         Path to the .mut source file.
   --os <name>          Target OS. Default: current host OS.
   --arch <name>        Target architecture. Default: current host architecture.
-  --password <value>   Encrypt output with a password.
+  --password-file PATH Read the encryption password from PATH.
+  --password-stdin     Read the encryption password from stdin.
+  --password <value>   DEPRECATED: visible in the process table. Warns on use.
   --pwd <value>        Alias for --password.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
   --seed <int64>       Build seed: reproduces the bytecode (mutations and
@@ -579,7 +702,10 @@ Supported architecture values:
 Examples:
   mutant release --src hello.mut
   mutant release hello.mut --os windows --arch amd64
-  mutant release hello.mut --password "My$tr0ngPass!" --mutation 5
+  mutant release hello.mut --password-file ~/.mutant/release.key --mutation 5
+
+--dev is refused here: the development key is a compile-time constant shared by
+every Mutant binary, so a release built under it has no confidentiality.
 `, defaultPolymorphicLevel)
 }
 
@@ -724,31 +850,65 @@ func extractSignerAuthArg(args []string) bool {
 	return enforceSignerAuth
 }
 
-// extractPasswordArg scans args for -password|-pwd or --password=|--pwd=<value>
-func extractPasswordArg(args []string) string {
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "-password" || args[i] == "-pwd" || args[i] == "--password" || args[i] == "--pwd" {
-			return args[i+1]
-		}
+// extractPasswordRequest collects every password source named on the command
+// line. It reports what was asked for; credential.Resolver decides what that
+// means, including rejecting a command line that names more than one. (S-2)
+func extractPasswordRequest(args []string, confirm bool) credential.Request {
+	return credential.Request{
+		Inline:   extractFlagValue(args, "password", "pwd"),
+		Insecure: extractFlagValue(args, "password-insecure"),
+		FilePath: extractFlagValue(args, "password-file"),
+		Stdin:    hasBoolFlag(args, "password-stdin"),
+		Confirm:  confirm,
 	}
+}
+
+// extractFlagValue returns the value of the first of names present in args,
+// accepting `-name value`, `--name value`, `-name=value` and `--name=value`.
+func extractFlagValue(args []string, names ...string) string {
 	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "--password=") {
-			return strings.TrimPrefix(args[i], "--password=")
-		}
-		if strings.HasPrefix(args[i], "--pwd=") {
-			return strings.TrimPrefix(args[i], "--pwd=")
-		}
-		if strings.HasPrefix(args[i], "-password=") {
-			return strings.TrimPrefix(args[i], "-password=")
-		}
-		if strings.HasPrefix(args[i], "-pwd=") {
-			return strings.TrimPrefix(args[i], "-pwd=")
+		for _, name := range names {
+			if i+1 < len(args) && (args[i] == "-"+name || args[i] == "--"+name) {
+				return args[i+1]
+			}
+			for _, prefix := range []string{"--" + name + "=", "-" + name + "="} {
+				if strings.HasPrefix(args[i], prefix) {
+					return strings.TrimPrefix(args[i], prefix)
+				}
+			}
 		}
 	}
 	return ""
 }
 
-func prepareRelease(args []string) (string, string, string, string, int, int64, error) {
+func hasBoolFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == "-"+name || arg == "--"+name {
+			return true
+		}
+	}
+	return false
+}
+
+// registerPasswordFlags declares the password flags on a subcommand FlagSet.
+//
+// The values are deliberately discarded: extractPasswordRequest reads the raw
+// command line, so it stays the single place that knows how a password source
+// is spelled. These declarations exist so the FlagSet -- which runs with
+// flag.ExitOnError -- does not abort on a flag it has never heard of, and so
+// they appear in the subcommand's own -h output. (S-2)
+func registerPasswordFlags(fs *flag.FlagSet) {
+	var (
+		discardString string
+		discardBool   bool
+	)
+	fs.StringVar(&discardString, "password-file", "", "Read the encryption password from this file")
+	fs.StringVar(&discardString, "password-insecure", "", "Password on argv, opted into explicitly")
+	fs.BoolVar(&discardBool, "password-stdin", false, "Read the encryption password from stdin")
+	fs.BoolVar(&discardBool, "dev", false, "Use the built-in development key (local development only)")
+}
+
+func prepareRelease(args []string) (string, string, string, credential.Request, int, int64, error) {
 	var goos, goarch, src, password string
 	var mutationLevel int
 	var mutationSeed int64
@@ -758,44 +918,47 @@ func prepareRelease(args []string) (string, string, string, string, int, int64, 
 	releasecmd.StringVar(&src, "src", "", "Mutant Source Code File Path by using -src flag")
 	releasecmd.StringVar(&goos, "os", runtime.GOOS, "Use thie flag to specify target OS for cross-compilation by using -os flag")
 	releasecmd.StringVar(&goarch, "arch", runtime.GOARCH, "Use thie flag to specify target Architecture for cross-compilation by using -arch flag")
-	releasecmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
+	releasecmd.StringVar(&password, "password", "", "Password on argv (deprecated -- visible in the process table)")
 	releasecmd.StringVar(&password, "pwd", "", "Short for -password")
+	registerPasswordFlags(releasecmd)
 	releasecmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := releasecmd.Parse(filterSourceArgs(args[2:])); err != nil {
-		return "", "", "", "", 0, 0, err
+		return "", "", "", credential.Request{}, 0, 0, err
 	}
 
 	if src == "" {
 		src = findSourceArg(args[2:])
 	}
 
-	if password == "" {
-		password = extractPasswordArg(args)
+	// release compiles, so it confirms an interactively typed password. (S-2)
+	request := extractPasswordRequest(args, true)
+	if request.Inline == "" {
+		request.Inline = password
 	}
 
 	if releasecmd.Parsed() {
 		if src == "" {
-			return "", "", "", "", 0, 0, errors.New("mutant source code file path is required, please use -src flag")
+			return "", "", "", request, 0, 0, errors.New("mutant source code file path is required, please use -src flag")
 		}
 
 		if !strings.HasSuffix(src, global.MutantSourceCodeFileExtention) {
-			return "", "", "", "", 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
+			return "", "", "", request, 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
 		}
 
 		absSrc, err := filepath.Abs(src)
 		if err != nil {
-			return "", "", "", "", 0, 0, err
+			return "", "", "", request, 0, 0, err
 		}
 
-		return absSrc, goos, goarch, password, mutationLevel, mutationSeed, nil
+		return absSrc, goos, goarch, request, mutationLevel, mutationSeed, nil
 	}
 
-	return "", "", "", "", 0, 0, errors.New("could not parse values")
+	return "", "", "", request, 0, 0, errors.New("could not parse values")
 }
 
-func prepareGenRun(args []string) (string, string, int, int64, error) {
+func prepareGenRun(args []string) (string, credential.Request, int, int64, error) {
 	var src, password string
 	var mutationLevel int
 	var mutationSeed int64
@@ -803,41 +966,44 @@ func prepareGenRun(args []string) (string, string, int, int64, error) {
 	gencmd := flag.NewFlagSet(GENCMD, flag.ExitOnError)
 
 	gencmd.StringVar(&src, "src", "", "Mutant Source Code File Path by using -src flag")
-	gencmd.StringVar(&password, "password", "", "Optional password for encryption (leave empty for deterministic encryption)")
+	gencmd.StringVar(&password, "password", "", "Password on argv (deprecated -- visible in the process table)")
 	gencmd.StringVar(&password, "pwd", "", "Short for -password")
+	registerPasswordFlags(gencmd)
 	gencmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	gencmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := gencmd.Parse(filterSourceArgs(args[2:])); err != nil {
-		return "", "", 0, 0, err
+		return "", credential.Request{}, 0, 0, err
 	}
 
 	if src == "" {
 		src = findSourceArg(args[2:])
 	}
 
-	if password == "" {
-		password = extractPasswordArg(args)
+	// gen compiles, so it confirms an interactively typed password. (S-2)
+	request := extractPasswordRequest(args, true)
+	if request.Inline == "" {
+		request.Inline = password
 	}
 
 	if gencmd.Parsed() {
 		if src == "" {
-			return "", "", 0, 0, errors.New("mutant source code file path is required, please use -src flag")
+			return "", request, 0, 0, errors.New("mutant source code file path is required, please use -src flag")
 		}
 
 		if !strings.HasSuffix(src, global.MutantSourceCodeFileExtention) {
-			return "", "", 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
+			return "", request, 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
 		}
 
 		absSrc, err := filepath.Abs(src)
 		if err != nil {
-			return "", "", 0, 0, err
+			return "", request, 0, 0, err
 		}
 
-		return absSrc, password, mutationLevel, mutationSeed, nil
+		return absSrc, request, mutationLevel, mutationSeed, nil
 	}
 
-	return "", "", 0, 0, errors.New("could not parse values")
+	return "", request, 0, 0, errors.New("could not parse values")
 }
 
 func hasReleaseAssetsArg(args []string) bool {

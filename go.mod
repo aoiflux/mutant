@@ -96,6 +96,7 @@ require (
 	github.com/mandiant/GoReSym v1.7.1
 	github.com/richardlehane/mscfb v1.0.7
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 	modernc.org/sqlite v1.56.0
 	www.velocidex.com/golang/evtx v0.2.0
 )

@@ -4,8 +4,8 @@ Run from repository root (compile, then run the bytecode it writes
 beside the source):
 
 ```bash
-mutant gen --src examples/lua/lua_run_file_example.mut --password <password>
-mutant examples/lua/lua_run_file_example.mu --dev --password <password>
+mutant gen --src examples/lua/lua_run_file_example.mut --dev
+mutant examples/lua/lua_run_file_example.mu --dev
 ```
 
 Scripts:

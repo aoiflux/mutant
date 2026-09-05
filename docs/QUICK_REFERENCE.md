@@ -70,7 +70,10 @@ a run is a flag, so the command line is a complete record of it. See
 | `--dev` | Implies `--compat`, plus local password fallback. |
 | `--signer-auth` / `--no-signer-auth` | Require or skip trusted signer verification in secure mode. |
 | `--trusted-key <path>` | Verify against the hex-encoded public key in this file. |
-| `--password <pw>` | Decryption password. |
+| _(no password flag)_ | Prompt for the password with terminal echo off. The default. |
+| `--password-file <path>` | Read the password from a file. Refused if other users can read it. |
+| `--password-stdin` | Read the password from stdin, for CI and pipelines. |
+| `--password <pw>` | **Deprecated:** password on argv, visible in the process table. Warns on use. |
 | `--security-log-level <level>` | Security logging verbosity in dev mode. |
 | `--timing` | Per-stage run timing on stderr. |
 

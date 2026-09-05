@@ -5,14 +5,23 @@ behavior.
 
 ## 1) Is encryption password-based or deterministic?
 
-Both are supported.
+Password-based, always. There is no deterministic mode.
 
-1. If password is provided (`-password` or `-pwd`), password-based KDF path is
-   used.
-2. If password is omitted, deterministic mode is used.
+1. A password is required. The KDF path is the only path.
+2. Omitting a password is an error, not a fallback -- except under `--dev`,
+   which substitutes a built-in development key and says so on stderr. That key
+   is a compile-time constant shared by every Mutant binary, so it offers no
+   confidentiality and is refused for release artifacts.
 
-In both modes, runtime decrypts before execution and does not rely on plaintext
-bytecode files.
+This answer previously said an omitted password selected a deterministic mode.
+That was never true of the code: the encryption layer rejects an empty key
+outright. The claim also appeared in a comment on `generator.Generate`, and both
+were corrected together.
+
+The password itself does not have to appear on the command line -- prompt,
+`--password-file`, and `--password-stdin` are all supported, and `--password` is
+deprecated. In every case the runtime decrypts before execution and never relies
+on plaintext bytecode files.
 
 ## 2) How is authenticity enforced?
 

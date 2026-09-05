@@ -4,8 +4,8 @@ Run from repository root (compile, then run the bytecode it writes
 beside the source):
 
 ```bash
-mutant gen --src examples/network/cloud_metadata_checker.mut --password <password>
-mutant examples/network/cloud_metadata_checker.mu --dev --password <password>
+mutant gen --src examples/network/cloud_metadata_checker.mut --dev
+mutant examples/network/cloud_metadata_checker.mu --dev
 ```
 
 Scripts:

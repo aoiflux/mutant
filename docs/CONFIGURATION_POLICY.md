@@ -145,6 +145,40 @@ Preference order for anything new:
    material**: a path is safe to record in case notes, a private key is not.
 3. **A fixed default** if neither fits. Most things belong here.
 
+### Credentials are the exception to rule 1
+
+A password is the one input that must **not** travel as a flag value, and the
+policy above is what forces the shape of the alternative.
+
+An environment variable would be the obvious answer and is ruled out here: it is
+inherited by every child process, survives in the parent shell, and never
+appears in the command line an analyst records. That it is also a configuration
+read makes it doubly excluded, but it would be the wrong answer even if the
+policy allowed it.
+
+An argv flag is not much better. `--password <value>` is visible in `ps`, Task
+Manager, and process-creation EDR telemetry for the whole life of the process,
+and it lands in shell history. The command line being *recorded* is exactly the
+property this document wants everywhere else, and exactly the property a
+credential must not have.
+
+So credentials use rule 1's structure with the value removed:
+
+| Source                   | Shape                                          |
+| ------------------------ | ---------------------------------------------- |
+| Interactive prompt       | Nothing is recorded anywhere. The default.     |
+| `--password-file <path>` | Rule 2: a **path** on argv, content on disk.   |
+| `--password-stdin`       | A pipe. Nothing on argv, nothing on disk.      |
+
+`--password` still works and warns; it will require an explicit
+`--password-insecure` in the next minor release. See `credential/credential.go`.
+
+The `--password-file` permission check is POSIX-only. On Windows the mode bits
+`os.FileInfo` reports are synthesised from the read-only attribute rather than
+read from the ACL that governs access, so enforcing `0600` there would pass for
+a file granted to Everyone and fail for nothing. It is skipped rather than
+faked.
+
 ### What is not configurable, and why
 
 So a reader does not go looking for a switch that is not there:
