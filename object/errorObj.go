@@ -9,7 +9,25 @@ import (
 type Error struct {
 	Message string
 	Context string
-	Related map[string]string
+
+	// Related carries whatever else the raiser knows: the path that failed, the
+	// offset it failed at, the bytes actually read, the record that was being
+	// parsed. It is Object-valued rather than string-valued so an integer stays
+	// an integer and a buffer stays a buffer. An error that has to spell every
+	// fact as text forces its reader to parse them back out, and the parse is
+	// where facts get lost -- a 20-byte serial becomes a truncated one, an
+	// offset becomes a string that sorts lexically.
+	//
+	// Two things follow from Object being an interface rather than a string:
+	//
+	//   - Inspect renders each value through the value's own Inspect, and
+	//     Inspect is the de-facto identity function for error equality, so two
+	//     errors compare equal only when their related values render alike.
+	//   - Anything that gob-encodes an Error must register the concrete object
+	//     types first, via serialize.RegisterGobTypes. This used to be a plain
+	//     struct of concrete types that needed no registration. It is not one
+	//     any more.
+	Related map[string]Object
 
 	// File, Line and Column locate the call that produced the error. They are
 	// stamped by the VM, which is the only place that knows both the error and
@@ -134,6 +152,16 @@ func (e *Error) Traceback() string {
 	return "\t" + strings.Join(e.Stack, "\n\t")
 }
 
+// inspectRelated renders one related value. A key present with a nil value is
+// a bug in whatever raised the error, and this is the report trying to explain
+// an earlier failure -- so it names the hole rather than panicking inside it.
+func inspectRelated(value Object) string {
+	if value == nil {
+		return "null"
+	}
+	return value.Inspect()
+}
+
 func (e *Error) Type() ObjectType { return ERROR_OBJ }
 func (e *Error) Inspect() string {
 	if e == nil {
@@ -156,7 +184,7 @@ func (e *Error) Inspect() string {
 
 		relatedParts := make([]string, 0, len(keys))
 		for _, key := range keys {
-			relatedParts = append(relatedParts, fmt.Sprintf("%s=%s", key, e.Related[key]))
+			relatedParts = append(relatedParts, fmt.Sprintf("%s=%s", key, inspectRelated(e.Related[key])))
 		}
 		parts = append(parts, "related={"+strings.Join(relatedParts, ",")+"}")
 	}

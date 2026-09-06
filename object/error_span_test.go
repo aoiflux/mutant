@@ -133,3 +133,43 @@ func TestErrorInspectCarriesPositionButNotTheStack(t *testing.T) {
 		t.Errorf("Traceback lost a frame: %q", err.Traceback())
 	}
 }
+
+// Related is Object-valued, so Inspect must render each value through the
+// value's own Inspect rather than through %s on a string. The three types here
+// are the ones that would render wrong under the old map[string]string: an
+// integer would have had to be pre-formatted by the raiser, and a buffer would
+// have had to be pre-hexed -- which is the lossy step the widening removes.
+func TestErrorInspectRendersRelatedThroughEachValue(t *testing.T) {
+	err := &Error{
+		Message: "read failed",
+		Related: map[string]Object{
+			"path":   &String{Value: "/etc/shadow"},
+			"offset": &Integer{Value: 4096},
+			"magic":  &Bytes{Value: []byte{0x4d, 0x5a}},
+		},
+	}
+
+	inspected := err.Inspect()
+	for _, want := range []string{"path=/etc/shadow", "offset=4096", "magic=4d5a"} {
+		if !strings.Contains(inspected, want) {
+			t.Errorf("Inspect lost %q: %q", want, inspected)
+		}
+	}
+
+	// Sorted keys, because Inspect is the de-facto identity function for error
+	// equality and Go map order is not stable. Two errors built from the same
+	// facts have to render identically or they compare unequal at random.
+	if !strings.Contains(inspected, "related={magic=4d5a,offset=4096,path=/etc/shadow}") {
+		t.Errorf("related values are not in sorted key order: %q", inspected)
+	}
+}
+
+// A key present with a nil value is a bug in the raiser, but Inspect is the
+// report explaining an earlier failure -- it must name the hole, not panic in it.
+func TestErrorInspectSurvivesANilRelatedValue(t *testing.T) {
+	err := &Error{Message: "boom", Related: map[string]Object{"why": nil}}
+
+	if got := err.Inspect(); !strings.Contains(got, "why=null") {
+		t.Errorf("nil related value rendered as %q", got)
+	}
+}

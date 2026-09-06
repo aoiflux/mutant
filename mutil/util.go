@@ -12,6 +12,7 @@ import (
 	"mutant/global"
 	"mutant/object"
 	"mutant/security"
+	"mutant/serialize"
 	"slices"
 	"strconv"
 	"strings"
@@ -265,7 +266,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 	// also the value most worth covering: its Message carries the path that
 	// failed, and SourceLine carries a line of the program itself.
 	//
-	// It is encoded whole rather than field by field. Error has eleven fields and
+	// It is encoded whole rather than field by field. Error has ten fields and
 	// gains more over time; encrypting a chosen few would leave the rest in the
 	// clear and would go stale the next time one is added.
 	case object.ERROR_OBJ:
@@ -305,14 +306,27 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 
 // encodeError and decodeError serialise an *object.Error so it can be covered
 // by the same XOR every other stored value gets. gob is used rather than a
-// hand-rolled layout because Error is a plain struct of concrete types, so the
-// encoding stays correct as fields are added -- which is the failure mode a
-// hand-rolled one would have.
+// hand-rolled layout because Error gains fields over time and the encoding
+// stays correct as it does -- which is the failure mode a hand-rolled one
+// would have.
 //
-// No gob.Register is needed: the value is encoded as a concrete *object.Error,
-// never through an interface. That is also why this does not belong in the
-// serialize package, whose list exists for the constant pool's interface field.
+// The registration is not optional, and it is not defensive. Related is
+// map[string]object.Object, so an error carrying any context at all is encoded
+// through an interface, and gob refuses a concrete type it was not told about.
+// It refuses by returning an error -- and both callers of EncryptObject keep
+// the plaintext object when this fails, so an unregistered type would not fail
+// loudly. It would quietly store the error, its message and its copied source
+// line in the clear, which is the one outcome this function exists to prevent.
+//
+// This used to read "no gob.Register is needed: Error is a plain struct of
+// concrete types". That stopped being true when Related was widened from
+// map[string]string, so the registration moved in rather than the list being
+// copied here -- serialize owns the one list precisely so it cannot be
+// duplicated into a second one that drifts. RegisterGobTypes is a sync.Once,
+// so calling it on every error costs a mutex read.
 func encodeError(errObj *object.Error) ([]byte, error) {
+	serialize.RegisterGobTypes()
+
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(errObj); err != nil {
 		return nil, err
@@ -321,6 +335,8 @@ func encodeError(errObj *object.Error) ([]byte, error) {
 }
 
 func decodeError(encoded []byte) (*object.Error, error) {
+	serialize.RegisterGobTypes()
+
 	var errObj object.Error
 	if err := gob.NewDecoder(bytes.NewReader(encoded)).Decode(&errObj); err != nil {
 		return nil, err

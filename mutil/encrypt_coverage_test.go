@@ -194,11 +194,21 @@ func TestMultiValueRoundTrips(t *testing.T) {
 
 // The whole error is encoded rather than a chosen few fields, so this checks the
 // ones most easily forgotten: the position, the copied source line and the stack.
+//
+// Related is deliberately populated with three different concrete types. It is
+// the only interface-typed field on Error, so it is the only one that can fail
+// for a reason the other fields cannot: gob refusing a type it was not told
+// about. That failure is silent at this layer -- EncryptObject's callers keep
+// the plaintext object -- so a round trip is the only thing that catches it.
 func TestErrorRoundTripsWholeStruct(t *testing.T) {
 	in := &object.Error{
-		Message:    "fs_read: open /etc/shadow: permission denied",
-		Context:    "builtin.fs_read",
-		Related:    map[string]string{"path": "/etc/shadow"},
+		Message: "fs_read: open /etc/shadow: permission denied",
+		Context: "builtin.fs_read",
+		Related: map[string]object.Object{
+			"path":  &object.String{Value: "/etc/shadow"},
+			"errno": &object.Integer{Value: 13},
+			"magic": &object.Bytes{Value: []byte{0x4d, 0x5a}},
+		},
 		File:       "prog.mut",
 		Line:       12,
 		Column:     5,
