@@ -1017,6 +1017,14 @@ var builtinDocs = map[string]builtinDoc{
 			param("fn", "Key function called per element: (element) or (element, index).", ParamFn),
 		},
 		returns: ret("a new array sorted by the callback's key", ParamArray)},
+	BuiltinNameWithResource: {
+		signature: "with_resource(resource, closer, fn)", summary: "Calls fn with a resource an open call returned and always closes it afterwards -- whether fn returns a value, returns an error, or fails outright. closer is the name of a closing builtin (\"ntfs_close\") or a function taking the resource. If the open itself failed, fn never runs and the open's error comes back unchanged, so wrapping an existing call in with_resource does not change what the program sees. Returns (value, err): value is what fn returned, and err is the first failure among the open, an error fn returned, and the close. When fn and the close both fail, fn's error is the one returned and the close's is attached to it as related[\"close_error\"].",
+		params: []builtinParamDoc{
+			param("resource", "What an open call returned: a (handle, err) pair, or the handle itself.", ParamAny),
+			param("closer", "Name of the builtin that closes the resource, or a function taking it.", ParamString, ParamFn),
+			param("fn", "Function called with the resource: (resource).", ParamFn),
+		},
+		returns: pairRet("what fn returned, and the first failure among the open, fn and the close", ParamAny)},
 	BuiltinNameKeys: {
 		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
 		params:  []builtinParamDoc{param("hash", "Hash to read keys from.", ParamHash)},

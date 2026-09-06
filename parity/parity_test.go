@@ -294,6 +294,63 @@ func TestErrorConstructorParity(t *testing.T) {
 	}
 }
 
+// with_resource makes the same promise in both engines, and the shapes it has
+// to agree on are the ones a program can see: what a completed call returns,
+// what a body's error becomes, whether the (value, err) convention is unwrapped
+// on the way out, and which mistakes are refused.
+//
+// A channel stands in for the twenty handle families because its closure is
+// observable from inside the language -- sending on a closed channel is an
+// error -- so the harness can ask whether the closer ran instead of assuming
+// it. Every program below opens its own channel, since the two engines run
+// against the same package-level handle store and a leaked handle would make
+// the next case's numbering depend on the previous one's outcome.
+//
+// The engines' one real difference is deliberately not here: a body that gives
+// up reaches the VM as a Go error and the tree-walker as a fault, and the run
+// ends either way, so there is no value left to compare. Each engine's own
+// tests pin that the closer still ran.
+func TestWithResourceParity(t *testing.T) {
+	inputs := []string{
+		`type_of(with_resource(chan_new(1), "chan_close", fn(c) { return 1; }))`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 42; }); v`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 42; }); type_of(e)`,
+		// The body's error is what comes back, and the value slot is null.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return error("gave up", "test"); }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return error("gave up"); }); type_of(v)`,
+		// A body ending in a fallible call hands its caller the halves, not a
+		// MULTI_VALUE to take apart.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return chan_send(c, 7, 0); }); v`,
+		// The closer really runs: the handle the body returns is already closed.
+		`let h, e = with_resource(chan_new(1), "chan_close", fn(c) { return c; }); let s, se = chan_send(h, 1, 0); s`,
+		// A closer may be a function rather than a name.
+		`let v, e = with_resource(chan_new(1), fn(c) { return chan_close(c); }, fn(c) { return 9; }); v`,
+		// A handle passed bare, rather than as the pair an opener returns.
+		`let c, ce = chan_new(1); let v, e = with_resource(c, "chan_close", fn(h) { return h == c; }); v`,
+		// Both engines must refuse the same mistakes, with the same message.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 1; }, 4); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_clos", fn(c) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "each", fn(c) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c, extra) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", 7); e.message`,
+		`let v, e = with_resource(chan_new(1), 7, fn(c) { return 1; }); e.message`,
+		// The open's own error passes through unchanged.
+		`let v, e = with_resource(ntfs_open("/no/such/image.dd"), "ntfs_close", fn(h) { return 1; }); e.context`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+}
+
 func TestMacroExpansionMatchesDirectCompilation(t *testing.T) {
 	inputs := []string{
 		"1 + 2", "10 - 3", "6 * 7", "20 / 4", "7 % 3", "-5 + 2",

@@ -27,6 +27,11 @@ var (
 	peachBuiltin  = &BuiltIn{Fn: higherOrderStub("peach")}
 	spawnBuiltin  = &BuiltIn{Fn: higherOrderStub("spawn")}
 
+	// with_resource calls a user function too, and for the same reason: the
+	// guarantee it makes is that the closer runs after the body, which means
+	// it has to be the one running the body.
+	withResourceBuiltin = &BuiltIn{Fn: higherOrderStub(BuiltinNameWithResource)}
+
 	// These two answer for themselves outside an executor -- "no serve context"
 	// is a real answer, not a failure -- so they are registered with their real
 	// implementations rather than a stub.
@@ -43,6 +48,8 @@ var executorNativeKinds = map[*BuiltIn]string{
 	pmapBuiltin:   "pmap",
 	peachBuiltin:  "peach",
 	spawnBuiltin:  "spawn",
+
+	withResourceBuiltin: BuiltinNameWithResource,
 
 	serveConnBuiltin: "serve_conn",
 	serveArgBuiltin:  "serve_arg",

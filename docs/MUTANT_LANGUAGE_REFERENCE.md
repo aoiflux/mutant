@@ -146,6 +146,48 @@ Two errors are equal when their `message`, `context` and `related` match.
 Position is deliberately not compared: the same failure raised from two places is
 the same failure, and a program that cares where reads `err.line`.
 
+### Closing what you open (`with_resource`)
+
+Twenty builtin families hand back a handle you are expected to close: the
+filesystem and disk-image readers, `zip_open`/`tar_open`, `hive_open`,
+`reg_open`, `db_open`, `cache_open`, `hashset_load`, `chan_new`,
+`net_connect`/`net_listen`. Those handles live in a store with no eviction, so
+one you forget is held until the process exits — invisible in a script that
+opens an image and stops, descriptor exhaustion in a loop over a corpus or a
+long-running server.
+
+`with_resource(resource, closer, fn)` makes the close happen:
+
+```mutant
+let files, err = with_resource(ntfs_open("disk.img"), "ntfs_close", fn(img) {
+    let names, list_err = ntfs_list_files(img["handle"], "/");
+    if (list_err) { return list_err; }
+    return names;
+});
+```
+
+The closer runs whatever the body does — returns a value, returns an error, or
+fails outright. That is the difference between this and remembering to write the
+close yourself: there is no path out of the body that skips it.
+
+- **It is transparent to a failed open.** If `ntfs_open` fails, the body never
+  runs and you get exactly the error `let img, err = ntfs_open(...)` would have
+  given you. Wrapping an existing call changes nothing else about it.
+- **The `(value, err)` convention passes through.** A body ending in a fallible
+  call hands you its two halves, not a pair to take apart. A body that *returns*
+  an error fills the error slot.
+- **The closer is a name or a function.** `"ntfs_close"` names the builtin;
+  `fn(h) { ... }` is for cleanup that is more than one call. Naming it as a
+  string is what lets the editor check the spelling.
+- **When the body and the close both fail**, the body's error is the one you
+  get, with the close's attached as `err.related["close_error"]`.
+
+The editor reports the handles this does not cover. `unclosedResource` warns
+when an opener's result is bound to a name that nothing in the same scope
+closes, and stays quiet whenever it cannot see the whole lifetime — a handle
+returned to a caller, handed to a helper, or held by a server that runs until
+it is interrupted.
+
 ### Binding several names at once
 
 `let a, b = ...` binds more than one name from a single expression. What it does
@@ -501,7 +543,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 
 ## Builtins
 
-**Total builtins currently registered: 458**, across 34 capability categories.
+**Total builtins currently registered: 459**, across 34 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 

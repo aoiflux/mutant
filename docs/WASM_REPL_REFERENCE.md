@@ -24,7 +24,7 @@ Source of truth:
 | Struct/enum features    | Supported     | declarations, literals, field access/assignment                                |
 | Return/break/continue   | Supported     | control-flow propagation implemented                                           |
 | Macro system            | Supported     | macros expand before compilation here too, so quote/unquote behave as in the CLI |
-| Builtins (browser-safe) | Supported     | 238 of 458, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
+| Builtins (browser-safe) | Supported     | 238 of 459, derived from `builtin/metadata.go` rather than hand-listed (section 5) |
 | Host-bound builtins     | Not supported | fs/process/exec/network/registry/memory/binary/disk-image families             |
 | Completion modes        | Supported     | supported (callable-now) and all (discoverability)                             |
 | Output model            | Supported     | buffered putf/putln + optional final expression append                         |
@@ -224,7 +224,7 @@ Intentionally unsupported:
 
 ## 5) Builtin Support (Current)
 
-The full standard library is **458 builtins across 34 categories** — see the
+The full standard library is **459 builtins across 34 categories** — see the
 [Capability Reference](CAPABILITY_REFERENCE.md) for the complete catalog. In the
 browser WASM REPL, the **pure-compute** families run unchanged; the **host-facing**
 families (section 6) are unavailable because the WASM sandbox has no filesystem,
@@ -460,6 +460,20 @@ Reason:
   something the script has to arrange, so they always finish. Under WASM they
   resolve to a single worker and return identical results.
 
+### 6.8 Resource wrapping
+
+- with_resource
+
+Reason:
+
+- It is the only builtin that resolves another builtin by *name*, from a string
+  argument, at run time. Every other exclusion here works because a host-bound
+  name is never defined in the browser's symbol table, so the call fails while
+  compiling. A name looked up at run time never passes through that table, so
+  `with_resource(0, "gets", f)` would reach straight past it. Nothing it could
+  usefully close is available in the browser anyway -- every handle family is
+  host-bound or in section 6.7.
+
 ## 7) CLI REPL vs WASM REPL Notes
 
 WASM aims for language parity where feasible, but there are runtime model
@@ -473,7 +487,10 @@ differences:
   fails while compiling with `undefined variable`.
 - Which builtins are available is derived from `builtin/metadata.go` rather than
   hand-listed: a builtin is excluded when its capability category needs the host
-  or when it declares a filesystem-path parameter.
+  or when it declares a filesystem-path parameter. A short explicit list covers
+  what neither signal catches, and one entry on it -- `with_resource` -- is
+  there because it resolves a builtin by name at run time, which is the one way
+  around the symbol table this model relies on (section 6.8).
 
 ## 8) Completion and Help Behavior
 

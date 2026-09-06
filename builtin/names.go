@@ -486,4 +486,6 @@ const (
 	BuiltinNameChanRecv    = "chan_recv"
 	BuiltinNameChanTryRecv = "chan_try_recv"
 	BuiltinNameChanClose   = "chan_close"
+	// resources: guaranteed cleanup (append-only)
+	BuiltinNameWithResource = "with_resource"
 )

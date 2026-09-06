@@ -335,6 +335,18 @@
                         "off"
                     ],
                     "description": "Severity for spawned-callback global-write diagnostics: warns when a spawn, pmap or peach callback assigns to a top-level name. Those callbacks run on their own VM with a snapshot of the globals, so the write lands in a copy that is discarded when the callback finishes — the program runs, reports nothing, and the value never changes. Only a function literal written at the call site is checked, and only a name the callback does not rebind for itself. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.unclosedResource.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unclosed-resource diagnostics: warns when a builtin that opens a handle (ntfs_open, zip_open, chan_new, net_connect and their families) binds it to a name nothing in the same scope closes. Handles live in a package-level store with no eviction, so an unclosed one is held for the life of the process — invisible in a script that exits, descriptor exhaustion in a loop or a long-running server. The rule stays quiet whenever the handle is used somewhere it cannot follow (returned, passed to a helper, stored) or the closer is named anywhere in the scope, including inside with_resource. Set to 'off' to suppress the rule."
                 }
             }
         },

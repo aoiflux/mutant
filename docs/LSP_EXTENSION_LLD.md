@@ -274,6 +274,20 @@ Current lint rules (rule id -> default severity):
   finishes. Only a function literal written at the call site is examined, and
   only a name the callback does not rebind for itself -- a callback passed by
   name may also be called normally elsewhere, where the write does take effect)
+- `unclosedResource` -> warning (a builtin that opens a handle -- `ntfs_open`,
+  `zip_open`, `chan_new`, `net_connect` and their families -- bound to a name
+  nothing in the same scope closes. Handles live in a package-level store with
+  no cap, no eviction and no cleanup at exit, so an unclosed one is held for the
+  life of the process: theoretical in a script that exits, descriptor exhaustion
+  in a loop over a corpus or a long-running server. Curated opener/closer table
+  in [unclosed_resource.go](../lsp/internal/analyzer/unclosed_resource.go),
+  pinned to the registry by test so a new `*_close` family cannot be added
+  without being accounted for. The rule declines whenever the handle is used
+  somewhere it cannot follow -- returned, passed to a helper, stored, printed --
+  when the closer is named anywhere in the scope including inside the string
+  `with_resource` takes, and when the resource is held by something with no
+  reachable end: a `for` with no exit condition, or a listener handed to
+  `net_serve`)
 
 Config ingestion path:
 

@@ -532,6 +532,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNamePMap, pmapBuiltin},
 	{BuiltinNamePEach, peachBuiltin},
 	{BuiltinNameSpawn, spawnBuiltin},
+	{BuiltinNameWithResource, withResourceBuiltin},
 	{BuiltinNameTaskWait, &BuiltIn{TaskWait}},
 	{BuiltinNameTaskDone, &BuiltIn{TaskDone}},
 	{BuiltinNameChanNew, &BuiltIn{ChanNew}},

@@ -56,6 +56,10 @@ VS Code language support for Mutant.
 - `mutant.lint.rules.spawnGlobalWrite.severity`: severity for a `spawn`/`pmap`/
   `peach` callback writing a global, which lands in that worker's copy and is
   lost when the callback finishes
+- `mutant.lint.rules.unclosedResource.severity`: severity for opening a handle
+  (`ntfs_open`, `zip_open`, `chan_new`, `net_connect`, ...) that nothing in the
+  same scope closes. Quiet whenever the handle escapes the scope, the closer is
+  named in it, or the resource is deliberately held for the program's life
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

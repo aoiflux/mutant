@@ -34,6 +34,8 @@ func applyExecutorNative(kind string, args []object.Object) object.Object {
 		return evalParallel("peach", args)
 	case "spawn":
 		return evalSpawn(args)
+	case "with_resource":
+		return evalWithResource(args)
 	case "serve_conn", "serve_arg":
 		// Macro expansion has no connection and no net_serve arg, which is the
 		// same answer a program gets when it runs outside a handler.

@@ -49,6 +49,7 @@ type LintConfig struct {
 	BuiltinPairReturn            LintSeverity
 	BuiltinDeprecated            LintSeverity
 	SpawnGlobalWrite             LintSeverity
+	UnclosedResource             LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -90,6 +91,12 @@ func DefaultLintConfig() LintConfig {
 		// lands in that worker's copy of the globals and is gone when it
 		// finishes, and nothing at all reports it.
 		SpawnGlobalWrite: LintSeverityWarning,
+		// An unclosed handle is invisible in exactly the same way: the
+		// program runs, reports nothing, and holds an OS resource for the
+		// life of the process. The rule only fires where it can see the
+		// whole lifetime, so a report is about this code rather than a
+		// guess about the rest of the program.
+		UnclosedResource: LintSeverityWarning,
 	}
 }
 
@@ -122,6 +129,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinDeprecated
 	case "spawnGlobalWrite":
 		severityName = c.SpawnGlobalWrite
+	case "unclosedResource":
+		severityName = c.UnclosedResource
 	default:
 		return nil, false
 	}
@@ -177,6 +186,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUnclosedResources(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

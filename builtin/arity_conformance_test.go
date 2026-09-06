@@ -63,6 +63,8 @@ var arityProbeSkip = map[string]string{
 	"pmap":    "arity is enforced by the executor, not the registered stub",
 	"peach":   "arity is enforced by the executor, not the registered stub",
 	"spawn":   "arity is enforced by the executor, not the registered stub",
+
+	"with_resource": "arity is enforced by the executor, not the registered stub",
 }
 
 // handCheckedArities pins the argument counts of the builtins the probe must

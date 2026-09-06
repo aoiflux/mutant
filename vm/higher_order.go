@@ -34,6 +34,8 @@ func (vm *VM) applyExecutorNative(kind string, args []object.Object) (object.Obj
 		return vm.hoPEach(args)
 	case "spawn":
 		return vm.hoSpawn(args)
+	case "with_resource":
+		return vm.hoWithResource(args)
 	case "serve_conn":
 		return vm.serveConnValue(args)
 	case "serve_arg":

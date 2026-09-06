@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **458 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **459 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -27,7 +27,7 @@ Almost every builtin is cross-platform. The exceptions:
 
 ---
 
-## Standard Library (58)
+## Standard Library (59)
 
 Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.
 
@@ -90,6 +90,7 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `type_of(v) -> STRING` | all | Returns the object type name of v (e.g. INTEGER, STRING, ARRAY). |
 | `unique(array: ARRAY) -> ARRAY` | all | Returns a new array with duplicate values removed (order preserved). |
 | `values(hash: HASH) -> ARRAY` | all | Returns the hash values as an array (ordered by sorted key). |
+| `with_resource(resource, closer: STRING\|FUNCTION, fn: FUNCTION) -> (ANY, ERROR)` | all | Calls fn with a resource an open call returned and always closes it afterwards -- whether fn returns a value, returns an error, or fails outright. closer is the name of a closing builtin ("ntfs_close") or a function taking the resource. If the open itself failed, fn never runs and the open's error comes back unchanged, so wrapping an existing call in with_resource does not change what the program sees. Returns (value, err): value is what fn returned, and err is the first failure among the open, an error fn returned, and the close. When fn and the close both fail, fn's error is the one returned and the close's is attached to it as related["close_error"]. |
 | `zip(a: ARRAY, b: ARRAY) -> ARRAY` | all | Returns an array of [a[i], b[i]] pairs up to the shorter length. |
 
 ## Concurrency (8)
