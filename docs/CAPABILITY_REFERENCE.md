@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **440 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **457 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -152,9 +152,9 @@ Substring search, splitting/replacing, regular expressions, and fuzzy matching (
 | `text_similarity(left: STRING, right: STRING) -> FLOAT` | all | Computes normalized Levenshtein similarity between two strings. |
 | `text_split(text: STRING, sep: STRING) -> []STRING` | all | Splits text by separator and returns an array of parts. |
 
-## Structured Data (29)
+## Structured Data (46)
 
-JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zlib compression, base conversion, and type conversion. See [STRUCTURED_DATA.md](STRUCTURED_DATA.md).
+The formats evidence actually arrives in. JSON and NDJSON/JSONL (Zeek, Elastic bulk, OCSF), CSV/TSV (every SIEM export and hash set), XML (Scheduled Tasks, OOXML, Nessus, plist), YAML including multi-document streams (Sigma rulesets), TOML, and the binary serializations -- CBOR for COSE/WebAuthn, MessagePack for agent traffic, plus schemaless walkers for protobuf and DER/ASN.1 that report structure when no `.proto` or ASN.1 module is at hand. Then base64/base32/hex/URL encoding, gzip/zlib compression, base conversion, and type conversion. Every decoder shares one bridge, so a byte string is a BYTES buffer and a timestamp is RFC 3339 no matter which format it came from. See [STRUCTURED_DATA.md](STRUCTURED_DATA.md).
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
@@ -165,6 +165,11 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `base64_encode(s: STRING\|BYTES) -> STRING` | all | Standard base64-encodes s. |
 | `base64url_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes URL-safe base64; returns (bytes, err). |
 | `base64url_encode(s: STRING\|BYTES) -> STRING` | all | URL-safe base64-encodes s. |
+| `cbor_encode(value: STRING\|BYTES\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH\|STRUCT) -> (BYTES, ERROR)` | all | Serializes a Mutant value as canonical CBOR: map keys are sorted and integers use their shortest form, so hash_sha256(cbor_encode(v)) is a stable identifier for v. A buffer encodes as a CBOR byte string. |
+| `cbor_parse(data: BYTES\|STRING) -> (ANY, ERROR)` | all | Parses CBOR -- COSE, WebAuthn, IoT telemetry. Byte strings decode to buffers, not text; tagged items are preserved as {_cbor_tag, value} rather than dropped; integer map keys are supported (COSE labels them that way); duplicate keys are refused. Nesting is capped at 64 levels. |
+| `csv_parse(data: BYTES\|STRING, options?: HASH) -> (ARRAY, ERROR)` | all | Parses CSV/TSV into an array of hashes keyed by the header row. options: delimiter (default ","), comment, header (default true), trim_space, lazy_quotes. A UTF-8 BOM is stripped, duplicate column names are refused rather than silently resolved, and fields beyond the header land in an _extra array. With header:false each row is an array of strings instead. |
+| `csv_stringify(rows: ARRAY, options?: HASH) -> (STRING, ERROR)` | all | Serializes an array of hashes (or arrays) as CSV/TSV. options: delimiter, header (default true), columns (explicit column order), crlf. Without an explicit columns list the header is the sorted union of every row's keys, so a row missing a key writes an empty field rather than shifting the others. |
+| `der_parse(data: BYTES\|STRING) -> ([]HASH, ERROR)` | all | Walks DER/ASN.1 structurally, without a schema -- what x509_parse and pem_decode already need internally, and what a certificate extension or a Kerberos ticket needs when no ASN.1 module is at hand. Each node reports {offset, header_len, length, class, tag, constructed, tag_name}, constructed nodes carry children, and primitives carry raw value bytes plus a decoded rendering for universal types (OIDs dotted, big INTEGERs as decimal text rather than truncated, times as RFC 3339). BER indefinite length is refused by name. |
 | `from_base(s: STRING, base: INTEGER) -> (INTEGER, ERROR)` | all | Parses s as an integer in the given base (2–36); returns (int, err). |
 | `gunzip(s: STRING\|BYTES, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Gzip-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
 | `gunzip_bytes(s: STRING\|BYTES, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Gzip-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
@@ -174,16 +179,28 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `hex_encode(s: STRING\|BYTES) -> STRING` | all | Hex-encodes a byte string to lowercase hex. |
 | `json_parse(text: STRING) -> (ANY, ERROR)` | all | Parses JSON text into Mutant values. |
 | `json_stringify(value: STRING\|BYTES\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH) -> (STRING, ERROR)` | all | Serializes Mutant values into JSON text. |
+| `msgpack_encode(value: STRING\|BYTES\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH\|STRUCT) -> (BYTES, ERROR)` | all | Serializes a Mutant value as MessagePack with sorted map keys and compact integers, so the output is deterministic for a given value. |
+| `msgpack_parse(data: BYTES\|STRING) -> (ANY, ERROR)` | all | Parses MessagePack -- agent check-ins, queue payloads, Fluentd forward traffic. Binary values decode to buffers, not text. Input carrying more than one value is reported rather than ignored: a blob that decodes and keeps going is either a stream or not what it was thought to be. |
+| `ndjson_parse(data: BYTES\|STRING) -> ([]ANY, ERROR)` | all | Parses newline-delimited JSON (NDJSON/JSONL) -- the wire format of Zeek, Elastic bulk and OCSF streams. Blank lines are skipped; a malformed line fails with its line number rather than silently truncating the stream. |
+| `ndjson_stringify(values: ARRAY) -> (STRING, ERROR)` | all | Serializes an array as newline-delimited JSON, one value per line, with a trailing newline so the output concatenates with another stream. |
 | `parse_float(s: STRING) -> (FLOAT, ERROR)` | all | Parses s as a float; returns (float, err). |
 | `parse_int(s: STRING, base: INTEGER) -> (INTEGER, ERROR)` | all | Parses s as an integer in base (0 auto-detects); returns (int, err). |
 | `plist_parse(path: STRING) -> (ANY, ERROR)` | all | Parses an Apple property list (binary bplist00 or XML) into a Mutant value: dict->hash, array->array, string/integer/real/bool as scalars; dates and data become strings. Returns (value, err). |
+| `protobuf_parse(data: BYTES\|STRING) -> ([]HASH, ERROR)` | all | Walks protobuf wire format without a .proto -- the situation an analyst holding a gRPC capture is actually in. Each field reports {field, wire_type, offset} plus every reading its bytes admit: a varint as itself, as zigzag and as bool; a length-delimited field as bytes, plus text and message when those parse. Naming the ambiguity is the honest thing a schemaless reader can do. |
 | `to_base(n: INTEGER, base: INTEGER) -> STRING` | all | Formats integer n in the given base (2–36). |
 | `to_bool(v: BOOLEAN\|INTEGER\|FLOAT\|STRING) -> (BOOLEAN, ERROR)` | all | Converts a bool/number/string to BOOLEAN; returns (bool, err). |
 | `to_float(v: INTEGER\|FLOAT\|BOOLEAN\|STRING) -> (FLOAT, ERROR)` | all | Converts a number/bool/string to FLOAT; returns (float, err). |
 | `to_int(v: INTEGER\|FLOAT\|BOOLEAN\|STRING) -> (INTEGER, ERROR)` | all | Converts a number/bool/string to INTEGER; returns (int, err). |
 | `to_string(v) -> STRING` | all | Converts any value to its STRING representation. |
+| `toml_parse(data: BYTES\|STRING) -> (HASH, ERROR)` | all | Parses TOML into a hash. TOML datetimes become RFC 3339 strings, so they sort against every other timestamp the language produces. |
+| `toml_stringify(value: HASH\|STRUCT) -> (STRING, ERROR)` | all | Serializes a hash or struct as TOML. The top level must be a table -- TOML has no other document shape -- and a buffer is written as hex, matching yaml_stringify. |
 | `url_decode(s: STRING) -> (STRING, ERROR)` | all | URL query-unescapes s; returns (value, err). |
 | `url_encode(s: STRING) -> STRING` | all | URL query-escapes s. |
+| `xml_find(node: HASH, selector: STRING) -> ([]HASH, ERROR)` | all | Selects descendants of a parsed element by a slash-separated path. Three rules, not XPath: a name matches an element, * matches any single level, ** matches any number of levels including none (so "**/Task" also finds a direct child). |
+| `xml_parse(data: BYTES\|STRING) -> (HASH, ERROR)` | all | Parses XML into a node tree: {name, namespace, attrs, text, children}. Comments, processing instructions and directives are skipped, undeclared entities fail rather than expand (closing billion-laughs and XXE), and windows-1252/iso-8859-1/-15/windows-1251 documents are decoded by their declared charset -- an unrecognised charset fails by name rather than being misdecoded. |
+| `yaml_parse(data: BYTES\|STRING) -> (ANY, ERROR)` | all | Parses the first YAML document -- Sigma rules, CI config, cloud manifests. A file of ----separated documents needs yaml_parse_all, which is why this one exists as a pair. |
+| `yaml_parse_all(data: BYTES\|STRING) -> ([]ANY, ERROR)` | all | Parses every document in a multi-document YAML stream. A Sigma ruleset is one file of ----separated documents, and yaml_parse would return only the first, silently. |
+| `yaml_stringify(value: STRING\|BYTES\|INTEGER\|FLOAT\|BOOLEAN\|NULL\|ARRAY\|HASH\|STRUCT) -> (STRING, ERROR)` | all | Serializes a Mutant value as YAML. A buffer is written as hex, matching Inspect and json_stringify; string_to_bytes(s, "hex") converts it back. |
 | `zlib_compress(s: STRING\|BYTES) -> STRING` | all | Zlib-compresses s (returns a byte string). |
 | `zlib_decompress(s: STRING\|BYTES, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Zlib-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
 | `zlib_decompress_bytes(s: STRING\|BYTES, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Zlib-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |

@@ -157,12 +157,12 @@ func TestUnknownBuiltinFailsBeforeAnythingRuns(t *testing.T) {
 		Instructions: code.Instructions{},
 		Constants:    []object.Object{},
 		Version:      compiler.BytecodeVersionNamedBuiltins,
-		BuiltinNames: []string{"len", "csv_parse"},
+		BuiltinNames: []string{"len", "no_such_builtin_exists"},
 	})
 	if err == nil {
 		t.Fatal("a program naming a builtin this runtime does not have was allowed to run")
 	}
-	if !strings.Contains(err.Error(), "csv_parse") {
+	if !strings.Contains(err.Error(), "no_such_builtin_exists") {
 		t.Fatalf("the error must name the missing builtin; got: %v", err)
 	}
 }

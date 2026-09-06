@@ -451,6 +451,112 @@ var builtinDocs = map[string]builtinDoc{
 		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, buffer, null, array, or hash with string keys.",
 			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash)},
 		returns: pairRet("the JSON text", ParamString)},
+	// The formats that are not JSON (B-1). Every one of these decodes through
+	// the shared bridge in builtin/format_native.go, so a buffer, a timestamp and
+	// a big integer render identically no matter which format they arrived in.
+	// The parse side accepts BYTES or STRING because evidence reaches a program
+	// either way -- fs_read_bytes and zip_read_bytes hand back buffers, fs_read
+	// hands back text -- and neither should need a conversion first.
+	BuiltinNameCsvParse: {
+		signature: "csv_parse(data, options?)",
+		summary:   "Parses CSV/TSV into an array of hashes keyed by the header row. options: delimiter (default \",\"), comment, header (default true), trim_space, lazy_quotes. A UTF-8 BOM is stripped, duplicate column names are refused rather than silently resolved, and fields beyond the header land in an _extra array. With header:false each row is an array of strings instead.",
+		params: []builtinParamDoc{
+			param("data", "CSV/TSV text or buffer.", ParamBytes, ParamString),
+			param("options?", "Parse options: delimiter, comment, header, trim_space, lazy_quotes. Unknown keys are refused by name.", ParamHash),
+		},
+		returns: pairRet("the rows: hashes keyed by header name, or arrays of strings when header is false", ParamArray).ofElem(ParamHash, ParamArray)},
+	BuiltinNameCsvStringify: {
+		signature: "csv_stringify(rows, options?)",
+		summary:   "Serializes an array of hashes (or arrays) as CSV/TSV. options: delimiter, header (default true), columns (explicit column order), crlf. Without an explicit columns list the header is the sorted union of every row's keys, so a row missing a key writes an empty field rather than shifting the others.",
+		params: []builtinParamDoc{
+			arrayParam("rows", "Rows to write: hashes keyed by column name, or arrays of values.", ParamHash, ParamArray),
+			param("options?", "Write options: delimiter, header, columns, crlf. Unknown keys are refused by name.", ParamHash),
+		},
+		returns: pairRet("the CSV text", ParamString)},
+	BuiltinNameXmlParse: {
+		signature: "xml_parse(data)",
+		summary:   "Parses XML into a node tree: {name, namespace, attrs, text, children}. Comments, processing instructions and directives are skipped, undeclared entities fail rather than expand (closing billion-laughs and XXE), and windows-1252/iso-8859-1/-15/windows-1251 documents are decoded by their declared charset -- an unrecognised charset fails by name rather than being misdecoded.",
+		params:    []builtinParamDoc{param("data", "XML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the root element", ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
+	BuiltinNameXmlFind: {
+		signature: "xml_find(node, selector)",
+		summary:   "Selects descendants of a parsed element by a slash-separated path. Three rules, not XPath: a name matches an element, * matches any single level, ** matches any number of levels including none (so \"**/Task\" also finds a direct child).",
+		params: []builtinParamDoc{
+			param("node", "A node from xml_parse or a previous xml_find.", ParamHash),
+			// Named "selector", not "path": webrepl's browser-safe filter reads a
+			// parameter called "path" as a filesystem path and would exclude this
+			// builtin from the browser REPL, which reads no files at all.
+			param("selector", "Slash-separated selector, e.g. \"Triggers/*\" or \"**/Command\".", ParamString),
+		},
+		returns: pairRet("the matching nodes, in document order", ParamArray).ofElem(ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
+	BuiltinNameNdjsonParse: {
+		signature: "ndjson_parse(data)",
+		summary:   "Parses newline-delimited JSON (NDJSON/JSONL) -- the wire format of Zeek, Elastic bulk and OCSF streams. Blank lines are skipped; a malformed line fails with its line number rather than silently truncating the stream.",
+		params:    []builtinParamDoc{param("data", "NDJSON text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("one decoded value per line", ParamArray).ofElem(ParamAny)},
+	BuiltinNameNdjsonStringify: {
+		signature: "ndjson_stringify(values)",
+		summary:   "Serializes an array as newline-delimited JSON, one value per line, with a trailing newline so the output concatenates with another stream.",
+		params:    []builtinParamDoc{arrayParam("values", "Values to write, one per line.", ParamAny)},
+		returns:   pairRet("the NDJSON text", ParamString)},
+	BuiltinNameYamlParse: {
+		signature: "yaml_parse(data)",
+		summary:   "Parses the first YAML document -- Sigma rules, CI config, cloud manifests. A file of ----separated documents needs yaml_parse_all, which is why this one exists as a pair.",
+		params:    []builtinParamDoc{param("data", "YAML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded document", ParamAny)},
+	BuiltinNameYamlParseAll: {
+		signature: "yaml_parse_all(data)",
+		summary:   "Parses every document in a multi-document YAML stream. A Sigma ruleset is one file of ----separated documents, and yaml_parse would return only the first, silently.",
+		params:    []builtinParamDoc{param("data", "YAML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("one decoded value per document, in file order", ParamArray).ofElem(ParamAny)},
+	BuiltinNameYamlStringify: {
+		signature: "yaml_stringify(value)",
+		summary:   "Serializes a Mutant value as YAML. A buffer is written as hex, matching Inspect and json_stringify; string_to_bytes(s, \"hex\") converts it back.",
+		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the YAML text", ParamString)},
+	BuiltinNameTomlParse: {
+		signature: "toml_parse(data)",
+		summary:   "Parses TOML into a hash. TOML datetimes become RFC 3339 strings, so they sort against every other timestamp the language produces.",
+		params:    []builtinParamDoc{param("data", "TOML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded table", ParamHash)},
+	BuiltinNameTomlStringify: {
+		signature: "toml_stringify(value)",
+		summary:   "Serializes a hash or struct as TOML. The top level must be a table -- TOML has no other document shape -- and a buffer is written as hex, matching yaml_stringify.",
+		params:    []builtinParamDoc{param("value", "Table to serialize.", ParamHash, ParamStruct)},
+		returns:   pairRet("the TOML text", ParamString)},
+	BuiltinNameCborParse: {
+		signature: "cbor_parse(data)",
+		summary:   "Parses CBOR -- COSE, WebAuthn, IoT telemetry. Byte strings decode to buffers, not text; tagged items are preserved as {_cbor_tag, value} rather than dropped; integer map keys are supported (COSE labels them that way); duplicate keys are refused. Nesting is capped at 64 levels.",
+		params:    []builtinParamDoc{param("data", "CBOR bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded value", ParamAny)},
+	BuiltinNameCborEncode: {
+		signature: "cbor_encode(value)",
+		summary:   "Serializes a Mutant value as canonical CBOR: map keys are sorted and integers use their shortest form, so hash_sha256(cbor_encode(v)) is a stable identifier for v. A buffer encodes as a CBOR byte string.",
+		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the encoded bytes", ParamBytes)},
+	BuiltinNameMsgpackParse: {
+		signature: "msgpack_parse(data)",
+		summary:   "Parses MessagePack -- agent check-ins, queue payloads, Fluentd forward traffic. Binary values decode to buffers, not text. Input carrying more than one value is reported rather than ignored: a blob that decodes and keeps going is either a stream or not what it was thought to be.",
+		params:    []builtinParamDoc{param("data", "MessagePack bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded value", ParamAny)},
+	BuiltinNameMsgpackEncode: {
+		signature: "msgpack_encode(value)",
+		summary:   "Serializes a Mutant value as MessagePack with sorted map keys and compact integers, so the output is deterministic for a given value.",
+		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the encoded bytes", ParamBytes)},
+	BuiltinNameProtobufParse: {
+		signature: "protobuf_parse(data)",
+		summary:   "Walks protobuf wire format without a .proto -- the situation an analyst holding a gRPC capture is actually in. Each field reports {field, wire_type, offset} plus every reading its bytes admit: a varint as itself, as zigzag and as bool; a length-delimited field as bytes, plus text and message when those parse. Naming the ambiguity is the honest thing a schemaless reader can do.",
+		params:    []builtinParamDoc{param("data", "Protobuf-encoded bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("one hash per field, in wire order", ParamArray).ofElem(ParamHash).withFields("field", "offset", "wire_type")},
+	BuiltinNameDerParse: {
+		signature: "der_parse(data)",
+		summary:   "Walks DER/ASN.1 structurally, without a schema -- what x509_parse and pem_decode already need internally, and what a certificate extension or a Kerberos ticket needs when no ASN.1 module is at hand. Each node reports {offset, header_len, length, class, tag, constructed, tag_name}, constructed nodes carry children, and primitives carry raw value bytes plus a decoded rendering for universal types (OIDs dotted, big INTEGERs as decimal text rather than truncated, times as RFC 3339). BER indefinite length is refused by name.",
+		params:    []builtinParamDoc{param("data", "DER-encoded bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the top-level nodes, each a tree", ParamArray).ofElem(ParamHash).withFields("class", "constructed", "header_len", "length", "offset", "tag", "tag_name")},
 	BuiltinNameLuaRunString: {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string.", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("code", "Lua source to run.", ParamString)}},
 	BuiltinNameLuaRunFile:   {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file.", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("path", "Path to the Lua script.", ParamString)}},
 	BuiltinNameLuaRunHttp:   {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries).", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("url", "URL the script is fetched from.", ParamString)}},
@@ -2187,6 +2293,18 @@ var capabilityCategories = []capabilityCategory{
 	{"to_", "structured data"},
 	{"parse_", "structured data"},
 	{"plist_", "structured data"},
+	// The formats that are not JSON. None of these collide with an earlier
+	// prefix: "to_" needs a literal underscore third, so it does not claim
+	// "toml_".
+	{"csv_", "structured data"},
+	{"xml_", "structured data"},
+	{"ndjson_", "structured data"},
+	{"yaml_", "structured data"},
+	{"toml_", "structured data"},
+	{"cbor_", "structured data"},
+	{"msgpack_", "structured data"},
+	{"protobuf_", "structured data"},
+	{"der_", "structured data"},
 	// concurrency
 	{"chan_", "concurrency"},
 	{"task_", "concurrency"},

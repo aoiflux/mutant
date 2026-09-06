@@ -90,11 +90,11 @@ func TestAliasesDoNotShadowLiveBuiltins(t *testing.T) {
 }
 
 func TestResolveNamesNamesTheMissingBuiltin(t *testing.T) {
-	_, err := ResolveNames([]string{"len", "csv_parse", "putln"})
+	_, err := ResolveNames([]string{"len", "no_such_builtin_exists", "putln"})
 	if err == nil {
 		t.Fatal("resolving an unknown builtin succeeded")
 	}
-	if !strings.Contains(err.Error(), "csv_parse") {
+	if !strings.Contains(err.Error(), "no_such_builtin_exists") {
 		t.Fatalf("the error must name the builtin it could not find; got: %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-# Structured Data: JSON, Encoding, Compression & Conversion
+# Structured Data: The Formats Evidence Arrives In
 
 Mutant scripts spend most of their time moving data between "shapes":
 text off the wire, bytes on disk, and the hashes/arrays/scalars a script
@@ -16,6 +16,9 @@ whole path:
    coercion between strings, ints, floats, and bools.
 5. **Apple plist** — read binary (`bplist00`) or XML property lists straight
    into a mutant hash.
+6. **Everything that is not JSON** — CSV/TSV, XML, YAML (including
+   multi-document streams), TOML, NDJSON/JSONL, CBOR, MessagePack, and
+   schemaless walkers for protobuf and DER/ASN.1. Section 7.
 
 Every fallible builtin here follows the language convention of returning
 `(result, err)`; destructure with `let value, err = ...` and check `err`
@@ -117,6 +120,142 @@ onto the obvious mutant types; dates and `data` blobs both come back as
 strings (see [Notes & limits](#notes--limits)).
 
 ---
+
+## 7. Text and binary formats beyond JSON
+
+Forensic input is mostly not JSON. A SIEM export is CSV, a Scheduled Task is
+XML, a Sigma ruleset is a multi-document YAML file, Zeek writes NDJSON, a COSE
+token is CBOR, and a certificate extension is DER. All of these decode through
+one shared bridge, so a byte string is a `BYTES` buffer and a timestamp is an
+RFC 3339 string no matter which format it came from.
+
+Every parse builtin accepts `BYTES` **or** `STRING`, because evidence reaches a
+program either way — `fs_read_bytes` and `zip_read_bytes` hand back buffers,
+`fs_read` hands back text — and neither should need a conversion first.
+
+### 7.1 Tables and markup
+
+| Builtin | Signature | Returns |
+| --- | --- | --- |
+| `csv_parse` | `csv_parse(data, options?)` | `(rows, err)` — one hash per row, keyed by the header |
+| `csv_stringify` | `csv_stringify(rows, options?)` | `(text, err)` |
+| `xml_parse` | `xml_parse(data)` | `(root, err)` — `{name, namespace, attrs, text, children}` |
+| `xml_find` | `xml_find(node, selector)` | `(nodes, err)` |
+
+`csv_parse` options: `delimiter` (default `","`), `comment`, `header` (default
+`true`), `trim_space`, `lazy_quotes`. `csv_stringify` options: `delimiter`,
+`header`, `columns`, `crlf`. An unknown option key is refused by name rather
+than ignored — `{"headers": true}` would otherwise run and silently return
+positional arrays.
+
+Three things `csv_parse` refuses to guess at:
+
+- A **UTF-8 BOM** is stripped. Excel and PowerShell's `Export-Csv` both write
+  one, so without this the first column is named `<BOM>Timestamp` and every
+  lookup of `Timestamp` misses — silently, since a missing key is not an error.
+- **Duplicate column names** are refused rather than resolved. First-wins,
+  last-wins and auto-rename each silently answer a question only the analyst
+  can; `header: false` reads the file either way.
+- **Ragged rows** are accepted, but fields beyond the header go into an
+  `_extra` array rather than off the end. (A column literally named `_extra` is
+  rejected, with an explanation.)
+
+`xml_find`'s selector language is three rules, not XPath: a name matches an
+element, `*` matches any single level, and `**` matches any number of levels
+including none — so `"**/Command"` finds a direct child as well as a deep one.
+A partial XPath that quietly disagrees with a real one on a predicate would be
+worse than a small language that does not pretend.
+
+`xml_parse` is safe against the two classic XML attacks by construction: the
+decoder is left with no entity table, so an undeclared entity fails at the
+reference instead of expanding (billion laughs), and Go's `encoding/xml` never
+fetches a SYSTEM identifier (XXE). Comments, processing instructions and
+directives are skipped. Declared charsets `utf-8`, `us-ascii`, `windows-1252`,
+`cp1252`, `iso-8859-1`, `latin1`, `iso-8859-15` and `windows-1251` are decoded;
+anything else fails **by name**, because a document silently misdecoded is
+worse than one that will not open.
+
+### 7.2 Streams and configuration
+
+| Builtin | Signature | Returns |
+| --- | --- | --- |
+| `ndjson_parse` | `ndjson_parse(data)` | `(values, err)` — one per line |
+| `ndjson_stringify` | `ndjson_stringify(values)` | `(text, err)` |
+| `yaml_parse` | `yaml_parse(data)` | `(value, err)` — the **first** document |
+| `yaml_parse_all` | `yaml_parse_all(data)` | `(documents, err)` |
+| `yaml_stringify` | `yaml_stringify(value)` | `(text, err)` |
+| `toml_parse` | `toml_parse(data)` | `(table, err)` |
+| `toml_stringify` | `toml_stringify(value)` | `(text, err)` |
+
+`yaml_parse_all` is not a convenience. A Sigma ruleset is one file of
+`---`-separated documents, and `yaml_parse` returns only the first — silently.
+Reach for `yaml_parse` when you know there is one document and
+`yaml_parse_all` when you do not.
+
+`ndjson_parse` skips blank lines and reports a malformed line **with its line
+number** rather than truncating the stream at the first bad record.
+`ndjson_stringify` ends every record with a newline, including the last, so its
+output concatenates with another stream.
+
+TOML datetimes become RFC 3339 strings, so they sort against every other
+timestamp the language produces. `toml_stringify` requires a `HASH` or `STRUCT`
+at the top level — a TOML document is a table, and there is no other shape.
+
+`yaml_stringify` and `toml_stringify` write a `BYTES` buffer as hex, matching
+`Inspect` and `json_stringify`; `string_to_bytes(s, "hex")` converts it back.
+
+### 7.3 Binary serializations
+
+| Builtin | Signature | Returns |
+| --- | --- | --- |
+| `cbor_parse` | `cbor_parse(data)` | `(value, err)` |
+| `cbor_encode` | `cbor_encode(value)` | `(bytes, err)` |
+| `msgpack_parse` | `msgpack_parse(data)` | `(value, err)` |
+| `msgpack_encode` | `msgpack_encode(value)` | `(bytes, err)` |
+| `protobuf_parse` | `protobuf_parse(data)` | `(fields, err)` |
+| `der_parse` | `der_parse(data)` | `(nodes, err)` |
+
+CBOR and MessagePack both distinguish a byte string from a text string, and
+both decode the former to a `BYTES` buffer. Encoding is **deterministic** —
+canonical CBOR, and sorted map keys with compact integers for MessagePack — so
+`hash_sha256(cbor_encode(v))` is a stable identifier for `v` rather than for
+one particular walk of a map.
+
+CBOR tags are preserved rather than dropped: an unrecognised tag becomes
+`{"_cbor_tag": n, "value": ...}`, because tag 18 is a COSE_Sign1 and losing it
+would turn a signed structure into an anonymous array. The standard time tags
+are the exception — those resolve to an RFC 3339 string like every other
+timestamp. Integer map keys are supported, since COSE labels its keys that way,
+and duplicate keys are refused.
+
+`msgpack_parse` reports trailing bytes rather than ignoring them: a blob that
+decodes and then keeps going is either a stream or not what it was thought to
+be, and silently returning the first value hides both.
+
+**`protobuf_parse` and `der_parse` are schemaless on purpose.** An analyst
+holding a blob from a packet capture or a certificate extension has neither the
+`.proto` nor the ASN.1 module, and Go's `encoding/asn1` unmarshals into a struct
+the caller has already written — the one thing they cannot supply.
+
+`protobuf_parse` therefore reports *every* reading the bytes admit. Each field
+carries `{field, wire_type, offset}` plus:
+
+- a varint as `value`, `zigzag` and `bool`;
+- a fixed32/fixed64 as `value` and `float`;
+- a length-delimited field as `value` (bytes) and `length`, plus `text` when
+  the payload is printable UTF-8 and `message` when it parses as a nested
+  message.
+
+Naming the ambiguity is the honest thing a schemaless reader can do.
+
+`der_parse` walks structure. Each node carries `{offset, header_len, length,
+class, tag, constructed, tag_name}`; a constructed node carries `children`, and
+a primitive carries raw `value` bytes plus, for universal-class tags, a
+`decoded` rendering: OIDs dotted, `PrintableString`/`UTF8String`/`IA5String`/
+`BMPString` as text, `UTCTime`/`GeneralizedTime` as RFC 3339, and INTEGERs as
+an `INTEGER` when they fit and as **decimal text** when they do not — a
+20-byte certificate serial reduced to its low 64 bits is a different serial.
+BER indefinite length is refused by name; DER forbids it.
 
 ## Examples
 
@@ -348,13 +487,13 @@ if (err) {
 - **Object keys must be strings.** `json_stringify` fails (returns a non-null
   `err`) if a hash contains a non-`STRING` key — JSON objects have no other
   key type.
-- **Byte strings vs. text.** Mutant represents byte data as `STRING` values,
-  so decoders (`base64_decode`, `gunzip`, `plist_parse`'s `data` fields, etc.)
-  return `STRING` objects that may contain arbitrary bytes, not necessarily
-  printable text. If you need it as guaranteed display text, or need to feed
-  it to a function that assumes text, pass it through `to_string` first —
-  it is a no-op on strings but documents the intent and works uniformly if
-  the value's type is uncertain.
+- **Byte strings vs. text.** Mutant has a real `BYTES` type. The formats in
+  section 7 that distinguish binary from text — CBOR, MessagePack, DER —
+  decode it to a buffer. The older decoders (`base64_decode`, `gunzip`,
+  `plist_parse`'s `data` fields) still return `STRING` values that may contain
+  arbitrary bytes rather than printable text; each has a `*_bytes` companion
+  (`base64_decode_bytes`, `gunzip_bytes`, ...) that returns a buffer instead,
+  and `string_to_bytes(s, "raw")` converts losslessly from any of them.
 - **Decoders and decompressors always return `(value, err)`.** Because the
   input might not actually be valid base64/hex/gzip/etc., always check
   `err` before using the result — unlike the encoders/compressors, which

@@ -16,7 +16,7 @@ If you want a concise answer to “what does it do?”:
 
 - It automates security and forensic workflows.
 - It can compile `.mut` source into encrypted bytecode and standalone binaries.
-- It has a large standard library (**440 builtins** across 34 categories):
+- It has a large standard library (**457 builtins** across 34 categories):
   strings, math, hashing, time, structured data (JSON/encoding/compression),
   higher-order collection functions, filesystem, networking (sockets/TLS/HTTP),
   graph modeling, cryptography, IOC/network intelligence, fingerprinting,

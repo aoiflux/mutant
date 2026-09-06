@@ -405,7 +405,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 
 ## Builtins
 
-**Total builtins currently registered: 440**, across 34 capability categories.
+**Total builtins currently registered: 457**, across 34 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
