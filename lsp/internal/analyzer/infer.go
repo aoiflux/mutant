@@ -254,6 +254,16 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		if lt.Kind == TypeArray && lt.Elem != nil {
 			return *lt.Elem
 		}
+		// err["message"] is the same table as err.message, so it gets the same
+		// type -- but only for a literal key, because a computed one could name
+		// any field and claiming one of them would be a guess.
+		if lt.Kind == TypeError {
+			if key, ok := n.Index.(*mast.StringLiteral); ok {
+				if ft, ok := errorFieldType(key.Value); ok {
+					return ft
+				}
+			}
+		}
 		return AnyType
 	case *mast.FieldExpression:
 		lt := inf.expr(n.Left, env)
@@ -266,6 +276,14 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 			if ft, ok := inf.structFieldType(lt.Name, n.Field.Value); ok {
 				// Record on the accessor identifier too, so hovering the field name
 				// (the node under the cursor) shows its type.
+				inf.record(n.Field, ft)
+				return ft
+			}
+		}
+		// An error's fields are fixed rather than inferred from initializers, so
+		// unlike a struct's they are known without having seen the value built.
+		if lt.Kind == TypeError && n.Field != nil {
+			if ft, ok := errorFieldType(n.Field.Value); ok {
 				inf.record(n.Field, ft)
 				return ft
 			}

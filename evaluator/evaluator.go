@@ -94,8 +94,8 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		}
 		return &object.Array{Elements: elements}
 	case *ast.IndexExpression:
-		left := Eval(node.Left, env)
-		if isError(left) {
+		left, fault := evalInspectedOperand(node.Left, env)
+		if fault {
 			return left
 		}
 		index := Eval(node.Index, env)
@@ -215,6 +215,32 @@ func nativeBoolToBoolObject(input bool) *object.Boolean {
 		return TRUE
 	}
 	return FALSE
+}
+
+// evalInspectedOperand evaluates something that is about to be inspected -- the
+// left of a field access, the container of an index -- and reports whether the
+// result is a propagating fault rather than a value to look inside.
+//
+// The evaluator has one Error type doing two jobs: it is the language's error
+// value, and it is the tree-walker's fatal signal. isError cannot tell them
+// apart, which is why `err.message` used to evaluate to the error itself: the
+// short-circuit fired before the field arm was ever reached. The conflation is
+// older than error field access and is not resolved here.
+//
+// An identifier is the one case where it can be settled exactly. If the name is
+// bound, the binding is a value whatever its type -- the only fault evaluating
+// an identifier can raise is "identifier not found", which by definition is not
+// a bound name. Everything else keeps the previous behaviour and propagates,
+// which is also right: a fallible call yields a MULTI_VALUE, so a bare error out
+// of a call is a fault rather than a result to read a field off.
+func evalInspectedOperand(node ast.Expression, env *object.Environment) (object.Object, bool) {
+	if ident, ok := node.(*ast.Identifier); ok {
+		if val, bound := env.Get(ident.Value); bound {
+			return val, false
+		}
+	}
+	obj := Eval(node, env)
+	return obj, isError(obj)
 }
 
 func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object {
@@ -550,14 +576,24 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 	}
 
 	// Evaluate the left side
-	left := Eval(node.Left, env)
-	if isError(left) {
+	left, fault := evalInspectedOperand(node.Left, env)
+	if fault {
 		return left
 	}
 
 	// Handle struct field access
 	if structObj, ok := left.(*object.Struct); ok {
 		if val, ok := structObj.Fields[node.Field.Value]; ok {
+			return val
+		}
+		return NULL
+	}
+
+	// Errors read like structs, mirroring the VM's OpGetField. Both engines go
+	// through object.Error.Field, which is the only way the two can be trusted
+	// to agree about a field set that will grow.
+	if errObj, ok := left.(*object.Error); ok {
+		if val, ok := errObj.Field(node.Field.Value); ok {
 			return val
 		}
 		return NULL

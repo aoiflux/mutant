@@ -50,6 +50,50 @@ putln("read", len(report), "bytes");
 
 This convention runs through the whole standard library; the [Capability Reference](CAPABILITY_REFERENCE.md) marks which builtins return a pair. (Idiom note: keep `return` inside functions rather than at the top level of a program. A top-level `return` is legal and stops the program there, reporting the value it returned — or nothing at all for a bare `return;` — but a program that reads top to bottom is easier to follow than one with exits scattered through it.)
 
+### Reading an error
+
+An `err` is an object, and its fields read like a struct's — with `.` or with a
+string index, which are the same table and cannot disagree:
+
+```mutant
+let data, err = fs_read(path);
+if (err) {
+    putln("failed:", err.message);        // "fs_read: open ...: no such file"
+    putln("raised by:", err.context);     // "builtin.fs_read"
+    putln("at:", err.file, err.line);     // the source path, and 12
+    putln("same thing:", err["message"]);
+};
+```
+
+| Field | Type | Where it comes from |
+| --- | --- | --- |
+| `message` | string | the raiser |
+| `context` | string | the raiser — which builtin, e.g. `builtin.fs_read` |
+| `related` | hash | the raiser: whatever else it knew — a path, an offset, the bytes it actually read |
+| `file`, `line`, `column` | string, int, int | stamped by the runtime at the call |
+| `end_line`, `end_column` | int | the end of the construct that failed |
+| `source_line` | string | the text of that line, copied when the error was stamped |
+| `stack` | array of string | the call stack, innermost first |
+
+Three things worth knowing:
+
+- **`related` keeps types.** An offset in it is an integer and a record is a
+  `bytes` buffer, not a pre-formatted string — so `err.related["offset"] > 4096`
+  works without parsing text back into a number. Today it is empty on every
+  builtin error: the field is there, and the builtins that have context worth
+  attaching have not been taught to attach it yet.
+- **An unknown field is `null`, not a failure** — the same rule a struct
+  follows. `err.kind` reads null today rather than stopping the program.
+- **The shape never changes with the build.** A binary compiled with debug
+  information stripped carries no line table, so `err.line` reads `0` and
+  `err.file` reads `""` — but they still read. A program that inspects position
+  does not have to know how it was compiled. `message` and `context` come from
+  the raiser rather than the line table, so stripping does not touch them.
+
+Errors are read-only: `err.message = "..."` is refused, because the position is
+stamped by the runtime and a program that could rewrite it could lie about where
+a failure happened.
+
 ### Binding several names at once
 
 `let a, b = ...` binds more than one name from a single expression. What it does

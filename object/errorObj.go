@@ -191,3 +191,91 @@ func (e *Error) Inspect() string {
 
 	return strings.Join(parts, " ")
 }
+
+// errorFieldNames lists every field a .mut program can read off an error, in
+// declaration order. It exists so the field set can be enumerated -- by a test
+// pinning the shape, by tooling -- rather than only probed one name at a time.
+var errorFieldNames = []string{
+	"message", "context", "related",
+	"file", "line", "column", "end_line", "end_column",
+	"source_line", "stack",
+}
+
+// ErrorFieldNames returns the readable field names of an error.
+func ErrorFieldNames() []string {
+	names := make([]string, len(errorFieldNames))
+	copy(names, errorFieldNames)
+	return names
+}
+
+// Field resolves one field of an error by the name a .mut program spells, for
+// both `err.message` and `err["message"]`. The second return is false for a
+// name that is not a field; the caller substitutes its own null, because the
+// two engines hold different null singletons and object cannot import either.
+//
+// One table, read by both spellings and both engines, is the point: a field
+// that exists under dot access and not under indexing would be a difference
+// nobody could explain.
+//
+// Every field is always present, whatever the build. A stripped binary has no
+// line table, so `line` reads 0 and `file` reads "" -- it does not stop being a
+// field. That is what keeps a program that inspects position from having to
+// know how it was compiled. See StripDebugInfo: strip removes the table, never
+// the shape.
+//
+// The composite fields are rebuilt on each read rather than cached: `related`
+// and `stack` hand back a fresh hash and array, so a program that mutates one
+// does not edit the error it came from. The values inside `related` are shared
+// rather than deep-copied -- a buffer is not duplicated because someone read
+// the field it hangs off.
+func (e *Error) Field(name string) (Object, bool) {
+	if e == nil {
+		return nil, false
+	}
+
+	switch name {
+	case "message":
+		return &String{Value: e.Message}, true
+	case "context":
+		return &String{Value: e.Context}, true
+	case "related":
+		return e.relatedHash(), true
+	case "file":
+		return &String{Value: e.File}, true
+	case "line":
+		return &Integer{Value: int64(e.Line)}, true
+	case "column":
+		return &Integer{Value: int64(e.Column)}, true
+	case "end_line":
+		return &Integer{Value: int64(e.EndLine)}, true
+	case "end_column":
+		return &Integer{Value: int64(e.EndColumn)}, true
+	case "source_line":
+		return &String{Value: e.SourceLine}, true
+	case "stack":
+		elements := make([]Object, 0, len(e.Stack))
+		for _, frame := range e.Stack {
+			elements = append(elements, &String{Value: frame})
+		}
+		return &Array{Elements: elements}, true
+	}
+
+	return nil, false
+}
+
+// relatedHash renders Related as a mutant hash keyed by string.
+//
+// A nil value under a key is a bug in the raiser -- the same one inspectRelated
+// names -- and it becomes a Null here rather than a Go nil, because a nil
+// Object inside a hash is a panic waiting for whichever builtin walks it next.
+func (e *Error) relatedHash() *Hash {
+	pairs := make(map[HashKey]HashPair, len(e.Related))
+	for name, value := range e.Related {
+		key := &String{Value: name}
+		if value == nil {
+			value = &Null{}
+		}
+		pairs[key.HashKey()] = HashPair{Key: key, Value: value}
+	}
+	return &Hash{Pairs: pairs}
+}

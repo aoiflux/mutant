@@ -1171,17 +1171,29 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			fieldName := fieldObj.Value
 			obj := vm.pop()
-			if structObj, ok := obj.(*object.Struct); ok {
-				if val, exists := structObj.Fields[fieldName]; exists {
-					if err := vm.push(val); err != nil {
-						return err
-					}
-				} else {
-					if err := vm.push(global.Null); err != nil {
-						return err
-					}
+			switch target := obj.(type) {
+			case *object.Struct:
+				val, exists := target.Fields[fieldName]
+				if !exists {
+					val = global.Null
 				}
-			} else {
+				if err := vm.push(val); err != nil {
+					return err
+				}
+			case *object.Error:
+				// Errors read like structs, deliberately. An unknown name gives
+				// null here exactly as it does above, so inspecting an error
+				// never introduces a failure mode that inspecting a struct does
+				// not already have -- and a field that a stripped build stamps
+				// nothing into still reads, as 0 or "".
+				val, exists := target.Field(fieldName)
+				if !exists {
+					val = global.Null
+				}
+				if err := vm.push(val); err != nil {
+					return err
+				}
+			default:
 				return fmt.Errorf("cannot access field on non-struct: %s", obj.Type())
 			}
 		case code.OpSetField:
@@ -1714,9 +1726,21 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 		return vm.execBytesIndex(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return vm.execHashIndex(left, index)
+	case left.Type() == object.ERROR_OBJ && index.Type() == object.STRING_OBJ:
+		return vm.execErrorField(left, index)
 	default:
 		return fmt.Errorf("index operator not supported: %s", left.Type())
 	}
+}
+
+// execErrorField reads err["message"] through the same table err.message reads,
+// so the two spellings cannot disagree. An unknown name is null, not a fault.
+func (vm *VM) execErrorField(errObj, index object.Object) error {
+	val, ok := errObj.(*object.Error).Field(index.(*object.String).Value)
+	if !ok {
+		return vm.push(global.Null)
+	}
+	return vm.push(val)
 }
 
 func (vm *VM) execMultiValueIndex(multiValue, index object.Object) error {

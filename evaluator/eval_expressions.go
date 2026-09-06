@@ -173,9 +173,23 @@ func evalIndexExpression(left, index object.Object) object.Object {
 		return evalBytesIndexExpression(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
+	case left.Type() == object.ERROR_OBJ && index.Type() == object.STRING_OBJ:
+		return evalErrorFieldIndexExpression(left, index)
 	default:
 		return newError("index operator not supported: %s", left.Type())
 	}
+}
+
+// evalErrorFieldIndexExpression reads err["message"] through object.Error.Field,
+// the same table err.message reads, matching the VM's execErrorField. An unknown
+// name is null rather than an error: a program probing whether a field carries
+// anything should not have to know which build it is running on.
+func evalErrorFieldIndexExpression(errObj, index object.Object) object.Object {
+	val, ok := errObj.(*object.Error).Field(index.(*object.String).Value)
+	if !ok {
+		return NULL
+	}
+	return val
 }
 
 // evalBytesIndexExpression yields the byte at i as an INTEGER 0-255, matching

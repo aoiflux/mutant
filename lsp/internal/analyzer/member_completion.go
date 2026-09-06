@@ -38,6 +38,7 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 	}
 
 	// 2. Struct-typed local receiver -> the struct's fields.
+	//    Error-typed local receiver -> the error's fields.
 	for _, b := range s.VisibleBindingsAt(pos) {
 		if b.ident == nil || b.ident.Value != receiver {
 			continue
@@ -47,10 +48,30 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 				return s.structFieldCompletionItems(typeName, fields, prefix, pos), true
 			}
 		}
+		// An error's fields are the same ten whatever produced it, so unlike a
+		// struct's they need no initializer to have been seen -- the inferred
+		// type of the binding is the whole condition.
+		if ty, ok := s.TypeOf(b.ident); ok && ty.Kind == TypeError {
+			return errorFieldCompletionItems(prefix, pos), true
+		}
 		break
 	}
 
 	return nil, false
+}
+
+// errorFieldCompletionItems offers the error field table, each labelled with the
+// type it reads as, in the runtime's declaration order rather than alphabetical:
+// the first thing anyone wants off an error is its message.
+func errorFieldCompletionItems(prefix string, pos lsp.Position) []lsp.CompletionItem {
+	items := memberCompletionItems(errorFieldNames(), lsp.CompletionItemKindField, prefix, pos)
+	for i := range items {
+		if ty, ok := errorFieldType(items[i].Label); ok {
+			detail := ty.String()
+			items[i].Detail = &detail
+		}
+	}
+	return items
 }
 
 // offsetForPosition converts a zero-based (line, character) position to a byte

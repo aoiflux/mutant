@@ -178,6 +178,59 @@ func TestEvaluatorVMOperatorParity(t *testing.T) {
 	}
 }
 
+// Reading a field off an error has to mean the same thing in both engines.
+//
+// The two arrive at it very differently. The VM keeps its fatal errors as Go
+// errors, so an *object.Error on its stack is unambiguously a value. The
+// evaluator has one Error type doing both jobs, and evalInspectedOperand is what
+// stops the fatal-propagation short-circuit from swallowing `err.message` --
+// that divergence is exactly the kind this file exists to catch, and it is why
+// the dot and the index spelling are both listed rather than one standing in
+// for the other.
+//
+// The error is produced by a real failing builtin rather than constructed,
+// because nothing in the language constructs one yet, and because a builtin's
+// error is the only kind a .mut program can actually hold today.
+func TestErrorFieldAccessParity(t *testing.T) {
+	const raise = `let d, err = fs_read("/mutant/parity/no/such/path");`
+
+	inputs := []string{
+		raise + ` err.message`,
+		raise + ` err["message"]`,
+		raise + ` err.context`,
+		raise + ` err["context"]`,
+		// Stamped position: the evaluator never stamps one, and the VM only
+		// stamps when a line table survived. Both must agree on the *shape* --
+		// an INTEGER, not a missing field -- which is the whole point of §6.5.
+		raise + ` type_of(err.line)`,
+		raise + ` type_of(err.column)`,
+		raise + ` type_of(err.file)`,
+		raise + ` type_of(err.source_line)`,
+		// Composite fields.
+		raise + ` type_of(err.related)`,
+		raise + ` type_of(err.stack)`,
+		raise + ` len(err.related)`,
+		// An unknown name is null in both, not a fault in either.
+		raise + ` type_of(err.no_such_field)`,
+		raise + ` type_of(err["no_such_field"])`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+		if evalRes == "ERROR" {
+			t.Errorf("reading a field of an error faulted in both engines for %q", input)
+		}
+	}
+}
+
 // A value computed by the evaluator during macro expansion must equal the same
 // expression compiled straight to bytecode. This is the parity that still has
 // teeth: `unquote(...)` runs in the evaluator and splices its result into the
