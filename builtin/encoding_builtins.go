@@ -7,7 +7,6 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
-	"io"
 	"net/url"
 	"strconv"
 
@@ -193,11 +192,26 @@ func Gunzip(args ...object.Object) object.Object { return gunzip(args, "gunzip",
 // GunzipBytes decompresses gzip data into a buffer.
 func GunzipBytes(args ...object.Object) object.Object { return gunzip(args, "gunzip_bytes", true) }
 
+// gunzip and zlibDecompress both bound what they will materialise.
+//
+// They did not, and the omission was not theoretical: io.ReadAll on a
+// decompressing reader holds whatever the stream produces, so a kilobyte of
+// hostile input was enough to take the process out. A forensics language is
+// handed hostile input by definition -- that is what evidence is -- and these
+// two are how a program reaches the compressed member of an artifact it has
+// just parsed out of a container.
+//
+// The limit is the shared one: 1000x the input, capped at 1 GiB, or whatever
+// the caller names in max_bytes. See decompressionLimit.
 func gunzip(args []object.Object, opName string, binary bool) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	s, errObj := requireBinaryArg(opName, args[0], 1)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	limit, errObj := resolveDecompressionLimit(opName, args, 2, int64(len(s)))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -206,7 +220,7 @@ func gunzip(args []object.Object, opName string, binary bool) object.Object {
 		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 	defer r.Close()
-	out, err := io.ReadAll(r)
+	out, err := readLimited(r, limit)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
@@ -239,10 +253,14 @@ func ZlibDecompressBytes(args ...object.Object) object.Object {
 }
 
 func zlibDecompress(args []object.Object, opName string, binary bool) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	s, errObj := requireBinaryArg(opName, args[0], 1)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	limit, errObj := resolveDecompressionLimit(opName, args, 2, int64(len(s)))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -251,7 +269,7 @@ func zlibDecompress(args []object.Object, opName string, binary bool) object.Obj
 		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 	defer r.Close()
-	out, err := io.ReadAll(r)
+	out, err := readLimited(r, limit)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}

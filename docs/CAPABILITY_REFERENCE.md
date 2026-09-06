@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **430 registered builtins** across **33 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **440 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -166,8 +166,8 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `base64url_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes URL-safe base64; returns (bytes, err). |
 | `base64url_encode(s: STRING\|BYTES) -> STRING` | all | URL-safe base64-encodes s. |
 | `from_base(s: STRING, base: INTEGER) -> (INTEGER, ERROR)` | all | Parses s as an integer in the given base (2–36); returns (int, err). |
-| `gunzip(s: STRING\|BYTES) -> (STRING, ERROR)` | all | Gzip-decompresses s; returns (bytes, err). |
-| `gunzip_bytes(s: STRING\|BYTES) -> (BYTES, ERROR)` | all | Gzip-decompresses s into a BYTES buffer; returns (bytes, err). |
+| `gunzip(s: STRING\|BYTES, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Gzip-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
+| `gunzip_bytes(s: STRING\|BYTES, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Gzip-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
 | `gzip(s: STRING\|BYTES) -> STRING` | all | Gzip-compresses s (returns a byte string). |
 | `hex_decode(s: STRING) -> (STRING, ERROR)` | all | Decodes a hex string to bytes; returns (bytes, err). |
 | `hex_decode_bytes(s: STRING) -> (BYTES, ERROR)` | all | Decodes a hex string into a BYTES buffer; returns (bytes, err). |
@@ -185,8 +185,8 @@ JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zl
 | `url_decode(s: STRING) -> (STRING, ERROR)` | all | URL query-unescapes s; returns (value, err). |
 | `url_encode(s: STRING) -> STRING` | all | URL query-escapes s. |
 | `zlib_compress(s: STRING\|BYTES) -> STRING` | all | Zlib-compresses s (returns a byte string). |
-| `zlib_decompress(s: STRING\|BYTES) -> (STRING, ERROR)` | all | Zlib-decompresses s; returns (bytes, err). |
-| `zlib_decompress_bytes(s: STRING\|BYTES) -> (BYTES, ERROR)` | all | Zlib-decompresses s into a BYTES buffer; returns (bytes, err). |
+| `zlib_decompress(s: STRING\|BYTES, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Zlib-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
+| `zlib_decompress_bytes(s: STRING\|BYTES, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Zlib-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise. |
 
 ## Math (5)
 
@@ -269,6 +269,23 @@ Binary buffer inspection and construction: fixed-width integer reads/writes (LE/
 | `bytes_write_u32_le(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 32-bit little-endian integer into bytes at offset. |
 | `bytes_write_u64_be(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 64-bit big-endian integer into bytes at offset. |
 | `bytes_write_u64_le(data: STRING\|BYTES, offset: INTEGER, value: INTEGER) -> (STRING\|BYTES, ERROR)` | all | Writes unsigned 64-bit little-endian integer into bytes at offset. |
+
+## Archives (10)
+
+Read evidence containers in place: `zip_*` for the .zip a KAPE, CyLR or Velociraptor collection arrives as, `tar_*` for the .tar and .tar.gz a Linux triage script produces (bzip2 and zstd too, detected by magic rather than by extension). Nothing is extracted to disk -- an entry goes straight into a BYTES buffer for whatever parses it next -- so the classic extraction escape cannot be exploited through these builtins. It is still reported: every entry carries `unsafe_path`, because an archive containing such a name is a finding in its own right. Every decompression is bounded, here and in `gunzip`/`zlib_decompress`, at 1000x its input and 1 GiB, which a caller can override per call with `max_bytes`.
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `tar_close(handle: STRING) -> (HASH, ERROR)` | all | Closes a tar handle and the archive file behind it. |
+| `tar_entries(handle: STRING) -> ([]HASH, ERROR)` | all | Lists an archive's members from the walk tar_open already did: name, size, entry type, link target, POSIX mode/uid/gid/uname/gname, the three timestamps, and unsafe_path -- which covers a link target that escapes as well as a name that does. |
+| `tar_open(path: STRING) -> (HASH, ERROR)` | all | Opens a tar archive -- plain, or wrapped in gzip, bzip2 or zstd, detected by magic rather than by extension -- and returns a handle. Tar has no central directory, so the whole archive is walked once here to learn what it contains; bodies are skipped rather than held. compression names what was detected. Release the handle with tar_close. |
+| `tar_read(handle: STRING, name: STRING, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Reads one member by name and returns its contents as text. Tar has no index, so this walks from the start of the archive: cheap on a plain .tar, but on a compressed one it decompresses everything before the member, which makes reading many members quadratic. Limited to 1 GiB unless max_bytes says otherwise. Nothing is written to disk. |
+| `tar_read_bytes(handle: STRING, name: STRING, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Reads one member by name into a BYTES buffer. Same walk and same limits as tar_read; this is the form to use, since an archive member is binary unless proven otherwise. |
+| `zip_close(handle: STRING) -> (HASH, ERROR)` | all | Closes a zip handle and the archive file behind it. |
+| `zip_entries(handle: STRING) -> ([]HASH, ERROR)` | all | Lists an archive's entries without decompressing any of them: name, sizes, compression method, CRC-32, mode, mtime, encryption flag, and unsafe_path. |
+| `zip_open(path: STRING) -> (HASH, ERROR)` | all | Opens a zip archive (store/deflate/bzip2/zstd) and returns a handle for the other zip_ builtins. Reads the central directory only, so opening a large collection is cheap. unsafe_path_count reports entries whose names would escape a destination directory on extraction -- an archive that contains one is itself a finding. Release the handle with zip_close. |
+| `zip_read(handle: STRING, name: STRING, max_bytes?: INTEGER) -> (STRING, ERROR)` | all | Reads one entry by name and returns its contents as text. Refuses to produce more than 1000x the entry's compressed size, capped at 1 GiB, unless max_bytes says otherwise -- the declared uncompressed size is checked first and the limit is enforced again against what actually decompresses, because a decompression bomb lies about its size. Nothing is written to disk. |
+| `zip_read_bytes(handle: STRING, name: STRING, max_bytes?: INTEGER) -> (BYTES, ERROR)` | all | Reads one entry by name into a BYTES buffer. Same limits as zip_read; this is the form to use, since an archive member is binary unless proven otherwise. |
 
 ## Filesystem (20)
 

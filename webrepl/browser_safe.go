@@ -27,6 +27,7 @@ import (
 // because they always finish — they never wait on something the script has to
 // arrange — which is the same line sleep_ms is already on.
 var hostCategories = map[string]bool{
+	"archives":             true,
 	"concurrency":          true,
 	"binary analysis":      true,
 	"browser artifacts":    true,

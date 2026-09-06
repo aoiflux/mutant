@@ -623,15 +623,15 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameHexEncode:           {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex.", params: []builtinParamDoc{param("s", "Text or buffer to encode.", ParamString, ParamBytes)}, returns: ret("the lowercase hex text", ParamString)},
 	BuiltinNameBase64DecodeBytes:   {signature: "base64_decode_bytes(s)", summary: "Decodes standard base64 into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamBytes)},
 	BuiltinNameHexDecodeBytes:      {signature: "hex_decode_bytes(s)", summary: "Decodes a hex string into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}, returns: pairRet("the decoded bytes", ParamBytes)},
-	BuiltinNameGunzipBytes:         {signature: "gunzip_bytes(s)", summary: "Gzip-decompresses s into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes)}, returns: pairRet("the decompressed bytes", ParamBytes)},
-	BuiltinNameZlibDecompressBytes: {signature: "zlib_decompress_bytes(s)", summary: "Zlib-decompresses s into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes)}, returns: pairRet("the decompressed bytes", ParamBytes)},
+	BuiltinNameGunzipBytes:         {signature: "gunzip_bytes(s, max_bytes?)", summary: "Gzip-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamBytes)},
+	BuiltinNameZlibDecompressBytes: {signature: "zlib_decompress_bytes(s, max_bytes?)", summary: "Zlib-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamBytes)},
 	BuiltinNameHexDecode:           {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
 	BuiltinNameURLEncode:           {signature: "url_encode(s)", summary: "URL query-escapes s.", params: []builtinParamDoc{param("s", "Text to escape.", ParamString)}, returns: ret("the query-escaped text", ParamString)},
 	BuiltinNameURLDecode:           {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err).", params: []builtinParamDoc{param("s", "Escaped text to unescape.", ParamString)}, returns: pairRet("the unescaped text", ParamString)},
 	BuiltinNameGzip:                {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "Text or buffer to compress.", ParamString, ParamBytes)}, returns: ret("the compressed bytes", ParamString)},
-	BuiltinNameGunzip:              {signature: "gunzip(s)", summary: "Gzip-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes)}, returns: pairRet("the decompressed bytes", ParamString)},
+	BuiltinNameGunzip:              {signature: "gunzip(s, max_bytes?)", summary: "Gzip-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamString)},
 	BuiltinNameZlibCompress:        {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "Text or buffer to compress.", ParamString, ParamBytes)}, returns: ret("the compressed bytes", ParamString)},
-	BuiltinNameZlibDecompress:      {signature: "zlib_decompress(s)", summary: "Zlib-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes)}, returns: pairRet("the decompressed bytes", ParamString)},
+	BuiltinNameZlibDecompress:      {signature: "zlib_decompress(s, max_bytes?)", summary: "Zlib-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamString)},
 	BuiltinNameToBase: {
 		signature: "to_base(n, base)", summary: "Formats integer n in the given base (2–36).",
 		params: []builtinParamDoc{
@@ -1937,6 +1937,58 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameTablePartitionInfo:  {signature: "table_partition_info(handle, index)", summary: "Returns details for a single partition by index, including absolute start_byte/length_byte.", returns: pairRet("details for a single partition by index, including absolute start_byte/length_byte", ParamHash).withFields("attributes", "end_lba", "flags", "guid_type", "guid_unique", "index", "length_byte", "length_lba", "name", "slot_number", "start_byte", "start_lba", "table_number", "type_code", "type_name"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString), param("index", "Zero-based partition index.", ParamInt)}},
 	BuiltinNameTableClose:          {signature: "table_close(handle)", summary: "Closes a partition-table handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)}},
 
+	// archives -- evidence containers, read in place
+	BuiltinNameZipOpen: {
+		signature: "zip_open(path)",
+		summary:   "Opens a zip archive (store/deflate/bzip2/zstd) and returns a handle for the other zip_ builtins. Reads the central directory only, so opening a large collection is cheap. unsafe_path_count reports entries whose names would escape a destination directory on extraction -- an archive that contains one is itself a finding. Release the handle with zip_close.",
+		params:    []builtinParamDoc{param("path", "Path to a .zip archive.", ParamString)},
+		returns:   pairRet("a handle for the other zip_ builtins, plus what the central directory declares", ParamHash).withFields("comment", "entry_count", "handle", "path", "status", "total_uncompressed", "unsafe_path_count")},
+	BuiltinNameZipEntries: {
+		signature: "zip_entries(handle)",
+		summary:   "Lists an archive's entries without decompressing any of them: name, sizes, compression method, CRC-32, mode, mtime, encryption flag, and unsafe_path.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString)},
+		returns:   pairRet("one hash per entry", ParamArray).ofElem(ParamHash).withFields("comment", "compressed_size", "crc32", "encrypted", "is_dir", "method", "mode", "modified", "name", "size", "unsafe_path")},
+	BuiltinNameZipRead: {
+		signature: "zip_read(handle, name, max_bytes?)",
+		summary:   "Reads one entry by name and returns its contents as text. Refuses to produce more than 1000x the entry's compressed size, capped at 1 GiB, unless max_bytes says otherwise -- the declared uncompressed size is checked first and the limit is enforced again against what actually decompresses, because a decompression bomb lies about its size. Nothing is written to disk.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString), param("name", "Entry name, as reported by zip_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the entry's contents", ParamString)},
+	BuiltinNameZipReadBytes: {
+		signature: "zip_read_bytes(handle, name, max_bytes?)",
+		summary:   "Reads one entry by name into a BYTES buffer. Same limits as zip_read; this is the form to use, since an archive member is binary unless proven otherwise.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString), param("name", "Entry name, as reported by zip_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the entry's contents", ParamBytes)},
+	BuiltinNameZipClose: {
+		signature: "zip_close(handle)",
+		summary:   "Closes a zip handle and the archive file behind it.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString)},
+		returns:   pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status")},
+	BuiltinNameTarOpen: {
+		signature: "tar_open(path)",
+		summary:   "Opens a tar archive -- plain, or wrapped in gzip, bzip2 or zstd, detected by magic rather than by extension -- and returns a handle. Tar has no central directory, so the whole archive is walked once here to learn what it contains; bodies are skipped rather than held. compression names what was detected. Release the handle with tar_close.",
+		params:    []builtinParamDoc{param("path", "Path to a .tar, .tar.gz/.tgz, .tar.bz2 or .tar.zst archive.", ParamString)},
+		returns:   pairRet("a handle for the other tar_ builtins, plus what the walk found", ParamHash).withFields("compression", "entry_count", "handle", "path", "status", "total_uncompressed", "unsafe_path_count")},
+	BuiltinNameTarEntries: {
+		signature: "tar_entries(handle)",
+		summary:   "Lists an archive's members from the walk tar_open already did: name, size, entry type, link target, POSIX mode/uid/gid/uname/gname, the three timestamps, and unsafe_path -- which covers a link target that escapes as well as a name that does.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString)},
+		returns:   pairRet("one hash per member", ParamArray).ofElem(ParamHash).withFields("accessed", "changed", "gid", "gname", "is_dir", "linkname", "mode", "modified", "name", "size", "type", "uid", "uname", "unsafe_path")},
+	BuiltinNameTarRead: {
+		signature: "tar_read(handle, name, max_bytes?)",
+		summary:   "Reads one member by name and returns its contents as text. Tar has no index, so this walks from the start of the archive: cheap on a plain .tar, but on a compressed one it decompresses everything before the member, which makes reading many members quadratic. Limited to 1 GiB unless max_bytes says otherwise. Nothing is written to disk.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString), param("name", "Member name, as reported by tar_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the member's contents", ParamString)},
+	BuiltinNameTarReadBytes: {
+		signature: "tar_read_bytes(handle, name, max_bytes?)",
+		summary:   "Reads one member by name into a BYTES buffer. Same walk and same limits as tar_read; this is the form to use, since an archive member is binary unless proven otherwise.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString), param("name", "Member name, as reported by tar_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the member's contents", ParamBytes)},
+	BuiltinNameTarClose: {
+		signature: "tar_close(handle)",
+		summary:   "Closes a tar handle and the archive file behind it.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString)},
+		returns:   pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status")},
+
 	// close helpers that lacked docs
 	BuiltinNameCacheClose: {signature: "cache_close(name)", summary: "Closes a named cache and frees its entries and backend.", returns: pairRet("confirmation that the cache has been closed", ParamHash).withFields("closed", "name"), params: []builtinParamDoc{param("name", "Cache namespace to close.", ParamString)}},
 	BuiltinNameRegClose:   {signature: "reg_close(handle)", summary: "Closes a registry-hive handle opened with reg_open.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from reg_open.", ParamString)}},
@@ -2216,6 +2268,9 @@ var capabilityCategories = []capabilityCategory{
 	{"ewf_", "disk image forensics"},
 	{"raw_", "disk image forensics"},
 	{"table_", "disk image forensics"},
+	// archives
+	{"zip_", "archives"},
+	{"tar_", "archives"},
 	// bytes
 	{"bytes_", "bytes"},
 }

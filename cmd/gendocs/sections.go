@@ -90,6 +90,11 @@ var categorySections = []categorySection{
 		blurb:    "Binary buffer inspection and construction: fixed-width integer reads/writes (LE/BE), a streaming cursor, slicing, and byte/char conversions.",
 	},
 	{
+		category: "archives",
+		heading:  "Archives",
+		blurb:    "Read evidence containers in place: `zip_*` for the .zip a KAPE, CyLR or Velociraptor collection arrives as, `tar_*` for the .tar and .tar.gz a Linux triage script produces (bzip2 and zstd too, detected by magic rather than by extension). Nothing is extracted to disk -- an entry goes straight into a BYTES buffer for whatever parses it next -- so the classic extraction escape cannot be exploited through these builtins. It is still reported: every entry carries `unsafe_path`, because an archive containing such a name is a finding in its own right. Every decompression is bounded, here and in `gunzip`/`zlib_decompress`, at 1000x its input and 1 GiB, which a caller can override per call with `max_bytes`.",
+	},
+	{
 		category: "filesystem",
 		heading:  "Filesystem",
 		blurb:    "Read/write/manage files and directories, plus file-level forensics: hashing, entropy, string extraction, magic-type detection, carving, diffing, and NTFS deleted-file recovery.",

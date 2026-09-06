@@ -343,7 +343,7 @@ hash with `"ok": false` rather than dropping out entirely is the idiom worth
 copying — a triage tool that silently skips a file is worse than one that says
 it failed.
 
-The whole forensic standard library is reached this way: 430 builtins across 33
+The whole forensic standard library is reached this way: 440 builtins across 34
 categories, catalogued in the [Capability Reference](CAPABILITY_REFERENCE.md).
 `fs_*` for files, `bin_*` for PE/ELF/Mach-O, `reg_*` for registry hives, `mft_*`
 and the filesystem parsers for disk images, `evtx_*` and `prefetch_*` for

@@ -376,6 +376,17 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameZlibCompress, &BuiltIn{ZlibCompress}},
 	{BuiltinNameZlibDecompress, &BuiltIn{ZlibDecompress}},
 	{BuiltinNameZlibDecompressBytes, &BuiltIn{ZlibDecompressBytes}},
+	// archives
+	{BuiltinNameZipOpen, &BuiltIn{ZipOpen}},
+	{BuiltinNameZipEntries, &BuiltIn{ZipEntries}},
+	{BuiltinNameZipRead, &BuiltIn{ZipRead}},
+	{BuiltinNameZipReadBytes, &BuiltIn{ZipReadBytes}},
+	{BuiltinNameZipClose, &BuiltIn{ZipClose}},
+	{BuiltinNameTarOpen, &BuiltIn{TarOpen}},
+	{BuiltinNameTarEntries, &BuiltIn{TarEntries}},
+	{BuiltinNameTarRead, &BuiltIn{TarRead}},
+	{BuiltinNameTarReadBytes, &BuiltIn{TarReadBytes}},
+	{BuiltinNameTarClose, &BuiltIn{TarClose}},
 	{BuiltinNameToBase, &BuiltIn{ToBase}},
 	{BuiltinNameFromBase, &BuiltIn{FromBase}},
 	// generic standard library: type conversion
