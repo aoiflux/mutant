@@ -241,7 +241,7 @@ func TestReturnKindsMatchImplementation(t *testing.T) {
 			continue
 		}
 
-		value, ok := successValue(result, spec.Pair)
+		value, ok := successValue(result, spec)
 		if !ok {
 			// The sample values are type-correct but not always meaningful — a
 			// negative repeat count, an out-of-range index — so a refusal here
@@ -355,8 +355,17 @@ func callWithNulls2(fn BuiltinFunction, args []object.Object) (result object.Obj
 
 // successValue digs the value half out of a result, reporting false when the
 // call failed instead of succeeding.
-func successValue(obj object.Object, pair bool) (object.Object, bool) {
+//
+// An *object.Error normally means the call failed -- except for a builtin whose
+// declared return *is* an ERROR. error() is the first of those, and without
+// this arm it would land in the refused list on every run: silently
+// unverifiable rather than failing, which is the worse of the two.
+func successValue(obj object.Object, spec BuiltinReturnDoc) (object.Object, bool) {
+	pair := spec.Pair
 	if _, isError := obj.(*object.Error); isError {
+		if !pair && spec.allows(ParamError) {
+			return obj, true
+		}
 		return nil, false
 	}
 	multi, isMulti := obj.(*object.MultiValue)
@@ -393,6 +402,13 @@ func kindOf(obj object.Object) ParamKind {
 		return ParamHash
 	case *object.Null:
 		return ParamNull
+	case *object.Bytes:
+		// BYTES has been a return kind since L-4 and was missing here, so all
+		// sixteen *_bytes producers reported "" and were quietly filed as
+		// refused -- declared but never confirmed against a real call.
+		return ParamBytes
+	case *object.Error:
+		return ParamError
 	}
 	return ""
 }

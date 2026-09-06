@@ -94,6 +94,58 @@ Errors are read-only: `err.message = "..."` is refused, because the position is
 stamped by the runtime and a program that could rewrite it could lie about where
 a failure happened.
 
+### Raising your own error
+
+`error(message, context?, related?)` builds one. Your own errors are the same
+kind of value a builtin's failure is, so they read the same, print the same, and
+travel the same way through `let value, err = ...`.
+
+```mutant
+let parse_record = fn(buf, offset) {
+    let magic, magic_err = bytes_slice(buf, 0, 2);
+    if (len(buf) < offset + 16) {
+        return "", error(
+            "record is truncated",           // message
+            "evidence.parser",               // context: where it went wrong
+            {"offset": offset,               // related: facts, keeping their types
+             "available": len(buf),
+             "magic": magic}
+        );
+    }
+    return bytes_slice(buf, offset, 16);
+};
+
+let rec, err = parse_record(buf, 8192);
+if (err) {
+    putln(err.message);              // "record is truncated"
+    putln(err.context);              // "evidence.parser"
+    putln(err.related["offset"]);    // 8192 -- an INTEGER, not the text "8192"
+    putln(err.line);                 // the line the error() call is on
+}
+```
+
+- **`context` defaults to `"user"`.** Every error names its origin: a builtin's
+  says `builtin.fs_read`, the runtime's says `evaluator`, and yours says `user`
+  until you give it something better. Naming the subsystem, as above, is what
+  makes a log line tell you where to look.
+- **`related` keys must be strings.** Mutant hashes also allow integer and
+  boolean keys; those are refused by name rather than quietly rendered, so
+  `{1: "a"}` is an error you can see instead of a `{"1": "a"}` you cannot.
+- **`related` values keep their types.** An offset stays an `INTEGER` and a
+  buffer stays `BYTES`. This is the whole reason to attach a fact rather than
+  formatting it into the message: the reader does not have to parse it back out.
+  Bind a fallible call to a name first, as the example does with `magic` --
+  writing `bytes_slice(...)` directly into the hash stores the whole
+  `(value, err)` pair, not the buffer.
+- **The position is filled in for you.** `error()` stamps the call that built it,
+  exactly as a builtin's error points at the builtin call.
+- **It returns one value, not a pair.** `let e, err = error("x")` is a mistake --
+  and one the editor reports before you run it.
+
+Two errors are equal when their `message`, `context` and `related` match.
+Position is deliberately not compared: the same failure raised from two places is
+the same failure, and a program that cares where reads `err.line`.
+
 ### Binding several names at once
 
 `let a, b = ...` binds more than one name from a single expression. What it does
@@ -449,7 +501,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 
 ## Builtins
 
-**Total builtins currently registered: 457**, across 34 capability categories.
+**Total builtins currently registered: 458**, across 34 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 

@@ -279,3 +279,40 @@ func (e *Error) relatedHash() *Hash {
 	}
 	return &Hash{Pairs: pairs}
 }
+
+// Equals reports whether two errors describe the same failure.
+//
+// Position is deliberately excluded. Inspect renders it, and equality used to
+// fall through to an Inspect comparison, which made the same failure raised at
+// two call sites unequal -- and, worse, made the answer depend on the engine:
+// the VM stamps a position onto every error a builtin returns, the tree-walking
+// evaluator stamps nothing, so `error("a") == error("a")` was false on one and
+// true on the other. Comparing what went wrong rather than where settles both
+// at once, and a program that cares where reads err.line.
+//
+// Related is compared through each value's own Inspect, which is the identity
+// function the rest of the language already uses for equality.
+func (e *Error) Equals(other *Error) bool {
+	if e == nil || other == nil {
+		return e == other
+	}
+	if e.Message != other.Message || e.Context != other.Context {
+		return false
+	}
+	if len(e.Related) != len(other.Related) {
+		return false
+	}
+	for key, value := range e.Related {
+		otherValue, present := other.Related[key]
+		if !present {
+			return false
+		}
+		if (value == nil) != (otherValue == nil) {
+			return false
+		}
+		if value != nil && value.Inspect() != otherValue.Inspect() {
+			return false
+		}
+	}
+	return true
+}

@@ -20,6 +20,7 @@ var validParamKinds = map[ParamKind]struct{}{
 	ParamNull:   {},
 	ParamStruct: {},
 	ParamEnum:   {},
+	ParamError:  {},
 }
 
 // TestSignaturesParse asserts every teaching signature is in the one shape the

@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **457 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **458 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -27,7 +27,7 @@ Almost every builtin is cross-platform. The exceptions:
 
 ---
 
-## Standard Library (57)
+## Standard Library (58)
 
 Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.
 
@@ -43,6 +43,7 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `delete(hash: HASH, key: STRING\|INTEGER\|FLOAT\|BOOLEAN) -> HASH` | all | Returns a new hash with key removed. |
 | `each(array: ARRAY, fn: FUNCTION) -> NULL` | all | Calls fn for each element for its side effects and returns null. fn takes (element) or (element, index). |
 | `entries(hash: HASH) -> ARRAY` | all | Returns the hash as an array of [key, value] pairs (sorted by key). |
+| `error(message: STRING, context?: STRING, related?: HASH) -> ERROR` | all | Constructs an error value carrying a message, an origin, and any related facts. Single-return: it cannot fail. |
 | `filter(array: ARRAY, fn: FUNCTION) -> ARRAY` | all | Returns a new array of the elements for which fn is truthy. fn takes (element) or (element, index). |
 | `first(array: ARRAY) -> ANY` | all | Returns the first element of an array. |
 | `flatten(array: ARRAY) -> ARRAY` | all | Flattens one level of nested arrays. |

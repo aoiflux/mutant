@@ -11,7 +11,7 @@ func evalExpressions(exps []ast.Expression, env *object.Environment) []object.Ob
 	var result []object.Object
 
 	for _, e := range exps {
-		evaluated := Eval(e, env)
+		evaluated := eval(e, env)
 		if isError(evaluated) {
 			return []object.Object{evaluated}
 		}
@@ -66,6 +66,11 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	// otherwise make a buffer equal to the string spelling its own hex.
 	case left.Type() == object.BYTES_OBJ || right.Type() == object.BYTES_OBJ:
 		return evalBytesInfixExpression(operator, left, right)
+	// Errors likewise: the Inspect fallback renders a position this engine
+	// never stamps, so comparing rendered forms would answer differently here
+	// than in the VM. object.Error.Equals is what both engines ask.
+	case left.Type() == object.ERROR_OBJ || right.Type() == object.ERROR_OBJ:
+		return evalErrorInfixExpression(operator, left, right)
 	case operator == "==":
 		return nativeBoolToBoolObject(left.Inspect() == right.Inspect())
 	case operator == "!=":
@@ -86,6 +91,25 @@ func evalStringInfixExpression(operator string, left, right object.Object) objec
 	lval := left.(*object.String).Value
 	rval := right.(*object.String).Value
 	return &object.String{Value: lval + rval}
+}
+
+// evalErrorInfixExpression handles every operator with an error on either side.
+// Only `==` and `!=` are defined, and only two errors can be equal. This mirrors
+// the VM's execErrorComparison; parity/ asserts they agree, which is the whole
+// reason it exists -- the Inspect fallback would have answered differently in
+// each engine because only one of them stamps a position.
+func evalErrorInfixExpression(operator string, left, right object.Object) object.Object {
+	leftErr, leftOK := left.(*object.Error)
+	rightErr, rightOK := right.(*object.Error)
+	equal := leftOK && rightOK && leftErr.Equals(rightErr)
+
+	switch operator {
+	case "==":
+		return nativeBoolToBoolObject(equal)
+	case "!=":
+		return nativeBoolToBoolObject(!equal)
+	}
+	return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
 }
 
 // evalBytesInfixExpression handles every operator with a bytes on either side:
@@ -117,14 +141,14 @@ func evalBytesInfixExpression(operator string, left, right object.Object) object
 }
 
 func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Object {
-	condition := Eval(node.Condition, env)
+	condition := eval(node.Condition, env)
 	if isError(condition) {
 		return condition
 	}
 	if isTruthy(condition) {
-		return Eval(node.Consequence, env)
+		return eval(node.Consequence, env)
 	} else if node.Alternative != nil {
-		return Eval(node.Alternative, env)
+		return eval(node.Alternative, env)
 	}
 
 	return NULL

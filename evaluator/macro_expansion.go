@@ -116,10 +116,14 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 			return node
 		}
 
-		evaluated := Eval(macro.Body, extendMacroEnv(macro, args))
+		evaluated := eval(macro.Body, extendMacroEnv(macro, args))
 
-		if errObj, isErr := evaluated.(*object.Error); isErr {
-			failure = fmt.Errorf("macro %s: %s", name, errObj.Message)
+		// A fault is the macro body giving up; report why. A bare *object.Error
+		// is not a fault any more -- it is a value the body produced, which
+		// falls through to the "produced a value instead of source" arm below
+		// and is reported as such.
+		if raised, isErr := evaluated.(*fault); isErr {
+			failure = fmt.Errorf("macro %s: %s", name, raised.err.Message)
 			return node
 		}
 

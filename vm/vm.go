@@ -1874,11 +1874,41 @@ func (vm *VM) execComparison(op code.Opcode) error {
 		return vm.execBytesComparison(op, left, right)
 	}
 
+	// Errors are compared before the fallback too, and for a sharper reason:
+	// the fallback compares Inspect, Inspect renders the position, and only
+	// this engine stamps one. Comparing rendered errors would make equality an
+	// artefact of which engine ran the program.
+	if ltype == object.ERROR_OBJ || rtype == object.ERROR_OBJ {
+		return vm.execErrorComparison(op, left, right)
+	}
+
 	switch op {
 	case code.OpEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() == left.Inspect()))
 	case code.OpUnEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() != left.Inspect()))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execErrorComparison decides equality for any comparison with an error on
+// either side. Only two errors can be equal; an error is never equal to a value
+// of another type, whatever it renders as.
+//
+// Ordering is undefined, as it is for bytes: `<` on two errors has no meaning
+// worth inventing, and the operand domains the analyzer derives from this
+// function are what its diagnostics are built on.
+func (vm *VM) execErrorComparison(op code.Opcode, left, right object.Object) error {
+	leftErr, leftOK := left.(*object.Error)
+	rightErr, rightOK := right.(*object.Error)
+	equal := leftOK && rightOK && leftErr.Equals(rightErr)
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
 	default:
 		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
 	}

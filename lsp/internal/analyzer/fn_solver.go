@@ -42,10 +42,11 @@ const (
 	ksNull
 	ksStruct
 	ksEnum
+	ksError
 )
 
 // ksAny is the top of the lattice: a parameter nothing has constrained.
-const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum
+const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum | ksError
 
 // The operand domains below are read off the VM, not assumed.
 //
@@ -56,7 +57,9 @@ const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash |
 //     buffers concatenate and do nothing else.
 //   - execComparison accepts INTEGER×INTEGER or numeric×numeric.
 //     execBytesComparison handles a bytes on either side, but only for equality,
-//     so bytes are deliberately absent from ksComparable.
+//     so bytes are deliberately absent from ksComparable. execErrorComparison
+//     does the same for errors, and for the same reason: `<` on two errors has
+//     no meaning, so errors are absent from ksComparable too.
 //   - execMinusOperation asserts INTEGER or FLOAT.
 //
 // `!`, `==` and `!=` accept anything, and so appear nowhere here: truthiness and
@@ -80,6 +83,7 @@ var kindBits = map[builtin.ParamKind]kindSet{
 	builtin.ParamNull:   ksNull,
 	builtin.ParamStruct: ksStruct,
 	builtin.ParamEnum:   ksEnum,
+	builtin.ParamError:  ksError,
 }
 
 // kindSetFor converts a declared kind list into a set. An empty list, or one

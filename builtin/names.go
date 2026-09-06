@@ -376,6 +376,7 @@ const (
 	BuiltinNameParseFloat = "parse_float"
 	BuiltinNameTypeOf     = "type_of"
 	BuiltinNameIsNull     = "is_null"
+	BuiltinNameError      = "error"
 	// generic standard library: time & date
 	BuiltinNameTimeNow    = "time_now"
 	BuiltinNameTimeUnix   = "time_unix"

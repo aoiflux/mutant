@@ -60,6 +60,8 @@ func sampleForKind(kind ParamKind) object.Object {
 		return &object.Array{Elements: []object.Object{}}
 	case ParamHash:
 		return &object.Hash{Pairs: map[object.HashKey]object.HashPair{}}
+	case ParamError:
+		return &object.Error{Message: "mutant-probe", Context: "probe"}
 	default:
 		return &object.Null{}
 	}

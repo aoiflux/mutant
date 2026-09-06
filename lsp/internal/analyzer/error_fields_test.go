@@ -102,3 +102,35 @@ func TestMemberCompletionErrorFields(t *testing.T) {
 		}
 	}
 }
+
+// error() is the first builtin whose return type is an error, so it is the
+// first thing that gives the editor an error-typed binding without a failing
+// call in sight. The return type is derived from the declared contract, so this
+// also checks that builtin.ParamError survived the trip through
+// typeForParamKind into the return table.
+func TestErrorConstructorIsTypedAsAnError(t *testing.T) {
+	if got := typeAt(t, "let e = error(\"boom\");\ne", 1, 0); got != "error" {
+		t.Errorf("type of a constructed error = %q, want %q", got, "error")
+	}
+}
+
+// Which means its fields complete and type like any other error's -- the point
+// of deriving the editor's view from the runtime rather than from where the
+// value came from.
+func TestConstructedErrorFieldsAreTyped(t *testing.T) {
+	tests := []struct {
+		field string
+		want  string
+	}{
+		{"message", "string"},
+		{"line", "int"},
+		{"related", "hash"},
+		{"stack", "[]string"},
+	}
+	for _, tt := range tests {
+		src := "let e = error(\"boom\");\ne." + tt.field
+		if got := typeAt(t, src, 1, uint32(2+len(tt.field))); got != tt.want {
+			t.Errorf("type of e.%s = %q, want %q", tt.field, got, tt.want)
+		}
+	}
+}

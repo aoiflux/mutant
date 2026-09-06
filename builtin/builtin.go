@@ -416,6 +416,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameParseFloat, &BuiltIn{ParseFloat}},
 	{BuiltinNameTypeOf, &BuiltIn{TypeOf}},
 	{BuiltinNameIsNull, &BuiltIn{IsNull}},
+	{BuiltinNameError, &BuiltIn{Error}},
 	// generic standard library: time & date
 	{BuiltinNameTimeNow, &BuiltIn{TimeNow}},
 	{BuiltinNameTimeUnix, &BuiltIn{TimeUnix}},

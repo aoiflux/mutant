@@ -239,6 +239,61 @@ func TestErrorFieldAccessParity(t *testing.T) {
 //
 // unquote splices back integers, booleans, and quoted nodes (see
 // convertObjectToASTNode), so the table stays within those.
+// A constructed error has to be the same value in both engines.
+//
+// This is the case that forced the evaluator's fault type. The VM keeps its
+// fatal errors as Go errors, so an *object.Error on its stack is a value by
+// construction; the evaluator used one *object.Error for both the language's
+// error value and its own "stop here" signal, so every one of these programs
+// aborted rather than binding. Nothing had exposed that, because until error()
+// every error a program could hold arrived inside a MULTI_VALUE, where the
+// fault check never looked.
+//
+// Position fields are deliberately absent below. Stamping is a VM facility --
+// decorateError reads a line table and a call stack, neither of which the
+// tree-walker has -- so `e.line` is 1 there and 0 here. That is the same rule a
+// stripped build follows, and it is a documented property of the field rather
+// than a disagreement about what error() means.
+func TestErrorConstructorParity(t *testing.T) {
+	inputs := []string{
+		`let e = error("boom"); type_of(e)`,
+		`let e = error("boom"); e.message`,
+		`let e = error("boom"); e.context`,
+		`let e = error("boom", "parser"); e.context`,
+		`let e = error("boom"); e["message"]`,
+		`let e = error("boom", "parser", {"path": "/d.img", "offset": 4096}); len(e.related)`,
+		`let e = error("b", "p", {"offset": 4096}); type_of(e.related["offset"])`,
+		// A constructed error survives a function return, a rebinding, and a
+		// place where a value is merely evaluated and discarded.
+		`let f = fn() { return error("inner"); }; let e = f(); e.message`,
+		`let e = error("boom"); let g = e; g.message`,
+		`if (true) { error("ignored"); 5 }`,
+		// Equality is by message, context and related -- never by position,
+		// which only one of these engines stamps.
+		`error("a") == error("a")`,
+		`error("a") == error("b")`,
+		`error("a", "x") == error("a", "y")`,
+		`error("a") != error("b")`,
+		`error("a") == "ERROR:a"`,
+		// Both engines must refuse the same construction mistakes.
+		`error()`,
+		`error(1)`,
+		`error("m", "c", {1: "a"})`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+}
+
 func TestMacroExpansionMatchesDirectCompilation(t *testing.T) {
 	inputs := []string{
 		"1 + 2", "10 - 3", "6 * 7", "20 / 4", "7 % 3", "-5 + 2",

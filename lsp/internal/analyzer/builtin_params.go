@@ -101,6 +101,12 @@ func paramKindForType(t Type) (builtin.ParamKind, bool) {
 		return builtin.ParamStruct, true
 	case TypeEnum:
 		return builtin.ParamEnum, true
+	// TypeError is deliberately absent even though builtin.ParamError now
+	// exists. This direction exists to judge an argument against a parameter's
+	// declared kinds, and no parameter declares ParamError -- so mapping it
+	// would make every typed position reject an error, which is a new
+	// diagnostic rather than a bridge, and one that needs its own
+	// false-positive case made before it fires on anyone.
 	default:
 		return "", false
 	}

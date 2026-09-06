@@ -30,6 +30,7 @@ var (
 	tBytes  = Type{Kind: TypeBytes}
 	tHash   = Type{Kind: TypeHash}
 	tArray  = Type{Kind: TypeArray}
+	tError  = Type{Kind: TypeError}
 )
 
 var builtinReturnTypes = deriveBuiltinReturnTypes()
@@ -84,6 +85,8 @@ func typeForParamKind(kind builtin.ParamKind) (Type, bool) {
 		return tArray, true
 	case builtin.ParamHash:
 		return tHash, true
+	case builtin.ParamError:
+		return tError, true
 	}
 	return AnyType, false
 }

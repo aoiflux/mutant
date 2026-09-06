@@ -38,7 +38,7 @@ func applyExecutorNative(kind string, args []object.Object) object.Object {
 		// Macro expansion has no connection and no net_serve arg, which is the
 		// same answer a program gets when it runs outside a handler.
 		if len(args) != 0 {
-			return evalPair(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
+			return evalPair(nil, errorValue("wrong number of arguments. got=%d, want=0", len(args)))
 		}
 		return evalPair(nil, nil)
 	default:
@@ -266,10 +266,10 @@ func evalParallel(op string, args []object.Object) object.Object {
 // and returns at once.
 func evalSpawn(args []object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
-		return evalPair(nil, newError("spawn: want 1 or 2 arguments (function[, arg]), got %d", len(args)))
+		return evalPair(nil, errorValue("spawn: want 1 or 2 arguments (function[, arg]), got %d", len(args)))
 	}
 	if !isCallable(args[0]) {
-		return evalPair(nil, newError("spawn: first argument must be a function, got %s", args[0].Type()))
+		return evalPair(nil, errorValue("spawn: first argument must be a function, got %s", args[0].Type()))
 	}
 
 	var callArgs []object.Object
@@ -281,7 +281,7 @@ func evalSpawn(args []object.Object) object.Object {
 		if len(callArgs) == 1 {
 			wanted = "spawn: spawn(fn, arg) needs a function that takes one parameter"
 		}
-		return evalPair(nil, newError("%s, but this one takes %d", wanted, len(fn.Parameters)))
+		return evalPair(nil, errorValue("%s, but this one takes %d", wanted, len(fn.Parameters)))
 	}
 
 	handle, regErr := builtin.RegisterTask()

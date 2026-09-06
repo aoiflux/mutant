@@ -21,7 +21,22 @@ var (
 	FALSE = &object.Boolean{Value: false}
 )
 
+// Eval evaluates a node and is the package boundary.
+//
+// The tree-walker signals "this expression cannot produce a value" with a
+// fault, an unexported type that must not escape: outside this package an error
+// is a value, and a caller that received a fault would have to know the
+// difference to do anything with it. So the fault is unwrapped here and every
+// caller sees the plain *object.Error it always did.
 func Eval(n ast.Node, env *object.Environment) object.Object {
+	result := eval(n, env)
+	if f, raised := result.(*fault); raised {
+		return f.err
+	}
+	return result
+}
+
+func eval(n ast.Node, env *object.Environment) object.Object {
 	switch node := n.(type) {
 
 	/// ---------- expressions ---------- ///
@@ -35,7 +50,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return nativeBoolToBoolObject(node.Value)
 
 	case *ast.PrefixExpression:
-		right := Eval(node.Right, env)
+		right := eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
@@ -47,11 +62,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		if node.Operator == "&&" || node.Operator == "||" {
 			return evalLogicalExpression(node, env)
 		}
-		left := Eval(node.Left, env)
+		left := eval(node.Left, env)
 		if isError(left) {
 			return left
 		}
-		right := Eval(node.Right, env)
+		right := eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
@@ -78,7 +93,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 			}
 			return quote(node.Arguments[0], env)
 		}
-		function := Eval(node.Function, env)
+		function := eval(node.Function, env)
 		if isError(function) {
 			return function
 		}
@@ -94,11 +109,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		}
 		return &object.Array{Elements: elements}
 	case *ast.IndexExpression:
-		left, fault := evalInspectedOperand(node.Left, env)
-		if fault {
+		left := eval(node.Left, env)
+		if isError(left) {
 			return left
 		}
-		index := Eval(node.Index, env)
+		index := eval(node.Index, env)
 		if isError(index) {
 			return index
 		}
@@ -114,7 +129,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return evalBlockStatement(node, env)
 
 	case *ast.ExpressionStatement:
-		return Eval(node.Expression, env)
+		return eval(node.Expression, env)
 
 	case *ast.ReturnStatement:
 		values, errObj := evalReturnValues(node, env)
@@ -132,7 +147,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		}
 
 	case *ast.LetStatement:
-		val := Eval(node.Value, env)
+		val := eval(node.Value, env)
 		if isError(val) {
 			return val
 		}
@@ -183,12 +198,12 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 	var res object.Object
 	for _, s := range stmts {
-		res = Eval(s, env)
+		res = eval(s, env)
 
 		switch res := res.(type) {
 		case *object.ReturnValue:
 			return res.Value
-		case *object.Error:
+		case *fault:
 			return res
 		}
 	}
@@ -198,11 +213,17 @@ func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 func evalBlockStatement(block *ast.BlockStatement, env *object.Environment) object.Object {
 	var res object.Object
 	for _, stmt := range block.Statements {
-		res = Eval(stmt, env)
+		res = eval(stmt, env)
 		if res != nil {
+			// A fault ends the block; an error *value* does not. The two used to
+			// be one test on ERROR_OBJ, which meant a statement that merely
+			// evaluated to an error -- error("x") on its own line -- would end
+			// the block as though it had failed.
+			if isError(res) {
+				return res
+			}
 			rt := res.Type()
-			if rt == object.RETURN_VALUE_OBJ || rt == object.ERROR_OBJ ||
-				rt == object.BREAK_OBJ || rt == object.CONTINUE_OBJ {
+			if rt == object.RETURN_VALUE_OBJ || rt == object.BREAK_OBJ || rt == object.CONTINUE_OBJ {
 				return res
 			}
 		}
@@ -215,32 +236,6 @@ func nativeBoolToBoolObject(input bool) *object.Boolean {
 		return TRUE
 	}
 	return FALSE
-}
-
-// evalInspectedOperand evaluates something that is about to be inspected -- the
-// left of a field access, the container of an index -- and reports whether the
-// result is a propagating fault rather than a value to look inside.
-//
-// The evaluator has one Error type doing two jobs: it is the language's error
-// value, and it is the tree-walker's fatal signal. isError cannot tell them
-// apart, which is why `err.message` used to evaluate to the error itself: the
-// short-circuit fired before the field arm was ever reached. The conflation is
-// older than error field access and is not resolved here.
-//
-// An identifier is the one case where it can be settled exactly. If the name is
-// bound, the binding is a value whatever its type -- the only fault evaluating
-// an identifier can raise is "identifier not found", which by definition is not
-// a bound name. Everything else keeps the previous behaviour and propagates,
-// which is also right: a fallible call yields a MULTI_VALUE, so a bare error out
-// of a call is a fault rather than a result to read a field off.
-func evalInspectedOperand(node ast.Expression, env *object.Environment) (object.Object, bool) {
-	if ident, ok := node.(*ast.Identifier); ok {
-		if val, bound := env.Get(ident.Value); bound {
-			return val, false
-		}
-	}
-	obj := Eval(node, env)
-	return obj, isError(obj)
 }
 
 func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object {
@@ -264,7 +259,7 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 			return newError("wrong number of arguments. want=%d, got=%d", len(fun.Parameters), len(args))
 		}
 		extendedEnv := extendFunctionEnv(fun, args)
-		evaluated := Eval(fun.Body, extendedEnv)
+		evaluated := eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
 		// Some builtins need something the builtin itself does not have: the
@@ -276,6 +271,18 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		result := fun.Fn(args...)
 		if result == nil {
 			return NULL
+		}
+		// A bare error coming back from a builtin means the call failed, and
+		// failure stops the tree-walker -- unless the builtin's contract says an
+		// error is what it returns, which is what error() declares. Asking the
+		// contract rather than the name means a second such builtin needs no
+		// change here.
+		//
+		// The VM needs none of this: it keeps fatal errors in a separate Go
+		// error channel, so an *object.Error reaching its stack is a value by
+		// construction. This arm is what makes the two engines agree.
+		if errObj, failed := result.(*object.Error); failed && !builtin.ReturnsErrorValue(fun) {
+			return &fault{err: errObj}
 		}
 		return result
 	default:
@@ -310,7 +317,7 @@ func evalReturnValues(node *ast.ReturnStatement, env *object.Environment) ([]obj
 			continue
 		}
 
-		value := Eval(expr, env)
+		value := eval(expr, env)
 		if isError(value) {
 			return nil, value
 		}
@@ -352,7 +359,7 @@ func destructureValues(source object.Object, arity int) []object.Object {
 // strict BOOLEAN result. For &&, the right operand is skipped when the left is
 // falsy; for ||, it is skipped when the left is truthy.
 func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) object.Object {
-	left := Eval(node.Left, env)
+	left := eval(node.Left, env)
 	if isError(left) {
 		return left
 	}
@@ -368,7 +375,7 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 		}
 	}
 
-	right := Eval(node.Right, env)
+	right := eval(node.Right, env)
 	if isError(right) {
 		return right
 	}
@@ -402,7 +409,7 @@ func isTruthy(obj object.Object) bool {
 func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Object {
 	pairs := make(map[object.HashKey]object.HashPair)
 	for keyNode, valueNode := range node.Pairs {
-		key := Eval(keyNode, env)
+		key := eval(keyNode, env)
 		if isError(key) {
 			return key
 		}
@@ -410,7 +417,7 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 		if !ok {
 			return newError("unusable as hash key: %s", key.Type())
 		}
-		value := Eval(valueNode, env)
+		value := eval(valueNode, env)
 		if isError(value) {
 			return value
 		}
@@ -426,7 +433,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 
 	// Execute init statement once
 	if node.Init != nil {
-		Eval(node.Init, loopEnv)
+		eval(node.Init, loopEnv)
 	}
 
 	var result object.Object
@@ -434,7 +441,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 	// Loop: check condition, execute body, execute post
 	for {
 		if node.Condition != nil {
-			condition := Eval(node.Condition, loopEnv)
+			condition := eval(node.Condition, loopEnv)
 			if isError(condition) {
 				return condition
 			}
@@ -443,7 +450,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 			}
 		}
 
-		result = Eval(node.Body, loopEnv)
+		result = eval(node.Body, loopEnv)
 
 		// Handle break: unwrap and return NULL
 		if result != nil && result.Type() == object.BREAK_OBJ {
@@ -462,7 +469,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 
 		// Execute post expression
 		if node.Post != nil {
-			postResult := Eval(node.Post, loopEnv)
+			postResult := eval(node.Post, loopEnv)
 			if isError(postResult) {
 				return postResult
 			}
@@ -518,7 +525,7 @@ func evalEnumStatement(node *ast.EnumStatement, env *object.Environment) object.
 }
 
 func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) object.Object {
-	value := Eval(node.Value, env)
+	value := eval(node.Value, env)
 	if isError(value) {
 		return value
 	}
@@ -526,7 +533,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	// Compound assignment (x += v, x++): fold the current value of the target
 	// with the right-hand side using the base operator before storing.
 	if node.Operator != "" {
-		current := Eval(node.Left, env)
+		current := eval(node.Left, env)
 		if isError(current) {
 			return current
 		}
@@ -547,7 +554,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	// Handle field assignment: struct.field = value
 	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
 		// Evaluate the left side (should be a struct)
-		obj := Eval(fieldExpr.Left, env)
+		obj := eval(fieldExpr.Left, env)
 		if isError(obj) {
 			return obj
 		}
@@ -576,8 +583,8 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 	}
 
 	// Evaluate the left side
-	left, fault := evalInspectedOperand(node.Left, env)
-	if fault {
+	left := eval(node.Left, env)
+	if isError(left) {
 		return left
 	}
 
@@ -606,7 +613,7 @@ func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.
 	// Evaluate all field values
 	fields := make(map[string]object.Object)
 	for _, fieldVal := range node.Fields {
-		val := Eval(fieldVal.Value, env)
+		val := eval(fieldVal.Value, env)
 		if isError(val) {
 			return val
 		}

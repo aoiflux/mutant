@@ -132,3 +132,65 @@ func TestFieldOnANilErrorReportsNothing(t *testing.T) {
 		t.Error("a nil error answered a field")
 	}
 }
+
+// Equality compares what went wrong, not where. Position is excluded because
+// only one of the two engines stamps one: comparing rendered errors -- which is
+// what the Inspect fallback did -- made `error("a") == error("a")` true in the
+// tree-walking evaluator and false in the VM.
+func TestErrorEqualityComparesTheFailureNotThePosition(t *testing.T) {
+	at := func(line int) *Error {
+		return &Error{Message: "boom", Context: "parser", File: "a.mut", Line: line}
+	}
+	if !at(1).Equals(at(99)) {
+		t.Error("two identical failures at different lines compare unequal")
+	}
+
+	tests := []struct {
+		name string
+		a, b *Error
+		want bool
+	}{
+		{"same", &Error{Message: "a", Context: "c"}, &Error{Message: "a", Context: "c"}, true},
+		{"message differs", &Error{Message: "a"}, &Error{Message: "b"}, false},
+		{"context differs", &Error{Message: "a", Context: "x"}, &Error{Message: "a", Context: "y"}, false},
+		{"nil both", nil, nil, true},
+		{"nil one", nil, &Error{Message: "a"}, false},
+		{
+			"related differs by value",
+			&Error{Related: map[string]Object{"n": &Integer{Value: 1}}},
+			&Error{Related: map[string]Object{"n": &Integer{Value: 2}}},
+			false,
+		},
+		{
+			"related differs by key",
+			&Error{Related: map[string]Object{"n": &Integer{Value: 1}}},
+			&Error{Related: map[string]Object{"m": &Integer{Value: 1}}},
+			false,
+		},
+		{
+			"related differs by size",
+			&Error{Related: map[string]Object{"n": &Integer{Value: 1}}},
+			&Error{},
+			false,
+		},
+		{
+			// A bytes and the string spelling its own hex render alike through
+			// Inspect, so related values are compared by rendering *and* the
+			// values themselves must not be allowed to collapse types silently.
+			"related matches by value",
+			&Error{Related: map[string]Object{"b": &Bytes{Value: []byte{0x4d, 0x5a}}}},
+			&Error{Related: map[string]Object{"b": &Bytes{Value: []byte{0x4d, 0x5a}}}},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.Equals(tt.b); got != tt.want {
+				t.Errorf("Equals = %t, want %t", got, tt.want)
+			}
+			if got := tt.b.Equals(tt.a); got != tt.want {
+				t.Errorf("Equals is not symmetric: reversed gave %t, want %t", got, tt.want)
+			}
+		})
+	}
+}

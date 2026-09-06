@@ -44,6 +44,15 @@ const (
 	// the language's words, so they follow the language rather than tidiness.
 	ParamStruct ParamKind = "STRUCT"
 	ParamEnum   ParamKind = "ENUM_VALUE"
+	// ParamError names the error type. It arrived with error(), the first
+	// builtin whose *success* value is an error rather than whose failure is.
+	//
+	// Every other builtin that yields an error yields it in the second half of
+	// a pair, which BuiltinReturnDoc.Text renders as the literal "ERROR"
+	// without needing a kind for it. A bare ERROR return had no way to be
+	// spelled at all, and "ANY" would have been a lie in the one place the
+	// contract has an exact answer.
+	ParamError ParamKind = "ERROR"
 )
 
 // BuiltinParamDoc is the exported view of one builtin parameter.
@@ -793,6 +802,14 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "is_null(v)", summary: "Returns whether v is NULL.",
 		params:  []builtinParamDoc{param("v", "Value to test; any type is accepted.", ParamAny)},
 		returns: ret("whether v is NULL", ParamBool)},
+	BuiltinNameError: {
+		signature: "error(message, context?, related?)", summary: "Constructs an error value carrying a message, an origin, and any related facts. Single-return: it cannot fail.",
+		params: []builtinParamDoc{
+			param("message", "What went wrong.", ParamString),
+			param("context?", "Where it went wrong; defaults to \"user\".", ParamString),
+			param("related?", "Facts to carry along, keyed by STRING. Values keep their types.", ParamHash),
+		},
+		returns: ret("an error carrying message, context and related, stamped with the call position", ParamError)},
 	// generic: time & date (epoch seconds; Go reference layout, e.g. \"2006-01-02 15:04:05\")
 	BuiltinNameTimeNow:  {signature: "time_now()", summary: "Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}.", returns: ret("the current UTC time, broken into fields", ParamHash).withFields("day", "hour", "iso", "minute", "month", "second", "unix", "year")},
 	BuiltinNameTimeUnix: {signature: "time_unix()", summary: "Returns the current Unix time in seconds.", returns: ret("the current Unix time in seconds", ParamInt)},
