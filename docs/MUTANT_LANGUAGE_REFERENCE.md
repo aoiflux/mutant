@@ -219,6 +219,29 @@ Nothing about this fails at compile time, and `err` is usually falsy, so an
 the [Capability Reference](CAPABILITY_REFERENCE.md) for whether a builtin returns
 a pair; `push`, `first`, `last`, `rest` and `len` do not.
 
+**Binding the error is not the same as reading it.** When a fallible call fails
+it leaves null in the value beside the error, so a program that never looks at
+`err` carries on with nothing and reports success:
+
+```mutant
+let report_json, err = json_stringify(report);
+let wrote, err = fs_write(path, report_json);   // writes "null" if the first
+                                                // call failed
+```
+
+`uncheckedError` warns on both lines. The first `err` is replaced before
+anything reads it; the second is never read at all. It stays quiet when you read
+the error
+any way at all -- test it, print it, return it, hand it on -- and when you catch
+the failure through the value instead, either by testing the value in an `if`
+condition or by using a boolean success flag, which is false whenever the call
+failed. When you genuinely mean to ignore a failure, bind `_` and the rule takes
+you at your word:
+
+```mutant
+let _, _ = fs_write(log_path, line);   // best-effort logging, on purpose
+```
+
 ### First-class functions and closures
 
 Functions are values: you can bind them, pass them, return them, and capture free variables.

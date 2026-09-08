@@ -347,6 +347,18 @@
                         "off"
                     ],
                     "description": "Severity for unclosed-resource diagnostics: warns when a builtin that opens a handle (ntfs_open, zip_open, chan_new, net_connect and their families) binds it to a name nothing in the same scope closes. Handles live in a package-level store with no eviction, so an unclosed one is held for the life of the process — invisible in a script that exits, descriptor exhaustion in a loop or a long-running server. The rule stays quiet whenever the handle is used somewhere it cannot follow (returned, passed to a helper, stored) or the closer is named anywhere in the scope, including inside with_resource. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.uncheckedError.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unchecked-error diagnostics: warns when `let value, err = f(...)` binds the error half of a (value, err) builtin and nothing reads that binding before the name is rebound or the scope ends. A failed call leaves null in the value beside the error, so a program that ignores the error carries on with nothing and reports success. The rule stays quiet when the error is read in any way at all \u2014 tested, printed, returned, passed on \u2014 when the failure is caught through the value instead (an `if` or `for` condition on it, or a BOOLEAN success flag used anywhere), when a nested function mentions the name, and when `_` is bound to say the failure is deliberately ignored. Set to 'off' to suppress the rule."
                 }
             }
         },

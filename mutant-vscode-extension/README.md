@@ -60,6 +60,11 @@ VS Code language support for Mutant.
   (`ntfs_open`, `zip_open`, `chan_new`, `net_connect`, ...) that nothing in the
   same scope closes. Quiet whenever the handle escapes the scope, the closer is
   named in it, or the resource is deliberately held for the program's life
+- `mutant.lint.rules.uncheckedError.severity`: severity for binding the error
+  half of a `(value, err)` builtin and never reading it before the name is
+  rebound or the scope ends. Quiet when the error is read in any way, when the
+  failure is caught through the value instead, or when `_` is bound to say the
+  failure is deliberately ignored
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

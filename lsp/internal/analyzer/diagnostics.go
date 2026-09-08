@@ -50,6 +50,7 @@ type LintConfig struct {
 	BuiltinDeprecated            LintSeverity
 	SpawnGlobalWrite             LintSeverity
 	UnclosedResource             LintSeverity
+	UncheckedError               LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -97,6 +98,12 @@ func DefaultLintConfig() LintConfig {
 		// whole lifetime, so a report is about this code rather than a
 		// guess about the rest of the program.
 		UnclosedResource: LintSeverityWarning,
+		// A bound-and-ignored error is the same failure one step earlier:
+		// the call failed, the value beside it is null, and the program
+		// keeps going as though it had succeeded. Warning rather than
+		// error because the code compiles and runs -- which is the whole
+		// problem with it.
+		UncheckedError: LintSeverityWarning,
 	}
 }
 
@@ -131,6 +138,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.SpawnGlobalWrite
 	case "unclosedResource":
 		severityName = c.UnclosedResource
+	case "uncheckedError":
+		severityName = c.UncheckedError
 	default:
 		return nil, false
 	}
@@ -187,6 +196,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUnclosedResources(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUncheckedErrors(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

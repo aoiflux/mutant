@@ -58,6 +58,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "builtinDeprecated", &config.BuiltinDeprecated)
 	applyRuleSeverity(rulesMap, "spawnGlobalWrite", &config.SpawnGlobalWrite)
 	applyRuleSeverity(rulesMap, "unclosedResource", &config.UnclosedResource)
+	applyRuleSeverity(rulesMap, "uncheckedError", &config.UncheckedError)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

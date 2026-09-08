@@ -288,6 +288,28 @@ Current lint rules (rule id -> default severity):
   `with_resource` takes, and when the resource is held by something with no
   reachable end: a `for` with no exit condition, or a listener handed to
   `net_serve`)
+- `uncheckedError` -> warning (`let value, err = f(...)` against a builtin whose
+  `builtin.ReturnSpec` declares the `(value, err)` contract, where nothing reads
+  that binding of `err` before the name is rebound or the scope ends. A failed
+  call leaves null in the value, so the program carries on with nothing and
+  reports success. It reads the same contract as `builtinSingleReturn` and
+  `builtinPairReturn` from the opposite direction: those two ask whether the
+  binding's shape matches the builtin's, this one takes a binding whose shape is
+  already right and asks whether the error half was used.
+
+  It answers **per binding, not per name**, and that is the whole reason it
+  exists alongside `unusedDeclaration`. Measured over `examples/**` before it
+  was written, `unusedDeclaration` reported an unread `err` three times in 104
+  files: `err` is bound 85 times over at the top level, so it is a duplicate
+  name and gets skipped wholesale, and its reference lookup answers for the name
+  rather than the binding. Asking the narrower question finds 40.
+
+  Quiet when the error is read in any way at all -- tested, printed, returned,
+  passed on, stored -- when a nested function mentions the name (a closure runs
+  when it is called, not where it is written), when `_` is bound, and when the
+  failure is caught through the value instead: the value written into an `if` or
+  `for` condition, or a BOOLEAN success value read anywhere, since that one is
+  false on every failure path)
 
 Config ingestion path:
 
