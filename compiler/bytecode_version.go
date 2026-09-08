@@ -6,6 +6,20 @@ package compiler
 // operand is read. It is not a compatibility flag for the instruction set: an
 // opcode's meaning has never depended on it, and a change there would need a
 // different mechanism.
+//
+// The instruction set is versioned by a different rule, which is worth stating
+// because it looks like an omission. Opcodes are append-only: a value once
+// emitted never changes meaning, and new ones go on the end. So old bytecode
+// runs unchanged on a new runtime, always, and the only failing direction is new
+// bytecode on an old runtime -- where the old runtime meets an opcode it does
+// not know and stops, naming it. Bumping this constant would not help that
+// runtime, which does not know the new version either; the guarantee is the
+// append-only rule plus a refusal, not a number.
+//
+// That refusal is recent. Until the boxed-cell opcodes went in, the dispatch
+// switch had no default arm: an unknown opcode matched nothing, the instruction
+// pointer advanced by one, and the operand bytes were executed as opcodes. See
+// VM.execLoop's default case.
 const (
 	// BytecodeVersionOrdinalBuiltins is everything compiled up to and including
 	// v2.4.0, when OpGetBuiltin carried an ordinal into the global builtin

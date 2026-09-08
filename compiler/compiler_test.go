@@ -913,7 +913,9 @@ func TestClosures(t *testing.T) {
 					code.Make(code.OpAdd),
 					code.Make(code.OpReturnValue),
 				},
-				[]code.Instructions{code.Make(code.OpGetLocal, 0),
+				// `a` is captured, so it is boxed: the capture list hands the
+				// inner closure the cell itself rather than a copy of the value.
+				[]code.Instructions{code.Make(code.OpCaptureLocal, 0),
 					code.Make(code.OpClosure, 0, 1),
 					code.Make(code.OpReturnValue),
 				},
@@ -934,14 +936,18 @@ func TestClosures(t *testing.T) {
 					code.Make(code.OpAdd),
 					code.Make(code.OpReturnValue),
 				},
+				// Two captures with different origins in one list: `a` is already
+				// a capture at this level and is passed along with
+				// OpCaptureFree, while `b` is this function's own local and is
+				// boxed here. Both push the same cell the owner allocated.
 				[]code.Instructions{
-					code.Make(code.OpGetFree, 0),
-					code.Make(code.OpGetLocal, 0),
+					code.Make(code.OpCaptureFree, 0),
+					code.Make(code.OpCaptureLocal, 0),
 					code.Make(code.OpClosure, 0, 2),
 					code.Make(code.OpReturnValue),
 				},
 				[]code.Instructions{
-					code.Make(code.OpGetLocal, 0),
+					code.Make(code.OpCaptureLocal, 0),
 					code.Make(code.OpClosure, 1, 1),
 					code.Make(code.OpReturnValue),
 				},
@@ -970,18 +976,21 @@ func TestClosures(t *testing.T) {
 					code.Make(code.OpAdd),
 					code.Make(code.OpReturnValue),
 				},
+				// `let b = 77` was compiled before anything captured b, and the
+				// OpSetLocal it emitted has been rewritten in place to its cell
+				// form. Same opcode width, so nothing after it moved.
 				[]code.Instructions{
 					code.Make(code.OpConstant, 2),
-					code.Make(code.OpSetLocal, 0),
-					code.Make(code.OpGetFree, 0),
-					code.Make(code.OpGetLocal, 0),
+					code.Make(code.OpSetLocalCell, 0),
+					code.Make(code.OpCaptureFree, 0),
+					code.Make(code.OpCaptureLocal, 0),
 					code.Make(code.OpClosure, 4, 2),
 					code.Make(code.OpReturnValue),
 				},
 				[]code.Instructions{
 					code.Make(code.OpConstant, 1),
-					code.Make(code.OpSetLocal, 0),
-					code.Make(code.OpGetLocal, 0),
+					code.Make(code.OpSetLocalCell, 0),
+					code.Make(code.OpCaptureLocal, 0),
 					code.Make(code.OpClosure, 5, 1),
 					code.Make(code.OpReturnValue),
 				},

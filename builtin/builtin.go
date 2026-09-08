@@ -18,7 +18,7 @@ type BuiltinDefinition struct {
 }
 
 func (b *BuiltIn) Type() object.ObjectType { return object.BUILTIN_OBJ }
-func (b *BuiltIn) Inspect() string         { return "builtin funciton" }
+func (b *BuiltIn) Inspect() string         { return "builtin function" }
 
 var Builtins = []BuiltinDefinition{
 	{BuiltinNameLen, &BuiltIn{Len}},

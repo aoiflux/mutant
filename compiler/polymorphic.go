@@ -364,6 +364,8 @@ var deadCodeFillers = []code.Opcode{
 	code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod,
 	code.OpBang, code.OpMinus, code.OpPop, code.OpDup,
 	code.OpEqual, code.OpUnEqual, code.OpGreater, code.OpGreaterEqual,
+	code.OpBitAnd, code.OpBitOr, code.OpBitXor, code.OpBitNot,
+	code.OpShiftLeft, code.OpShiftRight,
 }
 
 // generateDeadBlock returns instructions that are branched over rather than

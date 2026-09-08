@@ -30,6 +30,12 @@ func GobTypes() []any {
 		&object.Boolean{},
 		&object.Break{},
 		&object.Bytes{},
+		// A cell is created at frame entry and dies with the frame, so nothing
+		// this compiler emits can put one in a constant pool. It is registered
+		// anyway, under the rule above: the cost is one map entry, and the
+		// alternative is that the day something does reach gob the failure is a
+		// runtime encoding error in the field rather than a caught mistake.
+		&object.Cell{},
 		&object.Closure{},
 		&object.CompiledFunction{},
 		&object.Continue{},

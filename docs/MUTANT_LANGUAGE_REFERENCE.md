@@ -18,9 +18,9 @@ Mutant supports:
 - Variables and assignment with `let`
 - Primitive literals: integers, floats, booleans, strings
 - Compound literals: arrays, hashes, struct literals
-- Prefix operators: `!` and unary `-`
-- Infix operators: `+ - * / % < > <= >= == != && ||`
-- Assignment: `=`, compound assignment `+= -= *= /= %=`, and postfix `++` / `--`
+- Prefix operators: `!`, unary `-`, and the bitwise complement `~`
+- Infix operators: `+ - * / % < > <= >= == != && ||` and bitwise `& | ^ << >>`
+- Assignment: `=`, compound assignment `+= -= *= /= %= &= |= ^= <<= >>=`, and postfix `++` / `--`
 - Indexing and field access
 - A distinct `bytes` type for binary data, with explicit conversions to and from text
 - Conditionals: `if` / `else`
@@ -254,6 +254,46 @@ let add10 = adder(10);
 putln(add10(5));                       // 15
 ```
 
+A closure captures its free variables **by reference**, so it can read them and
+write them, and the enclosing function sees the writes:
+
+```mutant
+let total = fn() {
+    let acc = 0;
+    each([1, 2, 3], fn(x) { acc = acc + x; });
+    return acc;                                  // 6
+};
+```
+
+There is one storage location per variable per call, shared by the frame and
+every closure over it. Two closures over the same variable therefore see each
+other's writes, and a closure that outlives the call that made it keeps its
+variable alive:
+
+```mutant
+let counter = fn() {
+    let n = 0;
+    return fn() { n = n + 1; return n; };
+};
+let next = counter();
+putln(next());                                   // 1
+putln(next());                                   // 2
+putln(counter()());                              // 1 -- a separate n
+```
+
+A captured variable is scoped to the call, not to the iteration. A closure made
+inside a `for` loop shares the loop's variable rather than getting a snapshot of
+it, which is the behaviour of `var` in JavaScript and of a Go loop variable
+before Go 1.22. Capture the value in a parameter if you want it frozen:
+
+```mutant
+let freeze = fn(v) { return fn() { return v; }; };
+```
+
+Two things are still not assignable, because neither is storage: a builtin's
+name, and the name a function literal was bound to (`f = 1` inside `f`). Both
+are refused at compile time.
+
 ### Higher-order collection functions
 
 Closures compose with the functional collection builtins `map`, `filter`, `reduce`, `each`, and `sort_by`:
@@ -292,12 +332,13 @@ The third argument caps how many run at once. Omit it and the worker count
 follows the machine's CPU count, capped by the array length.
 
 **What the callback may rely on.** Each worker runs on its own VM with a
-*snapshot* of globals, taken when the call starts. So a callback can read
-globals and its own captured variables, but an assignment to a global stays
-local to that worker and is lost when it finishes. Write callbacks that return
-their result rather than accumulating into a global; when workers genuinely need
-to share state, put it in a `cache_*` or `db_*` store, which is what `net_serve`
-handlers already do.
+*snapshot* of globals and its own copy of the callback's captured variables,
+taken when the call starts. So a callback can read both, but an assignment to
+either stays local to that worker and is lost when it finishes -- unlike the
+sequential `each`, where a captured accumulator does reach the caller. Write
+callbacks that return their result rather than accumulating; when workers
+genuinely need to share state, put it in a `cache_*` or `db_*` store, which is
+what `net_serve` handlers already do.
 
 An error raised inside a callback stops the whole call and surfaces, the same as
 in `map`.
@@ -327,8 +368,8 @@ answers without waiting. Whatever stopped a task -- an error, a division by zero
 Collecting a task releases its handle, so wait for it once.
 
 **A spawned task follows the same rules as a `pmap` worker**: its own VM, its own
-stack, and a *snapshot* of globals taken at the spawn. It can read globals and
-its captured variables; its own writes stay local. The way back is the return
+stack, and a *snapshot* of globals and captured variables taken at the spawn. It
+can read both; its own writes to either stay local. The way back is the return
 value, or a channel.
 
 #### Channels
@@ -396,10 +437,70 @@ let has_both = si_frac == 0 && fn_frac > 0;   // both conditions must hold
 let ready = configured || force;               // either is enough
 ```
 
+### Bitwise operators
+
+`&` (and), `|` (or), `^` (xor), `<<` (left shift), `>>` (right shift) and the
+prefix `~` (complement) operate on integers. They are the signed 64-bit
+operations Go performs, so every result matches Go exactly.
+
+```mutant
+let READ  = 1;
+let WRITE = 2;
+let EXEC  = 4;
+
+let perms = READ | EXEC;                 // 5  -- combine flags
+let can_write = (perms & WRITE) != 0;    // false -- test one
+perms = perms | WRITE;                   // 7  -- set one
+perms = perms & ~EXEC;                   // 3  -- clear one
+
+let b = 240;
+b >> 4;                                  // 15 -- the high nibble
+b & 15;                                  // 0  -- the low one
+```
+
+**Precedence follows Go, not C.** `<< >> &` bind as tightly as `* / %`, and
+`| ^` bind as tightly as `+ -`. All of them bind tighter than the comparison
+operators, so `flags & MASK == 0` means `(flags & MASK) == 0` — the reading you
+wanted. C parses that same line as `flags & (MASK == 0)`, which is why C code
+is full of defensive parentheses around masks. Two cases still deserve them,
+because Go's answer is not the one most people would guess:
+
+```mutant
+1 | 2 + 1;    // 4, not 3: `|` and `+` are the same level, evaluated left to right
+1 << 2 + 1;   // 5, not 8: `<<` binds tighter than `+`, so it is (1 << 2) + 1
+```
+
+**`>>` is an arithmetic shift.** The operands are signed, so the sign bit is
+copied in as the value moves right: `-8 >> 1` is `-4`, and `-1 >> 63` is still
+`-1`. There is no unsigned integer type, and therefore no logical shift.
+
+**A shift count of 64 or more is not an error.** The value simply falls off the
+end, so `1 << 64` is `0` and `-1 >> 64` is `-1`. A *negative* count is an error:
+Go panics on one, and a program that shifts by a computed value can reach a
+negative count without anybody having written a minus sign.
+
+**Every operand must be an integer.** A float is refused, not truncated:
+
+```mutant
+1.5 & 1;   // error: bitwise operator & requires INTEGER operands, got FLOAT and INTEGER
+~1.5;      // error: bitwise complement requires an INTEGER, got FLOAT
+```
+
+Rounding to make the expression work would be the same class of plausible wrong
+answer the `bytes` type exists to prevent: the bits of a float are not the bits
+of the number it spells, so there is no honest result to return.
+
+The compound forms `&= |= ^= <<= >>=` are sugar in exactly the way `+=` is —
+`x &= mask` is `x = x & mask`.
+
+> Masks are written in decimal for now: Mutant has no hex literals, so `0xFF`
+> does not parse. Write `255`.
+
 ### Compound assignment and increment/decrement
 
-`+= -= *= /= %=` update a variable in place using its current value, and postfix
-`++` / `--` add or subtract one. They are pure syntactic sugar: `x += y` is exactly
+`+= -= *= /= %=`, and the bitwise `&= |= ^= <<= >>=`, update a variable in
+place using its current value, and postfix `++` / `--` add or subtract one.
+They are pure syntactic sugar: `x += y` is exactly
 `x = x + y`, and `x++` is exactly `x = x + 1`, so they follow the same operator
 semantics (integer vs. float promotion, `+=` concatenating strings, integer
 division/modulo-by-zero errors). The target must be an assignable lvalue — a

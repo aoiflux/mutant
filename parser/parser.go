@@ -30,6 +30,11 @@ var precedences = map[token.TokenType]int{
 	token.ASTERISK_ASSIGN: ASSIGNMENT,
 	token.SLASH_ASSIGN:    ASSIGNMENT,
 	token.MODULO_ASSIGN:   ASSIGNMENT,
+	token.AND_ASSIGN:      ASSIGNMENT,
+	token.OR_ASSIGN:       ASSIGNMENT,
+	token.XOR_ASSIGN:      ASSIGNMENT,
+	token.SHL_ASSIGN:      ASSIGNMENT,
+	token.SHR_ASSIGN:      ASSIGNMENT,
 	token.OR:              LOGIC_OR,
 	token.AND:             LOGIC_AND,
 	token.EQUALITY:        EQUALS,
@@ -43,12 +48,22 @@ var precedences = map[token.TokenType]int{
 	token.FSLASH:          PRODUCT,
 	token.ASTERISK:        PRODUCT,
 	token.MODULO:          PRODUCT,
-	token.INCREMENT:       CALL,
-	token.DECREMENT:       CALL,
-	token.LPAREN:          CALL,
-	token.LSQUARE:         INDEX,
-	token.DOT:             FIELD,
-	token.LBRACE:          CALL,
+	// Bitwise precedence is Go's exactly: `<< >> &` sit with `* / %`, and
+	// `| ^` sit with `+ -`. That is what makes `flags & MASK == 0` read as
+	// `(flags & MASK) == 0` -- C puts bitwise below comparison, and the
+	// resulting `flags & (MASK == 0)` is the single most-parenthesised
+	// footgun in that family of languages.
+	token.SHL:       PRODUCT,
+	token.SHR:       PRODUCT,
+	token.AMPERSAND: PRODUCT,
+	token.PIPE:      SUM,
+	token.CARET:     SUM,
+	token.INCREMENT: CALL,
+	token.DECREMENT: CALL,
+	token.LPAREN:    CALL,
+	token.LSQUARE:   INDEX,
+	token.DOT:       FIELD,
+	token.LBRACE:    CALL,
 }
 
 type (
@@ -116,6 +131,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.FLOAT, p.parseFloatLiteral)
 	p.registerPrefix(token.BANG, p.parsePrefixExpression)
 	p.registerPrefix(token.MINUS, p.parsePrefixExpression)
+	p.registerPrefix(token.TILDE, p.parsePrefixExpression)
 	p.registerPrefix(token.TRUE, p.parseBoolean)
 	p.registerPrefix(token.FALSE, p.parseBoolean)
 	p.registerPrefix(token.LPAREN, p.parseGroupedExpression)
@@ -138,12 +154,22 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerInfix(token.MODULO, p.parseInfixExpression)
 	p.registerInfix(token.AND, p.parseInfixExpression)
 	p.registerInfix(token.OR, p.parseInfixExpression)
+	p.registerInfix(token.AMPERSAND, p.parseInfixExpression)
+	p.registerInfix(token.PIPE, p.parseInfixExpression)
+	p.registerInfix(token.CARET, p.parseInfixExpression)
+	p.registerInfix(token.SHL, p.parseInfixExpression)
+	p.registerInfix(token.SHR, p.parseInfixExpression)
 	p.registerInfix(token.ASSIGN, p.parseAssignExpression)
 	p.registerInfix(token.PLUS_ASSIGN, p.parseCompoundAssignExpression)
 	p.registerInfix(token.MINUS_ASSIGN, p.parseCompoundAssignExpression)
 	p.registerInfix(token.ASTERISK_ASSIGN, p.parseCompoundAssignExpression)
 	p.registerInfix(token.SLASH_ASSIGN, p.parseCompoundAssignExpression)
 	p.registerInfix(token.MODULO_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.AND_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.OR_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.XOR_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.SHL_ASSIGN, p.parseCompoundAssignExpression)
+	p.registerInfix(token.SHR_ASSIGN, p.parseCompoundAssignExpression)
 	p.registerInfix(token.INCREMENT, p.parsePostfixIncDecExpression)
 	p.registerInfix(token.DECREMENT, p.parsePostfixIncDecExpression)
 	p.registerInfix(token.LPAREN, p.parseCallExpression)

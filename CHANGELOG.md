@@ -18,6 +18,16 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **Bitwise operators.** `&`, `|`, `^`, `<<`, `>>` and the prefix complement
+  `~`, with the compound forms `&= |= ^= <<= >>=`. A language whose brochure
+  leads with disk-image parsing could not express a mask, a flag test or a
+  shift; the workaround was arithmetic or a builtin call. Semantics and
+  precedence are Go's: `<< >> &` bind as tightly as `* / %` and `| ^` as `+ -`,
+  so `flags & MASK == 0` reads as `(flags & MASK) == 0` rather than C's
+  `flags & (MASK == 0)`. `>>` is an arithmetic shift over the signed 64-bit
+  integers the VM has. Non-integer operands are refused rather than truncated,
+  and a negative shift count is a runtime error instead of the panic Go would
+  raise. Six new opcodes, appended so existing opcode values are unchanged.
 - **A real `bytes` type.** `BYTES` is a first-class object: it indexes to an
   integer 0–255, concatenates with `+`, compares by content, measures with
   `len`, and hashes in a keyspace disjoint from strings. Every disk sector, PE
@@ -100,6 +110,39 @@ claim the README makes becomes verifiable.
 
 ### Fixed
 
+- **Assignment to a captured variable corrupted the frame.** The compiler
+  branched on two of `SymbolScope`'s five values at its three assignment sites,
+  so a write to a free variable was emitted as `OpSetLocal` against the *free*
+  index -- a position in the closure's capture list, not a frame slot. Writing
+  free 0 landed on local 0, which is usually the first parameter:
+  `fn(x) { let acc = 0; let inner = fn(p) { acc = 7; return p; }; return inner(x); }`
+  called with 42 answered **7**, and two captures over two parameters answered
+  `[777, 888]` for `(10, 20)`. Silent argument corruption, with no diagnostic
+  from any stage. The tree-walking evaluator was correct throughout, so this was
+  a defect against a reference implementation rather than a semantics question.
+
+  A captured local now lives in a cell that the frame slot and every closure over
+  it point at, so a write through any of them is a write all of them see. An
+  accumulator over a callback works, a counter outlives the frame that made it,
+  and two closures over one variable agree about its value. Adding `OpSetFree`
+  over the existing by-value capture list was rejected rather than deferred: it
+  would have stopped the corruption and left the accumulator answering 0, trading
+  a findable bug for a quiet one.
+
+  Five new opcodes, appended so existing opcode values are unchanged. Bytecode
+  compiled before this runs unchanged, including its by-value capture.
+  `pmap`, `peach` and `spawn` hand each worker its own copy of the captured
+  cells, so a callback's writes stay local -- the rule those builtins already
+  documented for globals, and without which the sharing would be a data race.
+  Assigning to a builtin's name or to the name a function literal was bound to
+  is still refused at compile time; neither is storage.
+- **The VM skipped opcodes it did not recognise.** The dispatch switch had no
+  default arm, so bytecode built by a newer toolchain ran to completion and
+  answered with nonsense: the unknown instruction matched nothing, the
+  instruction pointer advanced by one, and its operand bytes were executed as
+  opcodes. It now stops and names the opcode. Opcodes are append-only, so this
+  is the only direction that can fail -- old bytecode has always run on a new
+  runtime, and still does.
 - `mutil.EncryptObject`'s default arm returns an error both call sites discard,
   so an object type without an explicit arm travelled **unencrypted with nothing
   said**. `BYTES` has arms in both directions, with a test asserting the sealed

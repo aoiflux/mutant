@@ -570,7 +570,78 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 		return value
 	}
 
+	// Handle index assignment: a[i] = value / h[k] = value. Arrays, buffers and
+	// hashes are all pointers, so mutating one in place is what the enclosing
+	// environment sees; no write-back is needed, which is why the VM emits a
+	// store after OpSetIndex and this does not.
+	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
+		container := eval(idxExpr.Left, env)
+		if isError(container) {
+			return container
+		}
+
+		index := eval(idxExpr.Index, env)
+		if isError(index) {
+			return index
+		}
+
+		if err := evalSetIndex(container, index, value); err != nil {
+			return err
+		}
+		return value
+	}
+
 	return newError("invalid assignment target")
+}
+
+// evalSetIndex stores value at index inside container, mirroring the VM's
+// execSetIndex arm for arm. It returns an error object, or nil on success.
+// The two implementations exist separately -- one works on the stack, one on
+// evaluated objects -- so the messages are kept identical deliberately: the
+// parity harness compares what a program prints, and a divergence in wording
+// is a divergence.
+func evalSetIndex(container, index, value object.Object) object.Object {
+	switch c := container.(type) {
+	case *object.Array:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return newError("array index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Elements)) {
+			return newError("array index out of bounds: %d (len %d)", idx.Value, len(c.Elements))
+		}
+		c.Elements[idx.Value] = value
+		return nil
+	case *object.Bytes:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return newError("bytes index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Value)) {
+			return newError("bytes index out of bounds: %d (len %d)", idx.Value, len(c.Value))
+		}
+		val, ok := value.(*object.Integer)
+		if !ok {
+			return newError("bytes element must be INTEGER, got %s", value.Type())
+		}
+		if val.Value < 0 || val.Value > 255 {
+			return newError("bytes element out of range: %d (want 0-255)", val.Value)
+		}
+		c.Value[idx.Value] = byte(val.Value)
+		return nil
+	case *object.Hash:
+		hashKey, ok := index.(object.Hashable)
+		if !ok {
+			return newError("unusable as a hashkey: %s", index.Type())
+		}
+		if c.Pairs == nil {
+			c.Pairs = make(map[object.HashKey]object.HashPair)
+		}
+		c.Pairs[hashKey.HashKey()] = object.HashPair{Key: index, Value: value}
+		return nil
+	default:
+		return newError("index assignment not supported on %s", container.Type())
+	}
 }
 
 func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) object.Object {

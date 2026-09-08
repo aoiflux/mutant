@@ -10,6 +10,20 @@ type CompiledFunction struct {
 	NumLocals    int
 	NumParams    int
 
+	// CapturedLocals are the local slot indices an inner function closes over,
+	// ascending. The VM boxes exactly these slots when it pushes the frame --
+	// after the arguments are in place, so a captured *parameter* needs no
+	// special case -- and the compiler has already rewritten every read and
+	// write of them to the cell opcodes.
+	//
+	// This is semantic, not debug information, and must never join
+	// ByteCode.StripDebugInfo's list: a release build that lost it would stop
+	// boxing and quietly resume the by-value capture bug it exists to fix.
+	// Empty is not "unknown", it is "this function has no captured locals",
+	// which is also what every .mu compiled before boxing existed says -- and
+	// correctly so, since none of them can contain a cell.
+	CapturedLocals []int
+
 	// Name is the function's source name, or empty for an anonymous literal.
 	// It exists so a traceback can say which function a frame is in; nothing
 	// resolves or dispatches on it.

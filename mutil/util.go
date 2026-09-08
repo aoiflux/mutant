@@ -285,6 +285,20 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 			Seed:    int64(length),
 		}
 
+	// A cell is a handle, not a value, and encrypting it would be actively
+	// wrong rather than merely pointless: every encryption here returns a *new*
+	// object, and a new cell is a second storage location -- exactly the
+	// by-value copy that boxed captures exist to eliminate. The cell's contents
+	// are still covered, because whatever the VM writes into cell.Value went
+	// through this function on the way in.
+	//
+	// It has its own arm rather than joining the list below because the reason
+	// is different, and because the default arm silently leaves a value in
+	// plaintext (both callers discard the error) -- an accidental right answer
+	// is one refactor away from a wrong one.
+	case object.CELL_OBJ:
+		encObj = obj
+
 	// Code and control flow, not data at rest: there is nothing in a compiled
 	// function, a builtin, an evaluator function, a macro, a quoted node or a
 	// loop-control singleton that encrypting would protect. The last five are
@@ -513,6 +527,12 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 
 	// The mirror of the pass-through group in EncryptObject; see the comment
 	// there for why the evaluator-only types are named rather than defaulted.
+	// The mirror of the encrypt side: the cell passes through by pointer so the
+	// frame slot and every closure over it stay one location. cell.Value is
+	// decrypted where it is read, by OpGetLocalCell and OpGetFree.
+	case object.CELL_OBJ:
+		return decObj, nil
+
 	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ, object.FUNCTION_OBJ,
 		object.MACRO_OBJ, object.QUOTE_OBJ, object.RETURN_VALUE_OBJ,
 		object.BREAK_OBJ, object.CONTINUE_OBJ:

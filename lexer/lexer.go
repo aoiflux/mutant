@@ -112,7 +112,19 @@ func (l *Lexer) NextToken() token.Token {
 			tok = newToken(token.MODULO, l.ch)
 		}
 	case '<':
-		if l.peekRune() == '=' {
+		if l.peekRune() == '<' {
+			// Two runes of lookahead: the second `<` is consumed before the `=`
+			// can be seen, so `<<=` is decided here rather than by a case below.
+			ch := string(l.ch)
+			l.readRune()
+			if l.peekRune() == '=' {
+				ch += string(l.ch)
+				l.readRune()
+				tok = token.Token{Type: token.SHL_ASSIGN, Literal: ch + string(l.ch)}
+			} else {
+				tok = token.Token{Type: token.SHL, Literal: ch + string(l.ch)}
+			}
+		} else if l.peekRune() == '=' {
 			ch := string(l.ch)
 			l.readRune()
 			tok = token.Token{Type: token.LTE, Literal: ch + string(l.ch)}
@@ -120,7 +132,19 @@ func (l *Lexer) NextToken() token.Token {
 			tok = newToken(token.LT, l.ch)
 		}
 	case '>':
-		if l.peekRune() == '=' {
+		if l.peekRune() == '>' {
+			// Two runes of lookahead: the second `>` is consumed before the `=`
+			// can be seen, so `>>=` is decided here rather than by a case below.
+			ch := string(l.ch)
+			l.readRune()
+			if l.peekRune() == '=' {
+				ch += string(l.ch)
+				l.readRune()
+				tok = token.Token{Type: token.SHR_ASSIGN, Literal: ch + string(l.ch)}
+			} else {
+				tok = token.Token{Type: token.SHR, Literal: ch + string(l.ch)}
+			}
+		} else if l.peekRune() == '=' {
 			ch := string(l.ch)
 			l.readRune()
 			tok = token.Token{Type: token.GTE, Literal: ch + string(l.ch)}
@@ -140,19 +164,37 @@ func (l *Lexer) NextToken() token.Token {
 			ch := string(l.ch)
 			l.readRune()
 			tok = token.Token{Type: token.AND, Literal: ch + string(l.ch)}
+		} else if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.AND_ASSIGN, Literal: ch + string(l.ch)}
 		} else {
-			// Mutant has no bitwise '&'; a lone '&' is not a valid token.
-			tok = newToken(token.ILLEGAL, l.ch)
+			tok = newToken(token.AMPERSAND, l.ch)
 		}
 	case '|':
 		if l.peekRune() == '|' {
 			ch := string(l.ch)
 			l.readRune()
 			tok = token.Token{Type: token.OR, Literal: ch + string(l.ch)}
+		} else if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.OR_ASSIGN, Literal: ch + string(l.ch)}
 		} else {
-			// Mutant has no bitwise '|'; a lone '|' is not a valid token.
-			tok = newToken(token.ILLEGAL, l.ch)
+			tok = newToken(token.PIPE, l.ch)
 		}
+	case '^':
+		if l.peekRune() == '=' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.XOR_ASSIGN, Literal: ch + string(l.ch)}
+		} else {
+			tok = newToken(token.CARET, l.ch)
+		}
+	case '~':
+		// Unary only, so there is no `~=` to look for: `~x = y` would assign to
+		// a complement, which is not an lvalue in any language that has one.
+		tok = newToken(token.TILDE, l.ch)
 	case '(':
 		tok = newToken(token.LPAREN, l.ch)
 	case ')':

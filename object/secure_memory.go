@@ -83,6 +83,15 @@ func encryptObjectSecure(obj Object, seed int64, password string) ([]byte, error
 		val := obj.(*Boolean).Value
 		data = []byte(strconv.FormatBool(val))
 
+	// Refused by name rather than left to the default, because the reason is
+	// specific and worth keeping: a cell is a handle two places point at, and
+	// every path through here produces bytes that decryptObjectSecure would
+	// rebuild into a *new* cell. That is the by-value copy boxed captures exist
+	// to remove. Whatever the cell holds is encrypted where it is stored, on the
+	// way into cell.Value; the cell itself has nothing to protect.
+	case CELL_OBJ:
+		return nil, errors.New("a cell is a handle, not a value: encrypt its contents, not the cell")
+
 	default:
 		return nil, errors.New("unsupported object type for encryption")
 	}
@@ -255,6 +264,14 @@ func (ss *SecureStack) clearObject(obj Object) {
 
 	case *Encrypted:
 		security.SecureZero(v.Value)
+		v.Value = nil
+
+	case *Cell:
+		// A captured variable is the one place a secret can hide from a wipe:
+		// the frame slot holds the cell, not the value, so clearing the slot
+		// without recursing would leave the contents alive behind a pointer the
+		// closure still holds.
+		ss.clearObject(v.Value)
 		v.Value = nil
 	}
 }

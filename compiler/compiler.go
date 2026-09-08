@@ -443,6 +443,8 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			c.emit(code.OpMinus)
 		case "!":
 			c.emit(code.OpBang)
+		case "~":
+			c.emit(code.OpBitNot)
 		default:
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
@@ -486,6 +488,16 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			c.emit(code.OpDiv)
 		case "%":
 			c.emit(code.OpMod)
+		case "&":
+			c.emit(code.OpBitAnd)
+		case "|":
+			c.emit(code.OpBitOr)
+		case "^":
+			c.emit(code.OpBitXor)
+		case "<<":
+			c.emit(code.OpShiftLeft)
+		case ">>":
+			c.emit(code.OpShiftRight)
 		case ">":
 			c.emit(code.OpGreater)
 		case ">=":
@@ -655,21 +667,39 @@ func (c *Compiler) compileNode(node ast.Node) error {
 
 		freeSymbols := c.symbolTable.FreeSymbols
 		numLocals := c.symbolTable.numDefinitions
+		// Read before leaveScope drops the table. Every capture of one of this
+		// function's locals has already been discovered, because a capture is
+		// discovered while the inner literal is compiled and every inner literal
+		// is inside the body just compiled.
+		capturedLocals := c.symbolTable.CapturedLocals()
 		insts, debug := c.leaveScope()
 
+		// The reads and writes of a captured slot were emitted before anyone knew
+		// it would be captured, so they are patched now rather than at emit time.
+		// Only the opcode byte changes -- the cell forms take the same one-byte
+		// operand -- so nothing moves and no jump target, line-table offset or
+		// loop patch has to be recomputed.
+		boxCapturedLocals(insts, capturedLocals)
+
+		// The capture list OpClosure consumes is built in the *enclosing* scope,
+		// and it pushes cells rather than values: that shared pointer is the
+		// whole mechanism. loadSymbol is deliberately not used here -- it reads
+		// through storage, and this list is the one place that wants the storage
+		// itself.
 		for _, sym := range freeSymbols {
-			c.loadSymbol(sym)
+			c.emitCapture(sym)
 		}
 
 		compiledFun := &object.CompiledFunction{
-			Instructions: insts,
-			NumLocals:    numLocals,
-			NumParams:    len(node.Parameters),
-			Name:         node.Name,
-			Params:       parameterNames(node.Parameters),
-			LineTable:    debug.lines,
-			MacroTable:   debug.macros,
-			EndTable:     debug.ends,
+			Instructions:   insts,
+			NumLocals:      numLocals,
+			NumParams:      len(node.Parameters),
+			CapturedLocals: capturedLocals,
+			Name:           node.Name,
+			Params:         parameterNames(node.Parameters),
+			LineTable:      debug.lines,
+			MacroTable:     debug.macros,
+			EndTable:       debug.ends,
 		}
 
 		fnIndex := c.addConstant(compiledFun)
@@ -1026,10 +1056,139 @@ func (c *Compiler) loadSymbol(s Symbol) {
 		// registry ordinal; see code.BuiltinNameTableFlag.
 		c.emit(code.OpGetBuiltin, code.BuiltinNameTableFlag|c.symbolTable.ReferenceBuiltin(s.Name))
 	case FreeScope:
+		// OpGetFree reads through the cell. A free whose original is the
+		// enclosing function's own name is captured by value instead and is not
+		// a cell; the VM's arm handles both, which is also what keeps bytecode
+		// compiled before boxing running unchanged.
 		c.emit(code.OpGetFree, s.Index)
 	case FunctionScope:
 		c.emit(code.OpCurrentClosure)
 	}
+}
+
+// emitCapture pushes the storage for symbol so OpClosure can put it in the new
+// closure's Free list. It is loadSymbol's counterpart for the capture list: the
+// same five scopes, but a boxed local yields its cell rather than its value.
+//
+// Only three of the five can appear, because Resolve returns globals and
+// builtins without capturing them -- an inner function reaches those directly.
+func (c *Compiler) emitCapture(s Symbol) {
+	switch s.Scope {
+	case LocalScope:
+		c.emit(code.OpCaptureLocal, s.Index)
+	case FreeScope:
+		// A capture two functions deep. This frame's Free[i] already holds the
+		// cell the owner boxed, so the inner closure is handed the same pointer
+		// and all three levels share one location.
+		c.emit(code.OpCaptureFree, s.Index)
+	case FunctionScope:
+		// The enclosing function's own name, for recursion. Not storage and not
+		// assignable, so it is captured by value; emitAssignStore refuses to
+		// write it.
+		c.emit(code.OpCurrentClosure)
+	default:
+		// Unreachable for anything Resolve produces; emitting the read form
+		// keeps a future scope from silently capturing nothing.
+		c.loadSymbol(s)
+	}
+}
+
+// boxCapturedLocals rewrites the plain local accessors for captured slots to
+// their cell forms, in place.
+//
+// The pass exists because of an ordering problem with no cheaper answer: a
+// capture is discovered when the *inner* function literal is compiled, and by
+// then the enclosing function has already emitted OpGetLocal/OpSetLocal for the
+// slot. Boxing every local instead would remove the pass and put a heap
+// allocation and an indirection on the hottest path in the VM, for the small
+// minority of locals anything captures.
+//
+// It walks by operand width rather than scanning for opcode bytes: an operand
+// can hold any value, including one that equals OpGetLocal, and a scan would
+// eventually rewrite a constant index or a jump target instead of an
+// instruction.
+func boxCapturedLocals(ins code.Instructions, captured []int) {
+	if len(captured) == 0 {
+		return
+	}
+	boxed := make(map[int]bool, len(captured))
+	for _, index := range captured {
+		boxed[index] = true
+	}
+
+	for ip := 0; ip < len(ins); {
+		def, err := code.Lookup(ins[ip])
+		if err != nil {
+			// Not decodable, so neither is anything after it. Stopping is right:
+			// this only ever runs on a stream this compiler just emitted, and
+			// guessing where the next instruction starts would corrupt it.
+			return
+		}
+		operands, read := code.ReadOperands(def, ins[ip+1:])
+		switch code.Opcode(ins[ip]) {
+		case code.OpGetLocal:
+			if len(operands) == 1 && boxed[operands[0]] {
+				ins[ip] = byte(code.OpGetLocalCell)
+			}
+		case code.OpSetLocal:
+			if len(operands) == 1 && boxed[operands[0]] {
+				ins[ip] = byte(code.OpSetLocalCell)
+			}
+		}
+		ip += 1 + read
+	}
+}
+
+// emitAssignStore writes the value on top of the stack back into symbol's
+// storage and leaves it there as the assignment expression's value.
+//
+// It exists because SymbolScope has five values and assignment used to branch
+// on two: everything that was not GlobalScope was written with OpSetLocal
+// against symbol.Index, and that index only means a frame slot for LocalScope.
+// A free variable's index is its position in the closure's capture list, so
+// writing free 0 landed on local 0 -- usually the first parameter -- and the
+// program carried on with a plausible wrong value. loadSymbol has always
+// switched all five ways; this is the write side of the same switch.
+//
+// Four of the five scopes are storage and are written. The captured one writes
+// through a cell -- the frame slot and every closure over the variable point at
+// the same one -- which is what lets a closure accumulate into a variable its
+// enclosing frame can still read. Builtins and the enclosing function's own name
+// are not storage and never should have compiled; they are refused here.
+func (c *Compiler) emitAssignStore(symbol Symbol) error {
+	switch symbol.Scope {
+	case GlobalScope:
+		c.emit(code.OpSetGlobal, symbol.Index)
+		c.emit(code.OpGetGlobal, symbol.Index)
+	case LocalScope:
+		// Rewritten to the cell forms by boxCapturedLocals if it turns out
+		// something captures this slot, which is not known yet: the capture is
+		// discovered when the inner literal is compiled, and that has not
+		// happened at the point this runs.
+		c.emit(code.OpSetLocal, symbol.Index)
+		c.emit(code.OpGetLocal, symbol.Index)
+	case FreeScope:
+		// The write goes through the shared cell, so the enclosing frame and
+		// every other closure over the same variable see it -- which is what
+		// Environment.Update has always done in the tree-walking evaluator.
+		//
+		// The one free that is not a cell is the enclosing function's own name,
+		// captured by value for recursion. Writing it is refused here rather
+		// than at run time, where the failure would be an opaque type error
+		// about a closure.
+		if original, ok := c.symbolTable.freeOriginal(symbol.Index); ok && original.Scope == FunctionScope {
+			return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
+		}
+		c.emit(code.OpSetFree, symbol.Index)
+		c.emit(code.OpGetFree, symbol.Index)
+	case BuiltinScope:
+		return fmt.Errorf("cannot assign to builtin: %s", symbol.Name)
+	case FunctionScope:
+		return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
+	default:
+		return fmt.Errorf("internal: no assignment path for %s in scope %s", symbol.Name, symbol.Scope)
+	}
+	return nil
 }
 
 func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
@@ -1120,12 +1279,8 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 			symbol = c.symbolTable.Define(ident.Value)
 		}
 
-		if symbol.Scope == GlobalScope {
-			c.emit(code.OpSetGlobal, symbol.Index)
-			c.emit(code.OpGetGlobal, symbol.Index)
-		} else {
-			c.emit(code.OpSetLocal, symbol.Index)
-			c.emit(code.OpGetLocal, symbol.Index)
+		if err := c.emitAssignStore(symbol); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -1151,12 +1306,8 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 				return fmt.Errorf("undefined variable: %s", ident.Value)
 			}
 
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-				c.emit(code.OpGetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-				c.emit(code.OpGetLocal, symbol.Index)
+			if err := c.emitAssignStore(symbol); err != nil {
+				return err
 			}
 			c.emit(code.OpGetField, fieldNameIndex)
 		}
@@ -1184,12 +1335,8 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 			if !resolved {
 				return fmt.Errorf("undefined variable: %s", ident.Value)
 			}
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-				c.emit(code.OpGetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-				c.emit(code.OpGetLocal, symbol.Index)
+			if err := c.emitAssignStore(symbol); err != nil {
+				return err
 			}
 		}
 		return nil

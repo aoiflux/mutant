@@ -61,6 +61,10 @@ const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash |
 //     does the same for errors, and for the same reason: `<` on two errors has
 //     no meaning, so errors are absent from ksComparable too.
 //   - execMinusOperation asserts INTEGER or FLOAT.
+//   - execBinaryOperation rejects a bitwise operator whose operands are not both
+//     INTEGER before it dispatches on type at all, and execBitNotOperation does
+//     the same for `~` -- so `& | ^ << >>` and the complement admit ksInt and
+//     nothing else. There is no float promotion to widen that with.
 //
 // `!`, `==` and `!=` accept anything, and so appear nowhere here: truthiness and
 // equality are defined for every value, and a constraint that excludes nothing
@@ -332,6 +336,9 @@ func constrainBody(fn *solvedFunction, body *mast.BlockStatement, byName map[str
 			case "+":
 				narrow(n.Left, ksAddable)
 				narrow(n.Right, ksAddable)
+			case "&", "|", "^", "<<", ">>":
+				narrow(n.Left, ksInt)
+				narrow(n.Right, ksInt)
 			case "-", "*", "/", "%":
 				narrow(n.Left, ksNumeric)
 				narrow(n.Right, ksNumeric)
@@ -340,8 +347,11 @@ func constrainBody(fn *solvedFunction, body *mast.BlockStatement, byName map[str
 				narrow(n.Right, ksComparable)
 			}
 		case *mast.PrefixExpression:
-			if n.Operator == "-" {
+			switch n.Operator {
+			case "-":
 				narrow(n.Right, ksNumeric)
+			case "~":
+				narrow(n.Right, ksInt)
 			}
 		}
 	}

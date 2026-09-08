@@ -394,6 +394,13 @@ func (vm *VM) clearObjectSensitiveData(obj object.Object) {
 			vm.clearObjectSensitiveData(pair.Value)
 			delete(o.Pairs, key)
 		}
+	// A captured variable's storage, which the frame slot and every closure over
+	// it share. Recursing is what makes a secret held in one reachable at all:
+	// the slot holds the cell, so wiping the slot alone leaves the value alive
+	// behind a pointer some closure is still holding.
+	case *object.Cell:
+		vm.clearObjectSensitiveData(o.Value)
+		o.Value = nil
 	case *object.Closure:
 		for i := range o.Free {
 			vm.clearObjectSensitiveData(o.Free[i])
@@ -798,7 +805,12 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if err := vm.execMinusOperation(); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
-		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod:
+		case code.OpBitNot:
+			if err := vm.execBitNotOperation(); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod,
+			code.OpBitAnd, code.OpBitOr, code.OpBitXor, code.OpShiftLeft, code.OpShiftRight:
 			if err := vm.execBinaryOperation(op); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -970,7 +982,96 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
 				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
 			}
-			if err := vm.push(vm.decryptForUse(currentClosure.Free[freeIndex])); err != nil {
+			// A captured local is boxed, so the Free entry is the cell and the
+			// value is inside it. The two cases the type switch distinguishes
+			// are both real: a free whose original is the enclosing function's
+			// own name is captured by value for recursion and is a closure, not
+			// a cell, and every free in bytecode compiled before boxing existed
+			// is a plain value. Nothing a program can compute is ever a *Cell,
+			// so the test cannot be fooled by a user value.
+			captured := currentClosure.Free[freeIndex]
+			if cell, ok := captured.(*object.Cell); ok {
+				captured = cell.Value
+			}
+			if err := vm.push(vm.decryptForUse(captured)); err != nil {
+				return err
+			}
+		case code.OpSetFree:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("OpSetFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			freeIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
+			cell, ok := currentClosure.Free[freeIndex].(*object.Cell)
+			if !ok {
+				// The compiler refuses the one unboxed free it can produce (the
+				// enclosing function's own name), so reaching here means the
+				// bytecode did not come from this compiler.
+				return vm.runtimeErrorfAt(ip, op, "captured variable %d is not assignable storage", freeIndex)
+			}
+			cell.Value = vm.encryptForStorage(vm.pop())
+		case code.OpGetLocalCell, code.OpSetLocalCell, code.OpCaptureLocal:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("%s: not enough bytes for operand at ip=%d, len=%d", runtimeOpcodeName(op), ip, len(ins))
+			}
+			localIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			frame := vm.currentFrame()
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
+			cell, ok := vm.stack[slot].(*object.Cell)
+			if !ok {
+				// callClosure boxes every slot named in CapturedLocals before a
+				// single instruction runs, and only slots in that list are given
+				// these opcodes. A miss means the function object and its
+				// instruction stream disagree.
+				return vm.runtimeErrorfAt(ip, op, "local slot %d is not boxed", localIndex)
+			}
+			switch op {
+			case code.OpGetLocalCell:
+				if err := vm.push(vm.decryptForUse(cell.Value)); err != nil {
+					return err
+				}
+			case code.OpSetLocalCell:
+				cell.Value = vm.encryptForStorage(vm.pop())
+			case code.OpCaptureLocal:
+				// The cell itself, not its contents: OpClosure copies what is on
+				// the stack into the new closure's Free list, and copying the
+				// pointer is what makes the two sides one location.
+				if err := vm.push(cell); err != nil {
+					return err
+				}
+			}
+		case code.OpCaptureFree:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("OpCaptureFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			freeIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
+			// Re-capturing a capture: a function three levels down closing over a
+			// variable two levels up. Passing this frame's entry along unread is
+			// what keeps all three levels pointing at the one cell the owner
+			// boxed.
+			if err := vm.push(currentClosure.Free[freeIndex]); err != nil {
 				return err
 			}
 		case code.OpIndex:
@@ -1265,6 +1366,18 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if err := vm.push(enumObj); err != nil {
 				return err
 			}
+		default:
+			// An opcode this build does not know. It reaches here in exactly one
+			// way: bytecode compiled by a newer toolchain, since opcodes are only
+			// ever appended and a value once emitted never changes meaning.
+			//
+			// Saying so is the whole point of the arm. Without it the switch
+			// simply matched nothing, the instruction pointer advanced by one,
+			// and the operand bytes of the instruction it did not recognise were
+			// executed as opcodes -- a program that runs to completion and
+			// answers with nonsense. Refusing to run half of it is the same
+			// choice Run() already makes for a builtin this runtime lacks.
+			return vm.runtimeErrorfAt(ip, op, "unknown opcode %d: this program was built by a newer version of mutant", byte(op))
 		}
 	}
 
@@ -1537,12 +1650,38 @@ func (vm *VM) pop() object.Object {
 	return obj
 }
 
+// bitwiseOperatorSymbol maps a bitwise opcode back to its source spelling.
+//
+// The VM does not compute bitwise results itself: it hands the spelling and the
+// two int64s to object.BitwiseInfix, which is the function the evaluator and the
+// WASM REPL call. The arithmetic opcodes are each a single Go operator with no
+// guard worth sharing, so they stay inline; the bitwise ones carry a negative-
+// shift check that has to answer the same way in all three engines, and one
+// implementation is the only way to be sure it does.
+var bitwiseOperatorSymbol = map[code.Opcode]string{
+	code.OpBitAnd:     "&",
+	code.OpBitOr:      "|",
+	code.OpBitXor:     "^",
+	code.OpShiftLeft:  "<<",
+	code.OpShiftRight: ">>",
+}
+
 func (vm *VM) execBinaryOperation(op code.Opcode) error {
 	right := vm.pop()
 	left := vm.pop()
 
 	rtype := right.Type()
 	ltype := left.Type()
+
+	// Bitwise operands are checked before the type dispatch below, not inside
+	// the integer path: a FLOAT would otherwise reach execBinaryFloatOperation
+	// and be turned away as an unknown float operator, which is not what went
+	// wrong. `1.5 & 1` is a type error, and it should say so.
+	if sym, ok := bitwiseOperatorSymbol[op]; ok {
+		if ltype != object.INTEGER_OBJ || rtype != object.INTEGER_OBJ {
+			return fmt.Errorf("%s", object.BitwiseOperandError(sym, left, right).Message)
+		}
+	}
 
 	if rtype == object.INTEGER_OBJ && ltype == object.INTEGER_OBJ {
 		return vm.execBinaryIntegerOperation(op, left, right)
@@ -1577,6 +1716,15 @@ func (vm *VM) execBinaryOperation(op code.Opcode) error {
 func (vm *VM) execBinaryIntegerOperation(op code.Opcode, left, right object.Object) error {
 	rval := right.(*object.Integer).Value
 	lval := left.(*object.Integer).Value
+
+	if sym, ok := bitwiseOperatorSymbol[op]; ok {
+		bits := object.BitwiseInfix(sym, lval, rval)
+		if e, ok := bits.(*object.Error); ok {
+			return fmt.Errorf("%s", e.Message)
+		}
+		return vm.push(bits)
+	}
+
 	var result int64
 
 	switch op {
@@ -1852,6 +2000,19 @@ func (vm *VM) execMinusOperation() error {
 	return fmt.Errorf("unknown object: %s", operand.Type())
 }
 
+// execBitNotOperation evaluates `~x`. Like the binary bitwise operators it
+// defers to object, so the complement and the message it refuses non-integers
+// with are written once.
+func (vm *VM) execBitNotOperation() error {
+	operand := vm.pop()
+
+	result := object.BitwiseNot(operand)
+	if e, ok := result.(*object.Error); ok {
+		return fmt.Errorf("%s", e.Message)
+	}
+	return vm.push(result)
+}
+
 func (vm *VM) execComparison(op code.Opcode) error {
 	right := vm.pop()
 	left := vm.pop()
@@ -2092,7 +2253,37 @@ func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
 	vm.pushFrame(frame)
 	vm.ensureStackCapacity(frame.bp + cl.Fn.NumLocals)
 	vm.stackPointer = frame.bp + cl.Fn.NumLocals
+	vm.boxCapturedSlots(frame, cl.Fn)
 	return nil
+}
+
+// boxCapturedSlots replaces the frame slots an inner function closes over with
+// cells, so a write through the closure and a write through the frame land in
+// the same place.
+//
+// It runs after the arguments are already at their slots, which is the whole
+// reason a captured *parameter* needs no special case: slot i holds argument i,
+// and boxing it wraps the value that is already there. Slots above the
+// parameters have not been written yet -- a `let` always precedes any use of the
+// name it binds -- so they are boxed around Null rather than around whatever the
+// previous frame left on the stack.
+//
+// One cell per slot per frame, which is also the tree-walking evaluator's
+// scoping: it makes one environment per call and one per loop, not one per
+// iteration, so two closures made in different turns of the same loop share a
+// variable in both engines.
+func (vm *VM) boxCapturedSlots(frame *Frame, fn *object.CompiledFunction) {
+	for _, index := range fn.CapturedLocals {
+		slot := frame.bp + index
+		if slot < 0 || slot >= len(vm.stack) {
+			continue
+		}
+		if index < fn.NumParams {
+			vm.stack[slot] = &object.Cell{Value: vm.stack[slot]}
+			continue
+		}
+		vm.stack[slot] = &object.Cell{Value: global.Null}
+	}
 }
 
 // CallClosureSync runs a Mutant closure to completion from Go and returns its

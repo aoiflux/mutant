@@ -212,18 +212,34 @@ fixed** by the declaration order below, so do not reorder them.
 | 24 | `OpCall`           | `argc` (1)                      | `argN…arg0, fn →` result | Call function with `argc` arguments                              |
 | 25 | `OpReturnValue`    | —                               | `val → (caller frame)`   | Pop return value, restore frame, push value                      |
 | 26 | `OpReturn`         | —                               | `(caller frame)`         | Void return; restores frame, pushes `Null`                       |
-| 27 | `OpGetBuiltin`     | `idx` (2)                       | `→ fn`                   | Push the builtin at `BuiltinNames[idx & 0x7FFF]` (see §4.1)       |
-| 28 | `OpClosure`        | `fnIdx` (2), `numFree` (1)      | `fN…f0 → closure`        | Pop `numFree` free vars; wrap `constants[fnIdx]` in a `Closure`  |
-| 29 | `OpGetFree`        | `idx` (1)                       | `→ val`                  | Push `currentClosure.Free[idx]` (decrypted)                      |
-| 30 | `OpCurrentClosure` | —                               | `→ closure`              | Push the currently executing closure (for named recursion)       |
-| 31 | `OpChkDbg`         | —                               | —                        | Halt (or warn) if a debugger is detected                         |
-| 32 | `OpChkSnd`         | —                               | —                        | Halt (or warn) if a sandbox environment is detected              |
-| 33 | `OpBreak`          | —                               | `→ Break{}`              | Push a `Break` sentinel onto the stack                           |
-| 34 | `OpContinue`       | —                               | `→ Continue{}`           | Push a `Continue` sentinel onto the stack                        |
-| 35 | `OpMakeStruct`     | `typeIdx` (2), `fieldCount` (1) | `fN…f0 → struct`         | Pop `fieldCount` values, create a `Struct`                       |
-| 36 | `OpGetField`       | `nameIdx` (2)                   | `struct → val`           | Pop struct; push `struct.Fields[constants[nameIdx]]`             |
-| 37 | `OpSetField`       | `nameIdx` (2)                   | `val, struct → struct`   | Pop value then struct; set field; push struct back               |
-| 38 | `OpEnumValue`      | `typeIdx` (2), `tagIdx` (2)     | `→ EnumValue`            | Create `EnumValue{TypeName, Tag, ordinal}`                       |
+| 27 | `OpMultiValue`     | `count` (2)                     | `vN…v0 → multi`          | Pop `count` values into one `MultiValue`                         |
+| 28 | `OpDup`            | —                               | `a → a, a`               | Duplicate the top of the stack                                   |
+| 29 | `OpDestructure`    | `count` (2)                     | `multi → v0…vN`          | Pop a `MultiValue`; push `count` values from it                  |
+| 30 | `OpGetBuiltin`     | `idx` (2)                       | `→ fn`                   | Push the builtin at `BuiltinNames[idx & 0x7FFF]` (see §4.1)       |
+| 31 | `OpClosure`        | `fnIdx` (2), `numFree` (1)      | `fN…f0 → closure`        | Pop `numFree` free vars; wrap `constants[fnIdx]` in a `Closure`  |
+| 32 | `OpGetFree`        | `idx` (1)                       | `→ val`                  | Push `currentClosure.Free[idx]`, through the cell if it is one (decrypted) |
+| 33 | `OpCurrentClosure` | —                               | `→ closure`              | Push the currently executing closure (for named recursion)       |
+| 34 | `OpChkDbg`         | —                               | —                        | Halt (or warn) if a debugger is detected                         |
+| 35 | `OpChkSnd`         | —                               | —                        | Halt (or warn) if a sandbox environment is detected              |
+| 36 | `OpBreak`          | —                               | `→ Break{}`              | Push a `Break` sentinel onto the stack                           |
+| 37 | `OpContinue`       | —                               | `→ Continue{}`           | Push a `Continue` sentinel onto the stack                        |
+| 38 | `OpMakeStruct`     | `typeIdx` (2), `fieldCount` (1) | `fN…f0 → struct`         | Pop `fieldCount` values, create a `Struct`                       |
+| 39 | `OpGetField`       | `nameIdx` (2)                   | `struct → val`           | Pop struct; push `struct.Fields[constants[nameIdx]]`             |
+| 40 | `OpSetField`       | `nameIdx` (2)                   | `val, struct → struct`   | Pop value then struct; set field; push struct back               |
+| 41 | `OpEnumValue`      | `typeIdx` (2), `tagIdx` (2)     | `→ EnumValue`            | Create `EnumValue{TypeName, Tag, ordinal}`                       |
+| 42 | `OpGreaterEqual`   | —                               | `b, a → bool`            | `a >= b` (also used for `<=` by swapping operands)               |
+| 43 | `OpSetIndex`       | —                               | `val, idx, obj → obj`    | Mutate `obj[idx]` in place; push the container back              |
+| 44 | `OpBitAnd`         | —                               | `b, a → a&b`             | Bitwise AND; both operands must be `INTEGER`                     |
+| 45 | `OpBitOr`          | —                               | `b, a → a\|b`            | Bitwise OR; both operands must be `INTEGER`                      |
+| 46 | `OpBitXor`         | —                               | `b, a → a^b`             | Bitwise XOR; both operands must be `INTEGER`                     |
+| 47 | `OpBitNot`         | —                               | `a → ~a`                 | Bitwise complement; operand must be `INTEGER`                    |
+| 48 | `OpShiftLeft`      | —                               | `b, a → a<<b`            | Left shift; a negative count is a runtime error                  |
+| 49 | `OpShiftRight`     | —                               | `b, a → a>>b`            | Arithmetic right shift (sign-preserving); negative count errors  |
+| 50 | `OpGetLocalCell`   | `slot` (1)                      | `→ val`                  | Push `cell(bp+slot).Value` (decrypted); the slot must be boxed    |
+| 51 | `OpSetLocalCell`   | `slot` (1)                      | `val →`                  | Pop and store into `cell(bp+slot).Value` (encrypted)              |
+| 52 | `OpCaptureLocal`   | `slot` (1)                      | `→ cell`                 | Push the `*Cell` in `bp+slot` itself, for `OpClosure`'s list      |
+| 53 | `OpCaptureFree`    | `idx` (1)                       | `→ cell`                 | Push `currentClosure.Free[idx]` unread, for a nested capture      |
+| 54 | `OpSetFree`        | `idx` (1)                       | `val →`                  | Pop and store into `Free[idx].Value` (encrypted)                  |
 
 ### 3.2 Stack Notation
 
@@ -503,13 +519,16 @@ The compiler detects this with `lastInstructionIs(code.OpPop)` and either:
 4. Compile body block
 5. If last instruction is OpPop → replaceLastPopWithReturn()
 6. If last instruction is not OpReturnValue → emit OpReturn
-7. Snapshot freeSymbols = symbolTable.FreeSymbols
-8. Snapshot numLocals    = symbolTable.numDefinitions
-9. leaveScope() → captures finished instruction bytes
-10. For each free symbol: loadSymbol(sym)  → pushes captured values onto parent stack
-11. compiledFn = &CompiledFunction{Instructions, NumLocals, NumParams}
-12. fnIndex = addConstant(compiledFn)
-13. emit(OpClosure, fnIndex, len(freeSymbols))
+7.  Snapshot freeSymbols    = symbolTable.FreeSymbols
+8.  Snapshot numLocals      = symbolTable.numDefinitions
+9.  Snapshot capturedLocals = symbolTable.CapturedLocals()   (see §7.3.1)
+10. leaveScope() → captures finished instruction bytes
+11. boxCapturedLocals(insts, capturedLocals) → rewrites this function's own
+    OpGetLocal/OpSetLocal for captured slots to their cell forms, in place
+12. For each free symbol: emitCapture(sym) → pushes captured cells onto parent stack
+13. compiledFn = &CompiledFunction{Instructions, NumLocals, NumParams, CapturedLocals}
+14. fnIndex = addConstant(compiledFn)
+15. emit(OpClosure, fnIndex, len(freeSymbols))
 ```
 
 ### 6.6 Security Opcode Injection
@@ -581,10 +600,58 @@ Resolution order:
      - Appends `original` to `st.FreeSymbols`.
      - Stores a new `FreeScope` symbol with `Index = len(FreeSymbols)-1`.
      - Returns the free symbol.
+   - If the original was `LocalScope`, also mark that slot **captured** on the
+     table that owns it. A `FreeScope` original needs no marking here: the
+     recursive `Resolve` that produced it already marked whichever table owns
+     the slot, so the marking propagates outward on its own.
 
 `FreeSymbols` is consumed at the end of function compilation (step 10 in §6.5)
-to emit the instructions that push captured values onto the stack before
+to emit the instructions that push captured **cells** onto the stack before
 `OpClosure`.
+
+### 7.3.1 Boxed captures
+
+A captured local does not live in its frame slot; the slot holds an
+`*object.Cell` and the value is inside it. Every closure that captures the
+variable holds that same pointer, so there is exactly one storage location per
+variable per call and a write through any path is a write all of them see. This
+is what `object.Environment.Update` has always done in the tree-walking
+evaluator, and before it the VM captured by value: a closure's writes went into
+its own copy, and writing free *i* actually landed on local *i* — usually a
+parameter.
+
+The capture is discovered while the **inner** literal is compiled, by which time
+the enclosing function has already emitted plain `OpGetLocal`/`OpSetLocal` for
+the slot. So `boxCapturedLocals` rewrites those to `OpGetLocalCell` /
+`OpSetLocalCell` once the scope closes. Only the opcode byte changes — the cell
+forms take the same one-byte operand — so nothing moves and no jump target, line
+table offset or loop patch has to be recomputed. The alternative, boxing every
+local, needs no pass and puts a heap allocation and an indirection on the VM's
+hottest path.
+
+`CompiledFunction.CapturedLocals` carries the boxed slot indices, ascending, and
+the VM allocates the cells in `callClosure` **after** the arguments are already
+in their slots — which is why a captured *parameter* needs no special case.
+`CapturedLocals` is semantic, not debug information, and is never stripped by
+`ByteCode.StripDebugInfo`: a release build that lost it would silently stop
+boxing.
+
+Cells never reach gob and are never encrypted. `cell.Value` is encrypted on the
+way in and decrypted on the way out, so the at-rest guarantee locals already had
+is unchanged; encrypting the cell itself would return a *new* object, and a new
+cell is a second storage location — the by-value copy the design exists to
+remove.
+
+Bytecode compiled before boxing existed has an empty `CapturedLocals` and no
+cell opcodes, so nothing is boxed and `OpGetFree` finds a plain value and passes
+it through. Such a program keeps its original behaviour exactly, including the
+by-value capture.
+
+**Workers get their own cells.** `pmap`, `peach` and `spawn` run the callback on
+another VM and another goroutine, where a shared cell is a data race rather than
+a shared accumulator. Each worker is handed a closure whose cells have been
+copied, one level deep — the same rule as the globals snapshot beside it — so a
+worker's writes to a captured variable stay local.
 
 ### 7.4 `DefineFunctionName`
 
@@ -611,6 +678,17 @@ func (c *Compiler) loadSymbol(s Symbol) {
     }
 }
 ```
+
+`emitAssignStore` is the write side of the same switch, and had been an `if` on
+`GlobalScope` while the enum grew to five values — the defect §7.3.1 describes.
+It writes globals, locals (`OpSetLocal`, rewritten to `OpSetLocalCell` if the
+slot turns out to be boxed) and captures (`OpSetFree`), and refuses builtins and
+the function's own name, neither of which is storage.
+
+`emitCapture` is the third form: the capture list `OpClosure` consumes wants the
+storage itself rather than a read through it, so a `LocalScope` original becomes
+`OpCaptureLocal`, a `FreeScope` original `OpCaptureFree`, and the function's own
+name stays `OpCurrentClosure` — captured by value, because it is not storage.
 
 ---
 
@@ -769,6 +847,9 @@ case code.OpJump:
 | `OpEqual/UnEqual/Greater` | 0                             | pop b, pop a, push Boolean                    |
 | `OpMinus`                 | 0                             | pop a, push `-a`                              |
 | `OpBang`                  | 0                             | pop a, push `!a`                              |
+| `OpBitAnd/BitOr/BitXor`   | 0                             | pop b, pop a, push `a op b` (INTEGER only)    |
+| `OpShiftLeft/ShiftRight`  | 0                             | pop b, pop a, push `a op b`; `b < 0` errors   |
+| `OpBitNot`                | 0                             | pop a, push `~a` (INTEGER only)               |
 | `OpJump`                  | sets ip = target-1            | —                                             |
 | `OpJumpFalse`             | +2 (not taken) or ip=target-1 | pop condition                                 |
 | `OpGetGlobal`             | +2                            | push decrypted `globals[idx]`                 |
@@ -783,7 +864,12 @@ case code.OpJump:
 | `OpReturn`                | —                             | pop frame; push Null                          |
 | `OpGetBuiltin`            | +1                            | push the builtin resolved from `BuiltinNames[idx & 0x7FFF]` |
 | `OpClosure`               | +3                            | pop numFree values; push Closure              |
-| `OpGetFree`               | +1                            | push `currentClosure.Free[idx]`               |
+| `OpGetFree`               | +1                            | push `Free[idx]`, through the cell if it is one |
+| `OpSetFree`               | +1                            | pop, encrypt, store into `Free[idx].Value`    |
+| `OpGetLocalCell`          | +1                            | push decrypted `cell(bp+idx).Value`           |
+| `OpSetLocalCell`          | +1                            | pop, encrypt, store into `cell(bp+idx).Value` |
+| `OpCaptureLocal`          | +1                            | push the `*Cell` in `stack[bp+idx]` itself    |
+| `OpCaptureFree`           | +1                            | push `Free[idx]` unread                       |
 | `OpCurrentClosure`        | 0                             | push current Closure                          |
 | `OpChkDbg`                | 0                             | detect debugger → error or warn               |
 | `OpChkSnd`                | 0                             | detect sandbox → error or warn                |
@@ -813,6 +899,12 @@ vm.push(vm.decryptForUse(vm.stack[bp+idx]))
 `*object.Encrypted`. If encryption fails (e.g., unsupported type), the object is
 stored/returned as-is.
 
+A **boxed** local slot holds an `*object.Cell`, and the cell is deliberately one
+of the types `EncryptObject` passes through unchanged. Encryption returns a new
+object, and a new cell is a second storage location — the by-value capture
+boxing exists to remove. `cell.Value` goes through the same encrypt-on-write and
+decrypt-on-read as any other local, so nothing is left in the clear.
+
 ---
 
 ## 10. Closures & Free Variables
@@ -834,19 +926,23 @@ The compiler for `inner`:
 1. Sees `x` → resolves to outer's `LocalScope`.
 2. Calls `defineFree(x_local)` →
    `FreeSymbols = [{Name:"x", Scope:LOCAL, Index:0}]`.
-3. After body compilation, `FreeSymbols` has one entry.
-4. In the parent scope, `loadSymbol` for each free symbol emits `OpGetLocal 0`
-   (loading `x` onto the stack).
-5. Emits `OpClosure <innerFnIdx> 1`.
+3. Marks outer's slot 0 **captured**, so outer's `CapturedLocals` is `[0]`.
+4. After body compilation, `FreeSymbols` has one entry.
+5. Outer's own stream is rewritten: the `OpSetLocal 0` it emitted for `let x = 5`
+   becomes `OpSetLocalCell 0`. Same width, so nothing after it moves.
+6. In the parent scope, `emitCapture` for each free symbol emits
+   `OpCaptureLocal 0` — the cell itself, not a copy of the value.
+7. Emits `OpClosure <innerFnIdx> 1`.
 
-Bytecode for `outer`:
+Bytecode for `outer` (`CapturedLocals: [0]`, so the VM boxes slot 0 at frame
+entry):
 
 ```
 0000 OpConstant 0       ; integer 5
-0003 OpSetLocal 0       ; let x = 5
-0005 OpGetLocal 0       ; push x (as free var capture for inner)
+0003 OpSetLocalCell 0   ; let x = 5, written through the cell
+0005 OpCaptureLocal 0   ; push slot 0's cell (the capture for inner)
 0007 OpClosure 1 1      ; wrap constants[1] (inner fn) with 1 free var
-0011 OpSetLocal 1       ; let inner = <closure>
+0011 OpSetLocal 1       ; let inner = <closure>; nothing captures inner
 0013 OpGetLocal 1       ; return inner
 0015 OpReturnValue
 ```
@@ -867,19 +963,30 @@ func (vm *VM) pushClosure(constIndex, numFree int) error {
 ```
 
 The captured values are read from the stack in **forward order** (they were
-pushed in forward order by the parent's `loadSymbol` calls).
+pushed in forward order by the parent's `emitCapture` calls). What is copied
+into `Free` is the *pointer* each `OpCaptureLocal` / `OpCaptureFree` pushed, so
+the closure and the frame end up naming the same cell.
 
 ### 10.3 Accessing Free Variables
 
 ```go
 case code.OpGetFree:
     freeIndex := ReadUint8(...)
-    vm.push(vm.decryptForUse(vm.currentFrame().cl.Free[freeIndex]))
+    captured := vm.currentFrame().cl.Free[freeIndex]
+    if cell, ok := captured.(*object.Cell); ok {
+        captured = cell.Value
+    }
+    vm.push(vm.decryptForUse(captured))
 ```
 
-Free variables are stored inside the `Closure` object itself, isolated per call
-instance. Mutating a free variable inside the function mutates the captured slot
-directly in the closure's `Free` slice.
+`Free` holds cells, and `OpSetFree` writes back through them — so a closure's
+write is visible to the enclosing frame and to every other closure over the same
+variable, which is what makes an accumulator over a callback work.
+
+The type test is not a guess. Nothing a program can compute is a `*Cell`, and
+the only two entries that are not cells are decidable: the enclosing function's
+own name, captured by value with `OpCurrentClosure` for recursion, and every
+entry in bytecode compiled before boxing existed.
 
 ---
 
@@ -1387,8 +1494,9 @@ type Object interface {
 | `BYTES_OBJ`           | `*Bytes`            | `Value []byte` — a byte buffer; `Inspect()` is full hex |
 | `ARRAY_OBJ`           | `*Array`            | `Elements []Object`                                    |
 | `HASH_OBJ`            | `*Hash`             | `Pairs map[HashKey]HashPair`                           |
-| `COMPILED_FN_OBJ`     | `*CompiledFunction` | `Instructions`, `NumLocals`, `NumParams`               |
-| `CLOSURE_OBJ`         | `*Closure`          | `Fn *CompiledFunction`, `Free []Object`                |
+| `COMPILED_FN_OBJ`     | `*CompiledFunction` | `Instructions`, `NumLocals`, `NumParams`, `CapturedLocals` |
+| `CLOSURE_OBJ`         | `*Closure`          | `Fn *CompiledFunction`, `Free []Object` — cells (§7.3.1) |
+| `CELL_OBJ`            | `*Cell`             | `Value Object` — a captured variable's storage; runtime-only, never gob, never encrypted |
 | `BUILTIN_OBJ`         | `*Builtin`          | `Fn func(args ...Object) Object`                       |
 | `FUNCTION_OBJ`        | `*Function`         | AST-level function (evaluator path only)               |
 | `RETURN_VALUE_OBJ`    | `*ReturnValue`      | Sentinel (evaluator path only)                         |
@@ -1423,15 +1531,24 @@ Implemented by `Integer`, `Boolean`, and `String`.
 
 ```go
 type CompiledFunction struct {
-    Instructions code.Instructions   // bytecode for this function's body
-    NumLocals    int                 // number of local variables (stack slots)
-    NumParams    int                 // number of parameters
+    Instructions   code.Instructions // bytecode for this function's body
+    NumLocals      int               // number of local variables (stack slots)
+    NumParams      int               // number of parameters
+    CapturedLocals []int             // slots an inner function closes over (§7.3.1)
 }
 ```
 
 `NumLocals` includes the parameters (parameters are the first `NumParams`
 locals). The VM advances `stackPointer` by `NumLocals` when entering a frame to
-pre-allocate the local variable slots.
+pre-allocate the local variable slots, then boxes the slots named in
+`CapturedLocals` — after the arguments are already in place, so a captured
+parameter needs no special case.
+
+`CapturedLocals` is semantic, not debug information, and is never stripped by
+`ByteCode.StripDebugInfo`: a release build that lost it would silently stop
+boxing and resume capturing by value. Empty means "this function captures
+nothing", which is also what every artifact compiled before boxing existed says,
+and correctly so.
 
 ---
 

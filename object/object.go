@@ -26,6 +26,7 @@ const (
 	BREAK_OBJ        = "BREAK"
 	CONTINUE_OBJ     = "CONTINUE"
 	LUA_PATCH_OBJ    = "LUA_PATCH"
+	CELL_OBJ         = "CELL"
 )
 
 type Object interface {

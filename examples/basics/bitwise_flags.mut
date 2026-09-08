@@ -1,0 +1,51 @@
+// Bitwise operators: masks, flag tests, and shifts.
+//
+// The operators are `& | ^ << >>` with the prefix complement `~`, over signed
+// 64-bit integers, with Go's semantics and Go's precedence.
+
+let READ = 1;
+let WRITE = 2;
+let EXEC = 4;
+
+// Combine flags, then test one. `&` binds tighter than `!=`, so the
+// parentheses below are for the reader, not for the parser.
+let perms = READ | EXEC;
+putf("perms       = %d\n", perms);
+putf("can read?   = %v\n", (perms & READ) != 0);
+putf("can write?  = %v\n", (perms & WRITE) != 0);
+
+// Set a flag, then clear one with the complement.
+perms = perms | WRITE;
+putf("after set   = %d\n", perms);
+perms = perms & ~EXEC;
+putf("after clear = %d\n", perms);
+
+// Compound forms, which are sugar for `x = x op v`.
+let acc = 0;
+acc |= READ;
+acc |= WRITE;
+acc ^= READ;
+putf("acc         = %d\n", acc);
+
+// Shifts. `>>` is arithmetic, so the sign bit is copied in.
+let b = 240;
+putf("high nibble = %d\n", b >> 4);
+putf("low nibble  = %d\n", b & 15);
+putf("-8 >> 1     = %d\n", -8 >> 1);
+
+// Pack two bytes into one integer and take them back out.
+let packed = (77 << 8) | 90;
+putf("packed      = %d\n", packed);
+putf("unpacked hi = %d\n", packed >> 8);
+putf("unpacked lo = %d\n", packed & 255);
+
+// How many bits are set?
+let popcount = fn(n) {
+    let count = 0;
+    for (let i = 0; i < 64; i++) {
+        count = count + ((n >> i) & 1);
+    }
+    count
+};
+putf("popcount(7)   = %d\n", popcount(7));
+putf("popcount(240) = %d\n", popcount(240));

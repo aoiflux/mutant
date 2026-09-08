@@ -24,6 +24,17 @@ type SymbolTable struct {
 	numDefinitions int
 	FreeSymbols    []Symbol
 
+	// capturedLocals is the set of this table's own local slots that some inner
+	// function closed over. It is populated by Resolve at the moment a capture
+	// is discovered, which is the only moment the information exists: the outer
+	// function is mid-compilation and may already have emitted plain
+	// OpGetLocal/OpSetLocal for the slot, so the compiler patches those to their
+	// cell forms once the scope closes. See Compiler.boxCapturedLocals.
+	//
+	// A set, not a slice, because a variable captured by three inner functions
+	// is still one slot and must be boxed once.
+	capturedLocals map[int]bool
+
 	// builtinRefs is the table an OpGetBuiltin operand indexes into: the names
 	// of the builtins this compilation unit actually referenced, in first-use
 	// order. Only the root table's copy is ever used; see ReferenceBuiltin.
@@ -65,6 +76,23 @@ func (st *SymbolTable) Resolve(name string) (Symbol, bool) {
 
 		if obj.Scope == GlobalScope || obj.Scope == BuiltinScope {
 			return obj, ok
+		}
+
+		// The capture is discovered here, on the way back out, and this is where
+		// the owning table gets told about it. A LocalScope original means
+		// st.Outer owns the slot, so st.Outer is what has to box it. A FreeScope
+		// original means st.Outer had already captured the variable itself, and
+		// the recursive Resolve that produced it has already marked whichever
+		// table truly owns the slot -- so the marking propagates outward on its
+		// own, which is what makes a capture two functions deep work.
+		//
+		// A FunctionScope original -- an inner function referring to the
+		// enclosing function's own name for recursion -- is not a slot at all,
+		// and deliberately gets no marking: it is loaded with OpCurrentClosure
+		// and captured by value, because a function's own name cannot be
+		// reassigned.
+		if obj.Scope == LocalScope {
+			st.Outer.markCaptured(obj.Index)
 		}
 
 		free := st.defineFree(obj)
@@ -130,6 +158,34 @@ func (st *SymbolTable) DefineFunctionName(name string) Symbol {
 	return symbol
 }
 
+// markCaptured records that local slot index of this table is closed over by
+// some inner function and therefore has to live in a cell.
+func (st *SymbolTable) markCaptured(index int) {
+	if st.capturedLocals == nil {
+		st.capturedLocals = make(map[int]bool)
+	}
+	st.capturedLocals[index] = true
+}
+
+// CapturedLocals returns this table's boxed slot indices in ascending order.
+// Sorted because it travels in the bytecode as CompiledFunction.CapturedLocals,
+// and a map's iteration order would make one program compile to two different
+// .mu files.
+func (st *SymbolTable) CapturedLocals() []int {
+	if len(st.capturedLocals) == 0 {
+		return nil
+	}
+	indices := make([]int, 0, len(st.capturedLocals))
+	for index := range st.capturedLocals {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	return indices
+}
+
+// IsCaptured reports whether local slot index of this table is boxed.
+func (st *SymbolTable) IsCaptured(index int) bool { return st.capturedLocals[index] }
+
 func (st *SymbolTable) defineFree(original Symbol) Symbol {
 	st.FreeSymbols = append(st.FreeSymbols, original)
 	symbol := Symbol{Name: original.Name, Index: len(st.FreeSymbols) - 1}
@@ -151,4 +207,15 @@ func (st *SymbolTable) GlobalNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// freeOriginal returns the outer symbol that this table's free variable index
+// captures. The compiler uses it to tell an ordinary captured variable, which
+// lives in a cell and can be assigned, from the enclosing function's own name,
+// which is captured by value and cannot.
+func (st *SymbolTable) freeOriginal(index int) (Symbol, bool) {
+	if index < 0 || index >= len(st.FreeSymbols) {
+		return Symbol{}, false
+	}
+	return st.FreeSymbols[index], true
 }

@@ -851,6 +851,11 @@ func TestStoredGlobalsRemainEncryptedAtRest(t *testing.T) {
 	}
 }
 
+// A captured variable is held in a cell, so the Free entry is the cell and the
+// value is one level in. The cell itself is deliberately never encrypted --
+// encryption returns a new object, and a new cell is a second storage location,
+// which is the by-value capture boxing exists to remove. What has to stay
+// covered is the contents, and that is what this asserts.
 func TestClosureFreeVarsRemainEncryptedAtRest(t *testing.T) {
 	vm, err := runEncryptedVM("let newClosure = fn(a) { fn() { a; }; }; let closure = newClosure(99); closure;")
 	if err != nil {
@@ -866,8 +871,27 @@ func TestClosureFreeVarsRemainEncryptedAtRest(t *testing.T) {
 		t.Fatalf("wrong number of free vars: got=%d want=1", len(closure.Free))
 	}
 
-	if closure.Free[0].Type() != object.ENCRYPTED_OBJ {
-		t.Fatalf("closure free var stored decrypted: got=%s", closure.Free[0].Type())
+	cell, ok := closure.Free[0].(*object.Cell)
+	if !ok {
+		t.Fatalf("captured variable not boxed: got=%T", closure.Free[0])
+	}
+
+	if cell.Value.Type() != object.ENCRYPTED_OBJ {
+		t.Fatalf("captured value stored decrypted inside its cell: got=%s", cell.Value.Type())
+	}
+}
+
+// The frame slot the cell came from is the other half of the same guarantee: a
+// captured local is boxed in place, and boxing must not have quietly moved the
+// value out from under the encryption the slot already had.
+func TestBoxedLocalSlotsHoldEncryptedValues(t *testing.T) {
+	vm, err := runEncryptedVM("let probe = fn() { let acc = 7; let bump = fn() { acc = acc + 1; }; bump(); return acc; }; probe();")
+	if err != nil {
+		t.Fatalf("vm error: %s", err)
+	}
+
+	if err := testIntegerObject(8, vm.LastPoppedStackElement()); err != nil {
+		t.Fatalf("wrong result: %s", err)
 	}
 }
 
@@ -992,6 +1016,39 @@ func TestCleanupSensitiveDataWipesCompiledFunctionInstructions(t *testing.T) {
 
 	if compiled.Instructions != nil {
 		t.Fatalf("compiled function instructions not cleared")
+	}
+}
+
+// Opcodes are only ever appended and a value once emitted never changes meaning,
+// so the only way an unknown one reaches the dispatch loop is bytecode built by a
+// newer toolchain than the runtime opening it. That has been possible since the
+// first opcode was added after v1 and had no answer: the switch matched nothing,
+// the instruction pointer advanced by one, and the operand bytes of the
+// unrecognised instruction were executed as opcodes -- a program that ran to
+// completion and answered with nonsense.
+//
+// It matters more now that boxed captures add five opcodes with operands, which
+// is the shape most likely to desynchronise a stream rather than merely skip one
+// instruction.
+func TestUnknownOpcodeIsRefusedRatherThanSkipped(t *testing.T) {
+	// 250 is past every defined opcode, followed by bytes that would decode as
+	// real instructions if the stream desynchronised. The value the error names
+	// is the byte after the instruction stream's own decoding, not the literal
+	// 250 written here, which is why the assertion does not pin a number.
+	machine := New(&compiler.ByteCode{
+		Instructions: []byte{250, byte(code.OpTrue), byte(code.OpPop)},
+		Constants:    []object.Object{},
+	})
+
+	err := machine.Run()
+	if err == nil {
+		t.Fatal("the VM ran a program containing an opcode it does not know")
+	}
+	if !strings.Contains(err.Error(), "unknown opcode") {
+		t.Errorf("error = %q, want it to say the opcode is unknown", err)
+	}
+	if !strings.Contains(err.Error(), "newer version") {
+		t.Errorf("error = %q, want it to say where such bytecode comes from", err)
 	}
 }
 

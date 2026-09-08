@@ -240,6 +240,9 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		if n.Operator == "!" {
 			return tBool
 		}
+		if n.Operator == "~" && couldBeInt(rt) {
+			return tInt
+		}
 		if n.Operator == "-" && isNumericType(rt) {
 			return rt
 		}
@@ -513,11 +516,29 @@ func infixType(operator string, lt, rt Type) Type {
 			return tString
 		}
 		return numericResultType(lt, rt)
+	case "&", "|", "^", "<<", ">>":
+		// Bitwise operators are integer-only, so any expression that produces a
+		// value at all produces an int -- there is no float promotion to widen
+		// the result the way `numericResultType` has to model. A known non-int
+		// operand means the expression errors instead, and Any is the honest
+		// type for something that will not yield a value.
+		if couldBeInt(lt) && couldBeInt(rt) {
+			return tInt
+		}
+		return AnyType
 	case "-", "*", "/", "%":
 		return numericResultType(lt, rt)
 	default:
 		return AnyType
 	}
+}
+
+// couldBeInt reports whether t is consistent with the integer a bitwise
+// operator requires. An unknown type could be one, so it counts: this feeds
+// hover and inlay hints, never a diagnostic, and guessing `int` for an operand
+// nothing has pinned down is a better hint than giving up.
+func couldBeInt(t Type) bool {
+	return !t.IsKnown() || t.Kind == TypeInt
 }
 
 func numericResultType(lt, rt Type) Type {

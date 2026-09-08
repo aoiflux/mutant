@@ -153,6 +153,79 @@ func TestPMapCallbackEnvironment(t *testing.T) {
 
 // peach runs for side effects and yields null. Workers get a globals snapshot,
 // so the documented way to collect results is a shared store, not a global.
+// A captured variable is one storage location shared by the frame and every
+// closure over it, which is what makes a sequential `each` accumulator work.
+// Across worker goroutines that same sharing is a data race: `cell.Value = ...`
+// on a worker is an unsynchronised write to an interface the parent may be
+// reading. Workers therefore get their own cells, and their writes stay local --
+// the rule the parallel builtins already document for globals.
+//
+// The assertion is the observable half of that. The race itself is what `go test
+// -race` catches, and this test is the program that makes it catch it: before
+// detachCaptures it reported four races on this shape.
+func TestParallelWorkersDoNotShareCapturedVariables(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{
+			// The write happens on eight workers and reaches none of them here:
+			// each has its own cell, and the caller keeps the value it had.
+			name:  "pmap callbacks cannot write the caller's captured variable",
+			input: `let probe = fn() { let acc = 0; pmap([1, 2, 3, 4, 5, 6, 7, 8], fn(x) { acc = acc + x; x }, 4); acc }; probe()`,
+			want:  0,
+		},
+		{
+			// peach exists to be called for its effects, which makes it the
+			// shape most likely to be written this way.
+			name:  "peach callbacks cannot write the caller's captured variable",
+			input: `let probe = fn() { let acc = 0; peach([1, 2, 3, 4], fn(x) { acc = acc + x; }); acc }; probe()`,
+			want:  0,
+		},
+		{
+			// A spawned task outlives the call that started it, so its cells are
+			// detached on the caller's goroutine rather than the task's.
+			name:  "a spawned task cannot write the caller's captured variable",
+			input: `let probe = fn() { let acc = 0; let t, e = spawn(fn() { acc = 99; 0 }); task_wait(t); acc }; probe()`,
+			want:  0,
+		},
+		{
+			// The other half of the rule: reading a capture on a worker still
+			// works, and a worker's own writes are visible to itself.
+			name:  "a worker sees its own writes",
+			input: `let probe = fn() { let base = 10; pmap([1, 2], fn(x) { let n = base; n = n + x; n })[1] }; probe()`,
+			want:  12,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			machine, err := runEncryptedVM(tc.input)
+			if err != nil {
+				t.Fatalf("vm error: %s", err)
+			}
+			if err := testIntegerObject(int64(tc.want), machine.LastPoppedStackElement()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// The sequential higher-order builtins run on the caller's own VM and its own
+// goroutine, so they must keep sharing -- an accumulator over `each` is the
+// shape L-10 was opened for, and detaching cells for workers must not have
+// reached them.
+func TestSequentialHigherOrderCallbacksStillShareCapturedVariables(t *testing.T) {
+	machine, err := runEncryptedVM(`let probe = fn() { let acc = 0; each([1, 2, 3, 4], fn(x) { acc = acc + x; }); acc }; probe()`)
+	if err != nil {
+		t.Fatalf("vm error: %s", err)
+	}
+	if err := testIntegerObject(10, machine.LastPoppedStackElement()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPEachRunsForSideEffectsAndReturnsNull(t *testing.T) {
 	machine, err := runEncryptedVM(`peach([1, 2, 3], fn(x) { x * 2 })`)
 	if err != nil {

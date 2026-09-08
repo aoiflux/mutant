@@ -103,6 +103,19 @@ const (
 	OR         = "||"
 	COLON      = ":"
 
+	// Bitwise operators over the signed 64-bit integers the VM has.
+	//
+	// `^` is binary xor only and `~` is the unary complement. Go overloads a
+	// single `^` for both, which reads badly in a language where the unary
+	// form is the rarer one; splitting them costs one token and removes the
+	// ambiguity from the grammar entirely.
+	AMPERSAND = "&"
+	PIPE      = "|"
+	CARET     = "^"
+	TILDE     = "~"
+	SHL       = "<<"
+	SHR       = ">>"
+
 	// Compound assignment and increment/decrement. These are pure syntactic
 	// sugar: the parser desugars each to a plain assignment over the matching
 	// binary operator (e.g. `x += 1` -> `x = x + 1`, `x++` -> `x = x + 1`).
@@ -113,6 +126,13 @@ const (
 	MODULO_ASSIGN   = "%="
 	INCREMENT       = "++"
 	DECREMENT       = "--"
+
+	// Compound bitwise assignment, desugared the same way as `+=`.
+	AND_ASSIGN = "&="
+	OR_ASSIGN  = "|="
+	XOR_ASSIGN = "^="
+	SHL_ASSIGN = "<<="
+	SHR_ASSIGN = ">>="
 
 	// Delimiters
 	COMMA     = ","

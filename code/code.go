@@ -56,6 +56,28 @@ const (
 	// dev-sec-platform-upgrades — appended to keep existing opcode values stable.
 	OpGreaterEqual // >= (and <= via operand swap)
 	OpSetIndex     // a[i] = v / h[k] = v
+	// L-5 bitwise operators — appended for the same reason: an opcode's numeric
+	// value is part of the on-disk format, so new ones go on the end.
+	OpBitAnd     // &
+	OpBitOr      // |
+	OpBitXor     // ^ (binary xor; the complement is OpBitNot)
+	OpBitNot     // ~ (unary complement)
+	OpShiftLeft  // <<
+	OpShiftRight // >> (arithmetic — the operands are signed)
+	// L-10 boxed cells — appended for the same reason. A captured local lives in
+	// an object.Cell that the frame slot and every capturing closure point at,
+	// so a write through any of them is a write all of them see.
+	//
+	// The two Capture* loads push the cell itself and are emitted only in the
+	// prelude OpClosure consumes; the four Get/Set forms read and write through
+	// it and are the only thing a function body ever emits. Keeping them
+	// separate rather than making cells transparent inside OpGetLocal is what
+	// lets the disassembler still say which storage an instruction touches.
+	OpGetLocalCell // read through a boxed local slot
+	OpSetLocalCell // write through a boxed local slot
+	OpCaptureLocal // push a boxed local's cell, for OpClosure's capture list
+	OpCaptureFree  // push a captured cell again, for a nested capture
+	OpSetFree      // write through a captured cell
 )
 
 type Definition struct {
@@ -108,6 +130,17 @@ var definitions = map[Opcode]*Definition{
 	OpMod:            {"OpMod", []int{}},
 	OpGreaterEqual:   {"OpGreaterEqual", []int{}},
 	OpSetIndex:       {"OpSetIndex", []int{}},
+	OpBitAnd:         {"OpBitAnd", []int{}},
+	OpBitOr:          {"OpBitOr", []int{}},
+	OpBitXor:         {"OpBitXor", []int{}},
+	OpBitNot:         {"OpBitNot", []int{}},
+	OpShiftLeft:      {"OpShiftLeft", []int{}},
+	OpShiftRight:     {"OpShiftRight", []int{}},
+	OpGetLocalCell:   {"OpGetLocalCell", []int{1}},
+	OpSetLocalCell:   {"OpSetLocalCell", []int{1}},
+	OpCaptureLocal:   {"OpCaptureLocal", []int{1}},
+	OpCaptureFree:    {"OpCaptureFree", []int{1}},
+	OpSetFree:        {"OpSetFree", []int{1}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index

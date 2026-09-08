@@ -21,21 +21,27 @@ import (
 // plaintext object. So a type nobody classified used to become a silent leak.
 // Now it becomes a test failure, and someone has to choose.
 var encryptTreatment = map[object.ObjectType]string{
-	object.INTEGER_OBJ:      "sealed",
-	object.FLOAT_OBJ:        "sealed",
-	object.BOOLEAN_OBJ:      "sealed",
-	object.STRING_OBJ:       "sealed",
-	object.BYTES_OBJ:        "sealed",
-	object.NULL_OBJ:         "sealed",
-	object.ERROR_OBJ:        "sealed",
-	object.ARRAY_OBJ:        "recursive",
-	object.HASH_OBJ:         "recursive",
-	object.STRUCT_OBJ:       "recursive",
-	object.ENUM_VALUE_OBJ:   "recursive",
-	object.CLOSURE_OBJ:      "recursive",
-	object.MULTI_VALUE_OBJ:  "recursive",
-	object.LUA_PATCH_OBJ:    "recursive",
-	object.ENCRYPTED_OBJ:    "passthrough",
+	object.INTEGER_OBJ:     "sealed",
+	object.FLOAT_OBJ:       "sealed",
+	object.BOOLEAN_OBJ:     "sealed",
+	object.STRING_OBJ:      "sealed",
+	object.BYTES_OBJ:       "sealed",
+	object.NULL_OBJ:        "sealed",
+	object.ERROR_OBJ:       "sealed",
+	object.ARRAY_OBJ:       "recursive",
+	object.HASH_OBJ:        "recursive",
+	object.STRUCT_OBJ:      "recursive",
+	object.ENUM_VALUE_OBJ:  "recursive",
+	object.CLOSURE_OBJ:     "recursive",
+	object.MULTI_VALUE_OBJ: "recursive",
+	object.LUA_PATCH_OBJ:   "recursive",
+	object.ENCRYPTED_OBJ:   "passthrough",
+	// Passthrough for a reason unlike the others below: encrypting a cell is not
+	// merely pointless, it is wrong. Every arm here returns a new object, and a
+	// new cell is a second storage location -- the by-value capture that boxing
+	// exists to remove. The contents are sealed on the way into cell.Value, so
+	// nothing is left in the clear.
+	object.CELL_OBJ:         "passthrough",
 	object.COMPILED_FN_OBJ:  "passthrough",
 	object.BUILTIN_OBJ:      "passthrough",
 	object.FUNCTION_OBJ:     "passthrough",

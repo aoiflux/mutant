@@ -27,6 +27,10 @@ func evalPrefixExpression(operator string, right object.Object) object.Object {
 		return evalBangOperatorExpression(right)
 	case "-":
 		return evalMinusPrefixOperatorExpression(right)
+	case "~":
+		// object.BitwiseNot rather than a local switch: the VM calls the same
+		// function, so the complement and its error message cannot drift.
+		return object.BitwiseNot(right)
 	default:
 		return newError("unknown operator: %s%s", operator, right.Type())
 	}
@@ -57,6 +61,15 @@ func evalMinusPrefixOperatorExpression(right object.Object) object.Object {
 }
 
 func evalInfixExpression(operator string, left, right object.Object) object.Object {
+	// Bitwise operators are integer-only. This check comes first so the refusal
+	// is worded identically for every operand type -- NumericInfix only ever
+	// sees the numeric ones, and a string would otherwise be turned away by
+	// evalStringInfixExpression with a different sentence than the VM uses.
+	if object.IsBitwiseOperator(operator) &&
+		(left.Type() != object.INTEGER_OBJ || right.Type() != object.INTEGER_OBJ) {
+		return object.BitwiseOperandError(operator, left, right)
+	}
+
 	switch {
 	case object.IsNumeric(left) && object.IsNumeric(right):
 		// Numeric arithmetic/comparison is shared with the WASM REPL via

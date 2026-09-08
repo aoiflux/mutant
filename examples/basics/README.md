@@ -10,6 +10,8 @@ mutant examples/basics/code.mu --dev
 
 Scripts:
 - code.mut
+- bitwise_flags.mut
+- closures.mut
 - enums_example.mut
 - for_loop_control.mut
 - recur.mut
