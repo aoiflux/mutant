@@ -72,6 +72,24 @@ func GetSandboxIndicators() ([]string, error) {
 	return indicators, nil
 }
 
+// SandboxTamperDetail reports what the sandbox detector saw, for a run that is
+// stopping because of it. Detection is cached for the process (see
+// detectSandbox), so this re-reads the answer the gate already got rather than
+// probing again. (M-7)
+func SandboxTamperDetail() TamperDetail {
+	result, err := detectSandbox()
+	if err != nil {
+		return TamperDetail{Detector: "sandbox"}
+	}
+
+	return TamperDetail{
+		Detector:   "sandbox",
+		Kind:       result.Type,
+		Confidence: result.Confidence,
+		Signals:    append([]string(nil), result.Indicators...),
+	}
+}
+
 // Whether this process is running inside a container, VM, or analysis sandbox is
 // fixed for its lifetime -- a program does not move between a hypervisor and
 // bare metal while it runs -- but establishing it is expensive. On Windows the

@@ -48,7 +48,12 @@ Compatibility/dev behavior:
 2. Compat mode (`--compat`): warn-oriented defaults.
 3. Dev mode (`--dev`): compat posture plus local convenience defaults.
 
-CLI rule: last mode flag wins when multiple are passed.
+CLI rule: a command line names at most one mode. `--secure --compat`,
+`--secure --dev` and `--signer-auth --no-signer-auth` exit non-zero naming both
+flags. `--dev --compat` is accepted, because dev mode implies compat mode.
+
+`--compat` weakens the response; `--dev` weakens the key. Full table:
+[EXECUTION_MODES.md](EXECUTION_MODES.md).
 
 ## 4) Is anti-debugging implemented?
 

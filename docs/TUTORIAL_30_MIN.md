@@ -97,20 +97,28 @@ $ mutant
 Mutant's default mode refuses to run inside what it believes is an analysis
 environment. That is deliberate — a signed forensic tool that happily executes
 under a debugger is not much of a guarantee — but it can fire on a machine you
-consider perfectly ordinary. Ask it what it saw:
+consider perfectly ordinary. It tells you what it saw and what to do:
 
-```bash
-$ mutant --dev prog.mu --log-level debug
-[security-dev] sandbox detected=true type=WSL confidence=90 indicators=windows:process_parent:wsl,...
+```
+[security] event=sandbox_detected stage=pre-decode action=terminate
+[security] detector=sandbox type=WSL confidence=90 signals=windows:process_parent:wsl,...
+[security] reason: secure mode does not run where the host looks like an analysis sandbox
+[security] remedy: re-run with --compat if this host is expected to look like this.
+[security]         --compat weakens the response only: a probe hit warns instead of stopping
+[security]         the run. Your password is still required and the artifact is still verified.
+sandbox detected, execution halted for security
 ```
 
-The `indicators` field names the evidence. Detection scores by confidence and
-halts at 70. To get work done while you sort it out, `--compat` downgrades the
-response from halt to warn:
+The `signals` field names the evidence. Detection scores by confidence and halts
+at 70. Taking the remedy:
 
 ```bash
 $ mutant prog.mu --compat
 ```
+
+`--compat` weakens the *response*, not the key: your password is still required
+and the artifact is still verified. `--dev` is the one that weakens the key.
+See [EXECUTION_MODES.md](EXECUTION_MODES.md).
 
 > **Known false positive.** On Windows, launching `mutant` from **Git Bash**
 > (or MSYS2/Cygwin) is scored as WSL at confidence 90, because the parent

@@ -48,8 +48,9 @@ a run and nothing to unset after one.
 1. `--secure` (the default) resolves the tamper response to `terminate`.
 2. `--compat` resolves it to `warn`.
 3. `--dev` implies `--compat`, plus local password fallback.
-4. `--signer-auth` / `--no-signer-auth` require or skip trusted signer
-   verification in secure mode.
+4. `--signer-auth` / `--no-signer-auth` upgrade signature verification to a
+   trusted public key, or decline to. Self-verification runs in every mode
+   regardless, so this raises the floor rather than setting it.
 5. `--trusted-key <path>` pins verification to the hex-encoded public key in
    that file. Without it, verification uses a locally bootstrapped keypair,
    which trusts whatever signed the artifact on this host.
@@ -174,7 +175,7 @@ posture is a command line:
 | --- | --- |
 | Production, trusted release artifact | `mutant prog.mu --secure --signer-auth --trusted-key <path>` |
 | Production, no pinned signer yet | `mutant prog.mu --secure --signer-auth` |
-| Short-lived false-positive triage | `mutant prog.mu --compat` |
+| A probe fires on a container, VM or CI runner | `mutant prog.mu --compat` |
 | Local development | `mutant prog.mu --dev` |
 
 Notes:
@@ -184,7 +185,13 @@ Notes:
 2. `--compat` and `--dev` are the only things that downgrade a tamper response
    from `terminate` to `warn`. Both are visible in the command line, so a
    downgrade can never happen behind an operator's back -- which is why the
-   presets this section used to carry no longer exist.
+   presets this section used to carry no longer exist. Naming a mode twice over
+   (`--secure --compat`) is an error rather than last-flag-wins, so a downgrade
+   also cannot happen by a wrapper script appending a flag.
 3. There is nothing to reset afterwards. A previous run cannot leave state that
    changes the next one.
 4. `--timing` adds per-stage timings on stderr when a run is unexpectedly slow.
+5. A termination prints the detector that fired, the reason, and the remedy
+   before the run stops. `--compat` is named as the remedy for a host-probe hit
+   and deliberately not for a signature or integrity failure, which are facts
+   about the artifact. See [EXECUTION_MODES.md](EXECUTION_MODES.md).

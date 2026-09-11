@@ -65,18 +65,25 @@ Companion deep dives:
 
 Mutant currently has three practical launch postures:
 
+The definitive operator-facing table lives in
+[EXECUTION_MODES.md](EXECUTION_MODES.md); this section states the design behind
+it.
+
 1. Secure mode (`--secure`, default):
 
 - Runtime posture defaults to secure execution gates.
-- Trusted signer pinning is enforced only when `--signer-auth` is enabled.
-- Default tamper response is `terminate`.
+- Embedded self-verification always runs. Trusted signer pinning is an upgrade
+  on top of it, enabled by `--signer-auth`.
+- Default tamper response is `terminate`, printing the detector that fired, the
+  reason, and the remedy.
 - If `--trusted-key <path>` is not passed, the runtime bootstraps a local
   persistent keypair and uses the local public key as the trusted key for
   signer-auth verification.
 
 2. Compatibility mode (`--compat`):
 
-- Signature verification uses embedded signer key (format validity only).
+- Signature verification uses the embedded signer key (format validity only) --
+  the same floor secure mode has, not a substitute for it.
 - Default tamper response is `warn`.
 
 3. Developer mode (`--dev`):
@@ -88,10 +95,18 @@ Mutant currently has three practical launch postures:
 
 ### 4.1 Mode Resolution Rules
 
-CLI precedence is "last matching mode flag wins" due to linear arg scanning.
+A command line names at most one mode. `--secure --compat`, `--secure --dev` and
+`--signer-auth --no-signer-auth` are rejected with a non-zero exit naming both
+flags (`validateModeFlags`, `main.go`), before any other work.
 
-- Encounter `--compat` or `--dev` -> mode becomes compatibility.
-- Encounter `--secure` later -> mode becomes secure again.
+- `--compat` or `--dev` -> mode becomes compatibility.
+- `--dev --compat` is accepted: dev mode implies compatibility mode, so naming
+  both is redundant rather than contradictory. Repeating a flag is harmless.
+
+This used to be "last matching mode flag wins" due to linear arg scanning, with
+`--dev` winning over `--secure` regardless of order. `mutant prog.mu --dev
+--secure` therefore ran unsecured, having been asked in the same breath to run
+secured, and said nothing about it.
 
 ### 4.2 Tamper Response Policy
 
@@ -611,13 +626,27 @@ Security effect:
 If current instruction hash differs from expected baseline:
 
 1. `RecordIntegrityFailure(stage)`
-2. `ApplyTamperResponse(integrity_failed, stage, secureMode=true, err)`
+2. `ApplyTamperResponse(integrity_failed, stage, vm.secureMode, err)`
 
 Important implementation detail:
 
-- VM currently calls tamper response with `secureMode=true` for integrity
-  failures, so the secure default (`terminate`) applies to an integrity failure
-  even under `--compat`. Nothing downgrades it.
+- The VM passes its own `secureMode`, which carries the launch mode, so an
+  integrity failure follows the same rule as every other tamper event:
+  `terminate` under the default posture, `warn` under `--compat` and `--dev`.
+- This section previously claimed the VM forced `secureMode=true` here, making
+  integrity the one check no mode could downgrade. It does not, and has not
+  since `NewWithPasswordMode` began threading the launch mode into the VM.
+  Whether it *should* be the exception is an open question -- the difference
+  between "the host looks suspicious", which is a guess about the environment,
+  and "this bytecode is not what was signed", which is not. It is recorded here
+  rather than decided.
+
+A termination prints the detector, the reason and the remedy before the run
+stops -- see `ExplainTamperTermination` in
+[security/response_policy.go](../security/response_policy.go) and
+[EXECUTION_MODES.md](EXECUTION_MODES.md). The VM's security opcodes return their
+error directly rather than going through the response policy, so they call the
+explainer themselves.
 
 ### 10.5 Builtin Capability Configuration
 
@@ -997,17 +1026,23 @@ baseline is a command line and nothing else. See
 
 ## 22. Appendix B: Mode/Policy Decision Table
 
-| Execution Posture          | Signature Verification Path  | Default Policy | Wrong Signature / Untrusted Key        | Debugger Hit                           | Integrity Mismatch                     |
-| -------------------------- | ---------------------------- | -------------- | -------------------------------------- | -------------------------------------- | -------------------------------------- |
-| Secure (`--secure`)        | Trusted key pinning required | terminate      | stop                                   | stop                                   | stop                                   |
-| Compatibility (`--compat`) | Embedded key verification    | warn           | continue/log                           | continue/log                           | stop (VM forces secure policy)         |
-| Developer (`--dev`)        | Compatibility path forced    | warn           | continue/log                           | continue/log                           | stop (VM forces secure policy)         |
+| Execution Posture          | Signature Verification Path      | Default Policy | Wrong Signature / Untrusted Key | Debugger Hit | Integrity Mismatch |
+| -------------------------- | -------------------------------- | -------------- | ------------------------------- | ------------ | ------------------ |
+| Secure (`--secure`)        | Self-verify; trusted key pinning with `--signer-auth` | terminate | stop | stop | stop |
+| Compatibility (`--compat`) | Self-verify (embedded key)       | warn           | continue/log                    | continue/log | continue/log       |
+| Developer (`--dev`)        | Self-verify (embedded key)       | warn           | continue/log                    | continue/log | continue/log       |
 
 The posture column is the whole input. There is no downgrade path that is not
 one of these three flags -- see §4.2 and
-[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md). Integrity mismatch is the
-exception to the mode rule: the VM calls `ApplyTamperResponse` with
-`secureMode=true` regardless of the launch mode (§10.4).
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md), and naming two of them is an
+error rather than a resolution (§4.1).
+
+The integrity-mismatch column used to read "stop (VM forces secure policy)" for
+the two weaker postures. It does not: `vm.secureMode` carries the launch mode
+into both integrity checks (`vm/vm.go`), so under `--compat` and `--dev` a
+mismatch warns and the run continues, like every other tamper event. Whether the
+integrity check should be the one exception to the mode rule is an open
+question; the table states what the code does.
 
 ---
 

@@ -160,6 +160,12 @@ The response is derived from the execution mode by `ResolveTamperResponse`
 (`security/response_policy.go`). It is not overridable: see
 [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
+A terminating hit prints the detector, its type and confidence, the signals that
+fired, and `--compat` as the remedy, before the run stops. The sandbox detail
+comes from the cached detection the gate already performed, so explaining a
+termination costs nothing. See
+[EXECUTION_MODES.md](EXECUTION_MODES.md).
+
 ## Telemetry
 
 Sandbox detection contributes to security telemetry snapshot/export:

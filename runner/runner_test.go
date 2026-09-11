@@ -251,6 +251,55 @@ func TestEnforceAntiSandboxSecureModeTerminates(t *testing.T) {
 	}
 }
 
+// M-7's acceptance test at the layer an operator sees: a terminating probe hit
+// has to name what fired and what to do about it. The message this replaces
+// ("sandbox detected, execution halted for security") fires on ordinary
+// containers, VMs and CI runners -- where this tool is normally run -- and named
+// neither the probe nor --compat.
+func TestEnforceAntiSandboxTerminationNamesTheProbeAndTheRemedy(t *testing.T) {
+	originalSandbox := isSandboxed
+	isSandboxed = func() bool { return true }
+	defer func() {
+		isSandboxed = originalSandbox
+	}()
+
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = writer
+
+	enforceErr := enforceAntiSandbox(true, "pre-decode")
+
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatalf("writer.Close: %v", closeErr)
+	}
+	os.Stderr = originalStderr
+
+	var captured bytes.Buffer
+	if _, copyErr := captured.ReadFrom(reader); copyErr != nil {
+		t.Fatalf("read captured stderr: %v", copyErr)
+	}
+	output := captured.String()
+
+	if !errors.Is(enforceErr, security.ErrSandboxDetected) {
+		t.Fatalf("expected ErrSandboxDetected, got: %v", enforceErr)
+	}
+	for _, want := range []string{
+		"event=sandbox_detected",
+		"stage=pre-decode",
+		"action=terminate",
+		"detector=sandbox",
+		"reason:",
+		"--compat",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in the termination notice, got: %s", want, output)
+		}
+	}
+}
+
 func TestEnforceAntiSandboxCompatModeWarnsAndContinues(t *testing.T) {
 	originalSandbox := isSandboxed
 	isSandboxed = func() bool { return true }

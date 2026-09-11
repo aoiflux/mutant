@@ -187,7 +187,9 @@ func enforceAntiDebug(secureMode bool, stage string) error {
 	}
 	security.RecordDebuggerDetected(stage)
 
-	return security.ApplyTamperResponse("debugger_detected", stage, secureMode, security.ErrDebuggerDetected)
+	return security.ApplyTamperResponseWithDetail(
+		"debugger_detected", stage, secureMode,
+		security.ErrDebuggerDetected, security.DebuggerTamperDetail())
 }
 
 func enforceAntiSandbox(secureMode bool, stage string) error {
@@ -196,7 +198,9 @@ func enforceAntiSandbox(secureMode bool, stage string) error {
 	}
 	security.RecordSandboxDetected(stage)
 
-	return security.ApplyTamperResponse("sandbox_detected", stage, secureMode, security.ErrSandboxDetected)
+	return security.ApplyTamperResponseWithDetail(
+		"sandbox_detected", stage, secureMode,
+		security.ErrSandboxDetected, security.SandboxTamperDetail())
 }
 
 func enforceProcessProtection(secureMode bool, stage string) error {
@@ -220,11 +224,12 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 		}
 
 		security.RecordProcessProtectionDetected(stage)
-		return security.ApplyTamperResponse(
+		return security.ApplyTamperResponseWithDetail(
 			"process_protection_detected",
 			stage,
 			secureMode,
 			security.ErrProcessProtectionDetected,
+			processProtectionDetail(signal),
 		)
 	}
 
@@ -233,6 +238,42 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 
 func isProcessProtectionEnabled() bool {
 	return true
+}
+
+// processProtectionDetail names the probe that fired and what it saw, so a
+// terminating run reports "trampoline" rather than only that process protection
+// triggered. The signal is the one already in hand: nothing is probed twice. (M-7)
+func processProtectionDetail(signal security.AntiTamperSignal) security.TamperDetail {
+	detail := security.TamperDetail{
+		Detector:   "process-protection",
+		Kind:       signal.Name,
+		Confidence: signal.Confidence,
+	}
+	if signal.Detail != "" {
+		detail.Signals = []string{signal.Detail}
+	}
+
+	return detail
+}
+
+// remoteProcessDetail names the process that scored over the threshold and the
+// signals that put it there. The PID and name go in because the remedy for a
+// false positive is to recognise the process -- an EDR agent, a monitoring
+// daemon -- and an unnamed score is not something an operator can act on. (M-7)
+func remoteProcessDetail(verdict security.ProcessRiskVerdict) security.TamperDetail {
+	detail := security.TamperDetail{
+		Detector:   "remote-process-scan",
+		Kind:       fmt.Sprintf("%s(pid %d)", verdict.Name, verdict.PID),
+		Confidence: verdict.FinalScore,
+	}
+
+	for _, signal := range verdict.Signals {
+		if signal.Detected {
+			detail.Signals = append(detail.Signals, signal.Name)
+		}
+	}
+
+	return detail
 }
 
 func enforceRemoteProcessProtection(secureMode bool, stage string) error {
@@ -252,11 +293,12 @@ func enforceRemoteProcessProtection(secureMode bool, stage string) error {
 		}
 
 		security.RecordProcessProtectionDetected(stage)
-		return security.ApplyTamperResponse(
+		return security.ApplyTamperResponseWithDetail(
 			"remote_process_protection_detected",
 			stage,
 			secureMode,
 			security.ErrProcessProtectionDetected,
+			remoteProcessDetail(verdict),
 		)
 	}
 

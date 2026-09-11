@@ -82,6 +82,14 @@ func main() {
 }
 
 func run(args []string) int {
+	// Flag validation runs before anything else, including the embedded-payload
+	// branch, so a contradictory command line is rejected identically whichever
+	// entry point would have served it. (M-5)
+	if err := validateModeFlags(args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
 	if handled, exitCode := tryEmbeddedPayloadRun(args); handled {
 		return exitCode
 	}
@@ -197,6 +205,78 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 	}
 
 	return true
+}
+
+// canonicalModeFlags maps every accepted spelling of a posture flag to one name,
+// so a contradiction is reported under the canonical spelling rather than
+// whichever of the two forms the user happened to type.
+var canonicalModeFlags = map[string]string{
+	"--secure":         "--secure",
+	"-secure":          "--secure",
+	"--compat":         "--compat",
+	"-compat":          "--compat",
+	"--dev":            "--dev",
+	"-dev":             "--dev",
+	"--signer-auth":    "--signer-auth",
+	"-signer-auth":     "--signer-auth",
+	"--no-signer-auth": "--no-signer-auth",
+	"-no-signer-auth":  "--no-signer-auth",
+}
+
+// contradictoryFlagPairs are the combinations that have no coherent meaning.
+//
+// Every scanner in this file is last-flag-wins, which silently resolved these
+// to whichever flag came last -- and `--dev` did not even need to come last,
+// because resolveRuntimeExecutionOptions forces secureMode off whenever it is
+// present. So `mutant prog.mu --dev --secure` ran unsecured, having been asked
+// in the same breath to run secured, and said nothing about it. The user meant
+// one of the two; guessing which is not the CLI's job. (M-5)
+//
+// `--dev --compat` is absent on purpose: dev mode implies compatibility mode, so
+// naming both is redundant rather than contradictory. Repeating one flag is
+// likewise harmless, which is why this tests for presence and not for count.
+var contradictoryFlagPairs = []struct {
+	first  string
+	second string
+	reason string
+}{
+	{
+		first:  "--secure",
+		second: "--compat",
+		reason: "--secure terminates on a security probe hit, --compat downgrades it to a warning",
+	},
+	{
+		first:  "--secure",
+		second: "--dev",
+		reason: "--secure terminates on a security probe hit, --dev downgrades it to a warning " +
+			"and falls back to the built-in development key",
+	},
+	{
+		first:  "--signer-auth",
+		second: "--no-signer-auth",
+		reason: "--signer-auth requires verification against a trusted public key, " +
+			"--no-signer-auth declines it",
+	},
+}
+
+// validateModeFlags rejects a command line that asks for two incompatible
+// postures at once, naming both flags and why they conflict.
+func validateModeFlags(args []string) error {
+	present := make(map[string]bool, len(canonicalModeFlags))
+	for _, arg := range args {
+		if canonical, ok := canonicalModeFlags[arg]; ok {
+			present[canonical] = true
+		}
+	}
+
+	for _, pair := range contradictoryFlagPairs {
+		if present[pair.first] && present[pair.second] {
+			return fmt.Errorf("%s and %s cannot be combined: %s. Pass one of them",
+				pair.first, pair.second, pair.reason)
+		}
+	}
+
+	return nil
 }
 
 // extractSecurityModeArg scans args for explicit mode flags.
@@ -576,12 +656,28 @@ Password options:
                              --password-insecure in the next minor release.
   --password-insecure <v>    Same as --password, opted into explicitly.
 
+Execution modes (pick at most one; naming two is an error):
+  --secure                   Secure mode: the default. A security probe hit ends
+                             the run. Say it explicitly to record the posture.
+  --compat                   Compatibility mode: a probe hit warns and the run
+                             continues. Use where secure mode's probes fire on an
+                             ordinary container, VM or CI runner.
+  --dev                      Developer mode. Compatibility posture, plus a
+                             fallback to a development key that is a compile-time
+                             constant shared by every Mutant binary, so anyone
+                             holding a copy of the binary can decrypt what it
+                             produced. Local development only; refused for
+                             release artifacts.
+
+  --compat weakens the response. --dev weakens the key. Compat still requires
+  your password and still verifies the artifact; it only declines to stop the run
+  when a probe fires. An artifact built or run under --dev has no
+  confidentiality. See docs/EXECUTION_MODES.md.
+
 Runtime options:
-  --secure                   Enforce secure mode. Default behavior.
-  --compat                   Use compatibility mode with weaker security checks.
-  --dev                      Developer mode. Implies compatibility mode and local password fallback.
-  --signer-auth              Require trusted signer verification in secure mode.
-  --no-signer-auth           Disable signer verification.
+  --signer-auth              Upgrade signature verification to a trusted public
+                             key. Self-verification runs in every mode already.
+  --no-signer-auth           Do not verify against a trusted key. The default.
   --trusted-key PATH         Verify against the public key in PATH (hex-encoded).
   --security-log-level LEVEL Set security logging in dev mode.
   --log-level LEVEL          Alias for --security-log-level.

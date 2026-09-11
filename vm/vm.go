@@ -769,6 +769,11 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 					logSecurityWarning("debugger_detected", "vm-run")
 					continue
 				}
+				// The security opcodes return their error directly rather than
+				// going through ApplyTamperResponse, so they explain themselves
+				// here instead. Without this the run stopped mid-instruction
+				// with one sentence naming no probe and no remedy. (M-7)
+				security.ExplainTamperTermination("debugger_detected", "vm-run", security.DebuggerTamperDetail())
 				return security.ErrDebuggerDetected
 			}
 		case code.OpChkSnd:
@@ -778,6 +783,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 					logSecurityWarning("sandbox_detected", "vm-run")
 					continue
 				}
+				security.ExplainTamperTermination("sandbox_detected", "vm-run", security.SandboxTamperDetail())
 				return security.ErrSandboxDetected
 			}
 		case code.OpConstant:

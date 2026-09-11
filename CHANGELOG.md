@@ -76,8 +76,41 @@ claim the README makes becomes verifiable.
 - `examples/data/autoruns_hive.json` and `examples/data/phish.eml` — synthetic
   fixtures so two of the cookbook recipes run unchanged.
 
+- **`docs/EXECUTION_MODES.md`** — the definitive statement of what each mode
+  changes, every row traced to the code that implements it. The distinction it
+  exists to write down is that **`--compat` weakens the response and `--dev`
+  weakens the key**: compat still requires your password and still verifies the
+  artifact, while an artifact built or run under `--dev` has no confidentiality
+  at all, because the development key is a compile-time constant shared by every
+  Mutant binary. That sentence was in no help text and no document.
+
 ### Changed
 
+- **Contradictory mode flags are an error instead of a silent resolution.**
+  `--secure --compat`, `--secure --dev` and `--signer-auth --no-signer-auth`
+  each exit non-zero naming both flags and why they conflict. Every flag scanner
+  was last-flag-wins, and `--dev` did not even need to come last — it forced
+  compatibility mode wherever it appeared — so `mutant prog.mu --dev --secure`
+  ran unsecured having been asked in the same breath to run secured, and said
+  nothing about it. `--dev --compat` is still accepted: dev mode implies compat
+  mode, so naming both is redundant rather than contradictory, and repeating a
+  flag stays harmless. Validation runs before any other work, so the embedded
+  standalone path and the CLI reject the same command line identically.
+- **A terminating security event says what fired and what to do about it.** The
+  run used to stop on one sentence — `sandbox detected, execution halted for
+  security` — that named no probe, no reason and no way forward, on a check
+  that fires on ordinary containers, VMs and CI runners, which is where forensic
+  tooling normally runs. It now prints the detector, its classification and
+  confidence, the signals behind it, and the remedy. `--compat` is named for the
+  host-probe events and deliberately **not** for a failed signature or a failed
+  integrity check: those are statements about the artifact, and offering
+  `--compat` there would be advice to run a modified file anyway. The VM's
+  security opcodes return their error directly rather than through the response
+  policy, so they call the same explainer.
+- Help text for the modes was rewritten: `--dev` now says the fallback key is a
+  compile-time constant shared by every Mutant binary, `--signer-auth` says it
+  upgrades verification rather than enabling it, and the compat-weakens-response
+  versus dev-weakens-key distinction is stated in the help itself.
 - **Builtins resolve by name, not by registry ordinal.** `OpGetBuiltin` carried
   an index into the global registry, which made that registry append-only
   forever — nothing could be renamed, retired or reordered without silently
@@ -110,6 +143,18 @@ claim the README makes becomes verifiable.
 
 ### Fixed
 
+- `docs/SECURITY_LLD.md` claimed in two places that the VM forced
+  `secureMode=true` for integrity failures, making integrity the one check no
+  mode could downgrade. It does not: `vm.secureMode` carries the launch mode
+  into both integrity checks, so under `--compat` and `--dev` a mismatch warns
+  and the run continues. The documents now state what the code does. Whether
+  integrity *should* be the exception to the mode rule -- "the host looks
+  suspicious" is a guess about the environment, "this bytecode is not what was
+  signed" is not -- is recorded as an open question rather than settled here.
+- The test helpers that capture stdout and stderr wrote everything before
+  reading anything, so they deadlocked once the captured output outgrew the pipe
+  buffer (4 KiB on Windows). `mutant --help` crossed that line when the mode
+  section was rewritten. They now drain concurrently.
 - **Assignment to a captured variable corrupted the frame.** The compiler
   branched on two of `SymbolScope`'s five values at its three assignment sites,
   so a write to a free variable was emitted as `OpSetLocal` against the *free*

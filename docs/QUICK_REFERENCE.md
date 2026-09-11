@@ -65,10 +65,10 @@ a run is a flag, so the command line is a complete record of it. See
 
 | Flag | Effect |
 | --- | --- |
-| `--secure` | Secure mode. The default. |
-| `--compat` | Weaker checks; tamper response becomes `warn`. |
-| `--dev` | Implies `--compat`, plus local password fallback. |
-| `--signer-auth` / `--no-signer-auth` | Require or skip trusted signer verification in secure mode. |
+| `--secure` | Secure mode. The default. A probe hit ends the run. |
+| `--compat` | A probe hit warns and the run continues. Password and signature verification unchanged. |
+| `--dev` | Compatibility posture, plus a fallback to a development key that is a compile-time constant shared by every Mutant binary. |
+| `--signer-auth` / `--no-signer-auth` | Upgrade signature verification to a trusted public key, or decline to. Self-verification runs in every mode regardless. |
 | `--trusted-key <path>` | Verify against the hex-encoded public key in this file. |
 | _(no password flag)_ | Prompt for the password with terminal echo off. The default. |
 | `--password-file <path>` | Read the password from a file. Refused if other users can read it. |
@@ -76,6 +76,15 @@ a run is a flag, so the command line is a complete record of it. See
 | `--password <pw>` | **Deprecated:** password on argv, visible in the process table. Warns on use. |
 | `--security-log-level <level>` | Security logging verbosity in dev mode. |
 | `--timing` | Per-stage run timing on stderr. |
+
+Naming two modes at once is an error: `--secure --compat`, `--secure --dev` and
+`--signer-auth --no-signer-auth` each exit non-zero naming both flags rather
+than resolving to whichever came last.
+
+> **`--compat` weakens the response. `--dev` weakens the key.** Compat still
+> requires your password and still verifies the artifact; it only declines to
+> stop the run when a probe fires. An artifact built or run under `--dev` has no
+> confidentiality. Full table: [EXECUTION_MODES.md](EXECUTION_MODES.md).
 
 Run `mutant --help` for the current list.
 
@@ -91,10 +100,14 @@ Standalone release trailer V3:
 
 ## Operational defaults
 
-- Secure mode: terminate on tamper. Not overridable except by choosing a
-  different mode on the command line.
+- Secure mode: terminate on tamper, printing the detector that fired, the
+  reason, and the remedy. Not overridable except by choosing a different mode on
+  the command line.
 - Compatibility mode: warn on tamper.
-- Dev mode: compatibility posture with local password fallback.
+- Dev mode: compatibility posture with local password fallback, announced on
+  every use.
+- Signature self-verification runs in every mode; `--signer-auth` upgrades it to
+  trusted-key verification.
 - New release builds emit V3 trailers.
 
 ## Quick checks

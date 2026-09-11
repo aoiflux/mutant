@@ -719,15 +719,40 @@ func TestReleaseCommandsRefuseDevMode(t *testing.T) {
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 
-	originalStderr := os.Stderr
+	return captureFile(t, &os.Stderr, fn)
+}
+
+// captureFile redirects one of the process's standard streams for the duration
+// of fn and returns what was written to it.
+//
+// The reader drains concurrently with fn rather than after it. A pipe holds only
+// a few kilobytes -- 4 KiB on Windows -- so a helper that writes everything
+// before reading anything deadlocks the moment the output it captures outgrows
+// that buffer, which `mutant --help` did the first time a few lines were added
+// to it. The failure is a hung test, not a failed assertion, so it does not
+// point at what caused it.
+func captureFile(t *testing.T, stream **os.File, fn func()) string {
+	t.Helper()
+
+	original := *stream
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
 
-	os.Stderr = writer
+	*stream = writer
 	defer func() {
-		os.Stderr = originalStderr
+		*stream = original
+	}()
+
+	captured := make(chan string, 1)
+	go func() {
+		output, readErr := io.ReadAll(reader)
+		if readErr != nil {
+			captured <- ""
+			return
+		}
+		captured <- string(output)
 	}()
 
 	fn()
@@ -736,40 +761,13 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("writer.Close: %v", err)
 	}
 
-	output, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("io.ReadAll: %v", err)
-	}
-
-	return string(output)
+	return <-captured
 }
 
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
-	originalStdout := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-
-	os.Stdout = writer
-	defer func() {
-		os.Stdout = originalStdout
-	}()
-
-	fn()
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close: %v", err)
-	}
-
-	output, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("io.ReadAll: %v", err)
-	}
-
-	return string(output)
+	return captureFile(t, &os.Stdout, fn)
 }
 
 func assertContains(t *testing.T, output, want string) {
@@ -1045,5 +1043,63 @@ func TestOnlyEncryptingPathsConfirmThePassword(t *testing.T) {
 				t.Errorf("Request.Confirm = %v, want %v", gotConfirm, test.wantConfirm)
 			}
 		})
+	}
+}
+
+func TestContradictoryModeFlagsAreRejected(t *testing.T) {
+	// Both orders, both spellings, and with the file argument in the position it
+	// really occupies: the old resolution was positional in one case (--dev won
+	// over --secure regardless of order) and last-flag-wins in the others, so a
+	// test that only checked one order would have passed against the old code.
+	contradictions := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"secure then compat", []string{"mutant", "p.mu", "--secure", "--compat"}, []string{"--secure", "--compat"}},
+		{"compat then secure", []string{"mutant", "p.mu", "--compat", "--secure"}, []string{"--secure", "--compat"}},
+		{"secure then dev", []string{"mutant", "p.mu", "--secure", "--dev"}, []string{"--secure", "--dev"}},
+		{"dev then secure", []string{"mutant", "p.mu", "--dev", "--secure"}, []string{"--secure", "--dev"}},
+		{"single dash spellings", []string{"mutant", "p.mu", "-dev", "-secure"}, []string{"--secure", "--dev"}},
+		{"mixed spellings", []string{"mutant", "p.mu", "--compat", "-secure"}, []string{"--secure", "--compat"}},
+		{"signer auth both ways", []string{"mutant", "p.mu", "--signer-auth", "--no-signer-auth"}, []string{"--signer-auth", "--no-signer-auth"}},
+		{"contradiction on a gen command", []string{"mutant", "gen", "--src", "p.mut", "--dev", "--secure"}, []string{"--secure", "--dev"}},
+	}
+
+	for _, tc := range contradictions {
+		t.Run(tc.name, func(t *testing.T) {
+			var exitCode int
+			output := captureStderr(t, func() {
+				exitCode = run(tc.args)
+			})
+
+			if exitCode == 0 {
+				t.Fatalf("expected a non-zero exit for %v, got 0", tc.args)
+			}
+			for _, flag := range tc.want {
+				if !strings.Contains(output, flag) {
+					t.Fatalf("expected the error to name %s, got: %s", flag, output)
+				}
+			}
+		})
+	}
+}
+
+func TestNonContradictoryFlagCombinationsAreLeftAlone(t *testing.T) {
+	// --dev implies --compat, so naming both is redundant rather than
+	// contradictory, and repeating a flag is how a wrapper script that appends
+	// one to an already-complete command line behaves.
+	harmless := [][]string{
+		{"mutant", "p.mu", "--dev", "--compat"},
+		{"mutant", "p.mu", "--compat", "--compat"},
+		{"mutant", "p.mu", "--secure", "--secure"},
+		{"mutant", "p.mu", "--secure", "--signer-auth"},
+		{"mutant", "p.mu", "--dev", "--timing"},
+	}
+
+	for _, args := range harmless {
+		if err := validateModeFlags(args); err != nil {
+			t.Fatalf("expected %v to be accepted, got: %v", args, err)
+		}
 	}
 }

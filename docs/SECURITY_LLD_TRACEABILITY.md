@@ -92,10 +92,17 @@ Every switch is a command-line flag. Mutant reads no environment variable for
 configuration, so this section is the complete control surface. See
 [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
+0. Mode-flag validation
+
+- `validateModeFlags` rejects a command line naming two contradictory postures
+  before any other work, so the selectors below are read from a command line
+  that names at most one mode
+- anchor: [main.go](../main.go)
+
 1. `--secure` / `-secure`
 
-- default secure posture selector and explicit override
-- anchor: [main.go](../main.go#L187)
+- default secure posture selector and explicit assertion of it
+- anchor: [main.go](../main.go)
 
 2. `--compat` / `-compat`
 
@@ -120,7 +127,8 @@ configuration, so this section is the complete control surface. See
 
 5. `--signer-auth` / `--no-signer-auth`
 
-- require or skip trusted signer verification in secure mode
+- upgrade signature verification to a trusted public key, or decline to;
+  self-verification is the floor in every mode either way
 - anchors: [main.go](../main.go#L714), [runner/runner.go](../runner/runner.go#L93)
 
 6. `--trusted-key <path>`

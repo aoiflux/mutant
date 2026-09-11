@@ -158,12 +158,21 @@ Supported release targets:
 When running `.mu` files or embedded standalone payloads, these flags are
 available:
 
-- `--secure` to enforce secure mode
-- `--compat` to allow weaker compatibility-mode checks
-- `--dev` for developer mode and local password fallback
-- `--signer-auth` to require trusted signer verification
+- `--secure` — secure mode, the default: a security probe hit ends the run
+- `--compat` — a probe hit warns and the run continues
+- `--dev` — compatibility posture, plus a fallback to a development key that is
+  a compile-time constant shared by every Mutant binary
+- `--signer-auth` to upgrade signature verification to a trusted public key
 - `--security-log-level <none|error|info|debug|trace>`
 - `--log-level <none|error|info|debug|trace>` as an alias
+
+Naming two modes at once is an error rather than last-flag-wins.
+
+> **`--compat` weakens the response. `--dev` weakens the key.** Compat still
+> requires your password and still verifies the artifact. An artifact built or
+> run under `--dev` has no confidentiality.
+
+Full table: [docs/EXECUTION_MODES.md](docs/EXECUTION_MODES.md).
 
 ## Browser REPL (WASM, experimental)
 
