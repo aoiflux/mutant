@@ -22,7 +22,7 @@ func RunRepl(version string, enableMacros bool, theme string) {
 // CompileCode returns the process exit code: 0 on a successful compile, 1 when
 // the source could not be compiled. A parse error and a compiler error both
 // used to be printed and then reported as success.
-func CompileCode(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
+func CompileCode(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, modulePaths []string) int {
 	start := time.Now()
 	srcpath, err := filepath.Abs(src)
 	if err != nil {
@@ -33,7 +33,7 @@ func CompileCode(src, goos, goarch string, release bool, password string, mutati
 
 	// Pass nil for privateKey - Generate() will create a new one
 	// In production, you'd load a persistent key from a secure location
-	if err, errtype, errors := generator.Generate(srcpath, dstpath, goos, goarch, release, password, mutationLevel, mutationSeed, nil); err != nil {
+	if err, errtype, errors := generator.Generate(srcpath, dstpath, goos, goarch, release, password, mutationLevel, mutationSeed, nil, modulePaths); err != nil {
 		switch errtype {
 		case errrs.ERROR:
 			fmt.Println(err)

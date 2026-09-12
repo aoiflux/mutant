@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	mast "mutant/ast"
 	"mutant/builtin"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -21,6 +22,9 @@ var keywordHoverDocs = map[string]string{
 	"struct":   "Declares a struct type with named fields.",
 	"enum":     "Declares a closed set of named variants.",
 	"macro":    "Declares a macro literal for AST-level metaprogramming.",
+	"import": "Loads another file as a module: import \"lib/util.mut\"; binds the namespace `util`, and import u \"lib/util.mut\"; binds `u` instead. " +
+		"Reach into it with `util.name`; the module's own top-level names are not visible unqualified, and a name beginning with _ is private to the file that declares it. " +
+		"The path resolves relative to this file's directory first, then against each --module-path directory in the order given. Top level only: an import inside a block is an error.",
 	"true":     "Boolean literal representing truth.",
 	"false":    "Boolean literal representing falsehood.",
 }
@@ -266,3 +270,37 @@ func builtinSignatureInformation(name string) (lsp.SignatureInformation, bool) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// importHoverText renders what an `import` actually bound, above the keyword's
+// own documentation.
+//
+// The namespace is the useful half: an unaliased import derives it from the
+// file name, so it is the one thing about the statement that is not written
+// out in front of the reader. Namespace() is asked rather than the base name
+// re-derived here, so hover cannot disagree with the compiler about what the
+// import is called.
+func importHoverText(node *mast.ImportStatement) string {
+	path := ""
+	if node != nil && node.Path != nil {
+		path = node.Path.Value
+	}
+
+	header := "module"
+	switch {
+	case node == nil:
+	case node.Namespace() != "":
+		header = fmt.Sprintf("module `%s`", node.Namespace())
+	default:
+		// Nothing usable could be derived -- an empty path, or a name that is
+		// all separators. Saying so is more use than an empty pair of ticks.
+		header = "module (no namespace could be derived from this path -- give it an alias)"
+	}
+	if path != "" {
+		header += fmt.Sprintf(" from `%s`", path)
+	}
+
+	if doc, ok := keywordHoverDocs["import"]; ok {
+		return header + "\n\n" + doc
+	}
+	return header
+}

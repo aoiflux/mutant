@@ -18,6 +18,54 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **Modules and imports.** A program can be more than one file. `import
+  "lib/stats.mut";` binds the namespace `stats`, and `import s
+  "lib/stats.mut";` binds `s` instead; the namespace is otherwise the file's
+  base name with the extension removed. An import binds that one name and
+  nothing else -- the imported file's own names are not visible unqualified, so
+  two modules may each declare `helper` without one silently overwriting the
+  other. A top-level name beginning with `_` is private to the file that
+  declares it, and reaching for it through a namespace is a compile error
+  naming both the module and the name: there is no export list to keep in step
+  with the code.
+
+  Paths resolve relative to the importing file's own directory first, then
+  against each `--module-path <dir>` directory in the order the flags were
+  given. The flag repeats rather than taking a separator-joined list, and it is
+  the only thing that widens the search: no manifest, no lockfile, no config
+  file, no environment variable (see
+  [docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md)). The extension
+  is written out rather than guessed, a cycle is reported as the chain that
+  closed it (`main.mut -> a.mut -> b.mut -> a.mut`), a module reached two ways
+  is compiled and run once, and a path that names no file lists every directory
+  that was tried.
+
+  `struct` and `enum` names stay program-wide, because that is how they travel
+  in the bytecode: one declaration is visible from every module with no
+  qualification, and two modules declaring the same type name is an error
+  naming both files. Values are per-module, types are per-program.
+
+  Modules link into one instruction stream, one constant pool and one global
+  slot space -- the bytecode format leaves no choice, since the polymorphic
+  engine shuffles the whole constant pool, the opcode permutation ships as one
+  table for the entire program, and jumps carry absolute offsets. None of that
+  is visible in a failure: each traceback frame names the file it came from and
+  quotes that file's line, from a new `ModuleSpans` table that `StripDebugInfo`
+  removes with the rest of the debug information, so a released artifact does
+  not carry the layout of your source tree. See
+  [docs/MODULES.md](docs/MODULES.md) and
+  [examples/modules/](examples/modules/).
+
+- **Builtin namespaces.** Every builtin family is now addressable with a dot:
+  `fs.read` is `fs_read`, `str.upper` is `str_upper`, `base64url.encode` is
+  `base64url_encode`. Nothing is imported and nothing is declared -- the flat
+  name is derived by joining the halves with `_`, so all 44 families worked the
+  day this landed and none has a list to maintain. Both spellings are one
+  function with one contract: one arity check, one argument-type check, one
+  deprecation notice, one entry in the traceback. A variable, parameter, field
+  or import that already binds the name wins, so no program written before this
+  changes meaning. Flat names keep working unchanged.
+
 - **Bitwise operators.** `&`, `|`, `^`, `<<`, `>>` and the prefix complement
   `~`, with the compound forms `&= |= ^= <<= >>=`. A language whose brochure
   leads with disk-image parsing could not express a mask, a flag test or a

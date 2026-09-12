@@ -33,7 +33,7 @@ func TestGenerateCompiledMacroProgramRuns(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 
-	if err, errType, parseErrors := Generate(src, dst, "", "", false, password, 0, 0, nil); err != nil {
+	if err, errType, parseErrors := Generate(src, dst, "", "", false, password, 0, 0, nil, nil); err != nil {
 		t.Fatalf("generate failed: type=%s err=%v parseErrors=%v", errType, err, parseErrors)
 	}
 

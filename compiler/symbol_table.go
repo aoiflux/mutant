@@ -1,6 +1,9 @@
 package compiler
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type SymbolScope string
 
@@ -40,6 +43,51 @@ type SymbolTable struct {
 	// order. Only the root table's copy is ever used; see ReferenceBuiltin.
 	builtinRefs []string
 	builtinRef  map[string]int
+
+	// currentModule is the module whose top level is being compiled right now.
+	// Only the root table's copy is read, for the same reason builtinRefs is:
+	// a module's top level and the bodies of the functions it declares are one
+	// module, however deeply the enclosed tables nest.
+	//
+	// The empty string means "no modules", which is the state every REPL,
+	// playground and test compiler stays in. It makes qualify a no-op, so a
+	// program that never imports anything is stored and resolved exactly as it
+	// was before modules existed.
+	currentModule string
+
+	// moduleNamespaces maps a module key to the namespaces that module's
+	// imports bound, and each of those to the key of the module it names.
+	//
+	// It is keyed by importer because a namespace is not global: two files may
+	// both import something called `util` and mean two different files, and
+	// each has to see its own.
+	moduleNamespaces map[string]map[string]string
+}
+
+// moduleSeparator joins a module key to a top-level name to form the key that
+// name is stored under. NUL is used because it is the one byte that can appear
+// in neither an identifier nor a path, so a qualified key can never collide
+// with an unqualified one.
+const moduleSeparator = "\x00"
+
+// qualify returns the store key that module's top-level name is filed under.
+//
+// With no module -- the REPL, the playground, a single file compiled by a test
+// -- the key is the bare name, which is what makes module scoping invisible to
+// every caller that does not use it.
+func qualify(module, name string) string {
+	if module == "" {
+		return name
+	}
+	return module + moduleSeparator + name
+}
+
+// IsModulePrivate reports whether a top-level name is visible only inside the
+// module that declares it. A leading underscore is the entire rule: there is no
+// export list to keep in step with the code, and the mark travels with every
+// mention of the name rather than living in one place far away from it.
+func IsModulePrivate(name string) bool {
+	return strings.HasPrefix(name, "_")
 }
 
 func NewSymbolTable() *SymbolTable {
@@ -54,19 +102,28 @@ func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 	return s
 }
 
+// Define allocates a slot for name in this table.
+//
+// At the root -- and only there -- the store key is qualified by the module
+// being compiled, so two modules may each declare `helper` without one silently
+// overwriting the other. Symbol.Name stays the bare name: it is what error
+// messages print, what the builtin intern table keys on, and what defineFree
+// files a capture under.
 func (st *SymbolTable) Define(name string) Symbol {
 	symbol := Symbol{Name: name, Index: st.numDefinitions}
+	key := name
 	if st.Outer == nil {
 		symbol.Scope = GlobalScope
+		key = qualify(st.currentModule, name)
 	} else {
 		symbol.Scope = LocalScope
 	}
-	st.store[name] = symbol
+	st.store[key] = symbol
 	st.numDefinitions++
 	return symbol
 }
 func (st *SymbolTable) Resolve(name string) (Symbol, bool) {
-	obj, ok := st.store[name]
+	obj, ok := st.own(name)
 
 	if !ok && st.Outer != nil {
 		obj, ok = st.Outer.Resolve(name)
@@ -111,6 +168,93 @@ func (st *SymbolTable) root() *SymbolTable {
 		st = st.Outer
 	}
 	return st
+}
+
+// own reads this table's own store, without walking outward.
+//
+// At the root of a modular program the current module's own top level is tried
+// first and the bare name second. The bare name is what builtins are filed
+// under -- DefineBuiltin writes them unqualified precisely so that every module
+// can see them -- so the two-step is "my module, then the builtins", which is
+// the whole of a module's global scope. Nothing else is stored bare at the root
+// once a module is set, so one module's names cannot leak into another's
+// through the fallback.
+func (st *SymbolTable) own(name string) (Symbol, bool) {
+	if st.Outer == nil && st.currentModule != "" {
+		if obj, ok := st.store[qualify(st.currentModule, name)]; ok {
+			return obj, true
+		}
+	}
+	obj, ok := st.store[name]
+	return obj, ok
+}
+
+// SetCurrentModule makes key the module that Define files top-level names under
+// and that Resolve reads them back from. Pass the empty string to compile with
+// no module scoping at all.
+//
+// The key has to be stable and unique across one program; the linker uses each
+// file's canonical absolute path.
+func (st *SymbolTable) SetCurrentModule(key string) {
+	st.root().currentModule = key
+}
+
+// CurrentModule returns the key set by SetCurrentModule, or "" when the program
+// has no modules.
+func (st *SymbolTable) CurrentModule() string {
+	return st.root().currentModule
+}
+
+// BindNamespace records that, inside the module currently being compiled, the
+// name namespace refers to the module filed under key.
+func (st *SymbolTable) BindNamespace(namespace, key string) {
+	root := st.root()
+	if root.moduleNamespaces == nil {
+		root.moduleNamespaces = make(map[string]map[string]string)
+	}
+	bindings, ok := root.moduleNamespaces[root.currentModule]
+	if !ok {
+		bindings = make(map[string]string, 2)
+		root.moduleNamespaces[root.currentModule] = bindings
+	}
+	bindings[namespace] = key
+}
+
+// LookupNamespace returns the module key that namespace names inside the module
+// currently being compiled.
+func (st *SymbolTable) LookupNamespace(namespace string) (string, bool) {
+	root := st.root()
+	key, ok := root.moduleNamespaces[root.currentModule][namespace]
+	return key, ok
+}
+
+// ResolveIn resolves name as a top-level definition of the module filed under
+// key, whichever module is currently being compiled. It is the lookup behind
+// `ns.name`, and deliberately does not walk outward: another module's locals
+// and captures are not addressable, only its top level.
+func (st *SymbolTable) ResolveIn(key, name string) (Symbol, bool) {
+	obj, ok := st.root().store[qualify(key, name)]
+	return obj, ok
+}
+
+// ModuleNames returns the top-level names the module filed under key declares,
+// sorted, with the module-private ones left out. Editor completion behind `ns.`
+// wants exactly this list.
+func (st *SymbolTable) ModuleNames(key string) []string {
+	root := st.root()
+	prefix := qualify(key, "")
+	names := make([]string, 0, 8)
+	for stored, symbol := range root.store {
+		if symbol.Scope != GlobalScope || !strings.HasPrefix(stored, prefix) {
+			continue
+		}
+		if IsModulePrivate(symbol.Name) {
+			continue
+		}
+		names = append(names, symbol.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ReferenceBuiltin interns name and returns the operand OpGetBuiltin should
@@ -200,9 +344,11 @@ func (st *SymbolTable) defineFree(original Symbol) Symbol {
 // tree-walking path.
 func (st *SymbolTable) GlobalNames() []string {
 	names := make([]string, 0, len(st.store))
-	for name, symbol := range st.store {
+	for _, symbol := range st.store {
 		if symbol.Scope == GlobalScope {
-			names = append(names, name)
+			// symbol.Name, not the store key: at the root of a modular program
+			// the key carries a module qualifier that no user ever typed.
+			names = append(names, symbol.Name)
 		}
 	}
 	sort.Strings(names)

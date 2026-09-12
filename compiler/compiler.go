@@ -21,6 +21,21 @@ type Compiler struct {
 	enumDefinitions   map[string][]string          // Maps enum name to tag names
 	loopContexts      []LoopContext
 
+	// moduleDisplays maps a module key to the path a human should see for it,
+	// so an error about another module can name the file rather than repeat
+	// the absolute path the linker uses as a key. Filled by EnterModule, which
+	// runs for every module in dependency order, so a module's imports are
+	// always already in here by the time its own body is compiled.
+	moduleDisplays map[string]string
+
+	// typeOwners records which module declared each struct or enum name.
+	// Unlike values, type names are one flat namespace for the whole program:
+	// they travel in ByteCode.StructDefs/EnumDefs keyed by bare name and are
+	// looked up there by the VM, so two modules cannot each have a `Point`.
+	// Recording the owner is what turns that from a silent overwrite into an
+	// error naming both files.
+	typeOwners map[string]string
+
 	injectSecurityChecks bool
 	hasChkDbg            bool
 	hasChkSnd            bool
@@ -49,6 +64,9 @@ type Compiler struct {
 
 	sourceFile string
 	sourceText string
+	// moduleSpans maps lines of sourceText back to the files they came from.
+	// Empty for a single-file compile, where SourceFile already answers it.
+	moduleSpans []ModuleSpan
 }
 
 type ByteCode struct {
@@ -121,6 +139,63 @@ type ByteCode struct {
 	//
 	// Stripped for release along with everything else here.
 	SourceText string
+
+	// ModuleSpans says which file each line of SourceText came from.
+	//
+	// Linking concatenates every module of a program into one source blob and
+	// compiles that, so SourceFile and the single blob are no longer enough to
+	// answer "where did this instruction come from": a fault in lib.mut would
+	// otherwise be reported as main.mut at the blob's line number, and quoted
+	// against main.mut's text -- a plausible-looking file, line and source
+	// snippet, all three wrong. A wrong answer in the failure reporter is worse
+	// than no answer, so the mapping travels with the program.
+	//
+	// Entries are sorted by StartLine and cover the blob without gaps,
+	// beginning with the first module linked. A single-file program has exactly
+	// one entry, so there is no special case to get wrong.
+	//
+	// Debug info, and stripped with the rest of it: it would otherwise hand a
+	// release artifact the whole import graph and every absolute path in it.
+	ModuleSpans []ModuleSpan
+}
+
+// ModuleSpan marks where one module's source begins inside the linked blob.
+//
+// StartLine is 1-based and names the first line of the module in SourceText,
+// so a blob line L belongs to the last span whose StartLine is <= L, and its
+// line within that file is L - StartLine + 1.
+type ModuleSpan struct {
+	// Path is the module as it should be shown to a reader -- the same string
+	// SourceFile would have carried had this module been compiled alone.
+	Path string
+
+	// StartLine is the 1-based line of SourceText at which this module begins.
+	StartLine int
+}
+
+// ModuleAt resolves a line of the linked source blob back to the file it came
+// from and its line within that file.
+//
+// It returns ok false when there are no spans -- an artifact compiled before
+// linking existed, or one whose debug info has been stripped. Callers must
+// treat that as "unknown" and fall back to SourceFile rather than guessing:
+// the blob line is only a file line by coincidence when a program has one
+// module.
+func (bc *ByteCode) ModuleAt(line int) (path string, localLine int, ok bool) {
+	if bc == nil || len(bc.ModuleSpans) == 0 || line <= 0 {
+		return "", 0, false
+	}
+
+	// Spans are in link order, which is start-line order. Walking backwards
+	// finds the last one that begins at or before the line.
+	for i := len(bc.ModuleSpans) - 1; i >= 0; i-- {
+		span := bc.ModuleSpans[i]
+		if span.StartLine <= line {
+			return span.Path, line - span.StartLine + 1, true
+		}
+	}
+
+	return "", 0, false
 }
 
 // StripDebugInfo removes every source position from the program: the file name,
@@ -148,6 +223,11 @@ func (bc *ByteCode) StripDebugInfo() {
 	bc.LineTable = nil
 	bc.MacroTable = nil
 	bc.EndTable = nil
+	// ModuleSpans is the most disclosing table of the set: it names every file
+	// the program was built from, by absolute path, and lays out the whole
+	// import graph. Dropping the line tables while shipping that would defeat
+	// the point of stripping.
+	bc.ModuleSpans = nil
 
 	for _, constant := range bc.Constants {
 		if fn, ok := constant.(*object.CompiledFunction); ok {
@@ -211,6 +291,8 @@ func New() *Compiler {
 		scopeIndex:        0,
 		structDefinitions: make(map[string][]*ast.Identifier),
 		enumDefinitions:   make(map[string][]string),
+		moduleDisplays:    make(map[string]string),
+		typeOwners:        make(map[string]string),
 		loopContexts:      []LoopContext{},
 	}
 }
@@ -221,7 +303,59 @@ func NewWithState(st *SymbolTable, constants []object.Object) *Compiler {
 	compiler.constants = constants
 	compiler.structDefinitions = make(map[string][]*ast.Identifier)
 	compiler.enumDefinitions = make(map[string][]string)
+	compiler.moduleDisplays = make(map[string]string)
+	compiler.typeOwners = make(map[string]string)
 	return compiler
+}
+
+// ModuleScope names the module a compilation is about to enter.
+//
+// It exists because linking drives every module through one Compiler: without
+// it, the compiler could not tell whose top level it was filling in, and every
+// module's globals would land in one flat namespace where the last `helper`
+// declared won.
+type ModuleScope struct {
+	// Key identifies the module. It has to be stable and unique across the
+	// program; the linker uses the file's canonical absolute path.
+	Key string
+
+	// Display is the module as a reader should see it -- the path relative to
+	// the working directory. It appears in errors about this module, and
+	// nowhere else.
+	Display string
+
+	// Namespaces maps every namespace this module's imports bound to the Key
+	// of the module it names.
+	Namespaces map[string]string
+}
+
+// EnterModule points the compiler at the next module: its top-level
+// definitions are filed under scope.Key, and `ns.name` inside it resolves
+// through scope.Namespaces.
+//
+// Call it before compiling each module, in dependency order. A compilation
+// that never calls it -- the REPL, the playground, a single file -- keeps the
+// one flat global scope it always had.
+func (c *Compiler) EnterModule(scope ModuleScope) {
+	if scope.Display != "" {
+		c.moduleDisplays[scope.Key] = scope.Display
+	}
+	c.symbolTable.SetCurrentModule(scope.Key)
+	for namespace, key := range scope.Namespaces {
+		c.symbolTable.BindNamespace(namespace, key)
+	}
+}
+
+// moduleName renders a module key for a human. It falls back to the key
+// itself, which is a real path, rather than to something evasive.
+func (c *Compiler) moduleName(key string) string {
+	if display, ok := c.moduleDisplays[key]; ok {
+		return display
+	}
+	if key == "" {
+		return "this program"
+	}
+	return key
 }
 
 // SeedTypeDefinitions pre-loads struct and enum declarations recorded by an
@@ -395,6 +529,15 @@ func (c *Compiler) SetSourceFile(path string) { c.sourceFile = path }
 // SetSourceText embeds the program's source so a failing artifact can quote the
 // line it died on. Stripped for release along with the position tables.
 func (c *Compiler) SetSourceText(text string) { c.sourceText = text }
+
+// SetModuleSpans records which file each line of the linked source blob came
+// from. The linker calls it once, with one span per module in link order; a
+// single-file compile leaves it unset and the VM falls back to SourceFile.
+//
+// Spans must be sorted by StartLine, which link order already guarantees.
+func (c *Compiler) SetModuleSpans(spans []ModuleSpan) {
+	c.moduleSpans = append([]ModuleSpan(nil), spans...)
+}
 
 // parameterNames pulls the declared names out of a function literal so a
 // traceback can label the arguments it finds on the stack. A nil parameter --
@@ -753,6 +896,9 @@ func (c *Compiler) compileNode(node ast.Node) error {
 
 	case *ast.StructStatement:
 		// Store struct definition
+		if err := c.claimTypeName("struct", node.Name.Value); err != nil {
+			return err
+		}
 		c.structDefinitions[node.Name.Value] = node.Fields
 		return nil
 
@@ -761,6 +907,9 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		tags := []string{}
 		for _, variant := range node.Variants {
 			tags = append(tags, variant.Value)
+		}
+		if err := c.claimTypeName("enum", node.Name.Value); err != nil {
+			return err
 		}
 		c.enumDefinitions[node.Name.Value] = tags
 		return nil
@@ -794,6 +943,13 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		// compiled cleanly and then crashed when it was run.
 		return fmt.Errorf("internal: nothing to compile where an expression was expected")
 
+	case *ast.ImportStatement:
+		// Nothing to emit. An import is resolved and linked before compilation
+		// begins, so by the time the compiler sees this node the imported
+		// module's statements are already in the stream ahead of it. The node
+		// survives only as the record of what the author wrote -- which is what
+		// the formatter and the language server read it for.
+
 	default:
 		// Every AST node type has a case above. A new one landing here would
 		// otherwise compile to nothing at all, silently.
@@ -818,6 +974,7 @@ func (c *Compiler) ByteCode() *ByteCode {
 		BuiltinNames: c.symbolTable.ReferencedBuiltins(),
 		SourceFile:   c.sourceFile,
 		SourceText:   c.sourceText,
+		ModuleSpans:  c.moduleSpans,
 		LineTable:    c.scopes[c.scopeIndex].lines.Build(),
 		MacroTable:   c.scopes[c.scopeIndex].macros.Build(),
 		EndTable:     c.scopes[c.scopeIndex].ends.Build(),
@@ -1287,6 +1444,20 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 
 	// Handle field assignment: struct.field = value
 	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
+		// Assigning through an import namespace would read as "give that
+		// module a different value", which no module system here can honour:
+		// the target is another file's global slot and the write would be
+		// invisible at its declaration. Say so, rather than letting it fall
+		// through to "undefined variable: <namespace>".
+		if ident, isIdent := fieldExpr.Left.(*ast.Identifier); isIdent {
+			if key, bound := c.symbolTable.LookupNamespace(ident.Value); bound {
+				return fmt.Errorf(
+					"cannot assign to %s.%s: %s belongs to %s, and a module owns its own top-level names",
+					ident.Value, fieldExpr.Field.Value, fieldExpr.Field.Value, c.moduleName(key),
+				)
+			}
+		}
+
 		if err := c.Compile(fieldExpr.Left); err != nil {
 			return err
 		}
@@ -1345,6 +1516,25 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 	return fmt.Errorf("invalid assignment target")
 }
 
+// claimTypeName records that the module being compiled declares a struct or
+// enum called name, and refuses the declaration if another module already did.
+//
+// Type names are program-wide, so this is the only thing standing between two
+// modules that each declare `Point` and a program where one of them silently
+// gets the other's fields. Outside a modular compile every key is "", so a
+// REPL redeclaring a type on a later line is still free to do it.
+func (c *Compiler) claimTypeName(kind, name string) error {
+	key := c.symbolTable.CurrentModule()
+	if owner, taken := c.typeOwners[name]; taken && owner != key {
+		return fmt.Errorf(
+			"%s %s is declared in both %s and %s: struct and enum names are shared across the whole program, so one of them has to be renamed",
+			kind, name, c.moduleName(owner), c.moduleName(key),
+		)
+	}
+	c.typeOwners[name] = key
+	return nil
+}
+
 func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 	if ident, ok := node.Left.(*ast.Identifier); ok {
 		if _, exists := c.enumDefinitions[ident.Value]; exists {
@@ -1352,6 +1542,26 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 			tagNameIndex := c.addConstant(&object.String{Value: node.Field.Value})
 			c.emit(code.OpEnumValue, typeNameIndex, tagNameIndex)
 			return nil
+		}
+
+		// An import namespace reaches into another module's top level. It is
+		// tried before an ordinary variable of the same name because the
+		// import is a declaration in this very file, and after enums because
+		// those were already a namespace-shaped thing before modules existed.
+		if key, bound := c.symbolTable.LookupNamespace(ident.Value); bound {
+			return c.compileModuleMember(key, ident.Value, node.Field.Value)
+		}
+
+		// A namespaced builtin: fs.read is fs_read. Derived rather than
+		// tabulated, so every family works the moment it is added and nothing
+		// has to be kept in step. It is tried last, so a variable, parameter or
+		// struct called `fs` still wins and no existing program changes
+		// meaning.
+		if _, shadowed := c.symbolTable.Resolve(ident.Value); !shadowed {
+			if flat := ident.Value + "_" + node.Field.Value; builtin.GetBuiltinByName(flat) != nil {
+				c.loadSymbol(Symbol{Name: flat, Scope: BuiltinScope})
+				return nil
+			}
 		}
 	}
 
@@ -1361,6 +1571,26 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 
 	fieldNameIndex := c.addConstant(&object.String{Value: node.Field.Value})
 	c.emit(code.OpGetField, fieldNameIndex)
+	return nil
+}
+
+// compileModuleMember loads name from the top level of the module bound to
+// namespace.
+func (c *Compiler) compileModuleMember(key, namespace, name string) error {
+	if IsModulePrivate(name) {
+		return fmt.Errorf(
+			"%s.%s is private to %s: a top-level name beginning with _ is visible only inside the module that declares it",
+			namespace, name, c.moduleName(key),
+		)
+	}
+
+	symbol, ok := c.symbolTable.ResolveIn(key, name)
+	if !ok {
+		return fmt.Errorf("%s declares no %s, so %s.%s has nothing to refer to",
+			c.moduleName(key), name, namespace, name)
+	}
+
+	c.loadSymbol(symbol)
 	return nil
 }
 

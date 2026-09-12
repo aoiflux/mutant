@@ -227,7 +227,11 @@ type openerBinding struct {
 	family resourceFamily
 	opener string
 	name   string
-	callee *mast.Identifier
+
+	// anchor is the node the diagnostic points at: the callee identifier for
+	// `ntfs_open(...)`, the whole `ntfs.open` for the dotted spelling, so the
+	// squiggle covers what the author wrote either way.
+	anchor mast.Node
 }
 
 func (c *unclosedResourceCollector) openerBindings(statements []mast.Statement) []openerBinding {
@@ -242,19 +246,16 @@ func (c *unclosedResourceCollector) openerBindings(statements []mast.Statement) 
 		if !ok {
 			return
 		}
-		callee, ok := call.Function.(*mast.Identifier)
-		if !ok || callee == nil {
+		calleeName, anchor, ok := builtinCallee(call.Function, c.isShadowed)
+		if !ok {
 			return
 		}
-		family, isOpener := openerFamilies[callee.Value]
+		family, isOpener := openerFamilies[calleeName]
 		if !isOpener {
 			return
 		}
-		// A name the file binds for itself shadows the builtin, and then this
-		// is not the call the rule thinks it is.
-		if _, shadowed := c.shadowed[callee.Value]; shadowed {
-			return
-		}
+		// builtinCallee already rejected a shadowed opener; the closer is a
+		// different name and still has to be checked here.
 		if _, shadowed := c.shadowed[family.closer]; shadowed {
 			return
 		}
@@ -266,9 +267,9 @@ func (c *unclosedResourceCollector) openerBindings(statements []mast.Statement) 
 
 		found = append(found, openerBinding{
 			family: family,
-			opener: callee.Value,
+			opener: calleeName,
 			name:   names[0].Value,
-			callee: callee,
+			anchor: anchor,
 		})
 	})
 
@@ -289,7 +290,7 @@ func (c *unclosedResourceCollector) report(
 	}
 
 	for _, mention := range mentioned[binding.name] {
-		if mention == binding.callee {
+		if mention == binding.anchor {
 			continue
 		}
 		if _, forever := lifelong[mention]; forever {
@@ -305,7 +306,7 @@ func (c *unclosedResourceCollector) report(
 		}
 	}
 
-	rng, ok := c.snapshot.Program.RangeOf(binding.callee)
+	rng, ok := c.snapshot.Program.RangeOf(binding.anchor)
 	if !ok {
 		return
 	}
@@ -438,8 +439,8 @@ func identifiersInFamilyArguments(statements []mast.Statement) map[*mast.Identif
 			if !ok {
 				return
 			}
-			callee, ok := call.Function.(*mast.Identifier)
-			if !ok || callee == nil || !isFamilyConsumer(callee.Value) {
+			calleeName, _, ok := builtinCallee(call.Function, nil)
+			if !ok || !isFamilyConsumer(calleeName) {
 				return
 			}
 			for _, arg := range call.Arguments {
@@ -494,11 +495,11 @@ func identifiersHeldForTheProgramsLife(statements []mast.Statement) map[*mast.Id
 			if !ok {
 				return
 			}
-			callee, ok := call.Function.(*mast.Identifier)
-			if !ok || callee == nil {
+			calleeName, _, ok := builtinCallee(call.Function, nil)
+			if !ok {
 				return
 			}
-			if _, serves := serveForever[callee.Value]; !serves {
+			if _, serves := serveForever[calleeName]; !serves {
 				return
 			}
 			for _, arg := range call.Arguments {
@@ -538,9 +539,14 @@ func isFamilyConsumer(name string) bool {
 }
 
 // namesSpelledIn collects every identifier and every string literal in the
-// scope. A closer reaches its handle by either spelling -- `ntfs_close(h)` or
-// `with_resource(h, "ntfs_close", ...)` -- and one is as good as the other for
-// deciding to stay quiet.
+// scope. A closer reaches its handle by any of its spellings -- `ntfs_close(h)`,
+// `ntfs.close(h)`, or `with_resource(h, "ntfs_close", ...)` -- and one is as
+// good as another for deciding to stay quiet.
+//
+// The dotted form has to be derived here rather than left to the walker:
+// visitExpressions never visits a FieldExpression's Field, so `ntfs.close`
+// would otherwise contribute only `ntfs` and the rule would report a handle
+// that is correctly closed. This rule promises never to do that.
 func namesSpelledIn(statements []mast.Statement) map[string]struct{} {
 	spelled := make(map[string]struct{})
 	for _, stmt := range statements {
@@ -554,8 +560,28 @@ func namesSpelledIn(statements []mast.Statement) map[string]struct{} {
 				if n != nil {
 					spelled[n.Value] = struct{}{}
 				}
+			case *mast.FieldExpression:
+				if n == nil || n.Field == nil || n.Field.Value == "" {
+					return
+				}
+				namespace, isIdent := n.Left.(*mast.Identifier)
+				if !isIdent || namespace == nil || namespace.Value == "" {
+					return
+				}
+				spelled[namespace.Value+"_"+n.Field.Value] = struct{}{}
 			}
 		})
 	}
 	return spelled
+}
+
+// isShadowed reports whether the file binds name for itself somewhere. It is
+// the shadow predicate builtinCallee needs, and it is the same set the rule
+// already consults directly for closer names.
+func (c *unclosedResourceCollector) isShadowed(name string) bool {
+	if c == nil {
+		return false
+	}
+	_, shadowed := c.shadowed[name]
+	return shadowed
 }

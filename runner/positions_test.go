@@ -25,7 +25,7 @@ func TestGeneratedProgramCarriesPositionsThroughTheContainer(t *testing.T) {
 
 	const password = "correct horse battery"
 	dst := filepath.Join(dir, "prog")
-	if err, _, _ := generator.Generate(src, dst, "", "", false, password, 0, 0, nil); err != nil {
+	if err, _, _ := generator.Generate(src, dst, "", "", false, password, 0, 0, nil, nil); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestPositionsSurviveTheDefaultMutationLevel(t *testing.T) {
 
 	const password = "correct horse battery"
 	dst := filepath.Join(dir, "prog")
-	if err, _, _ := generator.Generate(src, dst, "", "", false, password, 5, 99, nil); err != nil {
+	if err, _, _ := generator.Generate(src, dst, "", "", false, password, 5, 99, nil, nil); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 

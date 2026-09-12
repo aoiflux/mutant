@@ -120,6 +120,12 @@ type Parser struct {
 	nodeRanges     map[ast.Node]ast.Range
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
+
+	// blockDepth counts how many `{ ... }` bodies enclose the statement being
+	// parsed. Only `import` consults it, to reject a nested import: modules
+	// are linked into one program before it runs, so an import inside a
+	// function body could not mean "load this when control reaches here".
+	blockDepth int
 }
 
 func New(l *lexer.Lexer) *Parser {

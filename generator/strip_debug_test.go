@@ -20,16 +20,16 @@ func testSigningKey(t *testing.T) []byte {
 	return pair.PrivateKey
 }
 
-// readExample gives the test a program with enough statements for its position
-// tables to be worth measuring.
-func readExample(t *testing.T) []byte {
+// exampleProgram gives the test the path of a program with enough statements
+// for its position tables to be worth measuring.
+func exampleProgram(t *testing.T) string {
 	t.Helper()
 
-	source, err := os.ReadFile(filepath.Join("..", "examples", "binary", "static_bin_analysis.mut"))
-	if err != nil {
+	path := filepath.Join("..", "examples", "binary", "static_bin_analysis.mut")
+	if _, err := os.Stat(path); err != nil {
 		t.Skipf("example program unavailable: %s", err)
 	}
-	return source
+	return path
 }
 
 // compile honours stripDebug, which is what Generate passes `release` into.
@@ -42,15 +42,15 @@ func readExample(t *testing.T) []byte {
 // (TestGeneratedProgramCarriesPositionsThroughTheContainer). This covers the
 // piece neither of those does: that the flag is wired through at all.
 func TestCompileStripsDebugInfoWhenAsked(t *testing.T) {
-	source := readExample(t)
+	source := exampleProgram(t)
 	const password = "correct horse battery"
 
-	full, err, _, _ := compile(source, "prog.mut", false, password, 0, 7, testSigningKey(t))
+	full, err, _, _ := compile(source, nil, false, password, 0, 7, testSigningKey(t))
 	if err != nil {
 		t.Fatalf("compile with positions: %v", err)
 	}
 
-	stripped, err, _, _ := compile(source, "prog.mut", true, password, 0, 7, testSigningKey(t))
+	stripped, err, _, _ := compile(source, nil, true, password, 0, 7, testSigningKey(t))
 	if err != nil {
 		t.Fatalf("compile without positions: %v", err)
 	}

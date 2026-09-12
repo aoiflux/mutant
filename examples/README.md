@@ -85,6 +85,7 @@ sweep, not a category the file belongs to.
 ## Folder map
 
 - `examples/basics/` language syntax and control flow
+- `examples/modules/` one program built from several files with `import`
 - `examples/macros/` quote/unquote and macro expansion patterns
 - `examples/text/` text, fuzzy matching, regex pipelines
 - `examples/policy/` OPA/Rego policy loading and decisions
@@ -104,7 +105,8 @@ sweep, not a category the file belongs to.
 
 ## Suggested learning path
 
-1. Start with `examples/basics/`
+1. Start with `examples/basics/`, then `examples/modules/` once a program
+   outgrows one file
 2. Move to `examples/macros/`, `examples/text/`, and `examples/cache/`
 3. Explore `examples/policy/` for policy gates
 4. Use forensic folders (`memory`, `registry`, `email`, `network`, `binary`)

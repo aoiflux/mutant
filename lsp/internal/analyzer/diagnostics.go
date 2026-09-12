@@ -221,30 +221,33 @@ func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 	}
 
 	source := "mutant-lint"
+	// This rule has no scope model, so the only shadowing it can see is an
+	// import binding the namespace. A local `let ntfs = ...` still slips
+	// through -- exactly as it did before namespaces existed, and bolting a
+	// scope walk on here is a bigger change than this rule is worth.
+	bound := boundInNamespaces(importNamespaces(snapshot.Program.Statements))
+
 	result := make([]lsp.Diagnostic, 0, 2)
 	for node := range snapshot.Program.NodePositions {
 		call, ok := node.(*mast.CallExpression)
 		if !ok || call == nil {
 			continue
 		}
-		ident, ok := call.Function.(*mast.Identifier)
-		if !ok || ident == nil || ident.Value == "" {
+		name, anchor, ok := builtinCallee(call.Function, bound)
+		if !ok || !builtin.UnsupportedOn(name, hostGOOS) {
 			continue
 		}
-		if !builtin.UnsupportedOn(ident.Value, hostGOOS) {
-			continue
-		}
-		rng, ok := snapshot.Program.RangeOf(ident)
+		rng, ok := snapshot.Program.RangeOf(anchor)
 		if !ok {
 			continue
 		}
-		platforms, _ := builtin.PlatformSupport(ident.Value)
+		platforms, _ := builtin.PlatformSupport(name)
 		result = append(result, lsp.Diagnostic{
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: severity,
 			Source:   &source,
 			Message: fmt.Sprintf("builtin `%s` is not supported on %s (supported: %s)",
-				ident.Value, hostGOOS, strings.Join(platforms, ", ")),
+				name, hostGOOS, strings.Join(platforms, ", ")),
 		})
 	}
 
@@ -843,11 +846,28 @@ func lintUnusedDeclarations(snapshot *Snapshot, lintConfig LintConfig, skipNames
 	result := make([]lsp.Diagnostic, 0, 4)
 	candidates := collectUnusedCandidates(snapshot)
 
+	// A file whose top level declares things but never does anything cannot be
+	// a whole program: its names exist for whatever imports it. This rule sees
+	// one file, so it cannot find those uses, and reporting them unused would
+	// put a warning on every module in a project -- on exactly the names the
+	// module exists to provide.
+	//
+	// The narrow test is deliberate. A file that runs something at its top
+	// level is a program this rule can see all of, and a top-level helper
+	// nothing there calls is still reported, which is the case worth keeping.
+	exports := map[*mast.Identifier]struct{}{}
+	if !hasTopLevelAction(snapshot.Program.Statements) {
+		exports = topLevelDeclaredIdentifiers(snapshot.Program.Statements)
+	}
+
 	for _, ident := range candidates {
 		if ident == nil || ident.Value == "" || ident.Value == "_" {
 			continue
 		}
 		if _, skip := skipNames[ident.Value]; skip {
+			continue
+		}
+		if _, exported := exports[ident]; exported {
 			continue
 		}
 
@@ -893,11 +913,12 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 	}
 
 	collector := &undefinedCollector{
-		snapshot: snapshot,
-		severity: severity,
-		source:   &source,
-		builtins: knownBuiltins,
-		result:   make([]lsp.Diagnostic, 0, 4),
+		snapshot:   snapshot,
+		severity:   severity,
+		source:     &source,
+		builtins:   knownBuiltins,
+		namespaces: importNamespaces(snapshot.Program.Statements),
+		result:     make([]lsp.Diagnostic, 0, 4),
 	}
 
 	root := newDeclarationScope(nil, 0)
@@ -1095,7 +1116,13 @@ type undefinedCollector struct {
 	severity *lsp.DiagnosticSeverity
 	source   *string
 	builtins map[string]struct{}
-	result   []lsp.Diagnostic
+	// namespaces holds the name each `import` binds. They are kept as a
+	// file-wide set rather than entries in the scope chain for two reasons: an
+	// import is legal only at the top level, so there is no inner scope for one
+	// to belong to; and an unaliased import derives its namespace from the file
+	// name, so there is no identifier node to hang a declaration on.
+	namespaces map[string]struct{}
+	result     []lsp.Diagnostic
 }
 
 func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
@@ -1169,6 +1196,9 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			return
 		}
 		if _, ok := c.builtins[node.Value]; ok {
+			return
+		}
+		if _, ok := c.namespaces[node.Value]; ok {
 			return
 		}
 		if _, ok := current.find(node.Value); ok {
@@ -1249,9 +1279,26 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			c.collectExpression(node.Value, current)
 		}
 	case *mast.FieldExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+		if node.Left == nil {
+			return
 		}
+		// The left of a field access is usually a value and has to be checked
+		// like any other. Two shapes are not: a namespace an import bound, and
+		// a builtin family -- `str.upper` is str_upper, so `str` names no
+		// variable and reporting it undefined would be a hard error on a
+		// correct program.
+		if namespace, isIdent := node.Left.(*mast.Identifier); isIdent && namespace != nil && namespace.Value != "" {
+			if _, imported := c.namespaces[namespace.Value]; imported {
+				return
+			}
+			// Guarded on the name being unbound, so a local `let str = "x"`
+			// followed by `str.upper` is still the field access it looks like.
+			if _, shadowed := current.find(namespace.Value); !shadowed &&
+				node.Field != nil && isLiveBuiltin(namespace.Value+"_"+node.Field.Value) {
+				return
+			}
+		}
+		c.collectExpression(node.Left, current)
 	case *mast.StructLiteral:
 		if node.Name != nil {
 			c.collectExpression(node.Name, current)
@@ -1349,6 +1396,7 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
+		namespaces:      importNamespaces(snapshot.Program.Statements),
 		result:          make([]lsp.Diagnostic, 0, 2),
 	}
 
@@ -1382,8 +1430,30 @@ type builtinCallCollector struct {
 	source          *string
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
-	result          []lsp.Diagnostic
-	pairCandidates  []pairBindingCandidate
+
+	// namespaces is the set of names this file's imports bind. An imported
+	// `fs` is a module, so `fs.read(...)` is that module's function and not
+	// the builtin fs_read -- and checking it against fs_read's contract would
+	// be a diagnostic about the wrong function entirely.
+	namespaces map[string]struct{}
+
+	result         []lsp.Diagnostic
+	pairCandidates []pairBindingCandidate
+}
+
+// boundIn returns the shadow predicate builtinCallee needs: a name is taken if
+// some enclosing scope declares it, or if an import bound it as a namespace.
+func (c *builtinCallCollector) boundIn(current *declarationScope) func(string) bool {
+	return func(name string) bool {
+		if _, imported := c.namespaces[name]; imported {
+			return true
+		}
+		if current == nil {
+			return false
+		}
+		_, declared := current.find(name)
+		return declared
+	}
 }
 
 func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
@@ -1485,14 +1555,19 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil {
 			// Macro special forms (quote/unquote/...) are not builtin calls; do
-			// not arity-check them, but still walk their arguments.
+			// not arity-check them, but still walk their arguments. Keyed on
+			// the bare spelling only: there is no namespaced quote.
 			if isMacroSpecialFormName(ident.Value) {
 				for _, arg := range node.Arguments {
 					c.collectExpression(arg, current)
 				}
 				return
 			}
-			c.checkCall(ident, node.Arguments, current)
+		}
+		// Either spelling: fs_read(p) and fs.read(p) are one call, so both get
+		// checked against one contract.
+		if name, anchor, ok := builtinCallee(node.Function, c.boundIn(current)); ok {
+			c.checkCall(name, anchor, node.Arguments)
 		}
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
@@ -1580,23 +1655,23 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 // It is reported at the call and never suppressed by the arity or type rules:
 // the call may be perfectly well-formed, and usually is. The tag is what makes
 // editors strike the name through.
-func (c *builtinCallCollector) checkDeprecated(ident *mast.Identifier) {
-	if c == nil || c.deprecatedSev == nil || ident == nil {
+func (c *builtinCallCollector) checkDeprecated(name string, anchor mast.Node) {
+	if c == nil || c.deprecatedSev == nil || name == "" || anchor == nil {
 		return
 	}
-	replacement, deprecated := builtin.DeprecatedBy(ident.Value)
+	replacement, deprecated := builtin.DeprecatedBy(name)
 	if !deprecated {
 		return
 	}
-	rng, ok := c.snapshot.Program.RangeOf(ident)
+	rng, ok := c.snapshot.Program.RangeOf(anchor)
 	if !ok {
 		return
 	}
 
-	message := fmt.Sprintf("%s is deprecated.", ident.Value)
+	message := fmt.Sprintf("%s is deprecated.", name)
 	if replacement != "" {
 		message = fmt.Sprintf("%s is deprecated -- use %s instead. The old name keeps working, so this is safe to change at your own pace.",
-			ident.Value, replacement)
+			name, replacement)
 	}
 
 	c.result = append(c.result, lsp.Diagnostic{
@@ -1617,24 +1692,20 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 	if !ok || call.Function == nil {
 		return
 	}
-	ident, ok := call.Function.(*mast.Identifier)
-	if !ok || ident.Value == "" {
+	name, anchor, ok := builtinCallee(call.Function, c.boundIn(current))
+	if !ok {
 		return
 	}
-	// A user/local binding of this name shadows the builtin.
-	if _, shadowed := current.find(ident.Value); shadowed {
-		return
-	}
-	if _, live := c.builtins[ident.Value]; !live {
+	if _, live := c.builtins[name]; !live {
 		return
 	}
 
-	spec, declared := builtin.ReturnSpec(ident.Value)
+	spec, declared := builtin.ReturnSpec(name)
 	if !declared || spec.Pair {
 		return
 	}
 
-	rng, ok := c.snapshot.Program.RangeOf(ident)
+	rng, ok := c.snapshot.Program.RangeOf(anchor)
 	if !ok {
 		return
 	}
@@ -1656,42 +1727,45 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 		Severity: c.returnSeverity,
 		Source:   c.source,
 		Message: fmt.Sprintf("%s returns a single %s, not a (value, err) pair: %s. Bind one name.",
-			ident.Value, kinds, consequence),
+			name, kinds, consequence),
 	})
 }
 
-func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Expression, current *declarationScope) {
-	if ident == nil || ident.Value == "" {
-		return
-	}
-	// A user/local binding of this name shadows the builtin — not a builtin call.
-	if _, ok := current.find(ident.Value); ok {
+// checkCall checks one call against the builtin contract for name.
+//
+// name is the builtin's flat registry name whichever way the call was spelled,
+// and anchor is the node the squiggle should cover -- the identifier for
+// fs_read(p), the whole `fs.read` for the dotted form. Shadowing has already
+// been decided by builtinCallee, which is what lets one predicate serve every
+// rule instead of each one spelling it slightly differently.
+func (c *builtinCallCollector) checkCall(name string, anchor mast.Node, args []mast.Expression) {
+	if name == "" || anchor == nil {
 		return
 	}
 	// Only real builtins; a stale table key is inert.
-	if _, ok := c.builtins[ident.Value]; !ok {
+	if _, ok := c.builtins[name]; !ok {
 		return
 	}
 
-	c.checkDeprecated(ident)
+	c.checkDeprecated(name, anchor)
 
-	if arity, ok := builtinArityFor(ident.Value); ok && !arity.accepts(len(args)) {
+	if arity, ok := builtinArityFor(name); ok && !arity.accepts(len(args)) {
 		// The count is wrong whether or not the rule that reports it is on, so
 		// the type check is suppressed either way.
 		if c.aritySeverity != nil {
-			if rng, ok := c.snapshot.Program.RangeOf(ident); ok {
+			if rng, ok := c.snapshot.Program.RangeOf(anchor); ok {
 				c.result = append(c.result, lsp.Diagnostic{
 					Range:    localprotocol.ToLSPRange(rng),
 					Severity: c.aritySeverity,
 					Source:   c.source,
-					Message:  arity.message(ident.Value, len(args)),
+					Message:  arity.message(name, len(args)),
 				})
 			}
 		}
 		return
 	}
 
-	c.checkArgumentTypes(ident, args)
+	c.checkArgumentTypes(name, args)
 }
 
 // checkArgumentTypes flags an argument whose kind the parameter in that position
@@ -1708,12 +1782,12 @@ func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Exp
 //     (argumentTypeIsCertain);
 //  4. that type is expressible as a kind — structs, enums, and errors have no
 //     kind to compare against and are skipped.
-func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args []mast.Expression) {
+func (c *builtinCallCollector) checkArgumentTypes(name string, args []mast.Expression) {
 	if c.argTypeSeverity == nil || len(args) == 0 {
 		return
 	}
 
-	params, ok := builtin.ParamSpecs(ident.Value)
+	params, ok := builtin.ParamSpecs(name)
 	if !ok || len(params) == 0 || !argumentCountFitsParams(params, len(args)) {
 		return
 	}
@@ -1738,7 +1812,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			continue
 		}
 		if param.Accepts(kind) {
-			c.checkArrayElements(ident, i, param, arg)
+			c.checkArrayElements(name, i, param, arg)
 			continue
 		}
 		rng, ok := c.snapshot.Program.RangeOf(arg)
@@ -1749,7 +1823,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
-			Message:  argTypeMessage(ident.Value, i+1, param, kind),
+			Message:  argTypeMessage(name, i+1, param, kind),
 			Data:     ArgTypeDiagnosticData(param, kind),
 		})
 	}
@@ -1765,7 +1839,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 // elements are read straight off the syntax. Each element is then held to the
 // same certainty rule as a top-level argument, so an element that is itself a
 // call or an arithmetic expression is skipped rather than guessed at.
-func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
+func (c *builtinCallCollector) checkArrayElements(name string, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
 	if len(param.Elem) == 0 {
 		return
 	}
@@ -1794,7 +1868,7 @@ func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argInd
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
-			Message:  elementTypeMessage(ident.Value, argIndex+1, param, elementKind),
+			Message:  elementTypeMessage(name, argIndex+1, param, elementKind),
 			Data:     ElementTypeDiagnosticData(param, elementKind),
 		})
 	}
@@ -1826,6 +1900,50 @@ func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]stru
 		names[name] = struct{}{}
 	}
 	return names
+}
+
+// hasTopLevelAction reports whether the file's top level does anything beyond
+// declaring names -- a call, a loop, a conditional, a bare expression.
+//
+// `import` counts as a declaration: a file that only imports and declares is
+// still a module, and treating the import as action would put the warnings
+// straight back on the module that imports another one.
+func hasTopLevelAction(statements []mast.Statement) bool {
+	for _, stmt := range statements {
+		switch stmt.(type) {
+		case *mast.LetStatement, *mast.StructStatement, *mast.EnumStatement, *mast.ImportStatement:
+			continue
+		case nil:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// topLevelDeclaredIdentifiers returns the identifier nodes a file's top-level
+// `let` statements bind. Nodes rather than names: an inner declaration that
+// happens to share a name with a top-level one is a different binding and is
+// still reportable.
+func topLevelDeclaredIdentifiers(statements []mast.Statement) map[*mast.Identifier]struct{} {
+	declared := make(map[*mast.Identifier]struct{}, len(statements))
+	for _, stmt := range statements {
+		let, ok := stmt.(*mast.LetStatement)
+		if !ok || let == nil {
+			continue
+		}
+		names := let.Names
+		if len(names) == 0 && let.Name != nil {
+			names = []*mast.Identifier{let.Name}
+		}
+		for _, ident := range names {
+			if ident != nil {
+				declared[ident] = struct{}{}
+			}
+		}
+	}
+	return declared
 }
 
 func collectUnusedCandidates(snapshot *Snapshot) []*mast.Identifier {

@@ -82,9 +82,28 @@ const (
 // the macro's definition rather than its call. Line already points at the call.
 type TracebackFrame struct {
 	Function string
-	File     string
-	Line     int
-	Column   int
+
+	// File and Line are what a reader is shown: the module the instruction
+	// came from and the line within that file.
+	File string
+	Line int
+
+	Column int
+
+	// AbsLine is the same instruction's line in ByteCode.SourceText, the
+	// concatenated source the program was compiled from.
+	//
+	// Line cannot serve both purposes once a program is linked from several
+	// files. It is a display number, and it is also what the snippet renderer
+	// indexes the carried source by -- and after linking those are different
+	// numbers. Using one for both is not a formatting bug: it prints a correct
+	// header over a line of source from another file entirely, which is a
+	// plausible, confident, wrong answer in the one place a reader has nothing
+	// else to go on.
+	//
+	// For a single-file program, and for an artifact whose debug info was
+	// stripped, AbsLine equals Line and nothing changes.
+	AbsLine int
 
 	EndLine   int
 	EndColumn int
@@ -127,8 +146,35 @@ func (f TracebackFrame) String() string {
 
 // sameSite reports whether two frames are the same call at the same place,
 // which is what makes a repeat a repeat.
+//
+// File is part of the comparison. It used to be ignored, which was harmless
+// while every frame carried the same file name and wrong the moment they did
+// not: two same-named functions on the same line of two different modules
+// would read as one repeating call, and collapseCycles would fold a real
+// two-module call chain into a bogus "repeated 2 more times".
 func (f TracebackFrame) sameSite(other TracebackFrame) bool {
-	return f.Function == other.Function && f.Line == other.Line && f.Column == other.Column
+	return f.Function == other.Function &&
+		f.File == other.File &&
+		f.Line == other.Line &&
+		f.Column == other.Column
+}
+
+// resolveLine maps a line of the linked source blob to the file it came from
+// and its line within that file.
+//
+// Without module spans -- a single-file program, or an artifact whose debug
+// info was stripped -- the blob is the file, so the line is returned unchanged
+// under the program's own name. That is the honest answer rather than a
+// fallback: there is nothing to disambiguate.
+func (vm *VM) resolveLine(absLine int) (file string, line int) {
+	if vm == nil || vm.bytecode == nil {
+		return "", absLine
+	}
+
+	if path, local, ok := vm.bytecode.ModuleAt(absLine); ok {
+		return path, local
+	}
+	return vm.bytecode.SourceFile, absLine
 }
 
 // Traceback renders the call stack as it stands right now, innermost first.
@@ -141,11 +187,6 @@ func (vm *VM) Traceback() []TracebackFrame {
 		return nil
 	}
 
-	file := ""
-	if vm.bytecode != nil {
-		file = vm.bytecode.SourceFile
-	}
-
 	frames := make([]TracebackFrame, 0, vm.frameIndex)
 	for i := vm.frameIndex - 1; i >= 0; i-- {
 		frame := vm.frames[i]
@@ -154,7 +195,7 @@ func (vm *VM) Traceback() []TracebackFrame {
 		}
 		fn := frame.cl.Fn
 
-		entry := TracebackFrame{Function: fn.Name, File: file, Args: vm.frameArguments(frame)}
+		entry := TracebackFrame{Function: fn.Name, Args: vm.frameArguments(frame)}
 		if entry.Function == "" {
 			entry.Function = anonymousFrameName
 		}
@@ -164,14 +205,31 @@ func (vm *VM) Traceback() []TracebackFrame {
 		// position, only a name.
 		if frame.ip >= 0 {
 			if line, col, ok := fn.LineTable.At(frame.ip); ok {
-				entry.Line, entry.Column = line, col
+				// The tables record lines in the linked blob. Which file that
+				// is, and which line of it, is resolved per frame: a stack that
+				// crosses a module boundary has to name both files, and the one
+				// stamped on the program as a whole is only right for one of
+				// them.
+				entry.AbsLine = line
+				entry.File, entry.Line = vm.resolveLine(line)
+				entry.Column = col
 			}
 			if line, col, ok := fn.EndTable.At(frame.ip); ok {
-				entry.EndLine, entry.EndColumn = line, col
+				// End is converted through the same mapping so the renderer's
+				// EndLine-versus-Line comparison stays within one coordinate
+				// system.
+				_, entry.EndLine = vm.resolveLine(line)
+				entry.EndColumn = col
 			}
 			if line, col, ok := fn.MacroTable.At(frame.ip); ok {
-				entry.MacroLine, entry.MacroColumn = line, col
+				_, entry.MacroLine = vm.resolveLine(line)
+				entry.MacroColumn = col
 			}
+		}
+
+		// A frame with no position still names the program it belongs to.
+		if entry.File == "" && vm.bytecode != nil {
+			entry.File = vm.bytecode.SourceFile
 		}
 
 		frames = append(frames, entry)
@@ -414,12 +472,23 @@ func truncateEntries(entries []tracebackEntry) []tracebackEntry {
 //
 // The gutter is built to the width of the line number so the bar under a
 // three-digit line still lines up with the one under a one-digit line.
+// The line quoted is found by AbsLine and labelled with Line. Those are the
+// same number for a single-file program and differ once modules are linked:
+// source is the concatenated blob, while the gutter has to show the number the
+// reader will find in their editor.
 func snippetFor(frame TracebackFrame, source string) []string {
 	if frame.Line <= 0 || source == "" {
 		return nil
 	}
 
-	text, ok := sourceLine(source, frame.Line)
+	lookup := frame.AbsLine
+	if lookup <= 0 {
+		// A frame built before AbsLine existed, or by hand in a test. Its Line
+		// is already an index into the source it was paired with.
+		lookup = frame.Line
+	}
+
+	text, ok := sourceLine(source, lookup)
 	if !ok || strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -536,8 +605,15 @@ func (vm *VM) stampError(err *object.Error) {
 	err.File, err.Line, err.Column = top.File, top.Line, top.Column
 	err.EndLine, err.EndColumn = top.EndLine, top.EndColumn
 
+	// The quoted line is found by AbsLine, while err.Line above carries the
+	// number within top.File. Reading the blob by the display line would quote
+	// whatever another module happens to have at that offset.
 	if vm.bytecode != nil {
-		if text, ok := sourceLine(vm.bytecode.SourceText, top.Line); ok {
+		lookup := top.AbsLine
+		if lookup <= 0 {
+			lookup = top.Line
+		}
+		if text, ok := sourceLine(vm.bytecode.SourceText, lookup); ok {
 			err.SourceLine = text
 		}
 	}

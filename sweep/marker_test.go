@@ -228,3 +228,32 @@ func TestAnOrdinaryExampleNeedsNoMarker(t *testing.T) {
 		t.Fatalf("an ordinary example was asked for a marker: %s", err)
 	}
 }
+
+// TestCalledNamesSeesNamespacedCalls guards a real false negative: `net.serve`
+// resolves to the builtin net_serve, and a scan that only recorded `serve`
+// would let a port-binding example through unmarked -- which is how a sweep
+// hangs rather than reports.
+func TestCalledNamesSeesNamespacedCalls(t *testing.T) {
+	names := calledNames("let c = net.serve(8080);\nlet p = plain(1);\n")
+
+	for _, want := range []string{"serve", "net.serve", "net_serve", "plain"} {
+		if !names[want] {
+			t.Errorf("calledNames did not record %q; got %v", want, names)
+		}
+	}
+	if names["net_plain"] || names["net.plain"] {
+		t.Errorf("an unqualified call was recorded as namespaced; got %v", names)
+	}
+}
+
+// TestServeShapeSeesANamespacedListener is the same fix at the level that
+// matters: Check has to demand a marker for a file that binds a port, however
+// the call is spelled.
+func TestServeShapeSeesANamespacedListener(t *testing.T) {
+	if _, listener := serveShape("net.listen(\"127.0.0.1:0\");\n"); !listener {
+		t.Fatal("a namespaced net.listen did not read as opening a listener")
+	}
+	if _, listener := serveShape("let x = 1;\n"); listener {
+		t.Fatal("a program that opens nothing read as a listener")
+	}
+}

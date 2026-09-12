@@ -19,6 +19,27 @@ type Position struct {
 // IsValid reports whether p carries meaningful position information.
 func (p Position) IsValid() bool { return p.Line > 0 }
 
+// Shift moves p down by lines lines and forward by offset bytes.
+//
+// Linking concatenates the modules of a program into one source blob and
+// compiles that, so a position recorded against an individual file has to be
+// rebased onto the blob before the compiler ever sees it. Column is untouched:
+// concatenation happens at line boundaries, so a module's first column is
+// still column 1.
+//
+// An invalid position stays invalid. A node with no recorded position must not
+// acquire a plausible-looking one just because its file was linked after
+// another -- "unknown" is the honest answer, and a fabricated line is worse
+// than none.
+func (p Position) Shift(lines, offset int) Position {
+	if !p.IsValid() {
+		return p
+	}
+	p.Line += lines
+	p.Offset += offset
+	return p
+}
+
 // CommentKind distinguishes the comment syntaxes the lexer recognises.
 // Mutant currently only has line comments, but the kind is recorded
 // explicitly so the formatter does not have to re-inspect the text and so
@@ -158,6 +179,7 @@ const (
 	CONTINUE = "CONTINUE"
 	STRUCT   = "STRUCT"
 	ENUM     = "ENUM"
+	IMPORT   = "IMPORT"
 )
 
 var keywords = map[string]TokenType{
@@ -174,6 +196,7 @@ var keywords = map[string]TokenType{
 	"continue": CONTINUE,
 	"struct":   STRUCT,
 	"enum":     ENUM,
+	"import":   IMPORT,
 }
 
 // LookupIdent function takes in an identifier(string)

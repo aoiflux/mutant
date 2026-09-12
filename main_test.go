@@ -154,7 +154,7 @@ func TestPrepareGenRun(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			src, request, mutation, seed, err := prepareGenRun(test.args)
+			src, request, mutation, seed, _, err := prepareGenRun(test.args)
 			if err != nil {
 				t.Fatalf("prepareGenRun(%v) returned error: %v", test.args, err)
 			}
@@ -187,7 +187,7 @@ func TestPrepareGenRun(t *testing.T) {
 }
 
 func TestPrepareRelease(t *testing.T) {
-	src, goos, goarch, request, mutation, seed, err := prepareRelease([]string{
+	src, goos, goarch, request, mutation, seed, _, err := prepareRelease([]string{
 		"mutant",
 		RELEASECMD,
 		"hello.mut",
@@ -346,7 +346,7 @@ func TestRunDispatchesGenCommand(t *testing.T) {
 	var gotSeed int64
 	var gotRelease bool
 
-	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
+	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, modulePaths []string) int {
 		called = true
 		gotSrc = src
 		gotPassword = password
@@ -418,7 +418,7 @@ func TestRunDispatchesReleaseCommand(t *testing.T) {
 	var gotPassword string
 	var gotRelease bool
 
-	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
+	runtimeDeps.compileCode = func(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, modulePaths []string) int {
 		called = true
 		gotSrc = src
 		gotOS = goos
@@ -578,7 +578,7 @@ func TestDevModeCompilesAndRunsWithoutAPassword(t *testing.T) {
 			t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
 
 			gotPassword := ""
-			runtimeDeps.compileCode = func(_, _, _ string, _ bool, password string, _ int, _ int64) int {
+			runtimeDeps.compileCode = func(_, _, _ string, _ bool, password string, _ int, _ int64, _ []string) int {
 				gotPassword = password
 				return 0
 			}
@@ -691,7 +691,7 @@ func TestReleaseCommandsRefuseDevMode(t *testing.T) {
 			t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
 
 			built := false
-			runtimeDeps.compileCode = func(string, string, string, bool, string, int, int64) int {
+			runtimeDeps.compileCode = func(string, string, string, bool, string, int, int64, []string) int {
 				built = true
 				return 0
 			}
@@ -788,7 +788,7 @@ func withRuntimeDeps(deps cliRuntime) func() {
 func stubRuntimeDeps() cliRuntime {
 	return cliRuntime{
 		runRepl:               func(string, bool, string) {},
-		compileCode:           func(string, string, string, bool, string, int, int64) int { return 0 },
+		compileCode:           func(string, string, string, bool, string, int, int64, []string) int { return 0 },
 		generateReleaseAssets: func(string) int { return 0 },
 		runCode:               func(string, runner.Options) int { return 0 },
 		hasStandalonePayload:  func(string) (bool, error) { return false, nil },

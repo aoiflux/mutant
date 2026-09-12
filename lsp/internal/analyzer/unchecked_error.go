@@ -154,17 +154,17 @@ func (c *uncheckedErrorCollector) errorBindings(statements []mast.Statement) []e
 		if !ok {
 			return
 		}
-		callee, ok := call.Function.(*mast.Identifier)
-		if !ok || callee == nil || callee.Value == "" {
+		calleeName, _, ok := builtinCallee(call.Function, func(name string) bool {
+			_, shadowed := c.shadowed[name]
+			return shadowed
+		})
+		if !ok {
 			return
 		}
-		if _, shadowed := c.shadowed[callee.Value]; shadowed {
+		if _, live := c.builtins[calleeName]; !live {
 			return
 		}
-		if _, live := c.builtins[callee.Value]; !live {
-			return
-		}
-		spec, declared := builtin.ReturnSpec(callee.Value)
+		spec, declared := builtin.ReturnSpec(calleeName)
 		if !declared || !spec.Pair {
 			return
 		}
@@ -192,7 +192,7 @@ func (c *uncheckedErrorCollector) errorBindings(statements []mast.Statement) []e
 		}
 
 		found = append(found, errorBinding{
-			callee:    callee.Value,
+			callee:    calleeName,
 			name:      errorName,
 			offset:    rng.Start.Offset,
 			value:     names[0],

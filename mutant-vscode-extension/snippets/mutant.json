@@ -49,6 +49,16 @@
     "body": ["enum ${1:Name} { ${2:A}, ${3:B} };"],
     "description": "enum declaration"
   },
+  "import": {
+    "prefix": "import",
+    "body": ["import \"${1:lib/util.mut}\";"],
+    "description": "import a module (binds the file's base name as the namespace)"
+  },
+  "import as": {
+    "prefix": "importas",
+    "body": ["import ${1:ns} \"${2:lib/util.mut}\";"],
+    "description": "import a module under a chosen namespace"
+  },
   "macro": {
     "prefix": "macro",
     "body": ["let ${1:name} = macro(${2:params}) {", "\t$0", "};"],

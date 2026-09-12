@@ -182,6 +182,8 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := keywordHoverText("macro"); ok {
 			return text, rng, true
 		}
+	case *mast.ImportStatement:
+		return importHoverText(n), rng, true
 	}
 
 	return fmt.Sprintf("%T", node), rng, true
@@ -532,21 +534,11 @@ func nodeSpecificity(node mast.Node) int {
 	}
 }
 
-var keywords = []string{
-	"fn",
-	"let",
-	"true",
-	"false",
-	"if",
-	"else",
-	"return",
-	"macro",
-	"for",
-	"break",
-	"continue",
-	"struct",
-	"enum",
-}
+// keywords is the completion list, taken from the lexer rather than written
+// out again here. The hand-maintained copy had drifted -- it was missing
+// `import` the day the keyword was added -- and a list that has to be updated
+// in two places is a list that will be wrong in one of them.
+var keywords = token.KeywordLiterals()
 
 var semanticTokenTypes = []string{"keyword", "string", "number", "function", "variable", "type", "enum", "enumMember", "parameter", "property", "operator", "punctuation"}
 
@@ -728,7 +720,7 @@ func semanticTokenTypeForNode(node mast.Node, overrides map[mast.Node]semanticTo
 		switch token.LookupIdent(n.Value) {
 		case token.IDENT:
 			return semanticTokenTypeIndex["variable"], 0, true
-		case token.TRUE, token.FALSE, token.FUNCTION, token.LET, token.IF, token.ELSE, token.RETURN, token.MACRO, token.FOR, token.BREAK, token.CONTINUE, token.STRUCT, token.ENUM:
+		case token.TRUE, token.FALSE, token.FUNCTION, token.LET, token.IF, token.ELSE, token.RETURN, token.MACRO, token.FOR, token.BREAK, token.CONTINUE, token.STRUCT, token.ENUM, token.IMPORT:
 			return semanticTokenTypeIndex["keyword"], 0, true
 		default:
 			return semanticTokenTypeIndex["variable"], 0, true

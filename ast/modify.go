@@ -141,6 +141,11 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Variants {
 			node.Variants[i], _ = Modify(node.Variants[i], modifier).(*Identifier)
 		}
+	case *ImportStatement:
+		// Deliberately not descended into. An import path is resolved before
+		// macros are defined, so rewriting it here could name a file that was
+		// never read -- and the alias is a binding, not a reference a macro
+		// template should be able to capture.
 	}
 
 	// Deliberately no *MacroLiteral case. A macro body is a template, expanded

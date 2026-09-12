@@ -11,6 +11,8 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	start := p.startMark()
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
 	p.nextToken()
 	for !p.curTokenIs(token.RBRACE) && !p.curTokenIs(token.EOF) {
 		beforeErrCount := len(p.errors)
@@ -76,6 +78,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseStructStatement()
 	case token.ENUM:
 		return p.parseEnumStatement()
+	case token.IMPORT:
+		return p.parseImportStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -92,6 +96,50 @@ func (p *Parser) parseBreakStatement() *ast.BreakStatement {
 func (p *Parser) parseContinueStatement() *ast.ContinueStatement {
 	start := p.startMark()
 	stmt := &ast.ContinueStatement{Token: p.curToken}
+	p.consumeStatementTerminator(stmt)
+	p.recordRange(stmt, start)
+	return stmt
+}
+
+// parseImportStatement parses `import "path.mut";` and `import ns "path.mut";`.
+//
+// The path is required to be a string literal rather than an expression. An
+// import is resolved and compiled before the program runs, so there is no point
+// at which a computed path could be evaluated -- accepting one would mean
+// accepting source that can never work.
+//
+// For the same reason an import is only legal at the top level of a file. The
+// module graph is walked and linked before a single instruction executes, so
+// an import nested in a function body or loop would be loaded regardless of
+// whether control ever reached it -- a statement whose position implies a
+// conditionality the language cannot honour.
+func (p *Parser) parseImportStatement() *ast.ImportStatement {
+	if p.blockDepth > 0 {
+		p.appendError(p.curToken, "import is only allowed at the top level of a file, not inside a block")
+		return nil
+	}
+
+	start := p.startMark()
+	stmt := &ast.ImportStatement{Token: p.curToken}
+
+	if p.peekTokenIs(token.IDENT) {
+		p.nextToken()
+		aliasStart := p.startMark()
+		stmt.Alias = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.recordRange(stmt.Alias, aliasStart)
+	}
+
+	if !p.peekTokenIs(token.STRING) {
+		msg := fmt.Sprintf("expected an import path as a quoted string, got %s", p.peekToken.Type)
+		p.appendError(p.peekToken, msg)
+		return nil
+	}
+	p.nextToken()
+
+	pathStart := p.startMark()
+	stmt.Path = &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	p.recordRange(stmt.Path, pathStart)
+
 	p.consumeStatementTerminator(stmt)
 	p.recordRange(stmt, start)
 	return stmt

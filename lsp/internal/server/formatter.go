@@ -215,6 +215,8 @@ func (p *printer) statement(stmt mast.Statement, level int) string {
 		return prefix + "break"
 	case *mast.ContinueStatement:
 		return prefix + "continue"
+	case *mast.ImportStatement:
+		return prefix + importStatement(node)
 	default:
 		return prefix + strings.TrimSpace(stmt.String())
 	}
@@ -418,6 +420,24 @@ func letNames(node *mast.LetStatement) string {
 		return strings.Join(parts, ", ")
 	}
 	return identValue(node.Name)
+}
+
+// importStatement renders `import "path.mut"` or `import ns "path.mut"`.
+//
+// It deliberately stops short of the terminator: statements() appends `;`
+// for every statement whose RequiresSemicolon reports true, so emitting one
+// here would double it.
+func importStatement(node *mast.ImportStatement) string {
+	var b strings.Builder
+	b.WriteString("import ")
+	if alias := identValue(node.Alias); alias != "" {
+		b.WriteString(alias)
+		b.WriteString(" ")
+	}
+	if node.Path != nil {
+		b.WriteString(quoteString(node.Path.Value))
+	}
+	return b.String()
 }
 
 func identValue(ident *mast.Identifier) string {

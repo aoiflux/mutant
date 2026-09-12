@@ -3,6 +3,7 @@ package generator
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"mutant/ast"
 	"mutant/builtin"
@@ -10,10 +11,9 @@ import (
 	"mutant/errrs"
 	"mutant/evaluator"
 	"mutant/global"
-	"mutant/lexer"
+	"mutant/module"
 	"mutant/mutil"
 	"mutant/object"
-	"mutant/parser"
 	"mutant/security"
 	"mutant/serialize"
 	"os"
@@ -34,11 +34,11 @@ import (
 // the development key must resolve it before calling. (M-1)
 //
 // privateKey: Ed25519 private key for signing (if nil, one is loaded or bootstrapped)
-func Generate(srcpath, dstpath, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) (error, errrs.ErrorType, []string) {
-	data, err := os.ReadFile(srcpath)
-	if err != nil {
-		return err, errrs.ERROR, nil
-	}
+// modulePaths are the directories from repeated --module-path flags, searched
+// in order for any import that does not resolve relative to the file that
+// wrote it. Nil means relative resolution only.
+func Generate(srcpath, dstpath, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte, modulePaths []string) (error, errrs.ErrorType, []string) {
+	var err error
 
 	// Generate signing key if not provided
 	if privateKey == nil {
@@ -61,9 +61,9 @@ func Generate(srcpath, dstpath, goos, goarch string, release bool, password stri
 	// Release artifacts ship without source positions; see stripDebugInfo in
 	// compile. A local compile keeps them, because the program is about to run
 	// on the machine that holds the source anyway.
-	bytecode, err, errtype, errors := compile(data, srcpath, release, password, mutationLevel, mutationSeed, privateKey)
+	bytecode, err, errtype, details := compile(srcpath, modulePaths, release, password, mutationLevel, mutationSeed, privateKey)
 	if err != nil {
-		return err, errtype, errors
+		return err, errtype, details
 	}
 
 	if release {
@@ -107,50 +107,73 @@ func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 	return privateKey, nil
 }
 
-// compile turns source into an encoded, encrypted bytecode image.
+// compile turns the program rooted at entrypath into an encoded, encrypted
+// bytecode image.
 //
-// srcpath is recorded in the image so a runtime error can name the file it came
-// from. stripDebug removes that name and every line table before encoding: line
-// tables are a reverse-engineering aid, and a release artifact is the thing that
-// leaves the machine. Polymorphism strips them too, unconditionally and for a
-// second reason -- see ByteCode.StripDebugInfo.
-func compile(data []byte, srcpath string, stripDebug bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
+// The entry path is recorded in the image so a runtime error can name the
+// program it came from. stripDebug removes that name and every line table
+// before encoding: line tables are a reverse-engineering aid, and a release
+// artifact is the thing that leaves the machine. Polymorphism strips them too,
+// unconditionally and for a second reason -- see ByteCode.StripDebugInfo.
+//
+// The module graph is walked, linked and driven through ONE compiler, with
+// ByteCode() called exactly once. That is forced by the bytecode format, not
+// chosen: the polymorphic engine shuffles the whole constant pool and rewrites
+// every operand against it, the opcode permutation ships as a single 256-entry
+// table for the entire program, and jumps carry absolute stream offsets. Two
+// separately compiled modules could not be merged afterwards without each
+// indexing the other's constants.
+func compile(entrypath string, modulePaths []string, stripDebug bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
+	graph, err := module.Load(entrypath, modulePaths)
+	if err != nil {
+		return nil, err, moduleErrorType(err), moduleErrorDetails(err)
+	}
+	linked := graph.Link()
+
 	constants := []object.Object{}
 	symbolTable := compiler.NewSymbolTable()
 	for i, v := range builtin.Builtins {
 		symbolTable.DefineBuiltin(i, v.Name)
 	}
 
-	l := lexer.New(string(data))
-	p := parser.New(l)
-	program := p.ParseProgram()
-
-	if len(p.Errors()) != 0 {
-		return nil, fmt.Errorf("pareser error"), errrs.PARSER_ERROR, p.Errors()
-	}
-
-	macroEnv := object.NewEnvironment()
-	evaluator.DefineMacros(program, macroEnv)
-	expandedNode, expandErr := evaluator.ExpandMacros(program, macroEnv)
-	if expandErr != nil {
-		return nil, expandErr, errrs.COMPILER_ERROR, nil
-	}
-	expanded, ok := expandedNode.(*ast.Program)
-	if !ok || expanded == nil {
-		return nil, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
-	}
-
 	comp := compiler.NewWithState(symbolTable, constants)
-	comp.SetSourceFile(srcpath)
-	comp.SetSourceText(string(data))
+	// SourceFile stays the entry: it is the program's identity. Which file any
+	// individual line came from is what ModuleSpans answers.
+	comp.SetSourceFile(linked.EntryPath)
+	comp.SetSourceText(linked.SourceText)
+	comp.SetModuleSpans(linked.Spans)
 	comp.EnableSecurityOpcodeInjection()
 	// The same seed the polymorphic engine gets, applied whatever the mutation
 	// level: the injected security checks are part of what --seed has to
 	// reproduce, and they are emitted even at level 0.
 	comp.SetSecurityCheckSeed(resolvePolymorphismSeed(mutationSeed))
 	configureCompilerPolymorphism(comp, mutationLevel, mutationSeed)
-	if err := comp.Compile(expanded); err != nil {
-		return nil, err, errrs.COMPILER_ERROR, nil
+
+	// One macro environment for the whole program, filled in link order, so a
+	// macro a module defines is available to everything that imports it and to
+	// nothing it imports. Expansion runs after linking has already rebased the
+	// positions, which is what puts absolute lines into the macro table.
+	macroEnv := object.NewEnvironment()
+	for _, mod := range linked.Modules {
+		// Each module gets its own top-level scope, so two files may both
+		// declare `helper` and `ns.name` knows which one it means. The order is
+		// the graph's post-order, so every module a file imports has already
+		// been entered and compiled by the time that file names it.
+		comp.EnterModule(mod.Scope())
+
+		evaluator.DefineMacros(mod.Program, macroEnv)
+		expandedNode, expandErr := evaluator.ExpandMacros(mod.Program, macroEnv)
+		if expandErr != nil {
+			return nil, expandErr, errrs.COMPILER_ERROR, nil
+		}
+		expanded, ok := expandedNode.(*ast.Program)
+		if !ok || expanded == nil {
+			return nil, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
+		}
+
+		if err := comp.Compile(expanded); err != nil {
+			return nil, err, errrs.COMPILER_ERROR, nil
+		}
 	}
 
 	bytecode := comp.ByteCode()
@@ -164,6 +187,31 @@ func compile(data []byte, srcpath string, stripDebug bool, password string, muta
 	}
 
 	return encodedByteCode, nil, "", nil
+}
+
+// moduleErrorType classifies a failure from walking the import graph so the
+// CLI prints it the way it prints the same failure for a single file.
+//
+// A module that would not parse is a parse error whether it was the entry or
+// something the entry imported; anything else about resolution -- a path that
+// names no file, a cycle, an unreadable file -- is an ordinary error, because
+// nothing was ever compiled.
+func moduleErrorType(err error) errrs.ErrorType {
+	var parseErr *module.ParseError
+	if errors.As(err, &parseErr) {
+		return errrs.PARSER_ERROR
+	}
+	return errrs.ERROR
+}
+
+// moduleErrorDetails returns the individual parser messages when the failure
+// was a parse error, so they print one per line rather than as one blob.
+func moduleErrorDetails(err error) []string {
+	var parseErr *module.ParseError
+	if errors.As(err, &parseErr) {
+		return parseErr.Errors
+	}
+	return nil
 }
 
 func configureCompilerPolymorphism(comp *compiler.Compiler, mutationLevel int, mutationSeed int64) {

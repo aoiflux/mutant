@@ -10,6 +10,7 @@ Source of truth:
 
 Related references:
 - [Capability Reference](CAPABILITY_REFERENCE.md) — the full, category-grouped catalog of every builtin, with parameter types (generated from the metadata above by `cmd/gendocs`).
+- [Modules](MODULES.md) — `import`, namespaces, the `_` export rule, and where a path is looked up.
 - Deep-dive guides: [Secure Networking](SECURE_NETWORKING.md), [Graph Database](GRAPH_DATABASE.md), [Runtime Integration](RUNTIME_INTEGRATION.md), [Structured Data](STRUCTURED_DATA.md).
 
 ## Language Features
@@ -645,6 +646,51 @@ untouched — an INTEGER is still an integer, a TEXT still a string.
 The language server knows the type. Passing a buffer to a text builtin raises
 `builtinArgType` before the program runs, and the message names the conversion.
 
+### Modules (`import`)
+
+A program can be more than one file. `import` loads another `.mut` file and
+binds it to a namespace; [MODULES.md](MODULES.md) is the full reference.
+
+```mutant
+import "lib/stats.mut";          // binds the namespace `stats`
+import numbers "lib/stats.mut";  // binds `numbers` instead
+
+putf("%d\n", stats.mean([12, 47, 31]));
+```
+
+The rules in brief:
+
+- **Top level only.** An import inside a block is an error: modules are resolved
+  and linked before the program runs, so there is no moment at which control
+  could "reach" one.
+- **An import binds one name.** The imported file's own names are not visible
+  unqualified, so two modules may each declare `helper` without collision.
+  Builtins are the exception and are visible everywhere with no import.
+- **`_` is private.** A top-level name beginning with an underscore is visible
+  only inside the file that declares it; `ns._x` is a compile error naming the
+  module and the name.
+- **Paths resolve relative to the importing file first,** then against each
+  `--module-path <dir>` directory in the order given. The extension is written
+  out, never guessed. Nothing else contributes to the search — no manifest, no
+  config file, no environment variable.
+- **Cycles are an error** reported as the chain that closed them. A diamond is
+  not a cycle: a shared module is compiled and run exactly once.
+- **`struct` and `enum` names are program-wide,** not namespaced. One
+  declaration is visible everywhere, and two modules declaring the same type
+  name is an error naming both files. Values are per-module, types are
+  per-program.
+- **Tracebacks name the real file.** Modules link into one instruction stream,
+  but each frame reports the file and line it came from and quotes that file's
+  source.
+
+Builtin families are addressable the same way with no import at all: `fs.read`
+is `fs_read` and `str.upper` is `str_upper`, derived by joining the halves, so
+both spellings are one function. A variable or import that already binds the
+name wins, so no existing program changes meaning.
+
+Imports are a compiled-program feature. The REPL has no file for a relative
+path to resolve against.
+
 ### Notes
 - String literals are simple quoted strings; escape-sequence behavior is intentionally limited.
 - **Semicolons are required to terminate statements** — including statements whose value is a block, e.g. `let f = fn() { ... };` and `if (c) { ... };`. The language server's formatter enforces this canonically (it repairs missing semicolons and removes redundant ones on format), and the `semicolon` diagnostic flags them while you type.
@@ -659,6 +705,7 @@ The language server knows the type. Passing a buffer to a text builtin raises
 - fn
 - for
 - if
+- import
 - let
 - macro
 - return

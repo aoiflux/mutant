@@ -35,7 +35,7 @@ const (
 
 type cliRuntime struct {
 	runRepl               func(string, bool, string)
-	compileCode           func(string, string, string, bool, string, int, int64) int
+	compileCode           func(string, string, string, bool, string, int, int64, []string) int
 	generateReleaseAssets func(string) int
 	runCode               func(string, runner.Options) int
 	hasStandalonePayload  func(string) (bool, error)
@@ -334,6 +334,72 @@ func extractTrustedKeyArg(args []string) string {
 	return ""
 }
 
+// extractModulePathArgs collects every --module-path directory, in the order
+// they were written.
+//
+// The flag repeats rather than taking a separator-joined list, so a directory
+// whose name contains the platform's list separator is still expressible, and
+// so the order -- which decides which of two same-named modules wins -- is
+// exactly the order on the command line. This is the only way a search
+// directory can be named: there is no manifest, no config key and no
+// environment variable, per docs/CONFIGURATION_POLICY.md, because where a
+// module came from must be visible in the invocation that built it.
+func extractModulePathArgs(args []string) []string {
+	var paths []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--module-path" || arg == "-module-path":
+			if i+1 < len(args) {
+				if dir := strings.TrimSpace(args[i+1]); dir != "" {
+					paths = append(paths, dir)
+				}
+				i++
+			}
+		case strings.HasPrefix(arg, "--module-path="):
+			if dir := strings.TrimSpace(strings.TrimPrefix(arg, "--module-path=")); dir != "" {
+				paths = append(paths, dir)
+			}
+		case strings.HasPrefix(arg, "-module-path="):
+			if dir := strings.TrimSpace(strings.TrimPrefix(arg, "-module-path=")); dir != "" {
+				paths = append(paths, dir)
+			}
+		}
+	}
+
+	return paths
+}
+
+// modulePathFlag is the repeatable --module-path as a flag.Value, for the
+// subcommand FlagSets. Those run with flag.ExitOnError, so a flag they have
+// never heard of aborts the process with exit 2 -- declaring it is what keeps
+// `mutant gen --src x.mut --module-path ./lib` from dying before it starts.
+type modulePathFlag struct{ dirs *[]string }
+
+func (f modulePathFlag) String() string {
+	if f.dirs == nil {
+		return ""
+	}
+	return strings.Join(*f.dirs, string(os.PathListSeparator))
+}
+
+func (f modulePathFlag) Set(value string) error {
+	dir := strings.TrimSpace(value)
+	if dir == "" {
+		return errors.New("--module-path needs a directory")
+	}
+	*f.dirs = append(*f.dirs, dir)
+	return nil
+}
+
+// registerModulePathFlag declares --module-path on a subcommand FlagSet.
+func registerModulePathFlag(fs *flag.FlagSet, dirs *[]string) {
+	fs.Var(modulePathFlag{dirs: dirs}, "module-path",
+		"Directory to search for imported modules; repeat for more, searched in order")
+}
+
 func extractSecurityLogLevelArg(args []string) string {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == "--security-log-level" || args[i] == "-security-log-level" || args[i] == "--log-level" || args[i] == "-log-level" {
@@ -434,7 +500,7 @@ func executeProgramFile(args []string, fileArg string) (bool, int) {
 	opts.Password = password
 
 	if isSource {
-		return true, runtimeDeps.compileCode(fileArg, "", "", false, opts.Password, defaultPolymorphicLevel, time.Now().UnixNano())
+		return true, runtimeDeps.compileCode(fileArg, "", "", false, opts.Password, defaultPolymorphicLevel, time.Now().UnixNano(), extractModulePathArgs(args))
 	}
 
 	return true, runtimeDeps.runCode(fileArg, opts)
@@ -545,7 +611,7 @@ func handleGenAssetsCommand(args []string) int {
 }
 
 func handleGenCompileCommand(args []string) int {
-	src, request, mutationLevel, mutationSeed, err := prepareGenRun(args)
+	src, request, mutationLevel, mutationSeed, modulePaths, err := prepareGenRun(args)
 	if err != nil {
 		printCommandError(err, args[1])
 		printGenHelp(args[1] == RUNCMD)
@@ -568,12 +634,12 @@ func handleGenCompileCommand(args []string) int {
 	}
 
 	fmt.Println("Generating bytecode...")
-	return runtimeDeps.compileCode(src, "", "", false, password, mutationLevel, mutationSeed)
+	return runtimeDeps.compileCode(src, "", "", false, password, mutationLevel, mutationSeed, modulePaths)
 }
 
 func handleReleaseCompileCommand(args []string) int {
 
-	src, goos, goarch, request, mutationLevel, mutationSeed, err := prepareRelease(args)
+	src, goos, goarch, request, mutationLevel, mutationSeed, modulePaths, err := prepareRelease(args)
 	if err != nil {
 		printCommandError(err, RELEASECMD)
 		printReleaseHelp()
@@ -587,7 +653,7 @@ func handleReleaseCompileCommand(args []string) int {
 	}
 
 	fmt.Println("Compiling release build...")
-	return runtimeDeps.compileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed)
+	return runtimeDeps.compileCode(src, goos, goarch, true, password, mutationLevel, mutationSeed, modulePaths)
 }
 
 func printHelpTopic(args []string) {
@@ -727,6 +793,9 @@ Options:
   --password-stdin     Read the encryption password from stdin.
   --password <value>   DEPRECATED: visible in the process table. Warns on use.
   --pwd <value>        Alias for --password.
+  --module-path <dir>  Directory to search for imports that do not resolve
+                       relative to the file that wrote them. Repeat the flag to
+                       add more; they are searched in the order given.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
   --seed <int64>       Build seed: reproduces the bytecode (mutations and
                        security-check placement). The .mu file still differs
@@ -783,6 +852,9 @@ Options:
   --password-stdin     Read the encryption password from stdin.
   --password <value>   DEPRECATED: visible in the process table. Warns on use.
   --pwd <value>        Alias for --password.
+  --module-path <dir>  Directory to search for imports that do not resolve
+                       relative to the file that wrote them. Repeat the flag to
+                       add more; they are searched in the order given.
   --mutation <0-10>    Polymorphic mutation level. Default: %d.
   --seed <int64>       Build seed: reproduces the bytecode (mutations and
                        security-check placement). The .mu file still differs
@@ -1004,10 +1076,11 @@ func registerPasswordFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&discardBool, "dev", false, "Use the built-in development key (local development only)")
 }
 
-func prepareRelease(args []string) (string, string, string, credential.Request, int, int64, error) {
+func prepareRelease(args []string) (string, string, string, credential.Request, int, int64, []string, error) {
 	var goos, goarch, src, password string
 	var mutationLevel int
 	var mutationSeed int64
+	var modulePaths []string
 
 	releasecmd := flag.NewFlagSet(RELEASECMD, flag.ExitOnError)
 
@@ -1017,11 +1090,12 @@ func prepareRelease(args []string) (string, string, string, credential.Request, 
 	releasecmd.StringVar(&password, "password", "", "Password on argv (deprecated -- visible in the process table)")
 	releasecmd.StringVar(&password, "pwd", "", "Short for -password")
 	registerPasswordFlags(releasecmd)
+	registerModulePathFlag(releasecmd, &modulePaths)
 	releasecmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	releasecmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := releasecmd.Parse(filterSourceArgs(args[2:])); err != nil {
-		return "", "", "", credential.Request{}, 0, 0, err
+		return "", "", "", credential.Request{}, 0, 0, nil, err
 	}
 
 	if src == "" {
@@ -1036,28 +1110,29 @@ func prepareRelease(args []string) (string, string, string, credential.Request, 
 
 	if releasecmd.Parsed() {
 		if src == "" {
-			return "", "", "", request, 0, 0, errors.New("mutant source code file path is required, please use -src flag")
+			return "", "", "", request, 0, 0, nil, errors.New("mutant source code file path is required, please use -src flag")
 		}
 
 		if !strings.HasSuffix(src, global.MutantSourceCodeFileExtention) {
-			return "", "", "", request, 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
+			return "", "", "", request, 0, 0, nil, errors.New("incorrect file extension, this program only works for mutant source code files")
 		}
 
 		absSrc, err := filepath.Abs(src)
 		if err != nil {
-			return "", "", "", request, 0, 0, err
+			return "", "", "", request, 0, 0, nil, err
 		}
 
-		return absSrc, goos, goarch, request, mutationLevel, mutationSeed, nil
+		return absSrc, goos, goarch, request, mutationLevel, mutationSeed, modulePaths, nil
 	}
 
-	return "", "", "", request, 0, 0, errors.New("could not parse values")
+	return "", "", "", request, 0, 0, nil, errors.New("could not parse values")
 }
 
-func prepareGenRun(args []string) (string, credential.Request, int, int64, error) {
+func prepareGenRun(args []string) (string, credential.Request, int, int64, []string, error) {
 	var src, password string
 	var mutationLevel int
 	var mutationSeed int64
+	var modulePaths []string
 
 	gencmd := flag.NewFlagSet(GENCMD, flag.ExitOnError)
 
@@ -1065,11 +1140,12 @@ func prepareGenRun(args []string) (string, credential.Request, int, int64, error
 	gencmd.StringVar(&password, "password", "", "Password on argv (deprecated -- visible in the process table)")
 	gencmd.StringVar(&password, "pwd", "", "Short for -password")
 	registerPasswordFlags(gencmd)
+	registerModulePathFlag(gencmd, &modulePaths)
 	gencmd.IntVar(&mutationLevel, "mutation", defaultPolymorphicLevel, "Polymorphic mutation level (0-10)")
 	gencmd.Int64Var(&mutationSeed, "seed", 0, "Build seed; reproduces the bytecode, not the .mu file (default: current timestamp)")
 
 	if err := gencmd.Parse(filterSourceArgs(args[2:])); err != nil {
-		return "", credential.Request{}, 0, 0, err
+		return "", credential.Request{}, 0, 0, nil, err
 	}
 
 	if src == "" {
@@ -1084,22 +1160,22 @@ func prepareGenRun(args []string) (string, credential.Request, int, int64, error
 
 	if gencmd.Parsed() {
 		if src == "" {
-			return "", request, 0, 0, errors.New("mutant source code file path is required, please use -src flag")
+			return "", request, 0, 0, nil, errors.New("mutant source code file path is required, please use -src flag")
 		}
 
 		if !strings.HasSuffix(src, global.MutantSourceCodeFileExtention) {
-			return "", request, 0, 0, errors.New("incorrect file extension, this program only works for mutant source code files")
+			return "", request, 0, 0, nil, errors.New("incorrect file extension, this program only works for mutant source code files")
 		}
 
 		absSrc, err := filepath.Abs(src)
 		if err != nil {
-			return "", request, 0, 0, err
+			return "", request, 0, 0, nil, err
 		}
 
-		return absSrc, request, mutationLevel, mutationSeed, nil
+		return absSrc, request, mutationLevel, mutationSeed, modulePaths, nil
 	}
 
-	return "", request, 0, 0, errors.New("could not parse values")
+	return "", request, 0, 0, nil, errors.New("could not parse values")
 }
 
 func hasReleaseAssetsArg(args []string) bool {

@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"sort"
 	"strings"
 
 	mast "mutant/ast"
@@ -39,10 +40,18 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 
 	// 2. Struct-typed local receiver -> the struct's fields.
 	//    Error-typed local receiver -> the error's fields.
+	//
+	// shadowed records that something in scope answers to this name, whatever
+	// its type turned out to be. It decides step 3: a binding called `fs` wins
+	// over the builtin family, the same way it wins in the compiler, so an
+	// unrecognised local receiver must offer nothing rather than fall through
+	// to fs_read and friends.
+	shadowed := false
 	for _, b := range s.VisibleBindingsAt(pos) {
 		if b.ident == nil || b.ident.Value != receiver {
 			continue
 		}
+		shadowed = true
 		if typeName, ok := s.structTypeNameForBinding(b); ok {
 			if fields, ok := s.structFieldNames(typeName); ok {
 				return s.structFieldCompletionItems(typeName, fields, prefix, pos), true
@@ -57,7 +66,47 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 		break
 	}
 
+	// 3. A builtin family receiver -> the family's members. `fs.` offers read,
+	//    write and the rest, because fs.read IS fs_read.
+	//
+	//    An import binding this namespace comes first: a module called `fs`
+	//    means the file's own functions, not the standard library's, and
+	//    offering fs_read's members there would be offering the wrong module.
+	//    What that module exports is cross-file knowledge the Snapshot does
+	//    not have, so the honest answer is to offer nothing rather than guess.
+	if _, imported := importNamespaces(s.Program.Statements)[receiver]; imported {
+		return nil, false
+	}
+	if !shadowed {
+		if members := builtinFamilyMembers(receiver); len(members) > 0 {
+			return memberCompletionItems(members, lsp.CompletionItemKindFunction, prefix, pos), true
+		}
+	}
+
 	return nil, false
+}
+
+// builtinFamilyMembers returns the members of the builtin family named by
+// namespace, with the `namespace_` prefix stripped, sorted.
+//
+// Derived from the registry rather than from a table of families, which is
+// what makes every family work the day a builtin is added to it and keeps
+// base64url.encode and rand.int coming out right without a special case.
+func builtinFamilyMembers(namespace string) []string {
+	if namespace == "" {
+		return nil
+	}
+
+	prefix := namespace + "_"
+	members := make([]string, 0, 8)
+	for name := range builtinNameSet {
+		if !strings.HasPrefix(name, prefix) || len(name) == len(prefix) {
+			continue
+		}
+		members = append(members, name[len(prefix):])
+	}
+	sort.Strings(members)
+	return members
 }
 
 // errorFieldCompletionItems offers the error field table, each labelled with the

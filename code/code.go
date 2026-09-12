@@ -211,6 +211,39 @@ func Lookup(op byte) (*Definition, error) {
 	return def, nil
 }
 
+// checkOperandFits stops an operand too large for its encoding from being
+// silently truncated into a different, valid-looking instruction.
+//
+// The widths are fixed, so an index past a width's range does not fail to
+// encode -- it wraps. `OpConstant 65536` becomes `OpConstant 0`, which loads
+// the wrong constant in a program that compiles, links and runs. That is the
+// worst failure a compiler can have, and until modules arrived the limits were
+// remote enough that nothing checked them. Linking several files into one
+// constant pool and one global slot space brings them within reach, so the
+// limit is enforced here, at the single point every instruction passes through.
+//
+// This is an internal invariant rather than a user error -- the compiler chose
+// the index -- so it panics. The message names the opcode and the value, which
+// is what a report needs to be actionable.
+func checkOperandFits(def *Definition, i, operand, width int) {
+	var max int
+	switch width {
+	case 1:
+		max = 0xFF
+	case 2:
+		max = 0xFFFF
+	default:
+		return
+	}
+
+	if operand < 0 || operand > max {
+		panic(fmt.Sprintf(
+			"code: operand %d of %s is %d, which does not fit in %d byte(s) (limit %d); the program exceeds what the bytecode format can address",
+			i, def.Name, operand, width, max,
+		))
+	}
+}
+
 func Make(op Opcode, operands ...int) []byte {
 	def, ok := definitions[op]
 	if !ok {
@@ -230,6 +263,7 @@ func Make(op Opcode, operands ...int) []byte {
 
 	for i, o := range operands {
 		width := def.OperandWidths[i]
+		checkOperandFits(def, i, o, width)
 		switch width {
 		case 1:
 			inst[offset] = byte(o)

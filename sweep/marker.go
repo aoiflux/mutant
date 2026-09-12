@@ -187,16 +187,34 @@ func Classify(src string) Mode {
 }
 
 // calledNames collects every identifier that appears immediately before a `(`.
+//
+// A namespaced call registers three ways: the bare `name`, the qualified
+// `ns.name`, and `ns_name`. The last is the one that matters here -- `ns.name`
+// with no module bound to ns resolves to the builtin ns_name, so net.serve(...)
+// IS net_serve, and a scan that only saw `serve` would let an example bind a
+// port with no sweep marker and hang the sweep.
+//
+// Still lexical, deliberately. This runs over every .mut in the repository,
+// including files that are meant to fail to parse, so it cannot depend on a
+// program being well formed.
 func calledNames(src string) map[string]bool {
 	names := map[string]bool{}
-	previous := token.Token{}
+	var third, second, previous token.Token
 
 	lex := lexer.New(src)
 	for tok := lex.NextToken(); tok.Type != token.EOF; tok = lex.NextToken() {
 		if tok.Type == token.LPAREN && previous.Type == token.IDENT {
 			names[previous.Literal] = true
+			if second.Type == token.DOT && third.Type == token.IDENT {
+				names[third.Literal+"."+previous.Literal] = true
+				names[third.Literal+"_"+previous.Literal] = true
+			}
 		}
-		previous = tok
+		// After the shift previous is one token back, second two, third three,
+		// so the window at a `(` is IDENT(ns) DOT IDENT(name) LPAREN. The zero
+		// Token has an empty Type and matches neither IDENT nor DOT, so the
+		// first two iterations need no guard of their own.
+		third, second, previous = second, previous, tok
 	}
 	return names
 }

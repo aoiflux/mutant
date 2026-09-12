@@ -92,11 +92,13 @@ func (c *spawnWriteCollector) findCallbacks(node mast.Node) {
 		if !ok {
 			return
 		}
-		callee, ok := call.Function.(*mast.Identifier)
-		if !ok || callee == nil {
+		// nil bound: this site has no scope model and never had one, so a
+		// local `let spawn = ...` is as invisible here as it always was.
+		calleeName, _, ok := builtinCallee(call.Function, nil)
+		if !ok {
 			return
 		}
-		position, watched := spawnGlobalWriteCallbackArg[callee.Value]
+		position, watched := spawnGlobalWriteCallbackArg[calleeName]
 		if !watched || position >= len(call.Arguments) {
 			return
 		}
@@ -105,7 +107,7 @@ func (c *spawnWriteCollector) findCallbacks(node mast.Node) {
 			return
 		}
 
-		c.reportWrites(literal, callee.Value, shadowedNames(literal, nil))
+		c.reportWrites(literal, calleeName, shadowedNames(literal, nil))
 	})
 }
 

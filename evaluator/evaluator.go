@@ -191,6 +191,13 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 
 	case *ast.StructLiteral:
 		return evalStructLiteral(node, env)
+
+	case *ast.ImportStatement:
+		// Imports are resolved and linked before evaluation begins: by the
+		// time a tree reaches here, every imported module's statements are
+		// already part of the program. The node survives only as a marker,
+		// so evaluating it is a no-op rather than an error.
+		return nil
 	}
 	return nil
 }
@@ -650,6 +657,17 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 		enumValKey := ident.Value + "." + node.Field.Value
 		if val, ok := env.Get(enumValKey); ok {
 			return val
+		}
+
+		// A namespaced builtin: str.upper is str_upper. Derived from the flat
+		// name rather than tabulated, which is what lets all 44 families work
+		// without a list to maintain. It matches the compiler's arm in
+		// compileFieldExpression, down to the order: a binding named `str`
+		// wins, so nothing that already works changes meaning.
+		if _, bound := env.Get(ident.Value); !bound {
+			if fn, found := builtins[ident.Value+"_"+node.Field.Value]; found {
+				return fn
+			}
 		}
 	}
 

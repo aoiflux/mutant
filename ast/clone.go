@@ -61,6 +61,15 @@ func Clone(node Node) Node {
 		}
 		copied := *node
 		return &copied
+	case *ImportStatement:
+		if node == nil {
+			return nil
+		}
+		return &ImportStatement{
+			Token: node.Token,
+			Alias: cloneIdentifier(node.Alias),
+			Path:  cloneStringLiteral(node.Path),
+		}
 
 	/// ---------- expressions ---------- ///
 	case *PrefixExpression:
@@ -319,6 +328,14 @@ func cloneIdentifier(identifier *Identifier) *Identifier {
 		return nil
 	}
 	copied := *identifier
+	return &copied
+}
+
+func cloneStringLiteral(literal *StringLiteral) *StringLiteral {
+	if literal == nil {
+		return nil
+	}
+	copied := *literal
 	return &copied
 }
 

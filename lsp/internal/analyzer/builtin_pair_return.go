@@ -64,26 +64,25 @@ func (c *builtinCallCollector) checkSingleNameBinding(name *mast.Identifier, val
 	if !ok || call.Function == nil {
 		return
 	}
-	ident, ok := call.Function.(*mast.Identifier)
-	if !ok || ident.Value == "" {
+	calleeName, _, ok := builtinCallee(call.Function, c.boundIn(current))
+	if !ok {
 		return
 	}
-	// A user/local binding of this name shadows the builtin.
-	if _, shadowed := current.find(ident.Value); shadowed {
-		return
-	}
-	if _, live := c.builtins[ident.Value]; !live {
+	if _, live := c.builtins[calleeName]; !live {
 		return
 	}
 
-	spec, declared := builtin.ReturnSpec(ident.Value)
+	spec, declared := builtin.ReturnSpec(calleeName)
 	if !declared || !spec.Pair {
 		return
 	}
 
 	c.pairCandidates = append(c.pairCandidates, pairBindingCandidate{
-		name:        name,
-		builtinName: ident.Value,
+		name: name,
+		// The flat name, because the fix-it text quotes a contract that is
+		// recorded against it. The author who wrote fs.read reads `fs_read` in
+		// the message and it is still the same function.
+		builtinName: calleeName,
 		kinds:       spec.KindsText(),
 	})
 }

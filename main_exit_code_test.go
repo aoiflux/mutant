@@ -25,7 +25,7 @@ func TestFailedCompileExitsNonZero(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			deps := stubRuntimeDeps()
-			deps.compileCode = func(string, string, string, bool, string, int, int64) int { return 1 }
+			deps.compileCode = func(string, string, string, bool, string, int, int64, []string) int { return 1 }
 			defer withRuntimeDeps(deps)()
 
 			if got := run(tc.args); got != 1 {
