@@ -162,6 +162,14 @@ func (s *Snapshot) resolveStatement(stmt mast.Statement, current *scope, pos lsp
 			}
 		}
 	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+				if localprotocol.ContainsPosition(rng, pos) {
+					return binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}, true
+				}
+			}
+		}
 		if node.Iterable != nil {
 			if resolved, ok := s.resolveExpression(node.Iterable, current, pos); ok {
 				return resolved, true
@@ -817,6 +825,11 @@ func (s *Snapshot) scopeAtStatement(stmt mast.Statement, current *scope, pos lsp
 		}
 		return current
 	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+			}
+		}
 		if node.Iterable != nil {
 			if child, ok := s.scopeAtExpression(node.Iterable, current, pos); ok {
 				return child
@@ -1079,6 +1092,15 @@ func (s *Snapshot) advanceStatement(stmt mast.Statement, current *scope) {
 			s.advanceStatement(node.Body, current)
 		}
 	case *mast.ForInStatement:
+		// Defined in the enclosing scope rather than a child, which is what
+		// `for (let i = 0; ...)` already does here and what the VM actually
+		// does with either loop -- see the L-8 phase 1 note on the two engines
+		// disagreeing about loop-body scope.
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+			}
+		}
 		if node.Iterable != nil {
 			s.advanceExpression(node.Iterable, current)
 		}
@@ -1193,6 +1215,27 @@ func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
 	}
 }
 
+// loopBindings is the names a `for (k, v in xs)` declares, in the order they
+// are written. Key is nil in the one-binding form.
+//
+// They are declarations like any other, and every walk that tracks what is in
+// scope has to say so: without it, the name a loop body is written around is
+// undefined to the analyzer, which reports an error on correct code, offers no
+// completion for it, and finds no definition to go to.
+func loopBindings(node *mast.ForInStatement) []*mast.Identifier {
+	if node == nil {
+		return nil
+	}
+	names := make([]*mast.Identifier, 0, 2)
+	if node.Key != nil {
+		names = append(names, node.Key)
+	}
+	if node.Value != nil {
+		names = append(names, node.Value)
+	}
+	return names
+}
+
 func kindForLetValue(value mast.Expression) lsp.CompletionItemKind {
 	if _, ok := value.(*mast.FunctionLiteral); ok {
 		return lsp.CompletionItemKindFunction
@@ -1270,6 +1313,13 @@ func (c *referenceCollector) collectStatement(stmt mast.Statement, current *scop
 			c.collectStatement(node.Body, current)
 		}
 	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := c.snapshot.identifierRange(name); ok {
+				defined := binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}
+				current.define(name.Value, name, rng, defined.kind)
+				c.addOccurrenceIfTarget(defined, rng, true)
+			}
+		}
 		if node.Iterable != nil {
 			c.collectExpression(node.Iterable, current)
 		}

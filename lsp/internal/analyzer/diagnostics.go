@@ -51,6 +51,7 @@ type LintConfig struct {
 	SpawnGlobalWrite             LintSeverity
 	UnclosedResource             LintSeverity
 	UncheckedError               LintSeverity
+	MatchExhaustiveness          LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -104,6 +105,11 @@ func DefaultLintConfig() LintConfig {
 		// error because the code compiles and runs -- which is the whole
 		// problem with it.
 		UncheckedError: LintSeverityWarning,
+		// A match over an enum that misses a variant runs correctly until the
+		// subject is that variant, and then it raises. Warning rather than
+		// error because the miss is usually a variant added since -- the code
+		// was right when it was written, which is exactly why nobody looks.
+		MatchExhaustiveness: LintSeverityWarning,
 	}
 }
 
@@ -140,6 +146,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.UnclosedResource
 	case "uncheckedError":
 		severityName = c.UncheckedError
+	case "matchExhaustiveness":
+		severityName = c.MatchExhaustiveness
 	default:
 		return nil, false
 	}
@@ -197,6 +205,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUnclosedResources(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUncheckedErrors(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintMatchExhaustiveness(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
@@ -310,6 +319,32 @@ func lintUnreachableCode(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 	for node := range snapshot.Program.NodePositions {
 		if block, ok := node.(*mast.BlockStatement); ok && block != nil {
 			scan(block.Statements)
+		}
+		// An arm after `_` is the same defect one construct over: `_` matches
+		// anything, so the compare-and-jump chain never reaches what follows
+		// it. This belongs here rather than in a rule of its own -- it is
+		// literally code that cannot run, and one knob should govern one idea.
+		if match, ok := node.(*mast.MatchExpression); ok && match != nil {
+			for i, arm := range match.Arms {
+				if arm == nil || !arm.IsWildcard() || i+1 >= len(match.Arms) {
+					continue
+				}
+				next := match.Arms[i+1]
+				if next == nil {
+					break
+				}
+				rng, ok := snapshot.Program.RangeOf(next)
+				if !ok {
+					break
+				}
+				result = append(result, lsp.Diagnostic{
+					Range:    localprotocol.ToLSPRange(rng),
+					Severity: severity,
+					Source:   &source,
+					Message:  "unreachable arm after `_`, which matches anything",
+				})
+				break
+			}
 		}
 	}
 
@@ -1275,6 +1310,16 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 			c.collectStatement(node.Body, current)
 		}
 	case *mast.ForInStatement:
+		// The loop's own bindings, before the body that reads them. Without
+		// this every `for (v in xs)` body reported `undefined identifier v` at
+		// error severity -- a red squiggle on correct code, and a non-zero exit
+		// from `mutant lint` for any program that uses the loop.
+		if node.Key != nil {
+			c.defineDeclaration(node.Key, current, false)
+		}
+		if node.Value != nil {
+			c.defineDeclaration(node.Value, current, false)
+		}
 		if node.Iterable != nil {
 			c.collectExpression(node.Iterable, current)
 		}
@@ -1648,6 +1693,15 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 			c.collectStatement(node.Body, current)
 		}
 	case *mast.ForInStatement:
+		// This collector's scope answers one question -- is this name a local
+		// binding rather than the builtin of the same name -- so `for (max in
+		// xs) { max(1, 2); }` must not be held to the builtin's contract.
+		if node.Key != nil {
+			c.defineDeclaration(node.Key, current)
+		}
+		if node.Value != nil {
+			c.defineDeclaration(node.Value, current)
+		}
 		if node.Iterable != nil {
 			c.collectExpression(node.Iterable, current)
 		}

@@ -204,7 +204,10 @@ Supported:
 - let bindings (single and destructuring)
 - assignment expressions
 - if/else expressions
+- match expressions (literal, negated-number, enum-variant and `|` patterns, `_`)
 - for loops with init/condition/post
+- while loops
+- for-in loops over arrays, hashes, strings and bytes, binding one name or two
 - break and continue
 - function literals and user-defined function calls
 - struct declarations and struct literals

@@ -299,9 +299,12 @@ Current wasm REPL support intentionally focuses on a lightweight subset:
   `db_stats`
 - assignment expressions (for example `i = i + 1`)
 - `for` loops with init/condition/post
+- `while` loops
+- `for (v in xs)` and `for (k, v in xs)` over arrays, hashes, strings and bytes
 - `break` and `continue` inside loops
 - `return` statements with function short-circuit behavior
 - `if/else`
+- `match` expressions with literal, enum-variant and `|` patterns
 - prefix `!` and unary `-`
 - infix `+ - * / < > == !=`
 

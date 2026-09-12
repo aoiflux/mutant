@@ -26,7 +26,8 @@ Mutant supports:
 - Indexing and field access
 - A distinct `bytes` type for binary data, with explicit conversions to and from text
 - Conditionals: `if` / `else`
-- Loops: `for`, with `break` and `continue`
+- Loops: the counting `for`, `while`, and `for (item in collection)`, all with `break` and `continue`
+- Pattern matching: `match`, an expression whose value is the arm that matched
 - First-class functions, closures, and function calls
 - Return statements (single and multi-value)
 - Macros
@@ -243,6 +244,120 @@ you at your word:
 ```mutant
 let _, _ = fs_write(log_path, line);   // best-effort logging, on purpose
 ```
+
+### Loops
+
+Three spellings, each its own construct. `break` and `continue` work in all of
+them, and mean the same thing in each.
+
+```mutant
+// Counting, when the index is the point.
+for (let i = 0; i < len(hosts); i++) {
+    putln(hosts[i]);
+}
+
+// A condition, when the end is not a count.
+while (len(queue) > 0) {
+    let job = queue[0];
+    queue = slice(queue, 1, len(queue));
+    run(job);
+}
+
+// Over a collection, when the elements are the point.
+for (host in hosts) {
+    putln(host);
+}
+```
+
+What `for (item in collection)` binds depends on how many names it binds and
+what it is walking:
+
+| Written | Over an array | Over a hash | Over a string or bytes |
+| --- | --- | --- | --- |
+| `for (v in xs)` | element | **key** | character / byte |
+| `for (k, v in xs)` | index, element | key, value | index, character / byte |
+
+A single binding yields the thing the collection is made of, which is why an
+array gives elements but a hash gives keys.
+
+A hash is visited in the same order printing it shows. `Hash.Pairs` is a Go map
+and its iteration order differs run to run, so both the printer and the loop
+sort with the same comparison: a program that prints a hash and a program that
+loops over one agree about what order it is in.
+
+There is no range syntax. `range(start, end[, step])` is an ordinary builtin
+returning an array, so counting over one is a `for…in` like any other:
+
+```mutant
+for (n in range(0, 10)) { putln(n); }
+for (n in range(10, 0, -2)) { putln(n); }
+```
+
+### Matching (`match`)
+
+`match` is an **expression**: it evaluates to the arm that matched, so it binds,
+returns, and nests like any other value.
+
+```mutant
+let label = match (code) {
+    0         => "clean",
+    1 | 2 | 3 => "a few findings",
+    -1        => "the scan did not run",
+    _         => "many findings",
+};
+```
+
+Arms are `pattern => value`, separated by commas, tried top to bottom. A trailing
+comma after the last arm is allowed.
+
+A pattern is one of:
+
+- a literal — integer, float, string, `true`, `false`
+- a negated number — `-1`, `-2.5`
+- an enum variant — `Status.Ok`, or `mod.Status.Ok` for an imported enum
+- `_`, which matches anything
+
+Alternatives are joined with `|`, which is a *pattern* separator here rather
+than the bitwise-or operator: patterns have their own grammar, so `1 | 2 | 3`
+means those three values and not the number `3`.
+
+An arm body may be a block, whose value is its last expression:
+
+```mutant
+let weight = match (name) {
+    "critical" => {
+        let base = severity[name];
+        base * 10;
+    },
+    _ => 0,
+};
+```
+
+The parentheses around the subject are required. `{` is also the opening of a
+struct literal (`Point { x: 1 }`), so `match x { ... }` without them parses
+cleanly as a struct literal named `x` and means something else entirely.
+
+Because a `match` has to produce a value, a subject that no arm matches is a
+**run-time error naming the value**, not `null`:
+
+```mutant
+enum Status { Ok, Failed, Pending };
+
+let text = match (status) {
+    Status.Ok     => "finished",
+    Status.Failed => "raised",
+};                                   // raises when status is Status.Pending
+```
+
+That is the case the rule exists for: adding a variant to an enum leaves every
+existing `match` over it one arm short, and a `null` flowing onward would hide
+it. The language server reports the gap before the program runs — see the
+`matchExhaustiveness` rule — and writing `_` says the rest is deliberate.
+
+Not in this version: binding patterns (`n => ...`), payload destructuring (enum
+variants carry no payload), and guards (`n if n > 3 =>`, which depends on
+binding). An interpolated string is rejected as a pattern rather than quietly
+accepted, since comparing against something computed at match time is a guard.
 
 ### First-class functions and closures
 
@@ -792,11 +907,14 @@ without doubling -- though `r"\d+"` says so on purpose.
 - for
 - if
 - import
+- in
 - let
 - macro
+- match
 - return
 - struct
 - true
+- while
 
 ## Builtins
 

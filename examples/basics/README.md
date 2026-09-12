@@ -12,6 +12,7 @@ Scripts:
 - code.mut
 - bitwise_flags.mut
 - closures.mut
+- control_flow.mut
 - enums_example.mut
 - for_loop_control.mut
 - recur.mut

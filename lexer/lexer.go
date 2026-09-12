@@ -308,7 +308,17 @@ func (l *Lexer) readRune() {
 		l.ch = rune(l.input[l.readPosition])
 	}
 
-	l.position = l.readPosition
+	// readPosition runs one past the end and keeps going -- a scan that calls
+	// readRune again after hitting end of input is ordinary, and each call has
+	// to leave the cursor somewhere. position is different: every use of it is
+	// an index into input, either to slice a token's text or to record an
+	// offset in a Mark. Letting it run past the end turns one of those slices
+	// into a panic instead of a parse error, which is what happened to
+	// `"${ f(\"a\") }"`: the backslash is not an escape inside a hole, so the
+	// quote after it opened a string scan that consumed the rest of the file.
+	// That source is wrong either way, but wrong source is reported, not
+	// crashed on.
+	l.position = min(l.readPosition, len(l.input))
 	l.readPosition++
 }
 func (l *Lexer) nextRune() rune {

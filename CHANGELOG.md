@@ -18,6 +18,47 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **`while`, `for (item in collection)` and `match`.** The counting `for` was
+  the only loop the language had, and the only way to branch on a value was a
+  chain of `if`s.
+
+  `while (c) { ... }` is its own construct rather than sugar for `for (; c; )`,
+  so the formatter prints back the loop that was written; `break` and
+  `continue` work in it unchanged.
+
+  `for (v in xs)` walks arrays, hashes, strings and bytes. One binding yields
+  the thing the collection is made of -- an array's element, but a hash's key
+  -- and two bindings yield the index or key alongside the value. A hash is
+  visited in the order printing it shows, because both the printer and the loop
+  sort with the same comparison: a program that prints a hash and a program
+  that loops over one must agree about what order it is in. Iteration is two
+  opcodes rather than a desugar to `len()` plus indexing -- a program that
+  declared its own `len` would otherwise change what every loop in the file
+  means, and a hash has no ordered index to desugar to. There is no range
+  syntax: `range(0, 10)` is an ordinary builtin returning an array, and looping
+  over it is a `for…in` like any other.
+
+  `match` is an **expression**, so it binds, returns and nests like any other
+  value: `let label = match (code) { 0 => "clean", 1 | 2 | 3 => "a few", _ =>
+  "many" };`. A pattern is a literal, a negated number, an enum variant such as
+  `Status.Ok`, or `_`; alternatives are joined with `|`. Patterns have their
+  own grammar rather than going through the expression parser, which is what
+  makes `1 | 2 | 3` those three values instead of the number `3` -- `|` is the
+  bitwise-or operator everywhere else. An arm body is one expression or a block
+  whose value is its last expression, and the parentheses around the subject
+  are required, since `match x { ... }` without them is a struct literal.
+
+  Because a match must produce a value, a subject no arm matches is a run-time
+  error naming the value rather than a `null` flowing onward. The case that is
+  about is adding a variant to an enum, which leaves every existing match over
+  it one arm short and nothing else notices; the language server now reports
+  that gap before the program runs (`matchExhaustiveness`, settable like every
+  other rule), and reports an arm written after `_` as unreachable. All three
+  constructs run identically on the tree-walking evaluator and the VM, the
+  formatter round-trips them, and editor grammar, snippets, hover help and
+  completion cover them. See
+  [examples/basics/control_flow.mut](examples/basics/control_flow.mut).
+
 - **String interpolation, raw strings and triple-quoted strings.** `"${...}"`
   puts an expression in a string: `"host=${h}:${p}"` where `h` is a string and
   `p` an integer. A piece that is already a string contributes its own text,
@@ -171,6 +212,16 @@ claim the README makes becomes verifiable.
 
 ### Changed
 
+- **Enum equality is typed rather than textual.** Comparing an enum value with
+  anything that was not an enum fell through to comparing what the two would
+  print, and an enum prints as `Status.Ok(0)` -- so `Status.Ok ==
+  "Status.Ok(0)"` answered **true**, in both engines. Bytes and errors each
+  already had a typed comparison arm for exactly this class of accident; enums
+  never did, and `match` made it reachable in a way plain `==` rarely was. Two
+  enum values are now equal when they share a type and a variant, and an enum
+  is equal to nothing else. A program that relied on the old answer changes
+  behaviour.
+
 - **Contradictory mode flags are an error instead of a silent resolution.**
   `--secure --compat`, `--secure --dev` and `--signer-auth --no-signer-auth`
   each exit non-zero naming both flags and why they conflict. Every flag scanner
@@ -227,6 +278,16 @@ claim the README makes becomes verifiable.
   configuration is under design; no interface is specified.*
 
 ### Fixed
+
+- **An `if` used as a value left the stack wrong in two cases.** The compiler
+  decided whether a branch had produced a value by looking at the last
+  instruction it had emitted. A branch ending in a `let` emits no pop, so that
+  branch pushed nothing where its sibling pushed one and the VM underflowed; a
+  branch ending in a `for (v in xs)` ends in the pop that drops the loop
+  *cursor*, which looks identical to a value being discarded, so that pop was
+  removed and the cursor became the branch's value -- `if (true) { for (v in
+  []) {} } else { 4 }` evaluated to `<iterator>`. Both branches now decide from
+  the syntax, the same rule `match` arms use.
 
 - `docs/SECURITY_LLD.md` claimed in two places that the VM forced
   `secureMode=true` for integrity failures, making integrity the one check no

@@ -28,7 +28,7 @@
 10. [Closures & Free Variables](#10-closures--free-variables)
 11. [Structs at the Bytecode Level](#11-structs-at-the-bytecode-level)
 12. [Enums at the Bytecode Level](#12-enums-at-the-bytecode-level)
-13. [Loop Control Flow](#13-loop-control-flow)
+13. [Control Flow](#13-control-flow)
 14. [Operand Encryption](#14-operand-encryption)
 15. [Runtime Security Features](#15-runtime-security-features)
 16. [Polymorphic Mutation Engine](#16-polymorphic-mutation-engine)
@@ -240,6 +240,10 @@ fixed** by the declaration order below, so do not reorder them.
 | 52 | `OpCaptureLocal`   | `slot` (1)                      | `→ cell`                 | Push the `*Cell` in `bp+slot` itself, for `OpClosure`'s list      |
 | 53 | `OpCaptureFree`    | `idx` (1)                       | `→ cell`                 | Push `currentClosure.Free[idx]` unread, for a nested capture      |
 | 54 | `OpSetFree`        | `idx` (1)                       | `val →`                  | Pop and store into `Free[idx].Value` (encrypted)                  |
+| 55 | `OpConcat`         | `n` (2)                         | `pN…p0 → str`            | Pop `n` pieces of an interpolated string; push the one string they spell |
+| 56 | `OpIterInit`       | —                               | `iterable → iter`        | Pop a collection; push a cursor over it (hash keys in `Inspect` order) |
+| 57 | `OpIterNext`       | `target` (2), `binds` (1)       | `iter → iter[, key], val` | Advance the cursor: push `binds` values on top of it, or jump to `target` when spent |
+| 58 | `OpMatchFail`      | —                               | `subject → (error)`      | Pop the unmatched subject and raise, naming the value that fell through |
 
 ### 3.2 Stack Notation
 
@@ -1098,7 +1102,7 @@ and `"Red"` respectively.
 
 ---
 
-## 13. Loop Control Flow
+## 13. Control Flow
 
 ### 13.1 For Loop Structure
 
@@ -1146,6 +1150,96 @@ After the loop body and post-increment are fully compiled:
 At runtime, `OpBreak` / `OpContinue` push sentinel objects (`&object.Break{}` /
 `&object.Continue{}`). These are only meaningful in the evaluator (tree-walk)
 path; the compiled VM path uses only the jump instructions.
+
+### 13.3 While Loop Structure
+
+```mutant
+while (c) { body }
+```
+
+The same shape with the init and post phases absent:
+
+```
+[conditionStart: label A]
+[condition: push c]
+OpJumpFalse → loopEnd
+[body: ...]
+OpJump → A
+[loopEnd: label B]
+```
+
+`continue` back-patches to A, which for this loop is the condition rather than
+a post section — there is no post section to run.
+
+### 13.4 For-In Loop Structure
+
+```mutant
+for (k, v in xs) { body }
+```
+
+```
+[iterable: push xs]
+OpIterInit                         ; [iter]
+[head: label A]
+OpIterNext → loopEnd, binds        ; [iter] → [iter, key, value], or jump
+[bind value: OpSetLocal / OpSetGlobal]
+[bind key, when the loop binds two names]
+[body: ...]
+OpJump → A
+[loopEnd: label B]
+OpPop                              ; drop the cursor
+```
+
+`break` back-patches to B — *before* the `OpPop` — so the cursor is dropped on
+every exit path. `continue` back-patches to A, so the advance is this loop's
+post section.
+
+Two things about the body differ from §13.1 and are not stylistic. The body
+must be **stack-neutral**: the cursor lives underneath whatever the body leaves
+behind, so a body that leaks one value per iteration has the next `OpIterNext`
+reading that leftover as the cursor. And `binds` is read through the VM's
+operand reader rather than indexed out of the instruction stream directly —
+a raw byte index returns the *obfuscated* byte, which silently made a
+two-binding loop bind one.
+
+### 13.5 Match Expressions
+
+```mutant
+match (subject) { p1 | p2 => a, p3 => b, _ => c }
+```
+
+A `match` is an expression, so every path through it leaves exactly one value:
+
+```
+[subject: push it once]
+[per alternative]
+  OpDup                            ; [subject, subject]
+  [pattern]
+  OpEqual                          ; [subject, bool]
+  OpJumpFalse → next alternative
+[on a match]
+  OpPop                            ; drop the subject
+  [arm body]
+  [leave exactly one value]
+  OpJump → end
+[no arm matched, and no `_` arm]
+  OpMatchFail                      ; pops the subject and raises
+[end]
+```
+
+The subject lives on the stack behind `OpDup` rather than in a scratch local
+because `SymbolTable.Define` never reuses a slot: a temporary per match would
+spend one of the 256 one-byte local slots each time and eventually panic inside
+`code.Make`. A wildcard arm compiles as the body alone — no compare, no jump —
+and its presence is what omits the trailing `OpMatchFail`.
+
+"Leave exactly one value" is decided from the **syntax**, not from the last
+instruction emitted: if the arm body's last statement is an expression
+statement, its `OpPop` is removed, and otherwise `OpNull` is emitted. The
+instruction-stream test that §6.4 describes cannot be used here, because a
+`for (v in xs)` also ends in an `OpPop` — the one dropping the cursor — and
+removing that one leaks the iterator as the value of the arm. `if` branches go
+through the same rule for the same reason.
 
 ---
 

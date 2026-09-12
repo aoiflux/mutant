@@ -250,7 +250,7 @@
                         "hint",
                         "off"
                     ],
-                    "description": "Severity for unreachable-code diagnostics (statements after an unconditional return/break/continue). Set to 'off' to suppress the rule."
+                    "description": "Severity for unreachable-code diagnostics: statements after an unconditional return/break/continue, and a match arm written after `_`, which matches anything. Set to 'off' to suppress the rule."
                 },
                 "mutant.lint.rules.platformSupport.severity": {
                     "type": "string",
@@ -359,6 +359,18 @@
                         "off"
                     ],
                     "description": "Severity for unchecked-error diagnostics: warns when `let value, err = f(...)` binds the error half of a (value, err) builtin and nothing reads that binding before the name is rebound or the scope ends. A failed call leaves null in the value beside the error, so a program that ignores the error carries on with nothing and reports success. The rule stays quiet when the error is read in any way at all \u2014 tested, printed, returned, passed on \u2014 when the failure is caught through the value instead (an `if` or `for` condition on it, or a BOOLEAN success flag used anywhere), when a nested function mentions the name, and when `_` is bound to say the failure is deliberately ignored. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.matchExhaustiveness.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for match-exhaustiveness diagnostics: warns when every arm of a match is a variant of one enum declared in the same file, no arm is `_`, and a variant of that enum has no arm. A match must produce a value, so a subject no arm matches raises at run time rather than yielding null — which means adding a variant to an enum silently leaves every existing match over it one arm short. The rule stays quiet unless it is certain: a literal pattern, two different enums, an imported enum (`mod.Status.Ok`, whose variants live in another file), a `_` arm, or a name that is both an enum and a `let` binding all suppress it. Set to 'off' to suppress the rule."
                 }
             }
         },

@@ -38,7 +38,8 @@ VS Code language support for Mutant.
 - `mutant.lint.rules.semicolon.severity`: severity for missing/redundant
   semicolon diagnostics (each with a quick fix)
 - `mutant.lint.rules.unreachableCode.severity`: severity for unreachable-code
-  diagnostics (statements after an unconditional `return`/`break`/`continue`)
+  diagnostics (statements after an unconditional `return`/`break`/`continue`, and
+  a `match` arm written after `_`)
 - `mutant.lint.rules.platformSupport.severity`: severity for OS-aware
   platform-support warnings (a builtin unsupported on the host OS)
 - `mutant.lint.rules.builtinArity.severity`: severity for wrong-argument-count
@@ -65,6 +66,13 @@ VS Code language support for Mutant.
   rebound or the scope ends. Quiet when the error is read in any way, when the
   failure is caught through the value instead, or when `_` is bound to say the
   failure is deliberately ignored
+- `mutant.lint.rules.matchExhaustiveness.severity`: severity for a `match` whose
+  arms are variants of one enum declared in the same file, with no `_` arm and a
+  variant left out. An unmatched subject raises at run time rather than yielding
+  null, so a variant added to an enum leaves every existing match over it one arm
+  short. Quiet unless it is certain: a literal pattern, two different enums, an
+  imported enum, a `_` arm, or a name that is both an enum and a binding all
+  suppress it
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

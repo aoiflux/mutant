@@ -279,3 +279,36 @@ func TestTemplateKeepsItsSpelling(t *testing.T) {
 		t.Errorf("raw spelling %q, want %q", raw, src)
 	}
 }
+
+// TestAQuoteScanThatRunsOffTheEndDoesNotPanic pins the invariant that made this
+// a crash rather than a diagnostic: every use of the lexer's position is an
+// index into the source, so it must never point past the end of it.
+//
+// The source below is wrong -- a backslash is not an escape inside a `${...}`
+// hole, so the quote after it opens a string that never closes -- but a lexer
+// answers wrong source with a token stream the parser can complain about, not
+// with a slice out of range.
+func TestAQuoteScanThatRunsOffTheEndDoesNotPanic(t *testing.T) {
+	sources := []string{
+		`putln("x ${f(\"a\")} y");`,
+		`"${ "`,
+		`"${ h["`,
+		`"unterminated`,
+		`"""${ "`,
+	}
+
+	for _, src := range sources {
+		t.Run(src, func(t *testing.T) {
+			lex := New(src)
+			for i := 0; ; i++ {
+				tok := lex.NextToken()
+				if tok.Type == token.EOF {
+					break
+				}
+				if i > len(src)+8 {
+					t.Fatalf("the lexer never reached EOF on %q", src)
+				}
+			}
+		})
+	}
+}

@@ -59,6 +59,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "spawnGlobalWrite", &config.SpawnGlobalWrite)
 	applyRuleSeverity(rulesMap, "unclosedResource", &config.UnclosedResource)
 	applyRuleSeverity(rulesMap, "uncheckedError", &config.UncheckedError)
+	applyRuleSeverity(rulesMap, "matchExhaustiveness", &config.MatchExhaustiveness)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

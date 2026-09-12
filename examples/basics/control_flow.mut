@@ -1,0 +1,116 @@
+// The three control-flow constructs beyond `if` and the counting `for`:
+// `while`, `for (item in collection)`, and `match`.
+//
+// The first two are statements. `match` is an expression -- it produces a
+// value, which is what makes it worth having over a chain of `if`s.
+
+// ------------------------------------------------------------------- while --
+// A loop whose end is a condition rather than a count. `break` and `continue`
+// work exactly as they do in a counting `for`.
+let queue = [7, 3, 0, 9, 4];
+let drained = 0;
+
+while (len(queue) > 0) {
+    let head = queue[0];
+    queue = slice(queue, 1, len(queue));
+
+    if (head == 0) {
+        continue;
+    }
+    if (head > 8) {
+        break;
+    }
+    drained = drained + head;
+}
+
+putln("while: drained ${drained}, ${len(queue)} left in the queue");
+
+// ------------------------------------------------------------------ for-in --
+// One binding over an array yields elements, because an element is what an
+// array holds. Two bindings yield the index alongside it.
+let ports = [22, 80, 443];
+
+for (port in ports) {
+    putln("for-in array: port ${port}");
+}
+
+for (i, port in ports) {
+    putln("for-in array: ports[${i}] = ${port}");
+}
+
+// One binding over a hash yields keys -- a hash's element is its key. Two
+// bindings yield the value with it. The visiting order is the order printing
+// the hash shows, so a program that loops over a hash and a program that
+// prints one agree about what order it is in.
+let severity = {"critical": 3, "high": 2, "low": 1};
+
+for (name in severity) {
+    putln("for-in hash: ${name}");
+}
+
+for (name, weight in severity) {
+    putln("for-in hash: ${name} weighs ${weight}");
+}
+
+// Strings iterate by character, bytes by byte.
+for (char in "mut") {
+    putln("for-in string: ${char}");
+}
+
+// `range` is an ordinary builtin returning an array, so counting is a for-in
+// over it rather than its own syntax.
+let total = 0;
+for (n in range(1, 5)) {
+    total = total + n;
+}
+putln("for-in range: 1..4 sums to ${total}");
+
+// ------------------------------------------------------------------- match --
+// Arms are `pattern => value`, tried top to bottom. A pattern is a literal, a
+// negated number, an enum variant, or `_`; alternatives are joined with `|`.
+// The match evaluates to the arm that matched, so it binds like any value.
+let describe = fn(code) {
+    return match (code) {
+        0 => "clean",
+        1 | 2 | 3 => "a few findings",
+        -1 => "the scan did not run",
+        _ => "many findings",
+    };
+};
+
+for (code in [0, 2, -1, 47]) {
+    putln("match literal: ${code} -> ${describe(code)}");
+}
+
+// Matching an enum is what the construct is for: the arms are the variants,
+// and the language server warns when one is missing and there is no `_`.
+enum Status { Ok, Failed, Skipped };
+
+let report = fn(status) {
+    return match (status) {
+        Status.Ok => "finished",
+        Status.Failed => "raised",
+        Status.Skipped => "not attempted",
+    };
+};
+
+putln("match enum: ${report(Status.Ok)}");
+putln("match enum: ${report(Status.Failed)}");
+putln("match enum: ${report(Status.Skipped)}");
+
+// An arm body may be a block, whose value is its last expression.
+let weigh = fn(name) {
+    return match (name) {
+        "critical" => {
+            let base = severity[name];
+            base * 10;
+        },
+        _ => 0,
+    };
+};
+
+putln("match block arm: critical weighs ${weigh("critical")}, other weighs ${weigh("other")}");
+
+// A match has to produce a value, so a subject no arm matches is a run-time
+// error naming the value -- not a null flowing quietly onward. That is why the
+// wildcard above is written out rather than assumed.
