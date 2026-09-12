@@ -31,9 +31,34 @@ What the files show:
   its own directory, plus a builtin namespace (`str.format`).
 - `lib/stats.mut` — `_total`, a top-level name beginning with `_`, which is
   private to that file and usable only inside it.
+- `lib/stats_test.mut` and `lib/report_test.mut` — tests for the two modules,
+  which is the other thing an import is for.
 
 The library files also run on their own, because a module is an ordinary `.mut`
 file. They just declare things and finish.
+
+## Tests
+
+```bash
+mutant test --cover examples/modules
+```
+
+```
+ok    lib/report_test.mut  (3 tests, 2ms)
+ok    lib/stats_test.mut  (9 tests, 2ms)
+
+2 files | 12 tests  (2ms)
+
+coverage: 100.0% of 21 lines
+      100.0%      4/4  lib/report.mut
+      100.0%    17/17  lib/stats.mut
+```
+
+A test file is an ordinary program, compiled the same way, so it imports what
+it tests exactly as `main.mut` does. `report_test.mut` imports `report.mut`,
+which brings `stats.mut` with it — the whole chain is compiled once, the same
+way running `main.mut` compiles it. See
+[docs/TESTING.md](../../docs/TESTING.md).
 
 See [docs/MODULES.md](../../docs/MODULES.md) for the rules.
 

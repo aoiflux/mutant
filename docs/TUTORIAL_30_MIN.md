@@ -375,7 +375,7 @@ hash with `"ok": false` rather than dropping out entirely is the idiom worth
 copying — a triage tool that silently skips a file is worse than one that says
 it failed.
 
-The whole forensic standard library is reached this way: 459 builtins across 34
+The whole forensic standard library is reached this way: 469 builtins across 35
 categories, catalogued in the [Capability Reference](CAPABILITY_REFERENCE.md).
 `fs_*` for files, `bin_*` for PE/ELF/Mach-O, `reg_*` for registry hives, `mft_*`
 and the filesystem parsers for disk images, `evtx_*` and `prefetch_*` for
@@ -386,25 +386,43 @@ have already learned.
 
 ## 6. Test, lint, format
 
-A test file is just a program whose last expression must be true. Name it
-`*_test.mut`:
+A test file is an ordinary program named `*_test.mut`. It is compiled the same
+way any program is, so it can `import` the module it is testing:
 
 ```mutant
 // iocs_test.mut
-let iocs = extract_iocs("beacon to 203.0.113.44 via hxxp://bad[.]example[.]com/x");
+test("an IPv4 beacon is extracted", fn() {
+	let iocs = extract_iocs("beacon to 203.0.113.44 via hxxp://bad[.]example[.]com/x");
 
-len(iocs["ipv4"]) == 1 && iocs["ipv4"][0] == "203.0.113.44";
+	assert_eq(len(iocs["ipv4"]), 1);
+	assert_contains(iocs["ipv4"], "203.0.113.44");
+});
+
+test("so is the defanged URL", fn() {
+	let iocs = extract_iocs("hxxp://bad[.]example[.]com/x");
+	assert_contains(iocs["domains"], "bad.example.com");
+});
 ```
 
 ```bash
 $ mutant test .
-ok    iocs_test.mut
+ok    iocs_test.mut  (2 tests, 3ms)
 
-1 passed, 0 failed
+1 file | 2 tests  (3ms)
 ```
 
-A test passes unless running it errors or its final value is `false`. That is
-the whole framework — there are no assertions to learn.
+`test(name, fn)` runs the test where it is written, so the file reads top to
+bottom; a `test` inside another is a subtest. The assertions —
+`assert`, `assert_eq`, `assert_ne`, `assert_contains`, `assert_err`,
+`assert_ok`, `fail` — record the file and line they failed on, and the test
+carries on rather than stopping: a failure is a recorded fact, not an
+exception. `before_each`/`after_each` are the fixtures.
+
+`--run` filters by name, `--json` reports for CI, and `--cover` says which
+source lines the tests reached. A file that declares no `test(...)` still
+passes unless it errored or its last expression was `false`, which is what this
+command used to be in its entirety. The full guide is
+[TESTING.md](TESTING.md).
 
 The linter is the same analyzer the language server runs, so the command line
 and your editor agree:

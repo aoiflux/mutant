@@ -1,0 +1,52 @@
+// Tests for stats.mut.
+//
+// Run them from the repository root:
+//
+//	mutant test examples/modules
+//	mutant test --cover examples/modules
+//
+// A test file is an ordinary program: it imports what it tests the same way
+// any other file would, and `mutant test` compiles it through the same build.
+
+import "stats.mut";
+
+test("sum adds the values", fn() {
+	assert_eq(stats.sum([12, 47, 31]), 90);
+});
+
+test("sum of nothing is nothing", fn() {
+	assert_eq(stats.sum([]), 0);
+});
+
+test("mean divides by the count", fn() {
+	assert_eq(stats.mean([2, 4, 6]), 4);
+});
+
+// The guard `mean` opens with. Without a test naming it, the branch is a line
+// nobody has ever run -- which is exactly what `--cover` reports it as if this
+// test is deleted.
+test("mean of nothing is nothing rather than a division by zero", fn() {
+	assert_eq(stats.mean([]), 0);
+});
+
+test("largest", fn() {
+	test("picks the biggest", fn() {
+		assert_eq(stats.largest([12, 47, 31, 8, 92]), 92);
+	});
+
+	test("of a single value is that value", fn() {
+		assert_eq(stats.largest([7]), 7);
+	});
+
+	test("handles the maximum arriving first", fn() {
+		assert_eq(stats.largest([92, 1, 2]), 92);
+	});
+});
+
+// The underscore is the export rule, so `_total` is not reachable from here.
+// That it is unreachable is the thing worth pinning: it is a compile-time
+// promise, and a test cannot assert on a program that does not compile -- so
+// what this test asserts is the public face that stands in for it.
+test("the private helper is not part of the surface", fn() {
+	assert_eq(stats.sum([1, 2, 3]), 6, "sum is the public way to _total");
+});

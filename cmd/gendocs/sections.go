@@ -50,6 +50,11 @@ var categorySections = []categorySection{
 		blurb:    "Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.",
 	},
 	{
+		category: "testing",
+		heading:  "Testing",
+		blurb:    "What `mutant test` reads. `test(name, fn)` names a test and runs it where it is written, so a test file reads top to bottom and a test declared inside another is a subtest of it; `before_each`/`after_each` register fixtures for the tests declared after them. The assertions record what they saw against the test that is running AND return it, so a failure is both something the report can name with a file and line and an ordinary value the program can look at. A test that dies is caught at its own boundary and costs the file no other test. See [TESTING.md](TESTING.md).",
+	},
+	{
 		category: "concurrency",
 		heading:  "Concurrency",
 		blurb:    "Run work alongside the rest of the program and pass values between the pieces. `spawn` starts a closure on its own VM and hands back a handle for `task_wait`/`task_done`; `chan_*` moves values between them. Each task gets a snapshot of globals, so a channel or a return value is the way back, not a shared variable. For applying one callback across an array, reach for `pmap`/`peach` in the standard library instead.",

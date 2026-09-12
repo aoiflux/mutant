@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"mutant/builtin"
 	"mutant/global"
 	"mutant/object"
 )
@@ -40,6 +41,27 @@ func (vm *VM) applyExecutorNative(kind string, args []object.Object) (object.Obj
 		return vm.serveConnValue(args)
 	case "serve_arg":
 		return vm.serveArgValue(args)
+
+	// The test framework. See testing.go for why these are run here.
+	case builtin.BuiltinNameTest:
+		return vm.hoTest(args)
+	case builtin.BuiltinNameBeforeEach, builtin.BuiltinNameAfterEach:
+		return vm.hoTestFixture(kind, args)
+	case builtin.BuiltinNameAssert:
+		return vm.hoAssert(args)
+	case builtin.BuiltinNameAssertEq:
+		return vm.hoAssertEq(args)
+	case builtin.BuiltinNameAssertNe:
+		return vm.hoAssertNe(args)
+	case builtin.BuiltinNameAssertContains:
+		return vm.hoAssertContains(args)
+	case builtin.BuiltinNameAssertErr:
+		return vm.hoAssertErr(args)
+	case builtin.BuiltinNameAssertOk:
+		return vm.hoAssertOk(args)
+	case builtin.BuiltinNameFail:
+		return vm.hoFail(args)
+
 	default:
 		return vmErrorf("unknown executor-native builtin %q", kind), nil
 	}

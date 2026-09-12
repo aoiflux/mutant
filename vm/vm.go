@@ -104,6 +104,20 @@ type VM struct {
 	// is a decision made after the VM exists and before it runs, and a
 	// constructor parameter would have to be threaded through all nine of them.
 	debug *Debugger
+
+	// cover is the line-coverage recorder, non-nil only under
+	// `mutant test --cover`. Like debug, it is one nil check per instruction on
+	// a run that is not using it. coverMain is the program's own function,
+	// captured before the run because it is the one function that is not in the
+	// constant pool. See coverage.go.
+	cover     *coverage
+	coverMain *object.CompiledFunction
+
+	// tests is the test-run ledger, created the first time the program calls
+	// one of the testing builtins and nil in every run that calls none. It is
+	// not on the instruction path: only the builtins themselves touch it, so a
+	// program that never asserts never learns it exists. See testing.go.
+	tests *testRun
 }
 
 var (
@@ -774,6 +788,10 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if err := vm.debug.step(); err != nil {
 				return err
 			}
+		}
+
+		if vm.cover != nil {
+			vm.cover.mark(vm.currentFrame().cl.Fn, ip)
 		}
 
 		opcodeByte, err := vm.xorStream.XOROneAt(ins[ip], int64(ip))

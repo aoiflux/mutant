@@ -540,6 +540,17 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameChanRecv, &BuiltIn{ChanRecv}},
 	{BuiltinNameChanTryRecv, &BuiltIn{ChanTryRecv}},
 	{BuiltinNameChanClose, &BuiltIn{ChanClose}},
+	// testing: named tests, fixtures and assertions (executor-native)
+	{BuiltinNameTest, testBuiltin},
+	{BuiltinNameBeforeEach, beforeEachBuiltin},
+	{BuiltinNameAfterEach, afterEachBuiltin},
+	{BuiltinNameAssert, assertBuiltin},
+	{BuiltinNameAssertEq, assertEqBuiltin},
+	{BuiltinNameAssertNe, assertNeBuiltin},
+	{BuiltinNameAssertContains, assertContainsBuiltin},
+	{BuiltinNameAssertErr, assertErrBuiltin},
+	{BuiltinNameAssertOk, assertOkBuiltin},
+	{BuiltinNameFail, failBuiltin},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

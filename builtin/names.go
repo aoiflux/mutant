@@ -488,4 +488,15 @@ const (
 	BuiltinNameChanClose   = "chan_close"
 	// resources: guaranteed cleanup (append-only)
 	BuiltinNameWithResource = "with_resource"
+	// testing: named tests, fixtures and assertions (append-only)
+	BuiltinNameTest           = "test"
+	BuiltinNameBeforeEach     = "before_each"
+	BuiltinNameAfterEach      = "after_each"
+	BuiltinNameAssert         = "assert"
+	BuiltinNameAssertEq       = "assert_eq"
+	BuiltinNameAssertNe       = "assert_ne"
+	BuiltinNameAssertContains = "assert_contains"
+	BuiltinNameAssertErr      = "assert_err"
+	BuiltinNameAssertOk       = "assert_ok"
+	BuiltinNameFail           = "fail"
 )

@@ -85,7 +85,7 @@ sweep, not a category the file belongs to.
 ## Folder map
 
 - `examples/basics/` language syntax and control flow
-- `examples/modules/` one program built from several files with `import`
+- `examples/modules/` one program built from several files with `import`, and the `*_test.mut` files that test them (`mutant test --cover examples/modules`)
 - `examples/macros/` quote/unquote and macro expansion patterns
 - `examples/text/` text, fuzzy matching, regex pipelines
 - `examples/policy/` OPA/Rego policy loading and decisions

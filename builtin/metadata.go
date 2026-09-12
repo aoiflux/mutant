@@ -1025,6 +1025,76 @@ var builtinDocs = map[string]builtinDoc{
 			param("fn", "Function called with the resource: (resource).", ParamFn),
 		},
 		returns: pairRet("what fn returned, and the first failure among the open, fn and the close", ParamAny)},
+
+	// Testing. Every one of these records what it saw in the run that is
+	// executing and is therefore only meaningful under `mutant test`; each also
+	// RETURNS its verdict, so a failure is a value the program can read the way
+	// it reads every other failure in this language.
+	BuiltinNameTest: {
+		signature: "test(name, fn)", summary: "Runs fn as a named test and records whether it passed. Tests run where they are written, in order; a test declared inside another is a subtest of it. A runtime error inside fn fails that test and the file keeps going.",
+		params: []builtinParamDoc{
+			param("name", "What this test is called, as it will be reported.", ParamString),
+			param("fn", "The test body, taking no parameters.", ParamFn),
+		},
+		returns: ret("true when the test and everything nested inside it passed", ParamBool)},
+	BuiltinNameBeforeEach: {
+		signature: "before_each(fn)", summary: "Registers fn to run before each test declared after this call, at this nesting level and inside it. A failure in fn fails the test it was preparing.",
+		params:  []builtinParamDoc{param("fn", "Setup function, taking no parameters.", ParamFn)},
+		returns: ret("null; the function is recorded for later tests", ParamNull)},
+	BuiltinNameAfterEach: {
+		signature: "after_each(fn)", summary: "Registers fn to run after each test declared after this call, at this nesting level and inside it. It runs whether the test passed, failed, or ended in an error.",
+		params:  []builtinParamDoc{param("fn", "Teardown function, taking no parameters.", ParamFn)},
+		returns: ret("null; the function is recorded for later tests", ParamNull)},
+	BuiltinNameAssert: {
+		signature: "assert(condition, message?)", summary: "Fails the current test unless condition is truthy.",
+		params: []builtinParamDoc{
+			param("condition", "Value that must be truthy; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the assertion held; an error naming what was seen when it did not", ParamBool)},
+	BuiltinNameAssertEq: {
+		signature: "assert_eq(got, want, message?)", summary: "Fails the current test unless got equals want. Scalars compare by value; arrays, hashes and structs compare by their rendered form, so key order does not matter.",
+		params: []builtinParamDoc{
+			param("got", "The value produced; any type is accepted.", ParamAny),
+			param("want", "The value expected; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the two are equal; an error showing both when they are not", ParamBool)},
+	BuiltinNameAssertNe: {
+		signature: "assert_ne(got, unwanted, message?)", summary: "Fails the current test when got equals unwanted, compared the way assert_eq compares.",
+		params: []builtinParamDoc{
+			param("got", "The value produced; any type is accepted.", ParamAny),
+			param("unwanted", "The value it must not be; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the two differ; an error showing the value when they do not", ParamBool)},
+	BuiltinNameAssertContains: {
+		signature: "assert_contains(container, value, message?)", summary: "Fails the current test unless container holds value: a substring of a string, an element of an array, or a key of a hash.",
+		params: []builtinParamDoc{
+			param("container", "String, array or hash to look in.", ParamString, ParamArray, ParamHash),
+			param("value", "Substring, element or key to look for.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the value was found; an error naming both when it was not", ParamBool)},
+	BuiltinNameAssertErr: {
+		signature: "assert_err(value, substring?)", summary: "Fails the current test unless value is an error, optionally requiring its message to contain substring. This is what the second binding of a (value, err) call is checked with.",
+		params: []builtinParamDoc{
+			param("value", "The value expected to be an error; any type is accepted.", ParamAny),
+			param("substring?", "Text the error message must contain.", ParamString),
+		},
+		returns: ret("true when the value was the expected error; an error describing the mismatch when it was not", ParamBool)},
+	BuiltinNameAssertOk: {
+		signature: "assert_ok(value, message?)", summary: "Fails the current test when value is an error, quoting the error's own message. This is the check to put on the second binding of a (value, err) call that is expected to succeed.",
+		params: []builtinParamDoc{
+			param("value", "The value expected not to be an error; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the value was not an error; an error quoting it when it was", ParamBool)},
+	BuiltinNameFail: {
+		signature: "fail(message)", summary: "Fails the current test unconditionally with the given message. For the branch a test should never reach.",
+		params:  []builtinParamDoc{param("message", "Why the test failed.", ParamString)},
+		returns: ret("an error carrying the message; the failure is recorded either way", ParamError)},
+
 	BuiltinNameKeys: {
 		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
 		params:  []builtinParamDoc{param("hash", "Hash to read keys from.", ParamHash)},
@@ -2291,6 +2361,14 @@ type capabilityCategory struct {
 }
 
 var capabilityCategories = []capabilityCategory{
+	// testing. First, because these are short, common words and a later family
+	// that wanted one of them would be the one to rename: `assert` claims every
+	// assert_* spelling, and none of the five collide with an existing prefix.
+	{"assert", "testing"},
+	{"test", "testing"},
+	{"fail", "testing"},
+	{"before_each", "testing"},
+	{"after_each", "testing"},
 	// networking / http
 	{"http_", "http"},
 	{"ws_", "network"},

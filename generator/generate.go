@@ -160,6 +160,24 @@ func CompileForDebug(entrypath string, modulePaths []string) (*compiler.ByteCode
 	return bytecode, err, errType, details
 }
 
+// CompileForTest compiles a program `mutant test` is about to run in its own
+// process.
+//
+// It is the debug build, and deliberately the same one. A test wants exactly
+// what a debug session wants: the module graph linked, so a test file can
+// import the thing it is testing; the positions kept, so a failed assertion can
+// name the line it was written on; and the security opcodes still injected, so
+// the program under test is the program that ships rather than a private
+// variant that only exists inside the test runner.
+//
+// The runner used to compile through lexer -> parser -> compiler.New() instead,
+// which is why an `import` in a test file resolved to nothing and the namespace
+// it bound was then an undefined variable. A test framework that cannot cross a
+// file boundary cannot test the feature files exist for. (T-4)
+func CompileForTest(entrypath string, modulePaths []string) (*compiler.ByteCode, error, errrs.ErrorType, []string) {
+	return CompileForDebug(entrypath, modulePaths)
+}
+
 // buildByteCode walks the import graph, links it, and compiles the result. It
 // is everything compile does up to the point where the bytecode becomes a file,
 // split out so a debug session can take the bytecode and stop there.

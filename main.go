@@ -675,6 +675,8 @@ func printHelpTopic(args []string) {
 		printGenHelp(true)
 	case RELEASECMD:
 		printReleaseHelp()
+	case TESTCMD:
+		printTestHelp()
 	case DEBUGCMD:
 		printDebugHelp()
 	default:
@@ -698,7 +700,7 @@ Usage:
   mutant release [options] --src <file.mut>
   mutant fmt [--check] [--stdout] <file-or-dir>...
   mutant lint [--strict] <file-or-dir>...
-  mutant test [file-or-dir]...
+  mutant test [options] [file-or-dir]...
   mutant debug [--port N] [file.mut]
   mutant help [command]
 
@@ -708,7 +710,7 @@ Commands:
   release    Build a standalone executable for a target OS/ARCH.
   fmt        Format Mutant source in place (or --check / --stdout).
   lint       Report diagnostics for Mutant source (--strict fails on warnings).
-  test       Run *_test.mut files (fail on error or a false result).
+  test       Run *_test.mut files: named tests, assertions and coverage.
   debug      Serve the Debug Adapter Protocol for an editor (breakpoints,
              stepping, variables). Started by the editor, not by hand.
   help       Show general or command-specific help.

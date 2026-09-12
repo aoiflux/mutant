@@ -18,6 +18,34 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **A real test framework: `mutant test`.** Named tests and subtests,
+  assertions that report the file and line they failed on, fixtures, name
+  filtering, a `--json` reporter for CI, and line coverage with an LCOV
+  profile. The command existed before this and did one thing: run each
+  `*_test.mut` and call it passed unless it errored or its last expression was
+  `false`. There were no `*_test.mut` files in the repository, which is the
+  usual sign.
+
+  The fix underneath all of it: a test file is now compiled through the same
+  build every other program goes through. It used to have its own pipeline,
+  which never walked the module graph -- so an `import` in a test file resolved
+  to nothing and the namespace it bound was an undefined variable. A test
+  framework that could not cross a file boundary could not test the feature
+  files exist for.
+
+  `test(name, fn)` runs the test where it is written, so a file reads top to
+  bottom and a test declared inside another is a subtest. A failed assertion is
+  recorded and the test carries on -- the language has no exceptions and this
+  does not invent one -- and every assertion also returns its verdict, so a
+  failure is an ordinary value. A test that dies of a runtime error is caught
+  at its own boundary, so one broken test costs the file no other test.
+
+  Ten builtins: `test`, `before_each`, `after_each`, `assert`, `assert_eq`,
+  `assert_ne`, `assert_contains`, `assert_err`, `assert_ok`, `fail`. Deferred
+  and said so: parallel test files (the task registry behind `spawn` is
+  process-wide), benchmarks, mocking, and asserting on a crash. See
+  [docs/TESTING.md](docs/TESTING.md).
+
 - **A debugger: `mutant debug`.** Breakpoints, stepping, the call stack and
   variable inspection, delivered as a Debug Adapter Protocol server, so VS Code
   (press F5 on a `.mut`), Neovim's `nvim-dap` and anything else that speaks DAP

@@ -53,6 +53,20 @@ var executorNativeKinds = map[*BuiltIn]string{
 
 	serveConnBuiltin: "serve_conn",
 	serveArgBuiltin:  "serve_arg",
+
+	// The test framework: `test` calls a function, and the assertions record
+	// what they saw into the executing run. See testing.go.
+	testBuiltin:       BuiltinNameTest,
+	beforeEachBuiltin: BuiltinNameBeforeEach,
+	afterEachBuiltin:  BuiltinNameAfterEach,
+
+	assertBuiltin:         BuiltinNameAssert,
+	assertEqBuiltin:       BuiltinNameAssertEq,
+	assertNeBuiltin:       BuiltinNameAssertNe,
+	assertContainsBuiltin: BuiltinNameAssertContains,
+	assertErrBuiltin:      BuiltinNameAssertErr,
+	assertOkBuiltin:       BuiltinNameAssertOk,
+	failBuiltin:           BuiltinNameFail,
 }
 
 // ExecutorNativeKind returns the operation name an executor must run natively

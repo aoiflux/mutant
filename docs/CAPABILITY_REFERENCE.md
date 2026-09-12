@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **459 registered builtins** across **34 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **469 registered builtins** across **35 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -92,6 +92,23 @@ Core language primitives: collection and hash operations, first-class higher-ord
 | `values(hash: HASH) -> ARRAY` | all | Returns the hash values as an array (ordered by sorted key). |
 | `with_resource(resource, closer: STRING\|FUNCTION, fn: FUNCTION) -> (ANY, ERROR)` | all | Calls fn with a resource an open call returned and always closes it afterwards -- whether fn returns a value, returns an error, or fails outright. closer is the name of a closing builtin ("ntfs_close") or a function taking the resource. If the open itself failed, fn never runs and the open's error comes back unchanged, so wrapping an existing call in with_resource does not change what the program sees. Returns (value, err): value is what fn returned, and err is the first failure among the open, an error fn returned, and the close. When fn and the close both fail, fn's error is the one returned and the close's is attached to it as related["close_error"]. |
 | `zip(a: ARRAY, b: ARRAY) -> ARRAY` | all | Returns an array of [a[i], b[i]] pairs up to the shorter length. |
+
+## Testing (10)
+
+What `mutant test` reads. `test(name, fn)` names a test and runs it where it is written, so a test file reads top to bottom and a test declared inside another is a subtest of it; `before_each`/`after_each` register fixtures for the tests declared after them. The assertions record what they saw against the test that is running AND return it, so a failure is both something the report can name with a file and line and an ordinary value the program can look at. A test that dies is caught at its own boundary and costs the file no other test. See [TESTING.md](TESTING.md).
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `after_each(fn: FUNCTION) -> NULL` | all | Registers fn to run after each test declared after this call, at this nesting level and inside it. It runs whether the test passed, failed, or ended in an error. |
+| `assert(condition, message?: STRING) -> BOOLEAN` | all | Fails the current test unless condition is truthy. |
+| `assert_contains(container: STRING\|ARRAY\|HASH, value, message?: STRING) -> BOOLEAN` | all | Fails the current test unless container holds value: a substring of a string, an element of an array, or a key of a hash. |
+| `assert_eq(got, want, message?: STRING) -> BOOLEAN` | all | Fails the current test unless got equals want. Scalars compare by value; arrays, hashes and structs compare by their rendered form, so key order does not matter. |
+| `assert_err(value, substring?: STRING) -> BOOLEAN` | all | Fails the current test unless value is an error, optionally requiring its message to contain substring. This is what the second binding of a (value, err) call is checked with. |
+| `assert_ne(got, unwanted, message?: STRING) -> BOOLEAN` | all | Fails the current test when got equals unwanted, compared the way assert_eq compares. |
+| `assert_ok(value, message?: STRING) -> BOOLEAN` | all | Fails the current test when value is an error, quoting the error's own message. This is the check to put on the second binding of a (value, err) call that is expected to succeed. |
+| `before_each(fn: FUNCTION) -> NULL` | all | Registers fn to run before each test declared after this call, at this nesting level and inside it. A failure in fn fails the test it was preparing. |
+| `fail(message: STRING) -> ERROR` | all | Fails the current test unconditionally with the given message. For the branch a test should never reach. |
+| `test(name: STRING, fn: FUNCTION) -> BOOLEAN` | all | Runs fn as a named test and records whether it passed. Tests run where they are written, in order; a test declared inside another is a subtest of it. A runtime error inside fn fails that test and the file keeps going. |
 
 ## Concurrency (8)
 

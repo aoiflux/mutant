@@ -88,10 +88,12 @@ generation, release packaging, and help.
 mutant
 mutant hello.mut
 mutant hello.mu
+mutant test ./lib
 mutant debug hello.mut
 mutant help
 mutant help gen
 mutant help release
+mutant help test
 mutant help debug
 ```
 
@@ -101,6 +103,11 @@ mutant help debug
   artifact nobody can open).
 - `mutant hello.mu` runs compiled bytecode in the Mutant VM, prompting for the
   password it was encrypted with.
+- `mutant test` runs every `*_test.mut` file: named tests and subtests,
+  assertions that report the line they failed on, fixtures, filtering, a
+  `--json` reporter for CI and `--cover` for line coverage. A test file is an
+  ordinary program compiled the same way, so it can `import` the module it is
+  testing; see [docs/TESTING.md](docs/TESTING.md).
 - `mutant debug` serves the Debug Adapter Protocol so an editor can set
   breakpoints, step and inspect a running program. It is started by the editor
   rather than by hand; see
@@ -389,6 +396,8 @@ snippet completions), see:
 - [docs/GRAPH_DATABASE.md](docs/GRAPH_DATABASE.md)
 - [docs/RUNTIME_INTEGRATION.md](docs/RUNTIME_INTEGRATION.md)
 - [docs/STRUCTURED_DATA.md](docs/STRUCTURED_DATA.md)
+- [docs/TESTING.md](docs/TESTING.md) — `mutant test`: assertions, subtests,
+  fixtures, filtering, `--json` and coverage
 - [docs/DEBUGGING.md](docs/DEBUGGING.md) — breakpoints, stepping and variables
   from an editor, and what the debugger deliberately will not do
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)

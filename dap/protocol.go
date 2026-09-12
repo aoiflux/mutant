@@ -43,8 +43,8 @@ type event struct {
 // each of the ones left out, and the reason they are commented rather than
 // silently missing.
 type capabilities struct {
-	SupportsConfigurationDoneRequest bool `json:"supportsConfigurationDoneRequest"`
-	SupportsTerminateRequest         bool `json:"supportsTerminateRequest"`
+	SupportsConfigurationDoneRequest   bool `json:"supportsConfigurationDoneRequest"`
+	SupportsTerminateRequest           bool `json:"supportsTerminateRequest"`
 	SupportsBreakpointLocationsRequest bool `json:"supportsBreakpointLocationsRequest"`
 
 	// Hit counts are supported because a count is not an expression. General
@@ -158,9 +158,9 @@ type evaluateArguments struct {
 }
 
 type breakpointLocationsArguments struct {
-	Source source `json:"source"`
-	Line   int    `json:"line"`
-	EndLine int   `json:"endLine,omitempty"`
+	Source  source `json:"source"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"endLine,omitempty"`
 }
 
 type breakpointLocation struct {
