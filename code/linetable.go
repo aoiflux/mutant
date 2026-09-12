@@ -45,52 +45,73 @@ func (t LineTable) At(ip int) (line, col int, ok bool) {
 		return 0, 0, false
 	}
 
+	var found bool
+	t.forEach(func(entry lineEntry) bool {
+		if entry.ip > ip {
+			// Either nothing covers ip at all, or the previous entry does and
+			// this one is where its coverage ends. Both stop the walk.
+			return false
+		}
+		line, col, found = entry.line, entry.col, true
+		return true
+	})
+
+	if !found {
+		return 0, 0, false
+	}
+	return line, col, true
+}
+
+// lineEntry is one decoded entry: the offset the entry begins at and the
+// position recorded for it, with the deltas already accumulated.
+type lineEntry struct {
+	ip   int
+	line int
+	col  int
+}
+
+// forEach decodes the table from the start and hands each entry to visit in
+// emission order, stopping early when visit returns false.
+//
+// It is where the decode loop lives, so that At, Remap and BuildLineIndex read
+// the same format the one way rather than three times each with its own copy of
+// the varint arithmetic. A malformed entry ends the walk rather than reporting
+// an error: a table is debug information, every caller is already answering
+// some other question, and the entries that did decode are worth more than a
+// failure that discards them.
+func (t LineTable) forEach(visit func(lineEntry) bool) {
 	var (
-		curIP   int
-		curLine int
-		curCol  int
-		found   bool
-		pos     int
+		entry lineEntry
+		pos   int
 	)
 
 	for pos < len(t) {
 		ipDelta, n := binary.Uvarint(t[pos:])
 		if n <= 0 {
-			break
+			return
 		}
 		pos += n
 
 		lineDelta, n := binary.Varint(t[pos:])
 		if n <= 0 {
-			break
+			return
 		}
 		pos += n
 
 		colDelta, n := binary.Varint(t[pos:])
 		if n <= 0 {
-			break
+			return
 		}
 		pos += n
 
-		nextIP := curIP + int(ipDelta)
-		if found && nextIP > ip {
-			break
-		}
-		if !found && nextIP > ip {
-			// The first entry already starts past ip: nothing covers it.
-			return 0, 0, false
-		}
+		entry.ip += int(ipDelta)
+		entry.line += int(lineDelta)
+		entry.col += int(colDelta)
 
-		curIP = nextIP
-		curLine += int(lineDelta)
-		curCol += int(colDelta)
-		found = true
+		if !visit(entry) {
+			return
+		}
 	}
-
-	if !found {
-		return 0, 0, false
-	}
-	return curLine, curCol, true
 }
 
 // Remap rewrites every entry's instruction offset through offsets, which maps
@@ -107,41 +128,13 @@ func (t LineTable) Remap(offsets map[int]int) LineTable {
 		return nil
 	}
 
-	var (
-		out     LineTableBuilder
-		curIP   int
-		curLine int
-		curCol  int
-		pos     int
-	)
-
-	for pos < len(t) {
-		ipDelta, n := binary.Uvarint(t[pos:])
-		if n <= 0 {
-			break
+	var out LineTableBuilder
+	t.forEach(func(entry lineEntry) bool {
+		if moved, ok := offsets[entry.ip]; ok {
+			out.Add(moved, entry.line, entry.col)
 		}
-		pos += n
-
-		lineDelta, n := binary.Varint(t[pos:])
-		if n <= 0 {
-			break
-		}
-		pos += n
-
-		colDelta, n := binary.Varint(t[pos:])
-		if n <= 0 {
-			break
-		}
-		pos += n
-
-		curIP += int(ipDelta)
-		curLine += int(lineDelta)
-		curCol += int(colDelta)
-
-		if moved, ok := offsets[curIP]; ok {
-			out.Add(moved, curLine, curCol)
-		}
-	}
+		return true
+	})
 
 	return out.Build()
 }

@@ -18,6 +18,12 @@ VS Code language support for Mutant.
   category, and any platform constraint.
 - **Semantic highlighting**, go-to-definition, references, rename, document and
   workspace symbols, and signature help.
+- **Debugging** (press F5 on a `.mut`): breakpoints with hit counts, step
+  over/into/out, the call stack, and Arguments / Locals / Globals with arrays,
+  hashes and structs expandable. The CLI is the debug adapter -- the extension
+  runs `mutant debug` and speaks the Debug Adapter Protocol to it. Conditional
+  breakpoints and watch expressions beyond a plain variable name are
+  deliberately not supported; see `docs/DEBUGGING.md` for why.
 - Syntax highlighting via a TextMate grammar.
 
 ## Configuration

@@ -30,6 +30,7 @@ const (
 	FMTCMD     = "fmt"
 	LINTCMD    = "lint"
 	TESTCMD    = "test"
+	DEBUGCMD   = "debug"
 	VERSION    = "Version: 2.4.0"
 )
 
@@ -72,6 +73,7 @@ var commandHandlers = map[string]func([]string) int{
 	FMTCMD:     handleFmtCommand,
 	LINTCMD:    handleLintCommand,
 	TESTCMD:    handleTestCommand,
+	DEBUGCMD:   handleDebugCommand,
 }
 
 func main() {
@@ -190,7 +192,7 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 
 	for _, arg := range args[1:] {
 		switch arg {
-		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
+		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD:
 			return false
 		}
 
@@ -464,7 +466,7 @@ func handleFileInvocation(args []string) (bool, int) {
 
 func isBuiltinCommand(arg string) bool {
 	switch arg {
-	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD:
+	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD:
 		return true
 	default:
 		return false
@@ -673,6 +675,8 @@ func printHelpTopic(args []string) {
 		printGenHelp(true)
 	case RELEASECMD:
 		printReleaseHelp()
+	case DEBUGCMD:
+		printDebugHelp()
 	default:
 		fmt.Printf("unknown help topic: %s\n\n", args[0])
 		printGeneralHelp()
@@ -695,6 +699,7 @@ Usage:
   mutant fmt [--check] [--stdout] <file-or-dir>...
   mutant lint [--strict] <file-or-dir>...
   mutant test [file-or-dir]...
+  mutant debug [--port N] [file.mut]
   mutant help [command]
 
 Commands:
@@ -704,6 +709,8 @@ Commands:
   fmt        Format Mutant source in place (or --check / --stdout).
   lint       Report diagnostics for Mutant source (--strict fails on warnings).
   test       Run *_test.mut files (fail on error or a false result).
+  debug      Serve the Debug Adapter Protocol for an editor (breakpoints,
+             stepping, variables). Started by the editor, not by hand.
   help       Show general or command-specific help.
 
 Global options:

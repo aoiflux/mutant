@@ -355,6 +355,60 @@ func (st *SymbolTable) GlobalNames() []string {
 	return names
 }
 
+// LocalSlotNames returns this table's local slots as a slice indexed by slot,
+// each entry the name declared there and empty where there is none to report.
+//
+// A slot loses its name when a later declaration takes the name over, since the
+// store is keyed by name and holds one symbol per key. `let x = 1; let x = 2;`
+// allocates two slots; the second answers to `x` and the first answers to
+// nothing, which is the honest reading -- the alternative is a debugger showing
+// two variables called `x`, one of them unreachable from any source line.
+//
+// nil at the root, where the definitions are globals rather than locals:
+// GlobalSlotNames answers for those.
+func (st *SymbolTable) LocalSlotNames() []string {
+	if st.Outer == nil || st.numDefinitions == 0 {
+		return nil
+	}
+	return slotNames(st.store, LocalScope, st.numDefinitions)
+}
+
+// GlobalSlotNames returns the program's global slots as a slice indexed by
+// slot, under the same contract LocalSlotNames describes.
+//
+// Symbol.Name, not the store key: at the root of a modular program the key
+// carries a module qualifier that no user ever typed. Builtins are skipped
+// because DefineBuiltin allocates them no slot -- their index is a registry
+// ordinal in a different space, and letting one through would overwrite the
+// name of whichever global happens to hold that slot.
+func (st *SymbolTable) GlobalSlotNames() []string {
+	root := st.root()
+	if root.numDefinitions == 0 {
+		return nil
+	}
+	return slotNames(root.store, GlobalScope, root.numDefinitions)
+}
+
+// slotNames projects a store onto a slice indexed by slot, keeping only the
+// symbols in the scope that owns those slots. Out-of-range indices are dropped
+// rather than grown into: a scope's slot count comes from its own definition
+// counter, and a symbol claiming a slot past it is in the wrong table.
+func slotNames(store map[string]Symbol, scope SymbolScope, count int) []string {
+	names := make([]string, count)
+	populated := false
+	for _, symbol := range store {
+		if symbol.Scope != scope || symbol.Index < 0 || symbol.Index >= count {
+			continue
+		}
+		names[symbol.Index] = symbol.Name
+		populated = true
+	}
+	if !populated {
+		return nil
+	}
+	return names
+}
+
 // freeOriginal returns the outer symbol that this table's free variable index
 // captures. The compiler uses it to tell an ordinary captured variable, which
 // lives in a cell and can be assigned, from the enclosing function's own name,

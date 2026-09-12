@@ -124,9 +124,52 @@ func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 // separately compiled modules could not be merged afterwards without each
 // indexing the other's constants.
 func compile(entrypath string, modulePaths []string, stripDebug bool, password string, mutationLevel int, mutationSeed int64, privateKey []byte) ([]byte, error, errrs.ErrorType, []string) {
+	bytecode, level, err, errType, details := buildByteCode(entrypath, modulePaths, mutationLevel, mutationSeed)
+	if err != nil {
+		return nil, err, errType, details
+	}
+
+	if stripDebug {
+		bytecode.StripDebugInfo()
+	}
+
+	encodedByteCode, err := encode(bytecode, level, password, privateKey)
+	if err != nil {
+		return nil, err, errrs.ERROR, nil
+	}
+
+	return encodedByteCode, nil, "", nil
+}
+
+// CompileForDebug compiles a program to bytecode a debugger can drive: every
+// position kept, and no mutation.
+//
+// It stops where compile continues -- before stripping, before encoding, before
+// signing -- because a debug session runs the program in the process that
+// compiled it. Round-tripping it through an artifact would mean either a
+// password prompt in the middle of a protocol handshake the editor owns, or a
+// release build with nothing left to step through. See decision 2 in
+// plans/T1_DEBUGGER.md.
+//
+// Mutation is off for the same reason: nothing is being protected in a session
+// whose whole purpose is to watch the program execute, and every layer removed
+// is a layer that cannot misreport a position. The injected security checks
+// stay on, so the program being stepped is the program that runs.
+func CompileForDebug(entrypath string, modulePaths []string) (*compiler.ByteCode, error, errrs.ErrorType, []string) {
+	bytecode, _, err, errType, details := buildByteCode(entrypath, modulePaths, 0, 0)
+	return bytecode, err, errType, details
+}
+
+// buildByteCode walks the import graph, links it, and compiles the result. It
+// is everything compile does up to the point where the bytecode becomes a file,
+// split out so a debug session can take the bytecode and stop there.
+//
+// The second return is the polymorphism level the compiler actually applied,
+// which encode needs and which is not recoverable from the instruction bytes.
+func buildByteCode(entrypath string, modulePaths []string, mutationLevel int, mutationSeed int64) (*compiler.ByteCode, int, error, errrs.ErrorType, []string) {
 	graph, err := module.Load(entrypath, modulePaths)
 	if err != nil {
-		return nil, err, moduleErrorType(err), moduleErrorDetails(err)
+		return nil, 0, err, moduleErrorType(err), moduleErrorDetails(err)
 	}
 	linked := graph.Link()
 
@@ -164,29 +207,19 @@ func compile(entrypath string, modulePaths []string, stripDebug bool, password s
 		evaluator.DefineMacros(mod.Program, macroEnv)
 		expandedNode, expandErr := evaluator.ExpandMacros(mod.Program, macroEnv)
 		if expandErr != nil {
-			return nil, expandErr, errrs.COMPILER_ERROR, nil
+			return nil, 0, expandErr, errrs.COMPILER_ERROR, nil
 		}
 		expanded, ok := expandedNode.(*ast.Program)
 		if !ok || expanded == nil {
-			return nil, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
+			return nil, 0, fmt.Errorf("macro expansion did not return program"), errrs.COMPILER_ERROR, nil
 		}
 
 		if err := comp.Compile(expanded); err != nil {
-			return nil, err, errrs.COMPILER_ERROR, nil
+			return nil, 0, err, errrs.COMPILER_ERROR, nil
 		}
 	}
 
-	bytecode := comp.ByteCode()
-	if stripDebug {
-		bytecode.StripDebugInfo()
-	}
-
-	encodedByteCode, err := encode(bytecode, comp.PolymorphicLevel(), password, privateKey)
-	if err != nil {
-		return nil, err, errrs.ERROR, nil
-	}
-
-	return encodedByteCode, nil, "", nil
+	return comp.ByteCode(), comp.PolymorphicLevel(), nil, "", nil
 }
 
 // moduleErrorType classifies a failure from walking the import graph so the

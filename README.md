@@ -88,9 +88,11 @@ generation, release packaging, and help.
 mutant
 mutant hello.mut
 mutant hello.mu
+mutant debug hello.mut
 mutant help
 mutant help gen
 mutant help release
+mutant help debug
 ```
 
 - `mutant` starts the REPL
@@ -99,6 +101,10 @@ mutant help release
   artifact nobody can open).
 - `mutant hello.mu` runs compiled bytecode in the Mutant VM, prompting for the
   password it was encrypted with.
+- `mutant debug` serves the Debug Adapter Protocol so an editor can set
+  breakpoints, step and inspect a running program. It is started by the editor
+  rather than by hand; see
+  [docs/DEBUGGING.md](docs/DEBUGGING.md).
 
 #### Supplying the password
 
@@ -383,6 +389,8 @@ snippet completions), see:
 - [docs/GRAPH_DATABASE.md](docs/GRAPH_DATABASE.md)
 - [docs/RUNTIME_INTEGRATION.md](docs/RUNTIME_INTEGRATION.md)
 - [docs/STRUCTURED_DATA.md](docs/STRUCTURED_DATA.md)
+- [docs/DEBUGGING.md](docs/DEBUGGING.md) — breakpoints, stepping and variables
+  from an editor, and what the debugger deliberately will not do
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
 

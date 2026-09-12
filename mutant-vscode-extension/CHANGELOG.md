@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Debugging** — a `mutant` debug type. Press F5 on a `.mut` file with no
+  `launch.json` and the extension debugs the file in front of you; a saved
+  configuration takes `program`, `stopOnEntry`, `modulePaths` and `noDebug`.
+  The adapter is the CLI itself (`mutant debug`), found through the existing
+  `mutant.cli.path` setting, so the binary that runs a program is the binary
+  that debugs it.
+
 ## 0.1.0
 
 New this release:

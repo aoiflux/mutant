@@ -431,6 +431,14 @@ $ mutant fmt --stdout triage.mut
 $ mutant fmt --check .                 # lists files it would change; exits non-zero
 ```
 
+And when `putln` stops being enough, there is a debugger. `mutant debug` serves
+the Debug Adapter Protocol, so the editor drives it: in VS Code, press F5 on a
+`.mut` and set breakpoints in the gutter; step over, into and out; read the call
+stack and the values in each frame. It is started by the editor rather than by
+hand, and it debugs the source rather than a `.mu` — a release artifact has had
+its line numbers stripped, so there is nothing in one to step through. See
+[DEBUGGING.md](DEBUGGING.md).
+
 ---
 
 ## 7. Ship it

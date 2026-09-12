@@ -9,6 +9,7 @@ import (
 	"mutant/builtin"
 	"mutant/code"
 	"mutant/object"
+	"path/filepath"
 	"sort"
 )
 
@@ -157,6 +158,19 @@ type ByteCode struct {
 	// Debug info, and stripped with the rest of it: it would otherwise hand a
 	// release artifact the whole import graph and every absolute path in it.
 	ModuleSpans []ModuleSpan
+
+	// GlobalNames are the program's global slots, indexed by slot number, and
+	// carry the same contract CompiledFunction.LocalNames does for a frame:
+	// the name to show for a slot, empty where there is none to show.
+	//
+	// Bare names, not the module-qualified keys the symbol table files them
+	// under -- the qualifier is a linker detail nobody typed. Two modules may
+	// each declare `helper`; they hold different slots, so both are listed,
+	// each against its own.
+	//
+	// Debug info, stripped with the rest: a release artifact would otherwise
+	// name every top-level binding in the program.
+	GlobalNames []string
 }
 
 // ModuleSpan marks where one module's source begins inside the linked blob.
@@ -198,6 +212,73 @@ func (bc *ByteCode) ModuleAt(line int) (path string, localLine int, ok bool) {
 	return "", 0, false
 }
 
+// ModuleLine is the inverse of ModuleAt: it maps a file and a line within that
+// file to the line of the linked source blob the tables are keyed by. It is
+// what a breakpoint goes through -- an editor knows a path and a line number,
+// and the line tables know neither.
+//
+// A program with no spans is one module, so the blob is the file and the line
+// passes through unchanged. That is also the answer for an empty path, which is
+// how a caller says "the program's own source" without having to know whether
+// the program was linked.
+//
+// Matching is by cleaned path first and by base name second. The second pass is
+// there because the path an editor sends is the one the user opened, and the
+// path a span carries is the one the linker resolved: the same file can reach
+// here spelled two ways -- a symlinked checkout, a UNC share, a drive letter in
+// the other case -- and refusing the breakpoint because the spellings differ
+// would be a right answer to the wrong question. An ambiguous base name matches
+// nothing rather than the first candidate: two modules named util.mut is
+// exactly the case where guessing puts the breakpoint in the wrong file.
+func (bc *ByteCode) ModuleLine(path string, line int) (absLine int, ok bool) {
+	if bc == nil || line <= 0 {
+		return 0, false
+	}
+	if len(bc.ModuleSpans) == 0 {
+		return line, true
+	}
+
+	if index, found := bc.moduleSpanFor(path); found {
+		return bc.ModuleSpans[index].StartLine + line - 1, true
+	}
+	return 0, false
+}
+
+// moduleSpanFor finds the span describing path, under the matching rule
+// ModuleLine documents.
+func (bc *ByteCode) moduleSpanFor(path string) (int, bool) {
+	if path == "" {
+		// No file named: the first span is the program's entry module, which is
+		// what SourceFile names and what a single-module program means.
+		return 0, true
+	}
+
+	want := filepath.Clean(path)
+	for i, span := range bc.ModuleSpans {
+		if filepath.Clean(span.Path) == want {
+			return i, true
+		}
+	}
+
+	base := filepath.Base(want)
+	found := -1
+	for i, span := range bc.ModuleSpans {
+		if filepath.Base(span.Path) != base {
+			continue
+		}
+		if found >= 0 {
+			// Two modules share the base name. Picking one would put the
+			// breakpoint in a file the user is not looking at.
+			return 0, false
+		}
+		found = i
+	}
+	if found < 0 {
+		return 0, false
+	}
+	return found, true
+}
+
 // StripDebugInfo removes every source position from the program: the file name,
 // both tables on the main stream, and the name and tables of every compiled
 // function reachable through the constant pool.
@@ -223,6 +304,7 @@ func (bc *ByteCode) StripDebugInfo() {
 	bc.LineTable = nil
 	bc.MacroTable = nil
 	bc.EndTable = nil
+	bc.GlobalNames = nil
 	// ModuleSpans is the most disclosing table of the set: it names every file
 	// the program was built from, by absolute path, and lays out the whole
 	// import graph. Dropping the line tables while shipping that would defeat
@@ -233,6 +315,7 @@ func (bc *ByteCode) StripDebugInfo() {
 		if fn, ok := constant.(*object.CompiledFunction); ok {
 			fn.Name = ""
 			fn.Params = nil
+			fn.LocalNames = nil
 			fn.LineTable = nil
 			fn.MacroTable = nil
 			fn.EndTable = nil
@@ -812,6 +895,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 
 		freeSymbols := c.symbolTable.FreeSymbols
 		numLocals := c.symbolTable.numDefinitions
+		localNames := c.symbolTable.LocalSlotNames()
 		// Read before leaveScope drops the table. Every capture of one of this
 		// function's locals has already been discovered, because a capture is
 		// discovered while the inner literal is compiled and every inner literal
@@ -842,6 +926,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			CapturedLocals: capturedLocals,
 			Name:           node.Name,
 			Params:         parameterNames(node.Parameters),
+			LocalNames:     localNames,
 			LineTable:      debug.lines,
 			MacroTable:     debug.macros,
 			EndTable:       debug.ends,
@@ -982,6 +1067,7 @@ func (c *Compiler) ByteCode() *ByteCode {
 		BuiltinNames: c.symbolTable.ReferencedBuiltins(),
 		SourceFile:   c.sourceFile,
 		SourceText:   c.sourceText,
+		GlobalNames:  c.symbolTable.GlobalSlotNames(),
 		ModuleSpans:  c.moduleSpans,
 		LineTable:    c.scopes[c.scopeIndex].lines.Build(),
 		MacroTable:   c.scopes[c.scopeIndex].macros.Build(),

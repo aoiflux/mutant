@@ -18,6 +18,29 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **A debugger: `mutant debug`.** Breakpoints, stepping, the call stack and
+  variable inspection, delivered as a Debug Adapter Protocol server, so VS Code
+  (press F5 on a `.mut`), Neovim's `nvim-dap` and anything else that speaks DAP
+  get it from one implementation. For a language whose programs run for minutes
+  over multi-terabyte images, `putln` debugging was not viable.
+
+  It launches rather than attaches: `mutant debug` is the program's own
+  process. A Mutant program carries anti-debugging probes that end a
+  secure-mode run when an OS debugger is present, so attaching one would have
+  meant the language's own tooling tripping its own tamper response.
+
+  Debugging runs from source at mutation level 0. A release artifact has had
+  its positions stripped -- there is nothing to step through, and the values
+  held by a program that left this machine are not this machine's to render.
+
+  Three things are deliberately absent and say so rather than half-working:
+  watch expressions beyond a plain variable name, conditional breakpoints, and
+  stepping into `spawn` or `pmap`. Evaluating an expression means compiling it
+  in the frame's scope, and a compiled program does not carry its scopes; a
+  breakpoint carrying a condition stays armed with a message rather than
+  silently never firing. Hit counts do work. See
+  [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
 - **`while`, `for (item in collection)` and `match`.** The counting `for` was
   the only loop the language had, and the only way to branch on a value was a
   chain of `if`s.
@@ -278,6 +301,15 @@ claim the README makes becomes verifiable.
   configuration is under design; no interface is specified.*
 
 ### Fixed
+
+- **A frame's unassigned local slots held the previous call's values.** The
+  calling convention never cleared the region between a new frame's arguments
+  and the end of its locals, so those slots held whatever the last call left on
+  the stack. No program could see it -- every local is assigned before it is
+  read -- but a debugger reads them all, and would have shown a dead value from
+  an unrelated frame under the name of a variable whose declaration had not run
+  yet. The slots are cleared when a debugger is attached, so no ordinary run
+  pays for it.
 
 - **An `if` used as a value left the stack wrong in two cases.** The compiler
   decided whether a branch had produced a value by looking at the last

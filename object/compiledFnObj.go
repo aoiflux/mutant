@@ -57,6 +57,24 @@ type CompiledFunction struct {
 	// and one column. With both ends the reporter can underline the span that
 	// failed, the way rustc and Python 3.11 do.
 	EndTable code.LineTable
+
+	// LocalNames are the function's local slots, indexed by slot number, each
+	// entry the name declared there. The VM addresses a local by its index and
+	// never reads this; a debugger stopped in the frame has nothing else to
+	// call slot 3 but "slot 3".
+	//
+	// An entry is empty where the slot has no name to report, which happens
+	// when a later declaration takes the name over: `let x = 1; let x = 2;`
+	// allocates two slots and only the second still answers to `x`. Reporting
+	// the first as `x` too would point a watch window at the wrong value.
+	//
+	// Parameters occupy the first NumParams slots, so LocalNames covers them
+	// as well and agrees with Params there. Params is kept because it is what
+	// a traceback prints and it predates this table.
+	//
+	// Debug info: nil for a function compiled before this existed and for one
+	// stripped of positions, and the two are indistinguishable on purpose.
+	LocalNames []string
 }
 
 func (cf *CompiledFunction) Type() ObjectType { return COMPILED_FN_OBJ }

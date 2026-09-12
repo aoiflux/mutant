@@ -94,6 +94,16 @@ type VM struct {
 	serveContextSet bool
 	serveConn       int64
 	serveArg        object.Object
+
+	// debug is the attached debugger, or nil -- which is every run that is not
+	// a debug session, and the state the fetch loop is written to cost nothing
+	// in: one nil check per instruction, next to the integrity probe that is
+	// already there.
+	//
+	// It is set by NewDebugger rather than by a constructor, because attaching
+	// is a decision made after the VM exists and before it runs, and a
+	// constructor parameter would have to be threaded through all nine of them.
+	debug *Debugger
 }
 
 var (
@@ -755,6 +765,16 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 
 		ip = vm.currentFrame().ip
 		ins = vm.currentFrame().Instructions()
+
+		// The debugger sees the instruction before it runs, with ip already
+		// advanced to it -- which is the position Traceback reports, so a stop
+		// here and a crash here name the same line. It blocks inside this call
+		// for as long as the session is parked.
+		if vm.debug != nil {
+			if err := vm.debug.step(); err != nil {
+				return err
+			}
+		}
 
 		opcodeByte, err := vm.xorStream.XOROneAt(ins[ip], int64(ip))
 		if err != nil {
@@ -2409,6 +2429,11 @@ func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
 	vm.pushFrame(frame)
 	vm.ensureStackCapacity(frame.bp + cl.Fn.NumLocals)
 	vm.stackPointer = frame.bp + cl.Fn.NumLocals
+	// Before boxing, so a captured local starts its cell empty rather than
+	// holding whatever the previous frame left in that slot.
+	if vm.debug != nil {
+		vm.clearUnsetLocals(frame, cl.Fn)
+	}
 	vm.boxCapturedSlots(frame, cl.Fn)
 	return nil
 }

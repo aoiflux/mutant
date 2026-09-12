@@ -57,6 +57,74 @@
                 "path": "./snippets/mutant.json"
             }
         ],
+        "breakpoints": [
+            {
+                "language": "mutant"
+            }
+        ],
+        "debuggers": [
+            {
+                "type": "mutant",
+                "label": "Mutant",
+                "languages": [
+                    "mutant"
+                ],
+                "configurationAttributes": {
+                    "launch": {
+                        "required": [
+                            "program"
+                        ],
+                        "properties": {
+                            "program": {
+                                "type": "string",
+                                "description": "The .mut source file to debug. Debugging runs from source: a .mu built for release carries no source positions, so there is nothing to step through.",
+                                "default": "${file}"
+                            },
+                            "stopOnEntry": {
+                                "type": "boolean",
+                                "description": "Stop before the first instruction, so the program can be stepped from the beginning with no breakpoint set.",
+                                "default": false
+                            },
+                            "modulePaths": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Directories to search for imported modules, in order. The launch configuration's spelling of --module-path.",
+                                "default": []
+                            },
+                            "noDebug": {
+                                "type": "boolean",
+                                "description": "Run the program without stopping for anything. Output and the exit code are still reported.",
+                                "default": false
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "mutant",
+                        "request": "launch",
+                        "name": "Debug the current Mutant file",
+                        "program": "${file}",
+                        "stopOnEntry": false
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Mutant: debug the current file",
+                        "description": "Compile the open .mut file with positions and debug it.",
+                        "body": {
+                            "type": "mutant",
+                            "request": "launch",
+                            "name": "Debug the current Mutant file",
+                            "program": "^\"\\${file}\"",
+                            "stopOnEntry": false
+                        }
+                    }
+                ]
+            }
+        ],
         "taskDefinitions": [
             {
                 "type": "mutant",
