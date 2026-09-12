@@ -46,6 +46,10 @@ func GobTypes() []any {
 		&object.Function{},
 		&object.Hash{},
 		&object.Integer{},
+		// Like a cell: a loop cursor is made by OpIterInit and dropped at the
+		// end of the loop, so nothing the compiler emits can put one in a
+		// constant pool. Registered under the same "all of them" rule.
+		&object.Iterator{},
 		&object.LuaPatch{},
 		&object.Macro{},
 		&object.MultiValue{},

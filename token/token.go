@@ -214,6 +214,8 @@ const (
 	RETURN   = "RETURN"
 	MACRO    = "MACRO"
 	FOR      = "FOR"
+	WHILE    = "WHILE"
+	IN       = "IN"
 	BREAK    = "BREAK"
 	CONTINUE = "CONTINUE"
 	STRUCT   = "STRUCT"
@@ -231,6 +233,8 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"macro":    MACRO,
 	"for":      FOR,
+	"while":    WHILE,
+	"in":       IN,
 	"break":    BREAK,
 	"continue": CONTINUE,
 	"struct":   STRUCT,

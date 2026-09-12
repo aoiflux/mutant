@@ -414,8 +414,15 @@ func (c *uncheckedErrorCollector) conditionOffsetsByName(statements []mast.State
 	}
 
 	forEachStatementInScope(statements, func(stmt mast.Statement) {
-		if loop, ok := stmt.(*mast.ForStatement); ok && loop != nil {
-			collect(loop.Condition)
+		switch loop := stmt.(type) {
+		case *mast.ForStatement:
+			if loop != nil {
+				collect(loop.Condition)
+			}
+		case *mast.WhileStatement:
+			if loop != nil {
+				collect(loop.Condition)
+			}
 		}
 		walkExpressions(stmt, false, func(expr mast.Expression) {
 			if ifExpr, ok := expr.(*mast.IfExpression); ok && ifExpr != nil {

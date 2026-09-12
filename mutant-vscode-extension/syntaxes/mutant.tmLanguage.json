@@ -148,7 +148,7 @@
       "patterns": [
         {
           "name": "keyword.control.mutant",
-          "match": "\\b(?:fn|let|if|else|return|for|break|continue|macro|import)\\b"
+          "match": "\\b(?:fn|let|if|else|return|for|while|in|break|continue|macro|import)\\b"
         }
       ]
     },

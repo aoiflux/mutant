@@ -78,6 +78,15 @@ func (s *Snapshot) collectStatementWriteRanges(stmt mast.Statement, targetName s
 		s.collectExpressionWriteRanges(node.Condition, targetName, out)
 		s.collectExpressionWriteRanges(node.Post, targetName, out)
 		s.collectStatementWriteRanges(node.Body, targetName, out)
+	case *mast.WhileStatement:
+		s.collectExpressionWriteRanges(node.Condition, targetName, out)
+		s.collectStatementWriteRanges(node.Body, targetName, out)
+	case *mast.ForInStatement:
+		// The bindings themselves are not collected, matching the LetStatement
+		// arm above: this walk reports assignments to an existing name, and a
+		// loop binding is a declaration.
+		s.collectExpressionWriteRanges(node.Iterable, targetName, out)
+		s.collectStatementWriteRanges(node.Body, targetName, out)
 	}
 }
 

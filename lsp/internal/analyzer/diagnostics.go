@@ -525,6 +525,20 @@ func (c *duplicateCollector) collectStatement(stmt mast.Statement, current *decl
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
 	case *mast.StructStatement:
 		c.collectDeclaration(node.Name, current, false)
 	case *mast.EnumStatement:
@@ -1009,6 +1023,34 @@ func (c *nestingCollector) collectStatement(stmt mast.Statement, inFunction bool
 		if node.Body != nil {
 			c.collectStatement(node.Body, inFunction, nextDepth)
 		}
+	case *mast.WhileStatement:
+		// A while nests exactly as a for does: its body is one level deeper,
+		// its condition is not.
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, inFunction, depth)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, inFunction, nextDepth)
+		}
+	case *mast.ForInStatement:
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, inFunction, depth)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, inFunction, nextDepth)
+		}
 	}
 }
 
@@ -1182,6 +1224,20 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 		}
 		if node.Post != nil {
 			c.collectExpression(node.Post, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
 		}
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
@@ -1521,6 +1577,20 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 		}
 		if node.Post != nil {
 			c.collectExpression(node.Post, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
 		}
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
@@ -2017,6 +2087,25 @@ func collectUnusedCandidatesFromStatement(stmt mast.Statement, out *[]*mast.Iden
 		}
 		if node.Post != nil {
 			collectUnusedCandidatesFromExpression(node.Post, out)
+		}
+		if node.Body != nil {
+			collectUnusedCandidatesFromStatement(node.Body, out)
+		}
+	case *mast.ForInStatement:
+		// The iterable is a read like any other, and the body may read names
+		// from outside the loop.
+		if node.Iterable != nil {
+			collectUnusedCandidatesFromExpression(node.Iterable, out)
+		}
+		if node.Body != nil {
+			collectUnusedCandidatesFromStatement(node.Body, out)
+		}
+	case *mast.WhileStatement:
+		// A name read only by a while condition is used. Without this arm the
+		// unused-declaration rule reports it, which is the false-positive class
+		// every walker here exists to avoid.
+		if node.Condition != nil {
+			collectUnusedCandidatesFromExpression(node.Condition, out)
 		}
 		if node.Body != nil {
 			collectUnusedCandidatesFromStatement(node.Body, out)

@@ -901,6 +901,68 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			pos := int(res)
 			vm.currentFrame().ip = pos - 1
+		case code.OpIterInit:
+			iterable := vm.decryptForUse(vm.pop())
+			if iterable == nil {
+				return vm.runtimeErrorfAt(ip, op, "nothing to iterate over")
+			}
+			iterator, iterable_ok := object.NewIterator(iterable)
+			if !iterable_ok {
+				return vm.runtimeErrorfAt(ip, op, "cannot iterate over %s", iterable.Type())
+			}
+			if err := vm.push(iterator); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+
+		case code.OpIterNext:
+			if ip+3 >= len(ins) {
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operands, len=%d", len(ins))
+			}
+			res, err := vm.readUint16(ins, ip+1)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			endPosition := int(res)
+			// readUint8, not ins[ip+3]: instruction bytes are not read raw
+			// here, and a direct index gives the obfuscated byte rather than
+			// the operand.
+			bindingCount, err := vm.readUint8(ins, ip+3)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			bindings := int(bindingCount)
+			vm.currentFrame().ip += 3
+
+			// Peeked, not popped: the cursor stays on the stack for the whole
+			// loop and is dropped by the OpPop at the loop's end, which is
+			// where both the exhausted jump and every break land.
+			if vm.stackPointer < 1 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow reading the loop cursor")
+			}
+			iterator, isIterator := vm.stack[vm.stackPointer-1].(*object.Iterator)
+			if !isIterator {
+				return vm.runtimeErrorfAt(ip, op, "loop cursor was replaced on the stack")
+			}
+
+			key, value, more := iterator.Next()
+			if !more {
+				vm.currentFrame().ip = endPosition - 1
+				break
+			}
+
+			if bindings == 2 {
+				if err := vm.push(key); err != nil {
+					return vm.runtimeErrorAt(ip, op, err)
+				}
+				if err := vm.push(value); err != nil {
+					return vm.runtimeErrorAt(ip, op, err)
+				}
+				break
+			}
+			if err := vm.push(iterator.Primary(key, value)); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+
 		case code.OpJumpFalse:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJumpFalse: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))

@@ -27,6 +27,7 @@ const (
 	CONTINUE_OBJ     = "CONTINUE"
 	LUA_PATCH_OBJ    = "LUA_PATCH"
 	CELL_OBJ         = "CELL"
+	ITERATOR_OBJ     = "ITERATOR"
 )
 
 type Object interface {

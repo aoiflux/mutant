@@ -312,6 +312,18 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			walkExpression(node.Condition)
 			walkExpression(node.Post)
 			walkStatement(node.Body)
+		case *mast.WhileStatement:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Condition)
+			walkStatement(node.Body)
+		case *mast.ForInStatement:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Iterable)
+			walkStatement(node.Body)
 		}
 	}
 

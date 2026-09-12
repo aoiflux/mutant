@@ -297,6 +297,14 @@ func functionBindings(program *mast.Program) []functionBinding {
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}
+		case *mast.WhileStatement:
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
 		case *mast.ReturnStatement:
 			for _, value := range n.ReturnValues {
 				walkExpression(value)
@@ -444,6 +452,16 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			}
 			walkExpression(n.Condition)
 			walkExpression(n.Post)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.WhileStatement:
+			walkExpression(n.Condition)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			walkExpression(n.Iterable)
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}

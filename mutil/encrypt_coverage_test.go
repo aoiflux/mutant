@@ -41,7 +41,10 @@ var encryptTreatment = map[object.ObjectType]string{
 	// new cell is a second storage location -- the by-value capture that boxing
 	// exists to remove. The contents are sealed on the way into cell.Value, so
 	// nothing is left in the clear.
-	object.CELL_OBJ:         "passthrough",
+	object.CELL_OBJ: "passthrough",
+	// Passthrough for the sharper version of the same reason: OpIterNext
+	// advances the cursor in place, so a copy would restart the loop forever.
+	object.ITERATOR_OBJ:     "passthrough",
 	object.COMPILED_FN_OBJ:  "passthrough",
 	object.BUILTIN_OBJ:      "passthrough",
 	object.FUNCTION_OBJ:     "passthrough",

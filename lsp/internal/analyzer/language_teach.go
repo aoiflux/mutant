@@ -17,6 +17,8 @@ var keywordHoverDocs = map[string]string{
 	"else":     "Alternative branch for an if expression.",
 	"return":   "Returns one or more values from the current function.",
 	"for":      "Loop construct with init, condition, and post expressions: for (init; cond; post) { ... }.",
+	"in":       "Names the collection a for loop walks: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds an index and an element -- or, over a hash, a key and a value. A single binding over a hash yields its keys.",
+	"while":    "Loop that repeats its body while the condition stays truthy: while (cond) { ... }. Unlike for, it has no init or post section, so continue goes straight back to the condition.",
 	"break":    "Exits the nearest enclosing loop immediately.",
 	"continue": "Skips to the next iteration of the nearest enclosing loop.",
 	"struct":   "Declares a struct type with named fields.",

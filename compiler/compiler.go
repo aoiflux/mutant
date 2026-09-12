@@ -882,6 +882,12 @@ func (c *Compiler) compileNode(node ast.Node) error {
 	case *ast.ForStatement:
 		return c.compileForStatement(node)
 
+	case *ast.WhileStatement:
+		return c.compileWhileStatement(node)
+
+	case *ast.ForInStatement:
+		return c.compileForInStatement(node)
+
 	case *ast.BreakStatement:
 		if len(c.loopContexts) == 0 {
 			return fmt.Errorf("break used outside of for loop")
@@ -1116,10 +1122,27 @@ func (c *Compiler) replaceInstruction(pos int, newInstruction []byte) {
 	}
 }
 
+// changeOperand back-patches operand 0 of the instruction at pos, which is how
+// every forward jump gets its real target once the target is known.
+//
+// The operands after the first are read back and re-emitted unchanged. Rebuilding
+// the instruction from operand 0 alone would be right for every single-operand
+// opcode and silently wrong for a wider one: code.Make would produce a shorter
+// instruction, replaceInstruction would write only those bytes, and the tail of
+// the original -- OpIterNext's binding count -- would survive as the first byte
+// of whatever came next. That corrupts the stream from the patch point onward
+// rather than failing at it.
 func (c *Compiler) changeOperand(pos int, operand int) {
-	op := code.Opcode(c.currentInstructions()[pos])
-	newInstruction := code.Make(op, operand)
-	c.replaceInstruction(pos, newInstruction)
+	ins := c.currentInstructions()
+	op := code.Opcode(ins[pos])
+
+	operands := []int{operand}
+	if def, err := code.Lookup(byte(op)); err == nil && len(def.OperandWidths) > 1 {
+		existing, _ := code.ReadOperands(def, ins[pos+1:])
+		operands = append(operands, existing[1:]...)
+	}
+
+	c.replaceInstruction(pos, code.Make(op, operands...))
 }
 
 // compileLogicalExpression emits short-circuit code for && / || that leaves a
@@ -1349,6 +1372,149 @@ func (c *Compiler) emitAssignStore(symbol Symbol) error {
 	default:
 		return fmt.Errorf("internal: no assignment path for %s in scope %s", symbol.Name, symbol.Scope)
 	}
+	return nil
+}
+
+// compileForInStatement emits the iterator-driven loop shape.
+//
+//	<iterable>
+//	OpIterInit          ; the iterable is replaced by a cursor over it
+//	head:
+//	OpIterNext end, n   ; push the next binding(s), or jump to end when spent
+//	<store bindings>
+//	<body>
+//	OpJump head
+//	end:
+//	OpPop               ; drop the cursor
+//
+// The cursor is left on the stack for the whole loop and dropped at `end`,
+// which is also where `break` is patched to -- so every way out of the loop
+// goes through the same pop and none of them leaks a stack slot. `continue`
+// is patched to `head`, where the advance lives: a for-in has no post section
+// of its own, the advance *is* the post section.
+func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
+	if node.Value == nil {
+		return fmt.Errorf("for ... in has no name to bind")
+	}
+	if node.Key != nil && node.Key.Value == node.Value.Value {
+		// Both halves would write the same slot, so the loop would silently
+		// read the key and then overwrite it with the value.
+		return fmt.Errorf("for ... in binds %s twice", node.Key.Value)
+	}
+
+	if err := c.Compile(node.Iterable); err != nil {
+		return err
+	}
+	c.emit(code.OpIterInit)
+
+	// Defined before the body is compiled, so the body can resolve them, and
+	// once rather than per iteration, so the slot is stable across the loop.
+	bindings := 1
+	valueSymbol := c.symbolTable.Define(node.Value.Value)
+	var keySymbol Symbol
+	if node.Key != nil {
+		bindings = 2
+		keySymbol = c.symbolTable.Define(node.Key.Value)
+	}
+
+	headPosition := len(c.currentInstructions())
+	nextPosition := c.emit(code.OpIterNext, 9999, bindings)
+
+	// Stored in reverse of the push order: OpIterNext pushes the key first and
+	// the value on top, so the value comes off first.
+	c.emitBindingStore(valueSymbol)
+	if node.Key != nil {
+		c.emitBindingStore(keySymbol)
+	}
+
+	c.loopContexts = append(c.loopContexts, LoopContext{})
+	if err := c.Compile(node.Body); err != nil {
+		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+		return err
+	}
+
+	// Deliberately no removeLastPop here, unlike the two condition-driven
+	// loops. Dropping the body's trailing pop leaves its last expression's
+	// value on the stack once per iteration, and this loop keeps its cursor
+	// underneath that -- so the second iteration reads the leftover value as
+	// the cursor. The body has to be stack-neutral.
+
+	ctx := &c.loopContexts[len(c.loopContexts)-1]
+	for _, pos := range ctx.continuePositions {
+		c.changeOperand(pos, headPosition)
+	}
+
+	c.emit(code.OpJump, headPosition)
+
+	loopEndPosition := len(c.currentInstructions())
+	c.changeOperand(nextPosition, loopEndPosition)
+	for _, pos := range ctx.breakPositions {
+		c.changeOperand(pos, loopEndPosition)
+	}
+	c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+
+	// Drop the cursor. Reached by falling out of the loop and by every break.
+	c.emit(code.OpPop)
+
+	return nil
+}
+
+// emitBindingStore stores the top of the stack into a loop binding. The plain
+// local form is right even when a closure in the body captures the binding:
+// boxCapturedLocals rewrites it to the cell form afterwards, once the capture
+// is known.
+func (c *Compiler) emitBindingStore(symbol Symbol) {
+	if symbol.Scope == GlobalScope {
+		c.emit(code.OpSetGlobal, symbol.Index)
+		return
+	}
+	c.emit(code.OpSetLocal, symbol.Index)
+}
+
+// compileWhileStatement emits the same loop shape as a for statement with no
+// init and no post section.
+//
+// The one difference that matters is where `continue` lands: a for loop sends
+// it to the post section so the increment still runs, but a while loop has no
+// post section, so it goes straight back to the condition. Sending it to the
+// loop end instead -- or forgetting to patch it at all -- turns `continue` into
+// `break`, which is the kind of wrong that runs.
+func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
+	conditionStartPosition := len(c.currentInstructions())
+	if node.Condition == nil {
+		return fmt.Errorf("while statement has no condition")
+	}
+	if err := c.Compile(node.Condition); err != nil {
+		return err
+	}
+
+	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
+
+	c.loopContexts = append(c.loopContexts, LoopContext{})
+	if err := c.Compile(node.Body); err != nil {
+		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+		return err
+	}
+
+	if c.lastInstructionIs(code.OpPop) {
+		c.removeLastPop()
+	}
+
+	ctx := &c.loopContexts[len(c.loopContexts)-1]
+	for _, pos := range ctx.continuePositions {
+		c.changeOperand(pos, conditionStartPosition)
+	}
+
+	c.emit(code.OpJump, conditionStartPosition)
+	loopEndPosition := len(c.currentInstructions())
+	c.changeOperand(jumpFalsePosition, loopEndPosition)
+
+	for _, pos := range ctx.breakPositions {
+		c.changeOperand(pos, loopEndPosition)
+	}
+
+	c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+
 	return nil
 }
 

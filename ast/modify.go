@@ -50,6 +50,27 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Statements {
 			node.Statements[i], _ = Modify(node.Statements[i], modifier).(Statement)
 		}
+	case *ForInStatement:
+		// The bindings are declarations, not expressions to rewrite: a macro
+		// that replaced one with a call would leave the loop with nothing to
+		// bind. Only the iterable and the body are walked.
+		if node.Iterable != nil {
+			node.Iterable, _ = Modify(node.Iterable, modifier).(Expression)
+		}
+		if node.Body != nil {
+			node.Body, _ = Modify(node.Body, modifier).(*BlockStatement)
+		}
+
+	case *WhileStatement:
+		// The condition is not optional the way a for-header's is: `while ()`
+		// does not parse. A nil one only reaches here from a hand-built node.
+		if node.Condition != nil {
+			node.Condition, _ = Modify(node.Condition, modifier).(Expression)
+		}
+		if node.Body != nil {
+			node.Body, _ = Modify(node.Body, modifier).(*BlockStatement)
+		}
+
 	case *ForStatement:
 		// Every part of the header is optional -- `for (;;)` has none of them.
 		if node.Init != nil {

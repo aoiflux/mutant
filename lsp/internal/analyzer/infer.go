@@ -141,6 +141,44 @@ func (inf *typeInferer) stmt(stmt mast.Statement, env *typeEnv) {
 		if n.Body != nil {
 			inf.stmt(n.Body, child)
 		}
+	case *mast.WhileStatement:
+		// Its own scope, matching the loop's own scoping in both engines: a
+		// `let` in the body is not visible after the loop.
+		child := newTypeEnv(env)
+		if n.Condition != nil {
+			inf.expr(n.Condition, child)
+		}
+		if n.Body != nil {
+			inf.stmt(n.Body, child)
+		}
+	case *mast.ForInStatement:
+		child := newTypeEnv(env)
+		iterated := AnyType
+		if n.Iterable != nil {
+			iterated = inf.expr(n.Iterable, child)
+		}
+		// What a binding holds follows from what is being iterated, and only
+		// two of the cases are knowable without running the program: an index
+		// is always an integer, and a string yields one-character strings.
+		// Everything else stays Any rather than guessing -- this lattice is
+		// best-effort and feeds hover and completion, so a confident wrong
+		// answer is worse than no answer.
+		keyType, valueType := iterationBindingTypes(iterated)
+		if n.Key != nil {
+			inf.bindLoopName(n.Key, keyType, child)
+			inf.bindLoopName(n.Value, valueType, child)
+		} else if n.Value != nil {
+			// A single binding yields the key for a hash and the element
+			// otherwise -- the same rule object.NewIterator applies at run time.
+			single := valueType
+			if iterated.Kind == TypeHash {
+				single = keyType
+			}
+			inf.bindLoopName(n.Value, single, child)
+		}
+		if n.Body != nil {
+			inf.stmt(n.Body, child)
+		}
 	}
 }
 
@@ -447,7 +485,46 @@ func (inf *typeInferer) collectReturnExprs(stmt mast.Statement, out *[]mast.Expr
 		if n.Body != nil {
 			inf.collectReturnExprs(n.Body, out)
 		}
+	case *mast.WhileStatement:
+		if n.Body != nil {
+			inf.collectReturnExprs(n.Body, out)
+		}
+	case *mast.ForInStatement:
+		if n.Body != nil {
+			inf.collectReturnExprs(n.Body, out)
+		}
 	}
+}
+
+// bindLoopName records a for-in binding's type and puts it in the loop's scope.
+func (inf *typeInferer) bindLoopName(ident *mast.Identifier, t Type, env *typeEnv) {
+	if ident == nil {
+		return
+	}
+	inf.record(ident, t)
+	env.set(ident.Value, t)
+}
+
+// iterationBindingTypes says what `for (k, v in xs)` binds, given what xs is.
+//
+// Only what follows from the collection's own type is claimed. An array's
+// element type is not tracked by this lattice, so the element stays Any rather
+// than being guessed; a hash's keys are likewise unconstrained. What is known:
+// an index is an integer, a string yields one-character strings, and a buffer
+// yields byte values. This pass feeds hover, completion and inlay hints only,
+// so a confident wrong answer costs more than no answer.
+func iterationBindingTypes(iterated Type) (key Type, value Type) {
+	switch iterated.Kind {
+	case TypeArray:
+		return tInt, AnyType
+	case TypeString:
+		return tInt, tString
+	case TypeBytes:
+		return tInt, tInt
+	case TypeHash:
+		return AnyType, AnyType
+	}
+	return AnyType, AnyType
 }
 
 // recordedType returns the type recorded for an expression during the inference

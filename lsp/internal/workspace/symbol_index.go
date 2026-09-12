@@ -316,6 +316,28 @@ func markDeclaredInStatement(stmt mast.Statement, declared map[string]struct{}) 
 		if node.Body != nil {
 			markDeclaredInStatement(node.Body, declared)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			markDeclaredInExpression(node.Condition, declared)
+		}
+		if node.Body != nil {
+			markDeclaredInStatement(node.Body, declared)
+		}
+	case *mast.ForInStatement:
+		// The bindings are declarations: without marking them, a name that only
+		// a loop introduces reads as undefined everywhere it is used.
+		if node.Key != nil {
+			declared[node.Key.Value] = struct{}{}
+		}
+		if node.Value != nil {
+			declared[node.Value.Value] = struct{}{}
+		}
+		if node.Iterable != nil {
+			markDeclaredInExpression(node.Iterable, declared)
+		}
+		if node.Body != nil {
+			markDeclaredInStatement(node.Body, declared)
+		}
 	}
 }
 

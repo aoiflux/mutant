@@ -207,6 +207,10 @@ func (p *printer) statement(stmt mast.Statement, level int) string {
 		return prefix + p.block(node, level)
 	case *mast.ForStatement:
 		return prefix + p.forStatement(node, level)
+	case *mast.WhileStatement:
+		return prefix + p.whileStatement(node, level)
+	case *mast.ForInStatement:
+		return prefix + p.forInStatement(node, level)
 	case *mast.StructStatement:
 		return prefix + "struct " + identValue(node.Name) + " {" + bracedIdents(node.Fields, "; ", ";") + "}"
 	case *mast.EnumStatement:
@@ -424,6 +428,38 @@ func (p *printer) forStatement(stmt *mast.ForStatement, level int) string {
 	}
 
 	return "for (" + init + "; " + cond + "; " + post + ") " + p.block(stmt.Body, level)
+}
+
+func (p *printer) forInStatement(stmt *mast.ForInStatement, level int) string {
+	if stmt == nil {
+		return ""
+	}
+
+	names := identValue(stmt.Value)
+	if stmt.Key != nil {
+		names = identValue(stmt.Key) + ", " + names
+	}
+
+	iterable := ""
+	if stmt.Iterable != nil {
+		iterable = p.expression(stmt.Iterable, level)
+	}
+
+	return "for (" + names + " in " + iterable + ") " + p.block(stmt.Body, level)
+}
+
+func (p *printer) whileStatement(stmt *mast.WhileStatement, level int) string {
+	if stmt == nil {
+		return ""
+	}
+
+	if stmt.Condition == nil {
+		return "while () " + p.block(stmt.Body, level)
+	}
+
+	// condition() rather than expression(): an infix condition already prints
+	// its own parentheses, and wrapping it again gives `while ((i < 10))`.
+	return "while " + p.condition(stmt.Condition, level) + " " + p.block(stmt.Body, level)
 }
 
 func letNames(node *mast.LetStatement) string {

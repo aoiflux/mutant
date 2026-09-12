@@ -174,6 +174,12 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 	case *ast.ForStatement:
 		return evalForStatement(node, env)
 
+	case *ast.WhileStatement:
+		return evalWhileStatement(node, env)
+
+	case *ast.ForInStatement:
+		return evalForInStatement(node, env)
+
 	case *ast.BreakStatement:
 		return &object.Break{}
 
@@ -464,6 +470,89 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 		pairs[hashed] = object.HashPair{Key: key, Value: value}
 	}
 	return &object.Hash{Pairs: pairs}
+}
+
+func evalForInStatement(node *ast.ForInStatement, env *object.Environment) object.Object {
+	if node.Value == nil {
+		return newError("for ... in has no name to bind")
+	}
+
+	iterable := eval(node.Iterable, env)
+	if isError(iterable) {
+		return iterable
+	}
+
+	// The same object.NewIterator the VM uses, so the two engines cannot drift
+	// on what is iterable, on what a single binding yields, or on the order a
+	// hash comes out in.
+	iterator, ok := object.NewIterator(iterable)
+	if !ok {
+		return newError("cannot iterate over %s", iterable.Type())
+	}
+
+	loopEnv := object.NewEnclosedEnvironement(env)
+
+	for {
+		key, value, more := iterator.Next()
+		if !more {
+			break
+		}
+
+		if node.Key != nil {
+			loopEnv.Set(node.Key.Value, key)
+			loopEnv.Set(node.Value.Value, value)
+		} else {
+			loopEnv.Set(node.Value.Value, iterator.Primary(key, value))
+		}
+
+		result := eval(node.Body, loopEnv)
+		if result == nil {
+			continue
+		}
+
+		switch result.Type() {
+		case object.BREAK_OBJ:
+			return NULL
+		case object.CONTINUE_OBJ:
+			continue
+		case object.RETURN_VALUE_OBJ, object.ERROR_OBJ:
+			return result
+		}
+	}
+
+	return NULL
+}
+
+func evalWhileStatement(node *ast.WhileStatement, env *object.Environment) object.Object {
+	// A scope of its own, matching the for loop: a `let` in the body does not
+	// leak out, and re-entering the body does not redeclare into the caller.
+	loopEnv := object.NewEnclosedEnvironement(env)
+
+	for {
+		condition := eval(node.Condition, loopEnv)
+		if isError(condition) {
+			return condition
+		}
+		if !isTruthy(condition) {
+			break
+		}
+
+		result := eval(node.Body, loopEnv)
+		if result == nil {
+			continue
+		}
+
+		switch result.Type() {
+		case object.BREAK_OBJ:
+			return NULL
+		case object.CONTINUE_OBJ:
+			continue
+		case object.RETURN_VALUE_OBJ, object.ERROR_OBJ:
+			return result
+		}
+	}
+
+	return NULL
 }
 
 func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Object {

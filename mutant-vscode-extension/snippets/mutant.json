@@ -83,6 +83,33 @@
     ],
     "description": "C-style for loop"
   },
+  "for in": {
+    "prefix": "forin",
+    "body": [
+      "for (${1:item} in ${2:collection}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for-in loop over a collection"
+  },
+  "for in pair": {
+    "prefix": "forkv",
+    "body": [
+      "for (${1:key}, ${2:value} in ${3:collection}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for-in loop binding both halves"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while (${1:condition}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "while loop"
+  },
   "struct": {
     "prefix": "struct",
     "body": [

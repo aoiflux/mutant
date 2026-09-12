@@ -299,6 +299,15 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 	case object.CELL_OBJ:
 		encObj = obj
 
+	// A loop cursor passes through by pointer for the same reason a cell does,
+	// and the consequence is sharper: OpIterNext peeks the cursor on the stack
+	// and advances it in place. Handing back a copy would reset the loop to its
+	// first element on every iteration -- an endless loop, not an error. It
+	// holds no data of its own worth sealing; its keys and values were sealed
+	// when they went into the collection it walks.
+	case object.ITERATOR_OBJ:
+		encObj = obj
+
 	// Code and control flow, not data at rest: there is nothing in a compiled
 	// function, a builtin, an evaluator function, a macro, a quoted node or a
 	// loop-control singleton that encrypting would protect. The last five are
@@ -531,6 +540,15 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 	// frame slot and every closure over it stay one location. cell.Value is
 	// decrypted where it is read, by OpGetLocalCell and OpGetFree.
 	case object.CELL_OBJ:
+		return decObj, nil
+
+	// A loop cursor passes through by pointer for the same reason a cell does,
+	// and the consequence is sharper: OpIterNext peeks the cursor on the stack
+	// and advances it in place. Handing back a copy would reset the loop to its
+	// first element on every iteration -- an endless loop, not an error. It
+	// holds no data of its own worth sealing; its keys and values were sealed
+	// when they went into the collection it walks.
+	case object.ITERATOR_OBJ:
 		return decObj, nil
 
 	case object.COMPILED_FN_OBJ, object.BUILTIN_OBJ, object.FUNCTION_OBJ,

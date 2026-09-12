@@ -166,6 +166,14 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := keywordHoverText("for"); ok {
 			return text, rng, true
 		}
+	case *mast.WhileStatement:
+		if text, ok := keywordHoverText("while"); ok {
+			return text, rng, true
+		}
+	case *mast.ForInStatement:
+		if text, ok := keywordHoverText("for"); ok {
+			return text, rng, true
+		}
 	case *mast.ReturnStatement:
 		if text, ok := keywordHoverText("return"); ok {
 			return text, rng, true
@@ -525,7 +533,7 @@ func nodeSpecificity(node mast.Node) int {
 	switch node.(type) {
 	case *mast.Identifier, *mast.IntegerLiteral, *mast.FloatLiteral, *mast.StringLiteral, *mast.Boolean:
 		return 100
-	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.ForStatement, *mast.StructStatement, *mast.EnumStatement:
+	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.ForStatement, *mast.WhileStatement, *mast.ForInStatement, *mast.StructStatement, *mast.EnumStatement:
 		return 90
 	case *mast.ExpressionStatement:
 		return 20
@@ -826,6 +834,12 @@ func collectStatementTokenOverrides(stmt mast.Statement, overrides map[mast.Node
 		collectStatementTokenOverrides(s.Init, overrides)
 		collectExpressionTokenOverrides(s.Condition, overrides)
 		collectExpressionTokenOverrides(s.Post, overrides)
+		collectStatementTokenOverrides(s.Body, overrides)
+	case *mast.WhileStatement:
+		collectExpressionTokenOverrides(s.Condition, overrides)
+		collectStatementTokenOverrides(s.Body, overrides)
+	case *mast.ForInStatement:
+		collectExpressionTokenOverrides(s.Iterable, overrides)
 		collectStatementTokenOverrides(s.Body, overrides)
 	case *mast.StructStatement:
 		for _, field := range s.Fields {

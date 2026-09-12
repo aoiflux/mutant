@@ -39,6 +39,7 @@ func TestWideOperandsAreClassified(t *testing.T) {
 
 		"OpJump/0":      kindJump,
 		"OpJumpFalse/0": kindJump,
+		"OpIterNext/0":  kindJump, // where to go once the iterator is spent
 
 		"OpGetGlobal/0":   kindOther, // globals slot
 		"OpSetGlobal/0":   kindOther, // globals slot

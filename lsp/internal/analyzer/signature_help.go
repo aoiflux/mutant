@@ -281,6 +281,28 @@ func functionLiteralInStatementForIdent(stmt mast.Statement, target *mast.Identi
 				return literal, true
 			}
 		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Iterable, target); ok {
+				return literal, true
+			}
+		}
+		if node.Body != nil {
+			if literal, ok := functionLiteralInStatementForIdent(node.Body, target); ok {
+				return literal, true
+			}
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Condition, target); ok {
+				return literal, true
+			}
+		}
+		if node.Body != nil {
+			if literal, ok := functionLiteralInStatementForIdent(node.Body, target); ok {
+				return literal, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if literal, ok := functionLiteralInStatementForIdent(node.Init, target); ok {

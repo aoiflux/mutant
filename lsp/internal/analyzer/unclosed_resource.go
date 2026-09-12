@@ -184,6 +184,14 @@ func namesBoundAnywhere(statements []mast.Statement) map[string]struct{} {
 			if !isNilStatement(n.Body) {
 				walk(n.Body)
 			}
+		case *mast.WhileStatement:
+			if !isNilStatement(n.Body) {
+				walk(n.Body)
+			}
+		case *mast.ForInStatement:
+			if !isNilStatement(n.Body) {
+				walk(n.Body)
+			}
 		case *mast.ExpressionStatement:
 			forEachNestedIf(n.Expression, walk)
 		case *mast.LetStatement:
@@ -344,6 +352,14 @@ func forEachStatementInScope(statements []mast.Statement, visit func(mast.Statem
 			if !isNilStatement(n.Body) {
 				walk(n.Body)
 			}
+		case *mast.WhileStatement:
+			if !isNilStatement(n.Body) {
+				walk(n.Body)
+			}
+		case *mast.ForInStatement:
+			if !isNilStatement(n.Body) {
+				walk(n.Body)
+			}
 		case *mast.ExpressionStatement:
 			forEachNestedIf(n.Expression, walk)
 		case *mast.LetStatement:
@@ -484,9 +500,9 @@ func identifiersHeldForTheProgramsLife(statements []mast.Statement) map[*mast.Id
 
 	for _, stmt := range statements {
 		forEachStatementInScope([]mast.Statement{stmt}, func(inner mast.Statement) {
-			loop, ok := inner.(*mast.ForStatement)
-			if ok && loop != nil && isEndlessLoop(loop) && !isNilStatement(loop.Body) {
-				collect(loop.Body)
+			body, endless := endlessLoopBody(inner)
+			if endless && !isNilStatement(body) {
+				collect(body)
 			}
 		})
 
@@ -523,7 +539,35 @@ func isEndlessLoop(loop *mast.ForStatement) bool {
 	if loop.Condition == nil {
 		return true
 	}
-	literal, ok := loop.Condition.(*mast.Boolean)
+	return isAlwaysTrue(loop.Condition)
+}
+
+// endlessLoopBody reports the body of stmt when stmt is a loop that never ends.
+//
+// `while (true)` is the spelling a server loop actually uses, so leaving it out
+// would have excused exactly the resources this rule is about -- while the
+// equivalent `for (;;)` was still recognised.
+func endlessLoopBody(stmt mast.Statement) (mast.Statement, bool) {
+	switch loop := stmt.(type) {
+	case *mast.ForStatement:
+		if loop == nil {
+			return nil, false
+		}
+		return loop.Body, isEndlessLoop(loop)
+	case *mast.WhileStatement:
+		if loop == nil {
+			return nil, false
+		}
+		return loop.Body, isAlwaysTrue(loop.Condition)
+	}
+	return nil, false
+}
+
+// isAlwaysTrue reports whether a condition is the literal `true`. It is
+// deliberately syntactic: anything cleverer would start excusing loops whose
+// exit this rule cannot actually prove.
+func isAlwaysTrue(cond mast.Expression) bool {
+	literal, ok := cond.(*mast.Boolean)
 	return ok && literal != nil && literal.Value
 }
 

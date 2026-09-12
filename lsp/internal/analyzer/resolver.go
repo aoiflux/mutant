@@ -150,6 +150,28 @@ func (s *Snapshot) resolveStatement(stmt mast.Statement, current *scope, pos lsp
 				return resolved, true
 			}
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if resolved, ok := s.resolveExpression(node.Condition, current, pos); ok {
+				return resolved, true
+			}
+		}
+		if node.Body != nil {
+			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
+				return resolved, true
+			}
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if resolved, ok := s.resolveExpression(node.Iterable, current, pos); ok {
+				return resolved, true
+			}
+		}
+		if node.Body != nil {
+			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
+				return resolved, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if resolved, ok := s.resolveStatement(node.Init, current, pos); ok {
@@ -480,6 +502,28 @@ func (s *Snapshot) structTypeNameInStatement(stmt mast.Statement, target *mast.I
 				return typeName, true
 			}
 		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Iterable, target); ok {
+				return typeName, true
+			}
+		}
+		if node.Body != nil {
+			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Condition, target); ok {
+				return typeName, true
+			}
+		}
+		if node.Body != nil {
+			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
+				return typeName, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if typeName, ok := s.structTypeNameInStatement(node.Init, target); ok {
@@ -735,6 +779,30 @@ func (s *Snapshot) scopeAtStatement(stmt mast.Statement, current *scope, pos lsp
 			s.advanceStatement(inner, current)
 		}
 		return current
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if child, ok := s.scopeAtExpression(node.Iterable, current, pos); ok {
+				return child
+			}
+		}
+		if node.Body != nil {
+			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
+				return s.scopeAtStatement(node.Body, current, pos)
+			}
+		}
+		return current
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if child, ok := s.scopeAtExpression(node.Condition, current, pos); ok {
+				return child
+			}
+		}
+		if node.Body != nil {
+			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
+				return s.scopeAtStatement(node.Body, current, pos)
+			}
+		}
+		return current
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if rng, ok := s.Program.RangeOf(node.Init); ok && localprotocol.ContainsPosition(rng, pos) {
@@ -947,6 +1015,20 @@ func (s *Snapshot) advanceStatement(stmt mast.Statement, current *scope) {
 		for _, inner := range node.Statements {
 			s.advanceStatement(inner, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			s.advanceExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			s.advanceStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			s.advanceExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			s.advanceStatement(node.Body, current)
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			s.advanceStatement(node.Init, current)
@@ -1114,6 +1196,20 @@ func (c *referenceCollector) collectStatement(stmt mast.Statement, current *scop
 	case *mast.BlockStatement:
 		for _, inner := range node.Statements {
 			c.collectStatement(inner, current)
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
 		}
 	case *mast.ForStatement:
 		if node.Init != nil {

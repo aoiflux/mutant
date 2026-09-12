@@ -239,6 +239,8 @@ func SupportedSyntaxSummary() string {
 		"closures and higher-order builtins (map/filter/reduce/each/sort_by)",
 		"struct/enum declarations, struct literals, and field access",
 		"for loops with init/condition/post",
+		"while loops",
+		"for (v in xs) and for (k, v in xs) over arrays, hashes, strings and bytes",
 		"assignment expressions",
 		"compound assignment (+= -= *= /= %=) and ++/--",
 		"index and field assignment (a[i] = v, s.f = v)",

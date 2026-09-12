@@ -84,6 +84,19 @@ const (
 	// one string they spell. A piece that is not already a string contributes
 	// the text it would print.
 	OpConcat
+	// L-8 `for (x in xs)` — appended for the same reason. OpIterInit pops the
+	// iterable and pushes an iterator over it; OpIterNext either pushes the
+	// next key and value on top of that iterator, or jumps to its first operand
+	// when the iterator is spent. Operand 0 is an absolute instruction offset;
+	// operand 1 is how many names the loop binds -- 1 or 2 -- which decides
+	// whether the pair or only the primary half is pushed.
+	//
+	// Two opcodes rather than a desugar to len() plus indexing: a program that
+	// declared its own `len` would otherwise silently change what every
+	// `for…in` in the file means, and a hash has no ordered index to desugar
+	// to in the first place.
+	OpIterInit
+	OpIterNext
 )
 
 type Definition struct {
@@ -148,6 +161,8 @@ var definitions = map[Opcode]*Definition{
 	OpCaptureFree:    {"OpCaptureFree", []int{1}},
 	OpSetFree:        {"OpSetFree", []int{1}},
 	OpConcat:         {"OpConcat", []int{2}},
+	OpIterInit:       {"OpIterInit", []int{}},
+	OpIterNext:       {"OpIterNext", []int{2, 1}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index
@@ -193,6 +208,9 @@ var ConstantOperands = map[Opcode][]int{
 var JumpOperands = map[Opcode][]int{
 	OpJump:      {0},
 	OpJumpFalse: {0},
+	// Operand 0 is where to go when the iterator is spent. Operand 1 is the
+	// binding count and is one byte, so it is not a wide operand at all.
+	OpIterNext: {0},
 }
 
 // AllOpcodes returns every defined opcode in ascending numeric order.
@@ -324,12 +342,20 @@ func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
 	var offset int
 	operands := make([]int, len(def.OperandWidths))
 
+	// Each operand is read at the running offset, not at zero. Reading every
+	// operand from ins[0] happens to give the right answer for a single-operand
+	// opcode and for the one two-operand case the tests used (OpClosure with
+	// 0xFFFF and 255, where operand 0's high byte is operand 1's value), which
+	// is why it stood -- but it is wrong for any other {2, 1} instruction.
 	for i, width := range def.OperandWidths {
+		if offset+width > len(ins) {
+			break
+		}
 		switch width {
 		case 1:
-			operands[i] = int(uint8(ins[0]))
+			operands[i] = int(uint8(ins[offset]))
 		case 2:
-			operands[i] = int(binary.BigEndian.Uint16(ins))
+			operands[i] = int(binary.BigEndian.Uint16(ins[offset:]))
 		}
 		offset += width
 	}

@@ -252,6 +252,16 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}
+		case *mast.WhileStatement:
+			walkExpression(n.Condition)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			walkExpression(n.Iterable)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
 		}
 	}
 
@@ -301,6 +311,10 @@ func collectLetNames(stmt mast.Statement, into map[string]struct{}) {
 		}
 	case *mast.ForStatement:
 		collectLetNames(n.Init, into)
+		collectLetNames(n.Body, into)
+	case *mast.WhileStatement:
+		collectLetNames(n.Body, into)
+	case *mast.ForInStatement:
 		collectLetNames(n.Body, into)
 	case *mast.ExpressionStatement:
 		if ifExpr, ok := n.Expression.(*mast.IfExpression); ok {

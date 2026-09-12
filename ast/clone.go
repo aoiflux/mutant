@@ -257,6 +257,33 @@ func Clone(node Node) Node {
 			copied.ReturnValue = cloneExpression(node.ReturnValue)
 		}
 		return copied
+	case *ForInStatement:
+		if node == nil {
+			return nil
+		}
+		copied := &ForInStatement{
+			Token:    node.Token,
+			Iterable: cloneExpression(node.Iterable),
+			Body:     cloneBlock(node.Body),
+		}
+		if node.Key != nil {
+			copied.Key, _ = Clone(node.Key).(*Identifier)
+		}
+		if node.Value != nil {
+			copied.Value, _ = Clone(node.Value).(*Identifier)
+		}
+		return copied
+
+	case *WhileStatement:
+		if node == nil {
+			return nil
+		}
+		return &WhileStatement{
+			Token:     node.Token,
+			Condition: cloneExpression(node.Condition),
+			Body:      cloneBlock(node.Body),
+		}
+
 	case *ForStatement:
 		if node == nil {
 			return nil
