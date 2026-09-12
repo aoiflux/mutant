@@ -78,6 +78,12 @@ const (
 	OpCaptureLocal // push a boxed local's cell, for OpClosure's capture list
 	OpCaptureFree  // push a captured cell again, for a nested capture
 	OpSetFree      // write through a captured cell
+	// L-7 string interpolation — appended for the same reason. The operand is
+	// how many values to join, not a constant index: the pieces of "a${b}c"
+	// are pushed in source order and OpConcat replaces all of them with the
+	// one string they spell. A piece that is not already a string contributes
+	// the text it would print.
+	OpConcat
 )
 
 type Definition struct {
@@ -141,6 +147,7 @@ var definitions = map[Opcode]*Definition{
 	OpCaptureLocal:   {"OpCaptureLocal", []int{1}},
 	OpCaptureFree:    {"OpCaptureFree", []int{1}},
 	OpSetFree:        {"OpSetFree", []int{1}},
+	OpConcat:         {"OpConcat", []int{2}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index

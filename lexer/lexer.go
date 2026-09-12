@@ -225,9 +225,18 @@ func (l *Lexer) NextToken() token.Token {
 		tok.End = start
 		return tok
 	case '"':
-		tok.Type = token.STRING
-		tok.Literal = l.readString()
+		tok = l.readStringToken(start.Offset, false, l.peekRune() == '"' && l.peekRuneAt(2) == '"')
 	default:
+		// A raw string is spelled r"..." -- the one place an identifier
+		// character does not start an identifier. The test is the immediately
+		// following quote, which no identifier can be followed by today: there
+		// is no infix rule joining a name to a string, so `r"x"` cannot
+		// already mean something else.
+		if l.ch == 'r' && l.peekRune() == '"' {
+			l.readRune() // step onto the opening quote
+			tok = l.readStringToken(start.Offset, true, l.peekRune() == '"' && l.peekRuneAt(2) == '"')
+			break
+		}
 		if unicode.IsLetter(l.ch) || l.ch == '_' {
 			tok.Literal = l.readIdentifier()
 			tok.Type = token.LookupIdent(tok.Literal)
@@ -308,47 +317,109 @@ func (l *Lexer) nextRune() rune {
 	return next
 }
 
-// readString reads a double-quoted string literal, processing backslash escape
-// sequences: \n \r \t \" \\ \0. Unknown escapes are kept verbatim (backslash +
-// char). The lexer is byte-oriented, so bytes are accumulated directly to
-// preserve any multi-byte source content exactly. Leaves the cursor on the
-// closing quote (or EOF), matching the caller's trailing readRune().
-func (l *Lexer) readString() string {
-	var sb strings.Builder
+// readQuotedBody returns the source text between the quotes of an ordinary
+// string literal, exactly as written -- escapes not yet decoded.
+//
+// Splitting the scan from the decode is what lets one body be read twice: once
+// to find the ${...} holes, which have to be located in the source spelling,
+// and once per literal chunk to decode it. It is also the only way to report a
+// position inside a string, since a decoded byte has no source offset.
+//
+// A backslash consumes the character after it so that \" does not end the
+// literal. A newline does not end it either, which is long-standing behaviour:
+// a lone " spanning lines has always been legal, and triple quotes are for
+// saying so on purpose.
+func (l *Lexer) readQuotedBody() string {
+	start := l.readPosition
 	for {
 		l.readRune()
-		if l.ch == '"' || l.ch == 0 {
+		if l.ch == 0 || l.ch == '"' {
 			break
 		}
-		if l.ch == '\\' {
+		if l.ch == '\\' && l.peekRune() != 0 {
 			l.readRune()
-			switch l.ch {
-			case 'n':
-				sb.WriteByte('\n')
-			case 'r':
-				sb.WriteByte('\r')
-			case 't':
-				sb.WriteByte('\t')
-			case '"':
-				sb.WriteByte('"')
-			case '\\':
-				sb.WriteByte('\\')
-			case '0':
-				sb.WriteByte(0)
-			case 0:
-				// Trailing backslash at EOF: keep it literal and stop.
-				sb.WriteByte('\\')
-				return sb.String()
-			default:
-				// Unknown escape: preserve both characters.
-				sb.WriteByte('\\')
-				sb.WriteByte(byte(l.ch))
-			}
 			continue
 		}
-		sb.WriteByte(byte(l.ch))
+		// Inside a hole a quote belongs to the expression, not to the literal:
+		// "${ h["k"] }" ends at the last quote, not at the third.
+		if l.ch == '$' && l.peekRune() == '{' {
+			l.skipHole()
+		}
 	}
-	return sb.String()
+	return l.input[start:l.position]
+}
+
+// skipHole advances the cursor from the `$` of a `${` to the matching `}`,
+// counting nested braces and stepping over whole string literals on the way.
+// An unterminated hole runs to end of input, where the caller stops anyway.
+func (l *Lexer) skipHole() {
+	l.readRune() // onto the brace
+	depth := 1
+	for depth > 0 {
+		l.readRune()
+		switch l.ch {
+		case 0:
+			return
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case '"':
+			for {
+				l.readRune()
+				if l.ch == 0 || l.ch == '"' {
+					break
+				}
+				if l.ch == '\\' && l.peekRune() != 0 {
+					l.readRune()
+				}
+			}
+		}
+	}
+}
+
+// readRawBody reads the text of an r"..." literal. There are no escapes, so
+// the literal ends at the first quote and a raw string cannot contain one --
+// that is the entire rule, and r"""..."""  is how a program gets a quote back.
+// The cursor starts on the opening quote and is left on the closing one.
+func (l *Lexer) readRawBody() string {
+	start := l.readPosition
+	for {
+		l.readRune()
+		if l.ch == 0 || l.ch == '"' {
+			break
+		}
+	}
+	return l.input[start:l.position]
+}
+
+// readTripleBody returns the source text between the delimiters of a
+// """...""" literal. The cursor starts on the first of the three opening
+// quotes and is left on the last of the three closing ones.
+func (l *Lexer) readTripleBody(raw bool) string {
+	l.readRune()
+	l.readRune()
+
+	start := l.readPosition
+	end := len(l.input)
+	for {
+		l.readRune()
+		if l.ch == 0 {
+			end = l.position
+			break
+		}
+		if l.ch == '"' && l.peekRune() == '"' && l.peekRuneAt(2) == '"' {
+			end = l.position
+			l.readRune()
+			l.readRune()
+			break
+		}
+		if !raw && l.ch == '\\' && l.peekRune() != 0 {
+			l.readRune()
+		}
+	}
+
+	return l.input[start:end]
 }
 
 func newToken(tokenType token.TokenType, ch rune) token.Token {
@@ -452,4 +523,352 @@ func (l *Lexer) peekRune() rune {
 		return 0
 	}
 	return rune(l.input[l.readPosition])
+}
+
+// peekRuneAt looks n characters ahead of the cursor; peekRuneAt(1) is
+// peekRune. Only the string readers need to look further than one, to tell
+// """ from an empty string followed by something else.
+func (l *Lexer) peekRuneAt(n int) rune {
+	idx := l.readPosition + n - 1
+	if idx < 0 || idx >= len(l.input) {
+		return 0
+	}
+	return rune(l.input[idx])
+}
+
+// unescape decodes the backslash sequences an ordinary string literal
+// understands: \n \r \t \" \\ \0 and \$. Anything else is kept verbatim, both
+// characters, which is what makes a Windows path in an ordinary string merely
+// tedious rather than wrong. A trailing backslash stays a backslash.
+//
+// \$ is the escape hatch for interpolation: a lone $ is still a $, so only the
+// two characters ${ ever need one.
+func unescape(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			sb.WriteByte(s[i])
+			continue
+		}
+		if i+1 >= len(s) {
+			sb.WriteByte('\\')
+			break
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			sb.WriteByte('\n')
+		case 'r':
+			sb.WriteByte('\r')
+		case 't':
+			sb.WriteByte('\t')
+		case '"':
+			sb.WriteByte('"')
+		case '\\':
+			sb.WriteByte('\\')
+		case '$':
+			sb.WriteByte('$')
+		case '0':
+			sb.WriteByte(0)
+		default:
+			sb.WriteByte('\\')
+			sb.WriteByte(s[i])
+		}
+	}
+	return sb.String()
+}
+
+// normalizeNewlines turns CRLF into LF inside a multi-line literal.
+//
+// The newlines in a triple-quoted string come from the file's line endings,
+// and those are a property of the checkout rather than of the program. Without
+// this the same source would produce a different string depending on how it
+// was cloned. A program that wants a carriage return writes \r.
+func normalizeNewlines(s string) string {
+	if !strings.Contains(s, "\r\n") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
+
+// stripBlockIndent removes the indentation a triple-quoted literal inherits
+// from the code it is written inside.
+//
+// Stripping happens only when the opening """ is alone on its line: that is
+// the form that has indentation to inherit, and a literal that starts text on
+// the opening line is one whose first line has no indentation to measure. The
+// amount removed is the smallest indentation of any non-blank line, counting
+// the line the closing """ sits on when it is alone on one -- so aligning the
+// closer with the text, which is what anybody does by reflex, is also what
+// says where the left margin is.
+//
+// Indentation is counted in characters, so a tab is one. Mixing tabs and
+// spaces in the same block therefore strips a consistent number of characters
+// rather than a consistent visual width.
+func stripBlockIndent(body string) string {
+	newline := strings.IndexByte(body, '\n')
+	if newline < 0 || strings.TrimLeft(body[:newline], " \t") != "" {
+		return body
+	}
+	body = body[newline+1:]
+
+	lines := strings.Split(body, "\n")
+	indent := -1
+	if last := lines[len(lines)-1]; strings.TrimLeft(last, " \t") == "" {
+		indent = len(last)
+		lines = lines[:len(lines)-1]
+	}
+
+	for _, line := range lines {
+		if strings.TrimLeft(line, " \t") == "" {
+			continue
+		}
+		if width := len(line) - len(strings.TrimLeft(line, " \t")); indent < 0 || width < indent {
+			indent = width
+		}
+	}
+
+	if indent > 0 {
+		for i, line := range lines {
+			if len(line) < indent {
+				lines[i] = strings.TrimLeft(line, " \t")
+				continue
+			}
+			lines[i] = line[indent:]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// readStringToken reads a complete string literal in any of its spellings and
+// returns the token for it, already classified: a literal holding at least one
+// ${...} hole becomes a TEMPLATE carrying its parts, everything else stays a
+// STRING carrying its decoded text.
+//
+// openOffset is the offset of the literal's first character -- the `r` of a
+// raw one, not its quote -- so the spelling recorded on the token is the whole
+// thing. The cursor starts on the first quote and is left on the last one,
+// which is the contract NextToken's trailing readRune() expects.
+func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
+	bodyStart := l.bodyPosition(triple)
+
+	var body string
+	switch {
+	case triple:
+		body = l.readTripleBody(raw)
+	case raw:
+		body = l.readRawBody()
+	default:
+		body = l.readQuotedBody()
+	}
+
+	end := l.readPosition
+	if end > len(l.input) {
+		end = len(l.input)
+	}
+	spelling := l.input[openOffset:end]
+
+	// A raw literal has no holes for the same reason it has no escapes: raw
+	// means the text is the text. Nothing else would make r"${x}" usable for
+	// the shell and template snippets it exists to hold.
+	if !raw {
+		if parts, interpolated := splitTemplate(body, bodyStart); interpolated {
+			return token.Token{
+				Type:    token.TEMPLATE,
+				Literal: body,
+				Raw:     spelling,
+				Parts:   decodeParts(parts, triple),
+			}
+		}
+	}
+
+	decoded := body
+	if triple {
+		decoded = stripBlockIndent(normalizeNewlines(decoded))
+	}
+	if !raw {
+		decoded = unescape(decoded)
+	}
+
+	tok := token.Token{Type: token.STRING, Literal: decoded}
+	if raw || triple {
+		// An ordinary literal is left without a spelling on purpose: the
+		// formatter re-quotes its decoded value, which canonicalises escapes.
+		// These two spellings say something the decoded value cannot.
+		tok.Raw = spelling
+	}
+	return tok
+}
+
+// bodyPosition returns the position of the first character inside the literal
+// whose opening quote the cursor is currently on.
+func (l *Lexer) bodyPosition(triple bool) token.Position {
+	skip := 1
+	if triple {
+		skip = 3
+	}
+	return token.Position{
+		Line:   l.line,
+		Column: l.position - l.lineStart + 1 + skip,
+		Offset: l.position + skip,
+	}
+}
+
+// splitTemplate cuts a literal's source body into alternating text and ${...}
+// hole parts, starting at start, and reports whether it found a hole at all.
+//
+// Text parts are returned still encoded, because what a triple-quoted literal
+// does to its indentation has to be decided across the whole block and so
+// cannot happen here; decodeParts finishes them. Text parts are also emitted
+// even when empty, so that the parts alternate strictly -- decodeParts relies
+// on that to line the block up again, and the empty ones are dropped there.
+func splitTemplate(body string, start token.Position) ([]token.StringPart, bool) {
+	if !strings.Contains(body, "${") {
+		return nil, false
+	}
+
+	parts := []token.StringPart{}
+	pos := start
+	textStart := start
+	var text strings.Builder
+	found := false
+
+	flushText := func(at token.Position) {
+		parts = append(parts, token.StringPart{Text: text.String(), Start: textStart})
+		text.Reset()
+		textStart = at
+	}
+
+	for i := 0; i < len(body); {
+		// A backslash takes the next character with it, so \${ is two
+		// characters of text rather than the start of a hole.
+		if body[i] == '\\' && i+1 < len(body) {
+			text.WriteString(body[i : i+2])
+			pos = advance(pos, body[i:i+2])
+			i += 2
+			continue
+		}
+
+		if body[i] == '$' && i+1 < len(body) && body[i+1] == '{' {
+			exprStart := advance(pos, "${")
+			source, next := scanHole(body, i)
+			flushText(exprStart)
+			parts = append(parts, token.StringPart{
+				Text:       source,
+				Expression: true,
+				Start:      exprStart,
+			})
+			pos = advance(pos, body[i:next])
+			textStart = pos
+			i = next
+			found = true
+			continue
+		}
+
+		text.WriteByte(body[i])
+		pos = advance(pos, body[i:i+1])
+		i++
+	}
+	flushText(pos)
+
+	return parts, found
+}
+
+// scanHole returns the source between the braces of the hole starting at
+// body[i] (which is the `$` of a `${`), and the index just past its `}`.
+//
+// Braces nest and a string inside the hole is skipped whole, so
+// "${ hash[ "${k}" ] }" closes where a reader would say it closes. An
+// unterminated hole runs to the end of the literal and is handed to the parser
+// as it stands: the resulting error points inside the string, which is where
+// the missing brace is.
+func scanHole(body string, i int) (source string, next int) {
+	depth := 1
+	j := i + 2
+	for j < len(body) && depth > 0 {
+		switch body[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case '"':
+			j++
+			for j < len(body) && body[j] != '"' {
+				if body[j] == '\\' {
+					j++
+				}
+				j++
+			}
+		}
+		j++
+	}
+	if depth > 0 {
+		return body[i+2:], len(body)
+	}
+	return body[i+2 : j-1], j
+}
+
+// decodeParts finishes the text parts splitTemplate left encoded and drops the
+// empty ones.
+//
+// A triple-quoted literal's indentation belongs to the block, not to any one
+// part, so the text is reassembled with a NUL standing in for each hole,
+// re-indented as a whole, and cut apart again. A NUL is safe as the marker
+// because it is one character, so it cannot change a line's indentation, and
+// because the only way to get one into a literal is the \0 escape, which is
+// still two characters at this point.
+func decodeParts(parts []token.StringPart, triple bool) []token.StringPart {
+	if triple {
+		var masked strings.Builder
+		for _, part := range parts {
+			if part.Expression {
+				masked.WriteByte(0)
+				continue
+			}
+			masked.WriteString(part.Text)
+		}
+
+		chunks := strings.Split(stripBlockIndent(normalizeNewlines(masked.String())), "\x00")
+		next := 0
+		for i := range parts {
+			if parts[i].Expression || next >= len(chunks) {
+				continue
+			}
+			parts[i].Text = chunks[next]
+			next++
+		}
+	}
+
+	decoded := make([]token.StringPart, 0, len(parts))
+	for _, part := range parts {
+		if !part.Expression {
+			part.Text = unescape(part.Text)
+			if part.Text == "" {
+				continue
+			}
+		}
+		decoded = append(decoded, part)
+	}
+	return decoded
+}
+
+// advance moves a position forward over text, keeping line and column honest
+// so that a hole several lines into a triple-quoted literal still reports the
+// line it is on.
+func advance(pos token.Position, text string) token.Position {
+	for i := 0; i < len(text); i++ {
+		pos.Offset++
+		if text[i] == '\n' {
+			pos.Line++
+			pos.Column = 1
+			continue
+		}
+		pos.Column++
+	}
+	return pos
 }

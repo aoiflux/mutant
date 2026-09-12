@@ -15,4 +15,5 @@ Scripts:
 - enums_example.mut
 - for_loop_control.mut
 - recur.mut
+- string_forms.mut
 - structs_example.mut

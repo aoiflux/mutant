@@ -47,6 +47,7 @@ func TestWideOperandsAreClassified(t *testing.T) {
 		"OpHash/0":        kindOther, // element count
 		"OpMultiValue/0":  kindOther, // value count
 		"OpDestructure/0": kindOther, // target count
+		"OpConcat/0":      kindOther, // count of pieces to join
 	}
 
 	for _, op := range AllOpcodes() {

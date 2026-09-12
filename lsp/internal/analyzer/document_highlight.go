@@ -117,6 +117,10 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 		for _, element := range node.Elements {
 			s.collectExpressionWriteRanges(element, targetName, out)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			s.collectExpressionWriteRanges(element, targetName, out)
+		}
 	case *mast.IndexExpression:
 		s.collectExpressionWriteRanges(node.Left, targetName, out)
 		s.collectExpressionWriteRanges(node.Index, targetName, out)

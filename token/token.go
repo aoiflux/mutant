@@ -91,6 +91,41 @@ type Token struct {
 	Literal string
 	Start   Position
 	End     Position
+
+	// Raw is the literal's source spelling, delimiters included. It is set
+	// only for the string forms whose spelling carries something the decoded
+	// value cannot: r"..." (where every backslash is itself), """...""" (its
+	// own line breaks and indentation) and any literal holding a ${...} hole.
+	// The formatter reprints those verbatim instead of re-quoting a decoded
+	// value, which would turn a raw path back into a doubled-backslash one.
+	// Empty for every other token, including an ordinary string literal.
+	Raw string
+
+	// Parts is set only on a TEMPLATE token: the literal's text and holes in
+	// source order, each carrying the position it occupies in the file so a
+	// diagnostic inside a hole underlines the code the author wrote rather
+	// than the string that contains it.
+	Parts []StringPart
+}
+
+// StringPart is one piece of an interpolated string literal.
+//
+// A part is either decoded literal text or the source of one ${...} hole; the
+// two alternate but neither is guaranteed to come first, and an empty leading
+// or trailing text part is omitted rather than kept as "".
+type StringPart struct {
+	// Text is decoded literal text when Expression is false, and the source
+	// between ${ and } -- braces excluded -- when it is true.
+	Text string
+
+	// Expression reports whether Text is code rather than text.
+	Expression bool
+
+	// Start is where Text begins in the file. For a text part after any
+	// rewriting a triple-quoted literal does to its indentation this is the
+	// start of the part as originally written, which is the only position
+	// that exists; holes, the ones a reader is ever pointed at, are exact.
+	Start Position
 }
 
 const (
@@ -103,6 +138,10 @@ const (
 	INT    = "INT"
 	FLOAT  = "FLOAT"
 	STRING = "STRING"
+	// TEMPLATE is a string literal holding at least one ${...} hole. A literal
+	// with no hole stays a STRING, so nothing downstream pays for a feature a
+	// program does not use.
+	TEMPLATE = "TEMPLATE"
 
 	// Operators
 	ASSIGN     = "="

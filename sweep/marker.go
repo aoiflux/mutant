@@ -199,6 +199,18 @@ func Classify(src string) Mode {
 // program being well formed.
 func calledNames(src string) map[string]bool {
 	names := map[string]bool{}
+	collectCalledNames(src, names)
+	return names
+}
+
+// collectCalledNames does the scanning, and calls itself for the source inside
+// each ${...} hole.
+//
+// A hole is a whole expression and can hold a call like any other, but the
+// literal containing it is one token, so a scan that stopped at the token
+// would not see it. The recursion is bounded by nesting depth, which is
+// bounded by the source.
+func collectCalledNames(src string, names map[string]bool) {
 	var third, second, previous token.Token
 
 	lex := lexer.New(src)
@@ -210,13 +222,19 @@ func calledNames(src string) map[string]bool {
 				names[third.Literal+"_"+previous.Literal] = true
 			}
 		}
+		if tok.Type == token.TEMPLATE {
+			for _, part := range tok.Parts {
+				if part.Expression {
+					collectCalledNames(part.Text, names)
+				}
+			}
+		}
 		// After the shift previous is one token back, second two, third three,
 		// so the window at a `(` is IDENT(ns) DOT IDENT(name) LPAREN. The zero
 		// Token has an empty Type and matches neither IDENT nor DOT, so the
 		// first two iterations need no guard of their own.
 		third, second, previous = second, previous, tok
 	}
-	return names
 }
 
 func commentsOf(src string) []token.Comment {

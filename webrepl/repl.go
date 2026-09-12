@@ -230,6 +230,7 @@ func trimCommandLine(line string) string {
 func SupportedSyntaxSummary() string {
 	return strings.Join([]string{
 		"integers, booleans, strings",
+		"string interpolation (${...}), raw strings (r\"...\") and triple-quoted blocks",
 		"float literals and numeric expressions",
 		"arrays, hashes, indexing",
 		"let bindings and identifiers",

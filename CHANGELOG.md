@@ -18,6 +18,43 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **String interpolation, raw strings and triple-quoted strings.** `"${...}"`
+  puts an expression in a string: `"host=${h}:${p}"` where `h` is a string and
+  `p` an integer. A piece that is already a string contributes its own text,
+  anything else contributes what it would print, so there is no conversion to
+  write and no value a hole cannot take. A hole holds one expression -- a call,
+  an index, arithmetic, another interpolated string -- and it is compiled where
+  it stands, so nothing is re-scanned at runtime and a `%` in the text is a
+  percent sign.
+
+  Only the two characters `${` open a hole. A lone `$` is unchanged, so
+  `"cost: $5"` and `"$PATH"` mean what they always meant; `\${` writes the two
+  characters literally. A hole is parsed in place: a broken one is reported at
+  its own line and column inside the string, a traceback through a call in a
+  hole underlines that call, and go-to-definition and every builtin diagnostic
+  reach into holes exactly as they reach into any other expression.
+
+  `r"..."` decodes nothing -- no escapes, no interpolation -- so
+  `r"C:\Users\Public"` and `r"\d{4}-\d{2}"` say what they look like. It ends at
+  the first quote, so it cannot contain one.
+
+  `"""..."""` spans lines, with escapes and interpolation still live;
+  `r"""..."""` is its raw form, and either may hold a lone `"` or `""`. A
+  newline right after the opening delimiter is dropped and the smallest
+  indentation of any non-blank line -- counting the closing delimiter's own
+  line -- is removed, so a block reads as the text it is rather than as the
+  text plus the surrounding code's indentation. CRLF becomes LF inside one:
+  the line endings in a multi-line literal come from how the file was checked
+  out, and the same source must not mean two things in two clones.
+
+  A literal with no hole is still an ordinary string token, so nothing in a
+  program that does not interpolate changes -- not the AST, not the bytecode.
+  Interpolation compiles to its own opcode rather than to a call, so a module
+  that declares a name like `str_format` cannot change what every interpolated
+  string in the program means. The formatter reprints a raw or triple-quoted
+  literal as written instead of re-quoting its value, which would have doubled
+  the backslashes it exists to avoid.
+
 - **Modules and imports.** A program can be more than one file. `import
   "lib/stats.mut";` binds the namespace `stats`, and `import s
   "lib/stats.mut";` binds `s` instead; the namespace is otherwise the file's

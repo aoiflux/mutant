@@ -10,6 +10,7 @@ Source of truth:
 
 Related references:
 - [Capability Reference](CAPABILITY_REFERENCE.md) — the full, category-grouped catalog of every builtin, with parameter types (generated from the metadata above by `cmd/gendocs`).
+- [Strings](#strings) — interpolation, raw strings, and triple-quoted blocks.
 - [Modules](MODULES.md) — `import`, namespaces, the `_` export rule, and where a path is looked up.
 - Deep-dive guides: [Secure Networking](SECURE_NETWORKING.md), [Graph Database](GRAPH_DATABASE.md), [Runtime Integration](RUNTIME_INTEGRATION.md), [Structured Data](STRUCTURED_DATA.md).
 
@@ -691,8 +692,93 @@ name wins, so no existing program changes meaning.
 Imports are a compiled-program feature. The REPL has no file for a relative
 path to resolve against.
 
+### Strings
+
+A string literal has three spellings. All three produce the same kind of value;
+they differ only in what the source is allowed to say.
+
+```mutant
+let host = "db01";
+let port = 5432;
+
+// Ordinary: escapes are decoded, ${...} interpolates.
+putln("connecting to ${host}:${port}");
+
+// Raw: nothing is decoded. Every backslash is itself.
+let key = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+
+// Triple-quoted: spans lines, and is re-indented to its own left margin.
+let report = """
+    host: ${host}
+    port: ${port}
+    """;
+```
+
+#### Interpolation
+
+`${` opens a hole and `}` closes it. What is between them is an ordinary
+expression -- a call, an index, arithmetic, another string -- evaluated where it
+is written:
+
+```mutant
+putln("largest: ${ max(values) }");
+putln("first: ${ rows[0]["name"] }");
+```
+
+A value that is already a string contributes its own text; anything else
+contributes what it would print, so `"n=${1 + 1}"` is `"n=2"` and no conversion
+has to be written. Nothing is re-scanned afterwards: a `%` in an interpolated
+string is a percent sign, not a format directive.
+
+A lone `$` is still a `$`, so `"cost: $5"` and `"$PATH"` are unchanged. Only the
+two characters `${` open a hole, and `\${` writes them literally.
+
+A hole holds exactly one expression. `${}` and `${ let x = 1; }` are compile
+errors naming the line and column inside the string, and so is anything that
+fails to parse there -- a broken hole is reported where it is, not where the
+string starts.
+
+#### Raw strings
+
+`r"..."` decodes nothing: there are no escapes and no interpolation, which is
+what makes a Windows path or a regex readable.
+
+```mutant
+let path = r"C:\Users\Public\Desktop";     // "C:\\Users\\Public\\Desktop"
+let stamp = r"\d{4}-\d{2}-\d{2}";
+```
+
+A raw string ends at the first `"`, so it cannot contain one. Use an ordinary
+string or a raw triple-quoted one when you need a quote inside.
+
+#### Triple-quoted strings
+
+`"""..."""` spans lines. Escapes and interpolation still work; `r"""..."""` is
+the raw form of the same thing, and either may contain a lone `"` or `""`.
+
+Three things happen to the text, and all three exist so that a block reads as
+the text it is rather than as the text plus the code's indentation:
+
+- A newline immediately after the opening `"""` is dropped.
+- The smallest indentation of any non-blank line -- counting the line the
+  closing `"""` is on when it is alone on one -- is removed from every line.
+  Indentation is counted in characters, so a tab counts as one.
+- `\r\n` becomes `\n`. The line endings in a multi-line literal come from
+  however the file was checked out, and a program must not mean two different
+  things in two clones of the same repository. Write `\r` for a carriage
+  return.
+
+Re-indentation applies only when the opening `"""` is alone on its line. A
+literal that starts text on the opening line has no indentation to measure, so
+it is left exactly as written.
+
+#### Escape sequences
+
+In an ordinary or triple-quoted string: `\n`, `\r`, `\t`, `\"`, `\\`, `\0`, and
+`\$`. Anything else is kept as both characters, so `"\d+"` is a usable regex
+without doubling -- though `r"\d+"` says so on purpose.
+
 ### Notes
-- String literals are simple quoted strings; escape-sequence behavior is intentionally limited.
 - **Semicolons are required to terminate statements** — including statements whose value is a block, e.g. `let f = fn() { ... };` and `if (c) { ... };`. The language server's formatter enforces this canonically (it repairs missing semicolons and removes redundant ones on format), and the `semicolon` diagnostic flags them while you type.
 
 ## Reserved Keywords

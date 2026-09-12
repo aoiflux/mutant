@@ -617,6 +617,10 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 		for _, element := range node.Elements {
 			c.collectExpression(element, current)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			c.collectExpression(element, current)
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			c.collectExpression(key, current)
@@ -1085,6 +1089,10 @@ func (c *nestingCollector) collectExpression(expr mast.Expression, inFunction bo
 		for _, element := range node.Elements {
 			c.collectExpression(element, inFunction, depth)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			c.collectExpression(element, inFunction, depth)
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			c.collectExpression(key, inFunction, depth)
@@ -1311,6 +1319,10 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:
@@ -1616,6 +1628,10 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:
@@ -2078,6 +2094,14 @@ func collectUnusedCandidatesFromExpression(expr mast.Expression, out *[]*mast.Id
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
 			collectUnusedCandidatesFromExpression(element, out)
+		}
+	// A name used only inside a ${...} hole is used. Without this arm the
+	// unused-declaration rule reports every variable an interpolated string
+	// reads, which is a warning on correct code -- the one thing these rules
+	// promise never to produce.
+	case *mast.TemplateLiteral:
+		for _, part := range node.Parts {
+			collectUnusedCandidatesFromExpression(part, out)
 		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {

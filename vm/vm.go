@@ -15,6 +15,7 @@ import (
 	"mutant/object"
 	"mutant/security"
 	"os"
+	"strings"
 )
 
 // VM structure defines virtual machine
@@ -844,6 +845,24 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
 			vm.stackPointer = vm.stackPointer - numElements // pop the elements (OpHash does this; OpArray had omitted it)
 			if err := vm.push(array); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+		case code.OpConcat:
+			if ip+2 >= len(ins) {
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
+			}
+			res, err := vm.readUint16(ins, ip+1)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			numPieces := int(res)
+			vm.currentFrame().ip += 2
+			if vm.stackPointer-numPieces < 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d pieces (sp=%d)", numPieces, vm.stackPointer)
+			}
+			joined := vm.buildInterpolation(vm.stackPointer-numPieces, vm.stackPointer)
+			vm.stackPointer = vm.stackPointer - numPieces
+			if err := vm.push(joined); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpHash:
@@ -2143,6 +2162,29 @@ func (vm *VM) buildArray(startIndex, endIndex int) object.Object {
 		elements[i-startIndex] = vm.decryptForUse(vm.stack[i])
 	}
 	return &object.Array{Elements: elements}
+}
+
+// buildInterpolation joins the pieces of a string literal's holes and text
+// into the one string they spell.
+//
+// A piece that is already a string contributes its own text; anything else
+// contributes what it would print. There is no conversion to fail and no
+// protocol for a value to implement, because a value this language can print
+// is a value it can interpolate.
+func (vm *VM) buildInterpolation(startIndex, endIndex int) object.Object {
+	var out strings.Builder
+	for i := startIndex; i < endIndex; i++ {
+		piece := vm.decryptForUse(vm.stack[i])
+		if piece == nil {
+			continue
+		}
+		if str, isString := piece.(*object.String); isString {
+			out.WriteString(str.Value)
+			continue
+		}
+		out.WriteString(piece.Inspect())
+	}
+	return &object.String{Value: out.String()}
 }
 
 func (vm *VM) buildMultiValue(startIndex, endIndex int) object.Object {

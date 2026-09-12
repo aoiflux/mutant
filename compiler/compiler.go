@@ -705,6 +705,10 @@ func (c *Compiler) compileNode(node ast.Node) error {
 	case *ast.StringLiteral:
 		str := &object.String{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(str))
+	case *ast.TemplateLiteral:
+		if err := c.compileTemplateLiteral(node); err != nil {
+			return err
+		}
 	case *ast.Boolean:
 		if node.Value {
 			c.emit(code.OpTrue)
@@ -1532,6 +1536,42 @@ func (c *Compiler) claimTypeName(kind, name string) error {
 		)
 	}
 	c.typeOwners[name] = key
+	return nil
+}
+
+// compileTemplateLiteral compiles "a${b}c" as its pieces in source order
+// followed by one OpConcat that joins them.
+//
+// The alternative -- desugaring to a call -- would have been fewer lines and
+// one silent trap: whichever function it called could be shadowed by a module
+// that declares that name, and every interpolated string in the program would
+// then mean something else.
+func (c *Compiler) compileTemplateLiteral(node *ast.TemplateLiteral) error {
+	pieces := 0
+	for i, text := range node.Texts {
+		// An empty text slot contributes nothing and is not worth a constant:
+		// "${a}${b}" has three of them.
+		if text != "" {
+			c.emit(code.OpConstant, c.addConstant(&object.String{Value: text}))
+			pieces++
+		}
+		if i >= len(node.Parts) {
+			continue
+		}
+		if err := c.Compile(node.Parts[i]); err != nil {
+			return err
+		}
+		pieces++
+	}
+
+	if pieces == 0 {
+		c.emit(code.OpConstant, c.addConstant(&object.String{Value: ""}))
+		return nil
+	}
+
+	// A single piece still goes through OpConcat rather than being left on the
+	// stack: "${n}" has to produce a string even when n is an integer.
+	c.emit(code.OpConcat, pieces)
 	return nil
 }
 

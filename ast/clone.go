@@ -166,6 +166,15 @@ func Clone(node Node) Node {
 			Token:    node.Token,
 			Elements: cloneExpressions(node.Elements),
 		}
+	case *TemplateLiteral:
+		if node == nil {
+			return nil
+		}
+		return &TemplateLiteral{
+			Token: node.Token,
+			Texts: append([]string(nil), node.Texts...),
+			Parts: cloneExpressions(node.Parts),
+		}
 	case *HashLiteral:
 		if node == nil {
 			return nil

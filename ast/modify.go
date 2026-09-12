@@ -104,6 +104,13 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Elements {
 			node.Elements[i], _ = Modify(node.Elements[i], modifier).(Expression)
 		}
+	case *TemplateLiteral:
+		// The text pieces are string literals and modify to themselves; the
+		// holes are ordinary expressions, so unquote() inside one behaves the
+		// way it behaves anywhere else.
+		for i := range node.Parts {
+			node.Parts[i], _ = Modify(node.Parts[i], modifier).(Expression)
+		}
 	case *HashLiteral:
 		newPairs := make(map[Expression]Expression)
 		for key, val := range node.Pairs {

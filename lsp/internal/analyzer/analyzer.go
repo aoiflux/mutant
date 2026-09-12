@@ -888,6 +888,10 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		for _, element := range e.Elements {
 			collectExpressionTokenOverrides(element, overrides)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range e.Parts {
+			collectExpressionTokenOverrides(element, overrides)
+		}
 	case *mast.IndexExpression:
 		collectExpressionTokenOverrides(e.Left, overrides)
 		collectExpressionTokenOverrides(e.Index, overrides)
@@ -956,6 +960,14 @@ func tokenLength(node mast.Node, rng mast.Range) uint32 {
 	case *mast.FloatLiteral:
 		return uint32(len([]rune(n.TokenLiteral())))
 	case *mast.StringLiteral:
+		// A semantic token cannot span lines, and a triple-quoted literal --
+		// or one text piece of an interpolated one -- can. Leaving it out
+		// hands the whole literal to the grammar, which colours it correctly
+		// across lines; claiming a length longer than the line would have the
+		// client colour past the end of it.
+		if rng.End.Line != rng.Start.Line {
+			return 0
+		}
 		return uint32(len([]rune(n.TokenLiteral())))
 	default:
 		if rng.End.Line != rng.Start.Line || rng.End.Column <= rng.Start.Column {

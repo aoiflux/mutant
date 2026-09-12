@@ -338,6 +338,12 @@ func (s *Snapshot) resolveExpression(expr mast.Expression, current *scope, pos l
 				return resolved, true
 			}
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			if resolved, ok := s.resolveExpression(element, current, pos); ok {
+				return resolved, true
+			}
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			if resolved, ok := s.resolveExpression(key, current, pos); ok {
@@ -586,6 +592,12 @@ func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
 				return typeName, true
 			}
@@ -878,6 +890,12 @@ func (s *Snapshot) scopeAtExpression(expr mast.Expression, current *scope, pos l
 				return child, true
 			}
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			if child, ok := s.scopeAtExpression(element, current, pos); ok {
+				return child, true
+			}
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			if child, ok := s.scopeAtExpression(key, current, pos); ok {
@@ -1014,6 +1032,10 @@ func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			s.advanceExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			s.advanceExpression(element, current)
 		}
 	case *mast.HashLiteral:
@@ -1242,6 +1264,10 @@ func (c *referenceCollector) collectExpression(expr mast.Expression, current *sc
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:

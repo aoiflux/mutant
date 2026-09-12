@@ -230,6 +230,13 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			for _, element := range node.Elements {
 				walkExpression(element)
 			}
+		case *mast.TemplateLiteral:
+			if node == nil {
+				return
+			}
+			for _, part := range node.Parts {
+				walkExpression(part)
+			}
 		case *mast.HashLiteral:
 			if node == nil {
 				return

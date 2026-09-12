@@ -13,6 +13,7 @@ import (
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/object"
+	"strings"
 )
 
 var (
@@ -84,6 +85,8 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 		return &object.Function{Parameters: params, Env: env, Body: body}
 	case *ast.StringLiteral:
 		return &object.String{Value: node.Value}
+	case *ast.TemplateLiteral:
+		return evalTemplateLiteral(node, env)
 	case *ast.CallExpression:
 		if node.Function.TokenLiteral() == "quote" {
 			// Arity is checked here rather than assumed: a bare `quote()` in
@@ -200,6 +203,35 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 		return nil
 	}
 	return nil
+}
+
+// evalTemplateLiteral joins the pieces of an interpolated string, matching the
+// VM's OpConcat: a string piece contributes its own text, anything else
+// contributes what it would print.
+//
+// The tree-walking evaluator only runs macro bodies now, but a macro that
+// builds a message out of its arguments is exactly the kind anybody writes, so
+// the two engines have to agree on what a hole produces.
+func evalTemplateLiteral(node *ast.TemplateLiteral, env *object.Environment) object.Object {
+	var out strings.Builder
+	for i, text := range node.Texts {
+		out.WriteString(text)
+		if i >= len(node.Parts) {
+			continue
+		}
+		piece := Eval(node.Parts[i], env)
+		if isError(piece) {
+			return piece
+		}
+		if str, isString := piece.(*object.String); isString {
+			out.WriteString(str.Value)
+			continue
+		}
+		if piece != nil {
+			out.WriteString(piece.Inspect())
+		}
+	}
+	return &object.String{Value: out.String()}
 }
 
 func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {

@@ -184,6 +184,15 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		return tFloat
 	case *mast.StringLiteral:
 		return tString
+	case *mast.TemplateLiteral:
+		// The result is a string whatever the holes hold, but the holes are
+		// ordinary expressions and have to be walked: a rule that asks what
+		// type an argument inside one has gets an answer only if this pass
+		// recorded it.
+		for _, part := range n.Parts {
+			inf.expr(part, env)
+		}
+		return tString
 	case *mast.Boolean:
 		return tBool
 	case *mast.ArrayLiteral:

@@ -403,6 +403,10 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			for _, el := range n.Elements {
 				walkExpression(el)
 			}
+		case *mast.TemplateLiteral:
+			for _, el := range n.Parts {
+				walkExpression(el)
+			}
 		case *mast.HashLiteral:
 			for key, value := range n.Pairs {
 				walkExpression(key)
@@ -539,6 +543,8 @@ func literalKindSet(e mast.Expression) (kindSet, bool) {
 		return ksBool, true
 	case *mast.ArrayLiteral:
 		return ksArray, true
+	case *mast.TemplateLiteral:
+		return ksString, true
 	case *mast.HashLiteral:
 		return ksHash, true
 	case *mast.FunctionLiteral:

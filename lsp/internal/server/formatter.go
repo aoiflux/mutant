@@ -247,7 +247,24 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 	case *mast.IntegerLiteral, *mast.FloatLiteral, *mast.Boolean:
 		return expr.String()
 	case *mast.StringLiteral:
+		// A raw or triple-quoted literal is reprinted as written. Re-quoting
+		// its value would be correct and useless: it would turn r"C:\Users"
+		// back into "C:\\Users" and collapse a block of text onto one line
+		// with \n between the pieces, undoing the two things those spellings
+		// exist to do. An ordinary literal carries no spelling and is
+		// re-quoted, which is what canonicalises its escapes.
+		if node.Token.Raw != "" {
+			return node.Token.Raw
+		}
 		return quoteString(node.Value)
+	case *mast.TemplateLiteral:
+		// Likewise, and for one more reason: a hole holds an expression whose
+		// printed form would have to be re-escaped to survive being put back
+		// inside a string.
+		if node.Token.Raw != "" {
+			return node.Token.Raw
+		}
+		return node.String()
 	case *mast.PrefixExpression:
 		// Mutant's canonical form parenthesises every operator expression, so
 		// precedence is always explicit in the printed text.
@@ -490,6 +507,13 @@ func quoteString(value string) string {
 	out.Grow(len(value) + 2)
 	out.WriteByte('"')
 	for i := 0; i < len(value); i++ {
+		// ${ has to be escaped back, or formatting a string that merely
+		// contains those two characters turns it into one that interpolates.
+		// Only the pair matters: a lone $ is a $ to the lexer too.
+		if value[i] == '$' && i+1 < len(value) && value[i+1] == '{' {
+			out.WriteString(`\$`)
+			continue
+		}
 		switch c := value[i]; c {
 		case '\\':
 			out.WriteString(`\\`)

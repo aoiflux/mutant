@@ -1,77 +1,144 @@
 {
   "function": {
     "prefix": "fn",
-    "body": ["let ${1:name} = fn(${2:params}) {", "\t$0", "};"],
+    "body": [
+      "let ${1:name} = fn(${2:params}) {",
+      "\t$0",
+      "};"
+    ],
     "description": "Function binding"
   },
   "let": {
     "prefix": "let",
-    "body": ["let ${1:name} = ${2:value};"],
+    "body": [
+      "let ${1:name} = ${2:value};"
+    ],
     "description": "Let binding"
   },
   "multi-value bind": {
     "prefix": "letr",
-    "body": ["let ${1:value}, ${2:err} = ${3:call};"],
+    "body": [
+      "let ${1:value}, ${2:err} = ${3:call};"
+    ],
     "description": "Multi-value bind (result, err)"
+  },
+  "raw string": {
+    "prefix": "rawstr",
+    "body": [
+      "r\"$1\""
+    ],
+    "description": "raw string literal (no escapes; every backslash is itself)"
+  },
+  "block string": {
+    "prefix": "blockstr",
+    "body": [
+      "\"\"\"",
+      "${1:text}",
+      "\"\"\""
+    ],
+    "description": "triple-quoted multiline string (indentation is stripped)"
+  },
+  "interpolated string": {
+    "prefix": "istr",
+    "body": [
+      "\"$1=\\${$2}\""
+    ],
+    "description": "string with a ${...} hole"
   },
   "guard return": {
     "prefix": "guard",
-    "body": ["if (${1:err} != ${2:\"\"}) {", "\treturn ${1:err};", "}"],
+    "body": [
+      "if (${1:err} != ${2:\"\"}) {",
+      "\treturn ${1:err};",
+      "}"
+    ],
     "description": "Guard / early return on error"
   },
   "if": {
     "prefix": "if",
-    "body": ["if (${1:cond}) {", "\t$0", "}"],
+    "body": [
+      "if (${1:cond}) {",
+      "\t$0",
+      "}"
+    ],
     "description": "if statement"
   },
   "if/else": {
     "prefix": "ife",
-    "body": ["if (${1:cond}) {", "\t$2", "} else {", "\t$0", "}"],
+    "body": [
+      "if (${1:cond}) {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
     "description": "if/else statement"
   },
   "for": {
     "prefix": "for",
-    "body": ["for (let ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {", "\t$0", "}"],
+    "body": [
+      "for (let ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {",
+      "\t$0",
+      "}"
+    ],
     "description": "C-style for loop"
   },
   "struct": {
     "prefix": "struct",
-    "body": ["struct ${1:Name} { ${2:x}; ${3:y}; };"],
+    "body": [
+      "struct ${1:Name} { ${2:x}; ${3:y}; };"
+    ],
     "description": "struct declaration"
   },
   "struct literal": {
     "prefix": "structlit",
-    "body": ["${1:Name} { ${2:field}: ${3:value} }"],
+    "body": [
+      "${1:Name} { ${2:field}: ${3:value} }"
+    ],
     "description": "struct literal"
   },
   "enum": {
     "prefix": "enum",
-    "body": ["enum ${1:Name} { ${2:A}, ${3:B} };"],
+    "body": [
+      "enum ${1:Name} { ${2:A}, ${3:B} };"
+    ],
     "description": "enum declaration"
   },
   "import": {
     "prefix": "import",
-    "body": ["import \"${1:lib/util.mut}\";"],
+    "body": [
+      "import \"${1:lib/util.mut}\";"
+    ],
     "description": "import a module (binds the file's base name as the namespace)"
   },
   "import as": {
     "prefix": "importas",
-    "body": ["import ${1:ns} \"${2:lib/util.mut}\";"],
+    "body": [
+      "import ${1:ns} \"${2:lib/util.mut}\";"
+    ],
     "description": "import a module under a chosen namespace"
   },
   "macro": {
     "prefix": "macro",
-    "body": ["let ${1:name} = macro(${2:params}) {", "\t$0", "};"],
+    "body": [
+      "let ${1:name} = macro(${2:params}) {",
+      "\t$0",
+      "};"
+    ],
     "description": "macro binding"
   },
   "putln": {
     "prefix": "putln",
-    "body": ["putln(${1:\"\"});"],
+    "body": [
+      "putln(${1:\"\"});"
+    ],
     "description": "Print a line"
   },
   "putf": {
     "prefix": "putf",
-    "body": ["putf(${1:\"\"}, ${2:value});"],
+    "body": [
+      "putf(${1:\"\"}, ${2:value});"
+    ],
     "description": "Formatted print"
   }
 }
