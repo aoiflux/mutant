@@ -58,6 +58,10 @@ func (l *Lexer) NextToken() token.Token {
 			ch := string(l.ch)
 			l.readRune()
 			tok = token.Token{Type: token.EQUALITY, Literal: ch + string(l.ch)}
+		} else if l.peekRune() == '>' {
+			ch := string(l.ch)
+			l.readRune()
+			tok = token.Token{Type: token.FATARROW, Literal: ch + string(l.ch)}
 		} else {
 			tok = newToken(token.ASSIGN, l.ch)
 		}

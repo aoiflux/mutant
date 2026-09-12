@@ -76,6 +76,9 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 	case *ast.IfExpression:
 		return evalIfExpression(node, env)
 
+	case *ast.MatchExpression:
+		return evalMatchExpression(node, env)
+
 	case *ast.Identifier:
 		return evalIdentifier(node, env)
 

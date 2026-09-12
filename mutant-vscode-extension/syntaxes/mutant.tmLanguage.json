@@ -148,7 +148,7 @@
       "patterns": [
         {
           "name": "keyword.control.mutant",
-          "match": "\\b(?:fn|let|if|else|return|for|while|in|break|continue|macro|import)\\b"
+          "match": "\\b(?:fn|let|if|else|match|return|for|while|in|break|continue|macro|import)\\b"
         }
       ]
     },
@@ -243,7 +243,7 @@
       "patterns": [
         {
           "name": "keyword.operator.mutant",
-          "match": "<<=|>>=|<<|>>|==|!=|<=|>=|&&|\\|\\||&=|\\|=|\\^=|\\+=|-=|\\*=|/=|%=|\\+\\+|--|[+\\-*/%<>!=&|^~]"
+          "match": "=>|<<=|>>=|<<|>>|==|!=|<=|>=|&&|\\|\\||&=|\\|=|\\^=|\\+=|-=|\\*=|/=|%=|\\+\\+|--|[+\\-*/%<>!=&|^~]"
         }
       ]
     },

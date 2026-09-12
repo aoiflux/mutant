@@ -263,6 +263,29 @@ func (s *Snapshot) resolveExpression(expr mast.Expression, current *scope, pos l
 				return resolved, true
 			}
 		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if resolved, ok := s.resolveExpression(node.Subject, current, pos); ok {
+				return resolved, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are resolved so that goto-definition on the `Status` of
+			// a `Status.Ok` arm reaches the enum declaration.
+			for _, pattern := range arm.Patterns {
+				if resolved, ok := s.resolveExpression(pattern, current, pos); ok {
+					return resolved, true
+				}
+			}
+			if arm.Body != nil {
+				if resolved, ok := s.resolveStatement(arm.Body, current, pos); ok {
+					return resolved, true
+				}
+			}
+		}
 	case *mast.CallExpression:
 		if node.Function != nil {
 			if resolved, ok := s.resolveExpression(node.Function, current, pos); ok {
@@ -566,6 +589,20 @@ func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast
 		}
 		if node.Alternative != nil {
 			if typeName, ok := s.structTypeNameInStatement(node.Alternative, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Subject, target); ok {
+				return typeName, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if typeName, ok := s.structTypeNameInStatement(arm.Body, target); ok {
 				return typeName, true
 			}
 		}
@@ -881,6 +918,25 @@ func (s *Snapshot) scopeAtExpression(expr mast.Expression, current *scope, pos l
 			return s.scopeAtStatement(node.Alternative, current, pos), true
 		}
 		return current, true
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if child, ok := s.scopeAtExpression(node.Subject, current, pos); ok {
+				return child, true
+			}
+		}
+		// Unlike an `if`, a match has many bodies, so the first one cannot
+		// simply be returned: scopeAtStatement is asked for each in turn and
+		// the one that actually contains pos is the answer. A body that does
+		// not contain pos gives back the scope it was handed.
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if child := s.scopeAtStatement(arm.Body, current, pos); child != current {
+				return child, true
+			}
+		}
+		return current, true
 	case *mast.CallExpression:
 		if node.Function != nil {
 			if child, ok := s.scopeAtExpression(node.Function, current, pos); ok {
@@ -1066,6 +1122,15 @@ func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
 		}
 		if node.Alternative != nil {
 			s.advanceStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			s.advanceExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && arm.Body != nil {
+				s.advanceStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if node.Function != nil {
@@ -1290,6 +1355,24 @@ func (c *referenceCollector) collectExpression(expr mast.Expression, current *sc
 		}
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns count as references. The unused-declaration rule asks
+			// this collector whether a name is used anywhere, so an enum
+			// mentioned only in match arms would otherwise be reported unused.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if node.Function != nil {

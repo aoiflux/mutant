@@ -248,6 +248,7 @@ func SupportedSyntaxSummary() string {
 		"macros with quote/unquote",
 		"function calls for browser-safe builtins",
 		"if/else expressions",
+		"match expressions with literal, enum-variant and `|` patterns",
 		"prefix ! and -",
 		"infix + - * / % < > <= >= == != && ||",
 		"builtins: len, first, last, rest, push, pop, putf, putln, bytes_* core (read/write + cursor), json_*, regex_*, text_* core set",

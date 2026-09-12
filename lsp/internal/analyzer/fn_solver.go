@@ -428,6 +428,13 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			if n.Alternative != nil {
 				walkStatement(n.Alternative)
 			}
+		case *mast.MatchExpression:
+			walkExpression(n.Subject)
+			for _, arm := range n.Arms {
+				if arm != nil && arm.Body != nil {
+					walkStatement(arm.Body)
+				}
+			}
 		}
 	}
 

@@ -194,6 +194,12 @@ const (
 	SHL_ASSIGN = "<<="
 	SHR_ASSIGN = ">>="
 
+	// `=>` separates a match arm's pattern from its body. It is one token, not
+	// `=` followed by `>`: every other two-character operator here is lexed
+	// whole, and a parser rejoining two tokens could not tell `x => y` from a
+	// mistyped `x = >y`.
+	FATARROW = "=>"
+
 	// Delimiters
 	COMMA     = ","
 	SEMICOLON = ";"
@@ -220,6 +226,7 @@ const (
 	CONTINUE = "CONTINUE"
 	STRUCT   = "STRUCT"
 	ENUM     = "ENUM"
+	MATCH    = "MATCH"
 	IMPORT   = "IMPORT"
 )
 
@@ -239,6 +246,7 @@ var keywords = map[string]TokenType{
 	"continue": CONTINUE,
 	"struct":   STRUCT,
 	"enum":     ENUM,
+	"match":    MATCH,
 	"import":   IMPORT,
 }
 

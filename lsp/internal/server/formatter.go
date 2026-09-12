@@ -295,6 +295,8 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 			result += " else " + p.block(node.Alternative, level)
 		}
 		return result
+	case *mast.MatchExpression:
+		return p.matchExpression(node, level)
 	case *mast.ArrayLiteral:
 		return "[" + p.expressionList(node.Elements, level) + "]"
 	case *mast.IndexExpression:
@@ -308,6 +310,84 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 	default:
 		return strings.TrimSpace(expr.String())
 	}
+}
+
+// matchExpression prints one arm per line, each ending in a comma including the
+// last. The parser accepts that trailing comma, and writing it means adding an
+// arm touches one line instead of two.
+func (p *printer) matchExpression(node *mast.MatchExpression, level int) string {
+	subject := "match " + p.condition(node.Subject, level)
+	if len(node.Arms) == 0 {
+		// The parser refuses an empty match, so this is unreachable from real
+		// source; it exists so a half-built tree from an editor buffer still
+		// prints something rather than a stray brace.
+		return subject + " {}"
+	}
+
+	var out strings.Builder
+	out.WriteString(subject)
+	out.WriteString(" {\n")
+	for _, arm := range node.Arms {
+		if arm == nil {
+			continue
+		}
+		out.WriteString(indent(level + 1))
+		out.WriteString(p.matchArm(arm, level+1))
+		out.WriteString(",\n")
+	}
+	out.WriteString(indent(level))
+	out.WriteString("}")
+	return out.String()
+}
+
+// matchArm prints `pattern => body`, keeping the author's choice of a braced or
+// a bare body. A block is how an arm does more than one thing, and rewriting
+// one form into the other would churn every file that picked the other.
+func (p *printer) matchArm(arm *mast.MatchArm, level int) string {
+	// The wildcard is stored as no patterns at all, so the `_` is written back
+	// here rather than read off the tree.
+	patterns := "_"
+	if !arm.IsWildcard() {
+		parts := make([]string, 0, len(arm.Patterns))
+		for _, pattern := range arm.Patterns {
+			parts = append(parts, p.matchPattern(pattern, level))
+		}
+		patterns = strings.Join(parts, " | ")
+	}
+
+	if !arm.Braced {
+		if bare, ok := bareArmValue(arm.Body); ok {
+			return patterns + " => " + p.expression(bare, level)
+		}
+	}
+	return patterns + " => " + p.block(arm.Body, level)
+}
+
+// matchPattern prints one pattern, which is not quite printing an expression.
+//
+// The canonical form parenthesises every operator expression so precedence is
+// explicit, and a negated number is one -- but a pattern has no precedence to
+// make explicit, and the pattern grammar admits a literal, a dotted path and a
+// leading `-`, nothing else. Printing `(-1)` would emit source the parser then
+// rejects, which is the one thing a formatter must never do.
+func (p *printer) matchPattern(pattern mast.Expression, level int) string {
+	if prefix, ok := pattern.(*mast.PrefixExpression); ok && prefix != nil {
+		return prefix.Operator + p.matchPattern(prefix.Right, level)
+	}
+	return p.expression(pattern, level)
+}
+
+// bareArmValue unwraps the single-statement block the parser builds for an
+// unbraced arm body, so the formatter can print back the form that was written.
+func bareArmValue(body *mast.BlockStatement) (mast.Expression, bool) {
+	if body == nil || len(body.Statements) != 1 {
+		return nil, false
+	}
+	es, ok := body.Statements[0].(*mast.ExpressionStatement)
+	if !ok || es.Expression == nil {
+		return nil, false
+	}
+	return es.Expression, true
 }
 
 func (p *printer) expressionList(exprs []mast.Expression, level int) string {

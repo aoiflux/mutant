@@ -97,6 +97,16 @@ const (
 	// to in the first place.
 	OpIterInit
 	OpIterNext
+	// L-8 `match` -- appended for the same reason. Every arm is a compare and a
+	// jump built from opcodes that already exist, so the only thing match adds
+	// is what to do when no arm matched: OpMatchFail pops the subject and
+	// fails, naming the value that fell through.
+	//
+	// It is an opcode rather than compiled-in code because there is nothing
+	// else in this instruction set that raises. The alternative -- pushing an
+	// error value -- would make the match evaluate *to* that error, which is
+	// the silent wrong answer a fall-through was supposed to stop being.
+	OpMatchFail
 )
 
 type Definition struct {
@@ -163,6 +173,7 @@ var definitions = map[Opcode]*Definition{
 	OpConcat:         {"OpConcat", []int{2}},
 	OpIterInit:       {"OpIterInit", []int{}},
 	OpIterNext:       {"OpIterNext", []int{2, 1}},
+	OpMatchFail:      {"OpMatchFail", []int{}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index

@@ -425,8 +425,18 @@ func (c *uncheckedErrorCollector) conditionOffsetsByName(statements []mast.State
 			}
 		}
 		walkExpressions(stmt, false, func(expr mast.Expression) {
-			if ifExpr, ok := expr.(*mast.IfExpression); ok && ifExpr != nil {
-				collect(ifExpr.Condition)
+			switch node := expr.(type) {
+			case *mast.IfExpression:
+				if node != nil {
+					collect(node.Condition)
+				}
+			case *mast.MatchExpression:
+				// A match subject is tested against every pattern, so a
+				// (value, err) pair used as one is checked in the same sense
+				// an if condition is.
+				if node != nil {
+					collect(node.Subject)
+				}
 			}
 		})
 	})

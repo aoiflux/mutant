@@ -375,6 +375,17 @@ func markDeclaredInExpression(expr mast.Expression, declared map[string]struct{}
 		if node.Alternative != nil {
 			markDeclaredInStatement(node.Alternative, declared)
 		}
+	case *mast.MatchExpression:
+		// Patterns declare nothing: there is no binding pattern in this
+		// version, so a pattern is only ever a value to compare against.
+		if node.Subject != nil {
+			markDeclaredInExpression(node.Subject, declared)
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && arm.Body != nil {
+				markDeclaredInStatement(arm.Body, declared)
+			}
+		}
 	case *mast.CallExpression:
 		if node.Function != nil {
 			markDeclaredInExpression(node.Function, declared)

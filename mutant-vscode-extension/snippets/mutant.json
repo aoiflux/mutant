@@ -110,6 +110,16 @@
     ],
     "description": "while loop"
   },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match (${1:subject}) {",
+      "\t${2:pattern} => ${3:value},",
+      "\t_ => ${0:fallback},",
+      "}"
+    ],
+    "description": "match expression"
+  },
   "struct": {
     "prefix": "struct",
     "body": [

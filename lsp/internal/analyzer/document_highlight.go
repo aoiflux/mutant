@@ -113,6 +113,15 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 		s.collectExpressionWriteRanges(node.Condition, targetName, out)
 		s.collectStatementWriteRanges(node.Consequence, targetName, out)
 		s.collectStatementWriteRanges(node.Alternative, targetName, out)
+	case *mast.MatchExpression:
+		// Patterns are deliberately not walked: this collects writes, and a
+		// pattern is a literal or an enum path, never an assignment target.
+		s.collectExpressionWriteRanges(node.Subject, targetName, out)
+		for _, arm := range node.Arms {
+			if arm != nil {
+				s.collectStatementWriteRanges(arm.Body, targetName, out)
+			}
+		}
 	case *mast.FunctionLiteral:
 		s.collectStatementWriteRanges(node.Body, targetName, out)
 	case *mast.MacroLiteral:

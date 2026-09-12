@@ -652,6 +652,8 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		default:
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
+	case *ast.MatchExpression:
+		return c.compileMatchExpression(node)
 	case *ast.IfExpression:
 		if err := c.Compile(node.Condition); err != nil {
 			return err
@@ -664,9 +666,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			return err
 		}
 
-		if c.lastInstructionIs(code.OpPop) {
-			c.removeLastPop()
-		}
+		c.leaveOneValue(node.Consequence)
 
 		// emit bogus jump location
 		jumpPos := c.emit(code.OpJump, 9999)
@@ -681,9 +681,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 				return err
 			}
 
-			if c.lastInstructionIs(code.OpPop) {
-				c.removeLastPop()
-			}
+			c.leaveOneValue(node.Alternative)
 		}
 
 		afterAlternativePosition := len(c.currentInstructions())
@@ -1463,6 +1461,135 @@ func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
 // local form is right even when a closure in the body captures the binding:
 // boxCapturedLocals rewrites it to the cell form afterwards, once the capture
 // is known.
+// compileMatchExpression emits the compare-and-jump chain a `match` is.
+//
+// The subject is compiled once and stays on the stack for the whole
+// expression; each alternative duplicates it to test against, because OpEqual
+// and OpJumpFalse both consume what they read. The shape per arm is:
+//
+//	<subject>                                  ; pushed once, before any arm
+//	OpDup / <pattern> / OpEqual / OpJumpFalse  ; once per alternative
+//	OpPop                                      ; this arm matched: drop subject
+//	<arm body>                                 ; leaves exactly one value
+//	OpJump end
+//	...
+//	OpMatchFail                                ; nothing matched
+//	end:
+//
+// A scratch local holding the subject would work too, and was rejected:
+// SymbolTable.Define never reuses a slot, so a match inside a large function
+// would spend one of the 256 local slots per occurrence and eventually panic
+// in code.Make. OpDup already existed and costs one byte.
+func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
+	if len(node.Arms) == 0 {
+		return fmt.Errorf("match has no arms")
+	}
+
+	if err := c.Compile(node.Subject); err != nil {
+		return err
+	}
+
+	endJumps := []int{}
+	matchAlwaysSucceeds := false
+
+	for _, arm := range node.Arms {
+		if arm == nil || arm.Body == nil {
+			return fmt.Errorf("match arm has no body")
+		}
+
+		// Jumps meaning "an alternative matched, run the body", and the one
+		// test whose failure leaves the arm entirely.
+		matchedJumps := []int{}
+		missedJump := -1
+
+		for i, pattern := range arm.Patterns {
+			c.emit(code.OpDup)
+			if err := c.Compile(pattern); err != nil {
+				return err
+			}
+			c.emit(code.OpEqual)
+
+			if i == len(arm.Patterns)-1 {
+				missedJump = c.emit(code.OpJumpFalse, 9999)
+				break
+			}
+
+			// Not the last alternative of `a | b | c`: failing this one only
+			// rules out this one, so it falls through to the next test rather
+			// than leaving the arm.
+			nextAlternative := c.emit(code.OpJumpFalse, 9999)
+			matchedJumps = append(matchedJumps, c.emit(code.OpJump, 9999))
+			c.changeOperand(nextAlternative, len(c.currentInstructions()))
+		}
+
+		for _, pos := range matchedJumps {
+			c.changeOperand(pos, len(c.currentInstructions()))
+		}
+
+		// The arm matched, so the subject has done its work.
+		c.emit(code.OpPop)
+
+		if err := c.Compile(arm.Body); err != nil {
+			return err
+		}
+		c.leaveOneValue(arm.Body)
+
+		endJumps = append(endJumps, c.emit(code.OpJump, 9999))
+
+		if arm.IsWildcard() {
+			// `_` is emitted with no test at all, so there is no jump to
+			// patch and nothing after this arm can be reached.
+			matchAlwaysSucceeds = true
+			continue
+		}
+		c.changeOperand(missedJump, len(c.currentInstructions()))
+	}
+
+	// Falling off the end is an error naming the value, not a null. A match is
+	// an expression, so a silent null would flow on as though an arm had
+	// produced it -- and an enum gaining a variant later is exactly the case
+	// where every existing match would start doing that.
+	if !matchAlwaysSucceeds {
+		c.emit(code.OpMatchFail)
+	}
+
+	endPosition := len(c.currentInstructions())
+	for _, pos := range endJumps {
+		c.changeOperand(pos, endPosition)
+	}
+
+	return nil
+}
+
+// leaveOneValue makes the block just compiled leave exactly one value on the
+// stack, which is what every branch of a value-producing expression owes its
+// caller.
+//
+// A block ending in an expression statement ends in an OpPop -- the statement
+// pushed its value and threw it away -- so removing that pop turns the block
+// back into the value it computed. A block ending in anything else (a `let`, a
+// loop, a `return`, or nothing at all) computed no value, and a branch that
+// pushed nothing while its siblings pushed one leaves everything after it
+// reading one slot too deep.
+//
+// The question is asked of the syntax rather than of the last instruction
+// emitted, and that is not a style choice. A `for (v in xs)` statement also
+// ends in an OpPop -- the one that drops the loop cursor OpIterInit pushed --
+// so a block ending in a loop looks exactly like a block ending in a value to
+// anything that only inspects the instruction stream, and stripping that pop
+// leaves the cursor on the stack as the arm's value.
+func (c *Compiler) leaveOneValue(body *ast.BlockStatement) {
+	if body != nil && len(body.Statements) > 0 {
+		if _, ok := body.Statements[len(body.Statements)-1].(*ast.ExpressionStatement); ok {
+			// An expression statement always emits its OpPop, so this is
+			// always the instruction that pop belongs to.
+			c.removeLastPop()
+			return
+		}
+	}
+	c.emit(code.OpNull)
+}
+
 func (c *Compiler) emitBindingStore(symbol Symbol) {
 	if symbol.Scope == GlobalScope {
 		c.emit(code.OpSetGlobal, symbol.Index)

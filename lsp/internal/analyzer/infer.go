@@ -382,6 +382,8 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 			inf.stmt(n.Alternative, env)
 		}
 		return AnyType
+	case *mast.MatchExpression:
+		return inf.matchType(n, env)
 	case *mast.FunctionLiteral:
 		child := newTypeEnv(env)
 		solvedParams := inf.solved[n]
@@ -430,6 +432,9 @@ func (inf *typeInferer) functionReturnType(body *mast.BlockStatement) Type {
 	// itself types as Any, so appending it would only poison the join.
 	if n := len(body.Statements); n > 0 {
 		if es, ok := body.Statements[n-1].(*mast.ExpressionStatement); ok && es.Expression != nil {
+			// A match is not excluded the way an `if` is: it types as the join
+			// of what its arms produce, which is a real answer, so a function
+			// whose last statement is a match gets that type rather than Any.
 			if _, isIf := es.Expression.(*mast.IfExpression); !isIf {
 				results = append(results, es.Expression)
 			}
@@ -473,12 +478,19 @@ func (inf *typeInferer) collectReturnExprs(stmt mast.Statement, out *[]mast.Expr
 			inf.collectReturnExprs(s, out)
 		}
 	case *mast.ExpressionStatement:
-		if ie, ok := n.Expression.(*mast.IfExpression); ok {
-			if ie.Consequence != nil {
-				inf.collectReturnExprs(ie.Consequence, out)
+		switch e := n.Expression.(type) {
+		case *mast.IfExpression:
+			if e.Consequence != nil {
+				inf.collectReturnExprs(e.Consequence, out)
 			}
-			if ie.Alternative != nil {
-				inf.collectReturnExprs(ie.Alternative, out)
+			if e.Alternative != nil {
+				inf.collectReturnExprs(e.Alternative, out)
+			}
+		case *mast.MatchExpression:
+			for _, arm := range e.Arms {
+				if arm != nil && arm.Body != nil {
+					inf.collectReturnExprs(arm.Body, out)
+				}
 			}
 		}
 	case *mast.ForStatement:
@@ -494,6 +506,56 @@ func (inf *typeInferer) collectReturnExprs(stmt mast.Statement, out *[]mast.Expr
 			inf.collectReturnExprs(n.Body, out)
 		}
 	}
+}
+
+// matchType infers what a match expression produces: the join of what its arms
+// produce. This is where match differs from `if`, which settles for Any -- an
+// arm body is a block whose value is its trailing expression statement, which
+// is exactly what the compiler's leaveOneValue keeps, so the arms can be joined
+// the same way a function's returns are.
+//
+// An arm ending in anything else (a `let`, a `for`, nothing at all) produces
+// null at run time, and joining that in collapses the answer to Any, which is
+// the honest result rather than the type of the arms that happen to be alike.
+func (inf *typeInferer) matchType(n *mast.MatchExpression, env *typeEnv) Type {
+	inf.expr(n.Subject, env)
+
+	joined := AnyType
+	for i, arm := range n.Arms {
+		if arm == nil {
+			return AnyType
+		}
+		// Patterns are recorded so hovering one says what it is; a pattern is
+		// a literal or an enum path, so this never binds anything.
+		for _, pattern := range arm.Patterns {
+			inf.expr(pattern, env)
+		}
+		if arm.Body != nil {
+			inf.stmt(arm.Body, env)
+		}
+
+		armType := inf.matchArmType(arm)
+		if i == 0 {
+			joined = armType
+			continue
+		}
+		joined = joinTypes(joined, armType)
+	}
+	return joined
+}
+
+// matchArmType is the type of the value one arm leaves behind: its body's
+// trailing expression statement, or Any when the body leaves no value.
+func (inf *typeInferer) matchArmType(arm *mast.MatchArm) Type {
+	if arm.Body == nil || len(arm.Body.Statements) == 0 {
+		return AnyType
+	}
+	last := arm.Body.Statements[len(arm.Body.Statements)-1]
+	es, ok := last.(*mast.ExpressionStatement)
+	if !ok || es.Expression == nil {
+		return AnyType
+	}
+	return inf.recordedType(es.Expression)
 }
 
 // bindLoopName records a for-in binding's type and puts it in the loop's scope.

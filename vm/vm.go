@@ -901,6 +901,18 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			pos := int(res)
 			vm.currentFrame().ip = pos - 1
+		case code.OpMatchFail:
+			// Reached only by falling past every arm of a match with no `_`.
+			// The subject is still on the stack because each arm drops it
+			// itself; naming it is the whole point of failing here rather
+			// than pushing a null and letting it flow on.
+			unmatched := vm.pop()
+			rendered := "null"
+			if unmatched != nil {
+				rendered = unmatched.Inspect()
+			}
+			return vm.runtimeErrorfAt(ip, op, "no match arm matched %s", rendered)
+
 		case code.OpIterInit:
 			iterable := vm.decryptForUse(vm.pop())
 			if iterable == nil {
@@ -2130,11 +2142,45 @@ func (vm *VM) execComparison(op code.Opcode) error {
 		return vm.execErrorComparison(op, left, right)
 	}
 
+	// Enum values, for the same reason as bytes: the fallback compares
+	// rendered forms, an enum renders as `Status.Ok(0)`, and a string spelling
+	// that text would otherwise compare equal to the variant. `match` makes
+	// that reachable in a way plain `==` rarely was.
+	if ltype == object.ENUM_VALUE_OBJ || rtype == object.ENUM_VALUE_OBJ {
+		return vm.execEnumComparison(op, left, right)
+	}
+
 	switch op {
 	case code.OpEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() == left.Inspect()))
 	case code.OpUnEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() != left.Inspect()))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execEnumComparison decides equality for any comparison with an enum value on
+// either side. Two variants are equal when they are the same variant of the
+// same enum, and an enum value is never equal to a value of another type --
+// whatever it renders as.
+//
+// Ordering is undefined, as it is for bytes and errors: a variant's ordinal
+// exists to identify it, and reading `Status.Ok < Status.Failed` as a fact
+// about severity is the kind of meaning a declaration order should not
+// silently acquire.
+func (vm *VM) execEnumComparison(op code.Opcode, left, right object.Object) error {
+	leftEnum, leftOK := left.(*object.EnumValue)
+	rightEnum, rightOK := right.(*object.EnumValue)
+	equal := leftOK && rightOK &&
+		leftEnum.TypeName == rightEnum.TypeName &&
+		leftEnum.Tag == rightEnum.Tag
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
 	default:
 		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
 	}

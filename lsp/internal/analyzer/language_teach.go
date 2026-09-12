@@ -19,6 +19,7 @@ var keywordHoverDocs = map[string]string{
 	"for":      "Loop construct with init, condition, and post expressions: for (init; cond; post) { ... }.",
 	"in":       "Names the collection a for loop walks: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds an index and an element -- or, over a hash, a key and a value. A single binding over a hash yields its keys.",
 	"while":    "Loop that repeats its body while the condition stays truthy: while (cond) { ... }. Unlike for, it has no init or post section, so continue goes straight back to the condition.",
+	"match":    "Expression that takes the first arm whose pattern equals the subject: match (x) { 1 | 2 => \"few\", Status.Ok => \"ok\", _ => \"other\" }. A pattern is a literal, a negated number, an enum variant, or `_` for anything, and alternatives are joined with `|`. An arm body is one expression or a block, and the match evaluates to it. Without a `_` arm, a subject that no arm matches is a run-time error rather than null.",
 	"break":    "Exits the nearest enclosing loop immediately.",
 	"continue": "Skips to the next iteration of the nearest enclosing loop.",
 	"struct":   "Declares a struct type with named fields.",

@@ -84,6 +84,11 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	// than in the VM. object.Error.Equals is what both engines ask.
 	case left.Type() == object.ERROR_OBJ || right.Type() == object.ERROR_OBJ:
 		return evalErrorInfixExpression(operator, left, right)
+	// Enum values, for the same reason as bytes: an enum renders as
+	// `Status.Ok(0)`, so under the fallback a string spelling that text was
+	// equal to the variant itself. Mirrors the VM's execEnumComparison.
+	case left.Type() == object.ENUM_VALUE_OBJ || right.Type() == object.ENUM_VALUE_OBJ:
+		return evalEnumInfixExpression(operator, left, right)
 	case operator == "==":
 		return nativeBoolToBoolObject(left.Inspect() == right.Inspect())
 	case operator == "!=":
@@ -104,6 +109,85 @@ func evalStringInfixExpression(operator string, left, right object.Object) objec
 	lval := left.(*object.String).Value
 	rval := right.(*object.String).Value
 	return &object.String{Value: lval + rval}
+}
+
+// evalEnumInfixExpression handles every operator with an enum value on either
+// side. Only `==` and `!=` are defined; two variants are equal when they are
+// the same variant of the same enum, and an enum value is never equal to a
+// value of another type. This mirrors the VM's execEnumComparison.
+func evalEnumInfixExpression(operator string, left, right object.Object) object.Object {
+	leftEnum, leftOK := left.(*object.EnumValue)
+	rightEnum, rightOK := right.(*object.EnumValue)
+	equal := leftOK && rightOK &&
+		leftEnum.TypeName == rightEnum.TypeName &&
+		leftEnum.Tag == rightEnum.Tag
+
+	switch operator {
+	case "==":
+		return nativeBoolToBoolObject(equal)
+	case "!=":
+		return nativeBoolToBoolObject(!equal)
+	}
+	return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
+}
+
+// evalMatchArmBody runs one arm's body in its own scope and answers null when
+// the body computed nothing -- a body ending in a `let`, a `for`, or nothing at
+// all. eval of such a block returns Go nil, and a match is an expression, so
+// returning that would hand a nil object.Object to whatever consumed the match.
+// The VM reaches the same answer by emitting OpNull for the same shape of body.
+func evalMatchArmBody(arm *ast.MatchArm, env *object.Environment) object.Object {
+	result := eval(arm.Body, object.NewEnclosedEnvironement(env))
+	if result == nil {
+		return NULL
+	}
+	return result
+}
+
+// evalMatchExpression evaluates the subject once, then walks the arms in source
+// order taking the first whose pattern equals it. Equality is the language's
+// own `==` -- an arm means exactly what the comparison the author would have
+// written by hand means.
+//
+// No arm matching is an error naming the value, matching the VM's OpMatchFail.
+// A match is an expression, so returning null instead would flow on as though
+// some arm had produced it.
+func evalMatchExpression(node *ast.MatchExpression, env *object.Environment) object.Object {
+	subject := eval(node.Subject, env)
+	if isError(subject) {
+		return subject
+	}
+
+	for _, arm := range node.Arms {
+		if arm == nil || arm.Body == nil {
+			continue
+		}
+
+		if arm.IsWildcard() {
+			return evalMatchArmBody(arm, env)
+		}
+
+		for _, pattern := range arm.Patterns {
+			value := eval(pattern, env)
+			if isError(value) {
+				return value
+			}
+
+			matched := evalInfixExpression("==", subject, value)
+			if isError(matched) {
+				return matched
+			}
+			if isTruthy(matched) {
+				return evalMatchArmBody(arm, env)
+			}
+		}
+	}
+
+	rendered := "null"
+	if subject != nil {
+		rendered = subject.Inspect()
+	}
+	return newError("no match arm matched %s", rendered)
 }
 
 // evalErrorInfixExpression handles every operator with an error on either side.
@@ -159,12 +243,26 @@ func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Ob
 		return condition
 	}
 	if isTruthy(condition) {
-		return eval(node.Consequence, env)
+		return evalBranchValue(node.Consequence, env)
 	} else if node.Alternative != nil {
-		return eval(node.Alternative, env)
+		return evalBranchValue(node.Alternative, env)
 	}
 
 	return NULL
+}
+
+// evalBranchValue runs one branch of a value-producing expression and answers
+// null when the branch computed nothing -- a branch ending in a `let`, a loop,
+// or nothing at all. eval of such a block returns Go nil, and an `if` is an
+// expression here, so returning that would hand a nil object.Object to whatever
+// consumed the `if`. The VM reaches the same answer by emitting OpNull for the
+// same shape of branch.
+func evalBranchValue(branch *ast.BlockStatement, env *object.Environment) object.Object {
+	result := eval(branch, env)
+	if result == nil {
+		return NULL
+	}
+	return result
 }
 
 func evalArrayIndexExpression(array, index object.Object) object.Object {

@@ -225,6 +225,19 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 			if n.Alternative != nil {
 				walkStatement(n.Alternative)
 			}
+		case *mast.MatchExpression:
+			walkExpression(n.Subject)
+			for _, arm := range n.Arms {
+				if arm == nil {
+					continue
+				}
+				for _, pattern := range arm.Patterns {
+					walkExpression(pattern)
+				}
+				if arm.Body != nil {
+					walkStatement(arm.Body)
+				}
+			}
 		}
 	}
 
@@ -317,9 +330,16 @@ func collectLetNames(stmt mast.Statement, into map[string]struct{}) {
 	case *mast.ForInStatement:
 		collectLetNames(n.Body, into)
 	case *mast.ExpressionStatement:
-		if ifExpr, ok := n.Expression.(*mast.IfExpression); ok {
-			collectLetNames(ifExpr.Consequence, into)
-			collectLetNames(ifExpr.Alternative, into)
+		switch expr := n.Expression.(type) {
+		case *mast.IfExpression:
+			collectLetNames(expr.Consequence, into)
+			collectLetNames(expr.Alternative, into)
+		case *mast.MatchExpression:
+			for _, arm := range expr.Arms {
+				if arm != nil {
+					collectLetNames(arm.Body, into)
+				}
+			}
 		}
 	}
 }

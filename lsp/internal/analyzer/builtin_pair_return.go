@@ -261,6 +261,16 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			walkExpression(node.Condition)
 			walkStatement(node.Consequence)
 			walkStatement(node.Alternative)
+		case *mast.MatchExpression:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Subject)
+			for _, arm := range node.Arms {
+				if arm != nil {
+					walkStatement(arm.Body)
+				}
+			}
 		}
 	}
 

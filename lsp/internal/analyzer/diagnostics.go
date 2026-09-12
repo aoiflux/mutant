@@ -578,6 +578,26 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
 		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
+		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
 			for _, arg := range node.Arguments {
@@ -1068,6 +1088,25 @@ func (c *nestingCollector) collectExpression(expr mast.Expression, inFunction bo
 		if node.Body != nil {
 			c.collectStatement(node.Body, true, 0)
 		}
+	case *mast.MatchExpression:
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, inFunction, depth)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			// All arms are siblings at one level, the way an if's two
+			// branches are: a match with twenty arms is wide, not deep, and
+			// counting it as deep would report nesting nobody wrote.
+			c.collectStatement(arm.Body, inFunction, nextDepth)
+		}
 	case *mast.IfExpression:
 		nextDepth := depth
 		if inFunction {
@@ -1303,6 +1342,26 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 		}
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
@@ -1633,6 +1692,26 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 		}
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil {
@@ -2136,6 +2215,17 @@ func collectUnusedCandidatesFromExpression(expr mast.Expression, out *[]*mast.Id
 		}
 		if node.Alternative != nil {
 			collectUnusedCandidatesFromStatement(node.Alternative, out)
+		}
+	case *mast.MatchExpression:
+		// Patterns are skipped: this gathers declarations that might be
+		// unused, and a pattern declares nothing.
+		if node.Subject != nil {
+			collectUnusedCandidatesFromExpression(node.Subject, out)
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && arm.Body != nil {
+				collectUnusedCandidatesFromStatement(arm.Body, out)
+			}
 		}
 	case *mast.CallExpression:
 		if node.Function != nil {

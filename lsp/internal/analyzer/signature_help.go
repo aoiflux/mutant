@@ -347,6 +347,23 @@ func functionLiteralInExpressionForIdent(expr mast.Expression, target *mast.Iden
 				return literal, true
 			}
 		}
+	case *mast.MatchExpression:
+		// Patterns cannot hold a function literal -- the pattern grammar admits
+		// literals and enum paths only -- so only the subject and the bodies
+		// are worth searching.
+		if node.Subject != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Subject, target); ok {
+				return literal, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if literal, ok := functionLiteralInStatementForIdent(arm.Body, target); ok {
+				return literal, true
+			}
+		}
 	case *mast.CallExpression:
 		if node.Function != nil {
 			if literal, ok := functionLiteralInExpressionForIdent(node.Function, target); ok {

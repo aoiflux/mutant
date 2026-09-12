@@ -40,6 +40,21 @@ func Modify(node Node, modifier ModifierFunc) Node {
 			}
 			node.Arguments[i], _ = Modify(node.Arguments[i], modifier).(Expression)
 		}
+	case *MatchExpression:
+		// The subject and every arm body are ordinary expressions a macro may
+		// rewrite. The patterns are not walked: a pattern is a literal or an
+		// enum variant by grammar, and a modifier that replaced one with a
+		// call would leave the arm with nothing to compare against.
+		if node.Subject != nil {
+			node.Subject, _ = Modify(node.Subject, modifier).(Expression)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			arm.Body, _ = Modify(arm.Body, modifier).(*BlockStatement)
+		}
+
 	case *IfExpression:
 		node.Condition, _ = Modify(node.Condition, modifier).(Expression)
 		node.Consequence, _ = Modify(node.Consequence, modifier).(*BlockStatement)

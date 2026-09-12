@@ -193,9 +193,9 @@ func namesBoundAnywhere(statements []mast.Statement) map[string]struct{} {
 				walk(n.Body)
 			}
 		case *mast.ExpressionStatement:
-			forEachNestedIf(n.Expression, walk)
+			forEachNestedBlockExpression(n.Expression, walk)
 		case *mast.LetStatement:
-			forEachNestedIf(n.Value, walk)
+			forEachNestedBlockExpression(n.Value, walk)
 		}
 	}
 
@@ -361,13 +361,13 @@ func forEachStatementInScope(statements []mast.Statement, visit func(mast.Statem
 				walk(n.Body)
 			}
 		case *mast.ExpressionStatement:
-			forEachNestedIf(n.Expression, walk)
+			forEachNestedBlockExpression(n.Expression, walk)
 		case *mast.LetStatement:
-			forEachNestedIf(n.Value, walk)
+			forEachNestedBlockExpression(n.Value, walk)
 		case *mast.ReturnStatement:
-			forEachNestedIf(n.ReturnValue, walk)
+			forEachNestedBlockExpression(n.ReturnValue, walk)
 			for _, value := range n.ReturnValues {
-				forEachNestedIf(value, walk)
+				forEachNestedBlockExpression(value, walk)
 			}
 		}
 	}
@@ -377,18 +377,31 @@ func forEachStatementInScope(statements []mast.Statement, visit func(mast.Statem
 	}
 }
 
-// forEachNestedIf reaches the statements inside an `if`, which is an expression
-// in this language and so can appear anywhere a value can.
-func forEachNestedIf(expr mast.Expression, walk func(mast.Statement)) {
-	ifExpr, ok := expr.(*mast.IfExpression)
-	if !ok || ifExpr == nil {
-		return
-	}
-	if !isNilStatement(ifExpr.Consequence) {
-		walk(ifExpr.Consequence)
-	}
-	if !isNilStatement(ifExpr.Alternative) {
-		walk(ifExpr.Alternative)
+// forEachNestedBlockExpression reaches the statements inside the two
+// expressions that hold blocks -- `if` and `match`. Both are expressions in
+// this language and so can appear anywhere a value can, which is why a
+// statement walker has to look inside expressions at all.
+func forEachNestedBlockExpression(expr mast.Expression, walk func(mast.Statement)) {
+	switch node := expr.(type) {
+	case *mast.IfExpression:
+		if node == nil {
+			return
+		}
+		if !isNilStatement(node.Consequence) {
+			walk(node.Consequence)
+		}
+		if !isNilStatement(node.Alternative) {
+			walk(node.Alternative)
+		}
+	case *mast.MatchExpression:
+		if node == nil {
+			return
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && !isNilStatement(arm.Body) {
+				walk(arm.Body)
+			}
+		}
 	}
 }
 

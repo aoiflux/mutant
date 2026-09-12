@@ -162,6 +162,10 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := keywordHoverText("if"); ok {
 			return text, rng, true
 		}
+	case *mast.MatchExpression:
+		if text, ok := keywordHoverText("match"); ok {
+			return text, rng, true
+		}
 	case *mast.ForStatement:
 		if text, ok := keywordHoverText("for"); ok {
 			return text, rng, true
@@ -533,7 +537,7 @@ func nodeSpecificity(node mast.Node) int {
 	switch node.(type) {
 	case *mast.Identifier, *mast.IntegerLiteral, *mast.FloatLiteral, *mast.StringLiteral, *mast.Boolean:
 		return 100
-	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.ForStatement, *mast.WhileStatement, *mast.ForInStatement, *mast.StructStatement, *mast.EnumStatement:
+	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.MatchExpression, *mast.ForStatement, *mast.WhileStatement, *mast.ForInStatement, *mast.StructStatement, *mast.EnumStatement:
 		return 90
 	case *mast.ExpressionStatement:
 		return 20
@@ -871,6 +875,17 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		collectExpressionTokenOverrides(e.Condition, overrides)
 		collectStatementTokenOverrides(e.Consequence, overrides)
 		collectStatementTokenOverrides(e.Alternative, overrides)
+	case *mast.MatchExpression:
+		collectExpressionTokenOverrides(e.Subject, overrides)
+		for _, arm := range e.Arms {
+			if arm == nil {
+				continue
+			}
+			for _, pattern := range arm.Patterns {
+				collectExpressionTokenOverrides(pattern, overrides)
+			}
+			collectStatementTokenOverrides(arm.Body, overrides)
+		}
 	case *mast.FunctionLiteral:
 		for _, parameter := range e.Parameters {
 			if parameter != nil {

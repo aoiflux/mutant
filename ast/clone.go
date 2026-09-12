@@ -129,6 +129,31 @@ func Clone(node Node) Node {
 			Left:  cloneExpression(node.Left),
 			Field: cloneIdentifier(node.Field),
 		}
+	case *MatchExpression:
+		if node == nil {
+			return nil
+		}
+		copied := &MatchExpression{
+			Token:   node.Token,
+			Subject: cloneExpression(node.Subject),
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				copied.Arms = append(copied.Arms, nil)
+				continue
+			}
+			copiedArm := &MatchArm{
+				Token:  arm.Token,
+				Body:   cloneBlock(arm.Body),
+				Braced: arm.Braced,
+			}
+			for _, pattern := range arm.Patterns {
+				copiedArm.Patterns = append(copiedArm.Patterns, cloneExpression(pattern))
+			}
+			copied.Arms = append(copied.Arms, copiedArm)
+		}
+		return copied
+
 	case *IfExpression:
 		if node == nil {
 			return nil
