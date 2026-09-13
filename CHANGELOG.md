@@ -18,6 +18,43 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **Seven security lint rules.** `commandInjection`, `pathTraversal`,
+  `weakCrypto`, `tlsVerificationDisabled`, `hardcodedSecret`,
+  `evidenceMutation` and `unboundedResource`, each settable through
+  `mutant.lint.rules.<name>.severity` like every rule before them. They take
+  the editor from 16 rules to 23, and they are the rules only a language that
+  knows what a disk image is can write.
+
+  The rules that shipped before these are right by construction: each compares
+  a call site against a fact the builtin registry states. These read *intent*,
+  which cannot be stated, so each carries its own answer to what makes a
+  finding certain enough to interrupt someone. The shared principle is that
+  **what the program does with a value decides the finding, not what the value
+  looks like** -- and the corpus is what forced it. `examples/` already held
+  three literals a textbook secret scanner flags first, all three legitimate
+  teaching material, and the one that separates them from a real leak is
+  whether the program *uses* the value or takes it apart. A JWT handed to
+  `jwt_decode` is a sample; the same string put in an `Authorization` header is
+  a credential. `weakCrypto` draws the same line for MD5, which in a forensic
+  tool is daily work: matching an artifact against a known-file set wants MD5
+  specifically, so the rule reports only a digest compared against one written
+  into the program, and never `imphash`, `nt_hash` or `lm_hash`.
+
+  `evidenceMutation` is the one no general-purpose linter has: elsewhere a path
+  is a path, but `raw_open` and `ewf_open` say out loud that the file is an
+  exhibit, and `fs_write` to that same path is a hash that no longer matches
+  the one in the notes. `unboundedResource` turned out not to be about
+  unboundedness at all -- `cidr_hosts` refuses more than 20 host bits and
+  `range` more than 10,000,000 elements, so `cidr_hosts("10.0.0.0/8")` is not a
+  memory risk but a call that reads as a reasonable network sweep and simply
+  fails. The rule evaluates exactly the predicate the builtin evaluates.
+
+  Running the rules over the corpus found three real defects in shipped
+  examples: `phishing_url_analyzer.mut` and `ioc_fetcher.mut` spliced values --
+  one of them an attacker-authored URL -- straight into Lua single-quoted
+  strings, where a `'` ends the string and the rest is read as Lua. All three
+  are fixed.
+
 - **A real test framework: `mutant test`.** Named tests and subtests,
   assertions that report the file and line they failed on, fixtures, name
   filtering, a `--json` reporter for CI, and line coverage with an LCOV

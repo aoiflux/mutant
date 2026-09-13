@@ -439,6 +439,90 @@
                         "off"
                     ],
                     "description": "Severity for match-exhaustiveness diagnostics: warns when every arm of a match is a variant of one enum declared in the same file, no arm is `_`, and a variant of that enum has no arm. A match must produce a value, so a subject no arm matches raises at run time rather than yielding null — which means adding a variant to an enum silently leaves every existing match over it one arm short. The rule stays quiet unless it is certain: a literal pattern, two different enums, an imported enum (`mod.Status.Ok`, whose variants live in another file), a `_` arm, or a name that is both an enum and a `let` binding all suppress it. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.tlsVerificationDisabled.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for tls-verification-disabled diagnostics: warns when a TLS call is handed literal options that weaken it. `insecure: true` on `net_tls_connect` or `net_tls_upgrade_client` turns off certificate verification, leaving the connection encrypted but unauthenticated \u2014 anything on the path can present its own certificate, and the call still succeeds. A `min_version` of \"1.0\" or \"1.1\" (client or server) accepts versions RFC 8996 deprecated in 2021. The rule reads only literal options, inline or bound once to a name in the same scope, so an option whose value is computed is one it says nothing about; it never reports a missing `min_version`, because a default is the runtime's business. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.unboundedResource.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for unbounded-resource diagnostics: warns when `cidr_hosts` or `range` is given literal arguments larger than the builtin will return \u2014 more than 20 host bits of CIDR, or more than 10,000,000 elements of range. Neither is an unbounded allocation: both raise at run time, so `cidr_hosts(\"10.0.0.0/8\")` is a call that reads as a reasonable network sweep and simply fails. The rule evaluates exactly the predicate the builtin evaluates, and only on arguments written out as literals, so it is quiet on anything computed. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.weakCrypto.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for weak-crypto diagnostics: warns when MD5, SHA-1 or CRC-32 decides whether something is authentic. Matching an artifact against a known-file set is what these algorithms are for in a forensic tool, so the rule does not look at the algorithm \u2014 it looks at the decision: comparing a digest against one written into the program is verifying authenticity, and all three have long been forgeable by anyone who controls the input. Comparing two computed digests, storing one, printing one, or looking one up in a hash set stays quiet. An hmac() over \"md5\" or \"sha1\" is also reported, because keying a hash has only one purpose. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.hardcodedSecret.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for hardcoded-secret diagnostics: warns when a credential is written into the program. A literal is reported when its name says credential (password, token, api_key, client_secret \u2026) or its shape belongs to an issuer (AWS, GitHub, Slack, a PEM private key, a signed JWT), when the value reads as issued rather than as a word or a placeholder, and when the program does not hand it to a decoder. That last question is what separates a credential from a sample: a value whose fate is jwt_decode, base64_decode, pem_decode or x509_parse is being examined, not presented. A literal in a bare argument position carries no name signal. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.commandInjection.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for command-injection diagnostics: warns when a value is spliced into a string an interpreter will parse \u2014 interpolated or concatenated into the command exec_string hands to a shell, the line cmd_add adds to a builder, or the script lua_run_string runs. The interpreter parses the finished string, so the spliced value is syntax rather than an argument: a space adds a word, and ';', '|' or '$(...)' start a command of their own. A command built only from literals is quiet, and so is a value that first goes through url_encode, base64_encode, hex_encode, to_int, parse_int, text_replace or regex_replace. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.evidenceMutation.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for evidence-mutation diagnostics: warns when fs_write, fs_append, fs_delete, fs_move, or the destination of fs_copy, is aimed at a path the same program opened as evidence \u2014 raw_open, ewf_open, vhdi_open, a filesystem or hive opener, an archive. Evidence is written once and read forever: a hash taken afterwards no longer matches the one in the notes. The rule compares what was written rather than what it will evaluate to \u2014 the same identifier in the same scope, or the same string literal anywhere in the file \u2014 so a derived path or a containing directory is never reported, and fs_copy FROM the evidence, which is the correct procedure, stays quiet. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.pathTraversal.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for path-traversal diagnostics: warns when a filesystem path is built from a value the program did not write \u2014 gets(), serve_arg(), net_conn_read(), or an HTTP request or response \u2014 and nothing in the file looks at that value before it reaches fs_read, fs_write, a *_read_file or an archive entry. A '..' segment walks out of whatever directory the rest of the path names, so the file is chosen by whoever supplied the value. The taint follows one hop of 'let' through concatenation and interpolation, and stops at a function boundary. Any mention of the value as an argument to a text-inspecting builtin (text_contains, regex_match, str_starts_with, text_replace, hashset_contains \u2026) counts as the check and silences the report; the rule cannot read which characters were looked for and takes the author's word. Set to 'off' to suppress the rule."
                 }
             }
         },

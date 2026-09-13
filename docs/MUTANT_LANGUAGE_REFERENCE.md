@@ -1017,10 +1017,10 @@ analyzer the language server uses, so editor and command-line results agree:
 - `mutant lint [--strict] <file-or-dir>...` — print diagnostics as
   `file:line:col: severity: message [source]`; exits non-zero on any error, or on
   any warning with `--strict`.
-- `mutant test [file-or-dir]...` — run every `*_test.mut` file. A test file is an
-  ordinary program: it **passes** unless running it errors (parse, compile, or
-  runtime) or its final value is `false`. With no path it tests the current
-  directory.
+- `mutant test [options] [file-or-dir]...` — run every `*_test.mut` file, with
+  `--run` to select tests by name, `-v`, `--json` for CI, `--fail-fast`, and
+  `--cover` / `--coverprofile` for line coverage. With no path it tests the
+  current directory. See [TESTING.md](TESTING.md).
 
 Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
 `vendor`).
@@ -1028,8 +1028,62 @@ Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
 ```mutant
 // math_test.mut  -> `mutant test .`
 let add = fn(a, b) { return a + b; };
-add(2, 3) == 5 && add(-1, -1) == -2;   // final value must be true to pass
+
+test("adds", fn() {
+    assert_eq(add(2, 3), 5);
+    assert_eq(add(-1, -1), -2);
+});
 ```
+
+A test file is an ordinary program, compiled the same way any program is, so it
+can `import` the module it tests. A file that declares no `test` still counts as
+one test and keeps the original contract: it **passes** unless running it errors
+or its final value is `false`.
+
+### What the linter checks for you
+
+`mutant lint` runs the same rules the editor does. Most of them read a fact the
+builtin registry states — how many arguments a builtin takes, what kinds it
+accepts, whether it returns a `(value, err)` pair — and are simply right.
+
+Seven more read intent, and those are the ones worth knowing about, because they
+are about the work this language is for:
+
+| Rule                      | What it reports                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `evidenceMutation`        | A write, delete or move aimed at a path the same program opened with `raw_open`, `ewf_open`, `ntfs_open` and friends |
+| `commandInjection`        | A value spliced into the string `exec_string` gives a shell, a `cmd_add` line, or a `lua_run_string` script          |
+| `pathTraversal`           | A path built from `gets`, `serve_arg` or a request, reaching the filesystem with nothing looking at it first         |
+| `weakCrypto`              | An MD5, SHA-1 or CRC-32 digest compared against one written into the program — an authenticity check                 |
+| `hardcodedSecret`         | A credential written into the source, by name or by a provider's own prefix                                          |
+| `tlsVerificationDisabled` | `insecure: true`, or a `min_version` below 1.2                                                                       |
+| `unboundedResource`       | A `cidr_hosts` or `range` whose literal arguments exceed what the builtin will return                                |
+
+Each of these has a way to say "I have handled this", and taking it is what
+silences the rule — there is no suppression comment:
+
+```mutant
+// pathTraversal: look at the value, and the rule takes you at your word.
+let leaf, err = serve_arg();
+if (text_contains(leaf, "..") == false) {
+    let body, rerr = fs_read("/srv/files/" + leaf);
+};
+
+// commandInjection: strip what could be syntax, or encode it away.
+let out, xerr = exec_string("whois " + text_replace(host, ";", ""));
+
+// weakCrypto: comparing two computed digests is matching, not verifying.
+let same = hash_md5(a) == hash_md5(b);
+
+// hardcodedSecret: a value handed to a decoder is a sample, not a credential.
+let token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig";
+let claims, jerr = jwt_decode(token);
+```
+
+They all decline where they cannot be certain, and they all err towards saying
+nothing: a false positive on a security rule is how a security rule gets turned
+off. Any of them can be set to `off` — or to `error`, for CI — through
+`mutant.lint.rules.<name>.severity`.
 
 ## Maintenance
 

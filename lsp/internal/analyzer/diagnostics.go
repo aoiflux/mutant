@@ -52,6 +52,13 @@ type LintConfig struct {
 	UnclosedResource             LintSeverity
 	UncheckedError               LintSeverity
 	MatchExhaustiveness          LintSeverity
+	TlsVerificationDisabled      LintSeverity
+	UnboundedResource            LintSeverity
+	WeakCrypto                   LintSeverity
+	HardcodedSecret              LintSeverity
+	CommandInjection             LintSeverity
+	EvidenceMutation             LintSeverity
+	PathTraversal                LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -110,6 +117,38 @@ func DefaultLintConfig() LintConfig {
 		// error because the miss is usually a variant added since -- the code
 		// was right when it was written, which is exactly why nobody looks.
 		MatchExhaustiveness: LintSeverityWarning,
+		// Turning off certificate verification, or accepting a TLS version
+		// deprecated in 2021, is a decision the code states outright. The rule
+		// reads the literal the runtime will read, so a report here is not a
+		// guess about intent -- it is what the connection will do.
+		TlsVerificationDisabled: LintSeverityWarning,
+		// A range or CIDR larger than the builtin will expand raises at run
+		// time. Warning rather than error for the reason the whole builtin
+		// family is: it parses, it compiles, and it fails only when reached.
+		UnboundedResource: LintSeverityWarning,
+		// A digest compared against one written into the program is deciding
+		// authenticity. Warning rather than error because the code is correct
+		// in every mechanical sense -- it runs, it compares, it is simply
+		// trusting an algorithm that can be made to agree.
+		WeakCrypto: LintSeverityWarning,
+		// A credential in source is in every copy of the source, including the
+		// history after it is deleted. Warning, because the program works
+		// perfectly and that is the problem.
+		HardcodedSecret: LintSeverityWarning,
+		// A value spliced into a string a shell will parse is syntax, not an
+		// argument. Warning rather than error because whether it is reachable
+		// by anyone hostile is a question about the whole program.
+		CommandInjection: LintSeverityWarning,
+		// Writing to a path the program opened as evidence is the one finding
+		// in this family that cannot be undone once it has run. It is still a
+		// warning, because the code does exactly what it says and only the
+		// author knows whether that path is an exhibit or a working copy.
+		EvidenceMutation: LintSeverityWarning,
+		// A path built from a value the program did not write, with nothing
+		// looking at it in between. Warning, because whether the value is
+		// really hostile depends on who can reach this program -- which is the
+		// one thing a single document cannot answer.
+		PathTraversal: LintSeverityWarning,
 	}
 }
 
@@ -148,6 +187,20 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.UncheckedError
 	case "matchExhaustiveness":
 		severityName = c.MatchExhaustiveness
+	case "tlsVerificationDisabled":
+		severityName = c.TlsVerificationDisabled
+	case "unboundedResource":
+		severityName = c.UnboundedResource
+	case "weakCrypto":
+		severityName = c.WeakCrypto
+	case "hardcodedSecret":
+		severityName = c.HardcodedSecret
+	case "commandInjection":
+		severityName = c.CommandInjection
+	case "evidenceMutation":
+		severityName = c.EvidenceMutation
+	case "pathTraversal":
+		severityName = c.PathTraversal
 	default:
 		return nil, false
 	}
@@ -206,6 +259,13 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintUnclosedResources(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUncheckedErrors(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintMatchExhaustiveness(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintTlsVerificationDisabled(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUnboundedResource(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintWeakCrypto(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintHardcodedSecret(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintCommandInjection(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintEvidenceMutation(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintPathTraversal(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

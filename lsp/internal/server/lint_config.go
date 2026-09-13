@@ -60,6 +60,13 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "unclosedResource", &config.UnclosedResource)
 	applyRuleSeverity(rulesMap, "uncheckedError", &config.UncheckedError)
 	applyRuleSeverity(rulesMap, "matchExhaustiveness", &config.MatchExhaustiveness)
+	applyRuleSeverity(rulesMap, "tlsVerificationDisabled", &config.TlsVerificationDisabled)
+	applyRuleSeverity(rulesMap, "unboundedResource", &config.UnboundedResource)
+	applyRuleSeverity(rulesMap, "weakCrypto", &config.WeakCrypto)
+	applyRuleSeverity(rulesMap, "hardcodedSecret", &config.HardcodedSecret)
+	applyRuleSeverity(rulesMap, "commandInjection", &config.CommandInjection)
+	applyRuleSeverity(rulesMap, "evidenceMutation", &config.EvidenceMutation)
+	applyRuleSeverity(rulesMap, "pathTraversal", &config.PathTraversal)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

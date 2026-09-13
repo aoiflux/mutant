@@ -310,6 +310,119 @@ Current lint rules (rule id -> default severity):
   failure is caught through the value instead: the value written into an `if` or
   `for` condition, or a BOOLEAN success value read anywhere, since that one is
   false on every failure path)
+- `matchExhaustiveness` -> warning (a `match` whose every arm is a variant of
+  one enum declared in the same file, with no `_` arm and at least one variant
+  unmatched. A match must produce a value, so a subject no arm matches raises
+  rather than yielding null -- which means adding a variant leaves every
+  existing match over it one arm short, silently. Quiet on a literal pattern,
+  two different enums, an imported enum whose variants live in another file, a
+  `_` arm, or a name that is both an enum and a `let` binding)
+
+### The security rules (T-2)
+
+Seven rules that read *intent* rather than a declared contract. The four
+contract rules above are right by construction -- each compares a call site
+against a fact `builtin.ReturnSpec` or `TypedSignature` states. These cannot be,
+so each carries its own answer to "what makes this certain enough to squiggle?",
+and they share one principle: **what the program does with a value decides the
+finding, not what the value looks like.** Shape heuristics alone are what makes
+a security linter something people switch off, and a switched-off rule catches
+nothing.
+
+Shared plumbing -- scope walking, one-hop `let` resolution, literal reading --
+is in [security_lint.go](../lsp/internal/analyzer/security_lint.go). Names are
+followed exactly one hop, and only when bound once in the scope, because the
+corpus writes `let tls_opts = {...}; net_tls_connect(h, t, tls_opts)` and a rule
+that only read an inline literal would miss the idiom the examples teach. §1
+applies throughout: these rules warn, and none reads or validates a capability
+policy.
+
+- `tlsVerificationDisabled` -> warning (`insecure: true` on `net_tls_connect` or
+  `net_tls_upgrade_client`, or a `min_version` of `"1.0"` / `"1.1"` on any of
+  the four TLS builtins, in a literal option hash or struct. Exact rather than
+  heuristic: it reads the keys `applyClientTLSOptions` /
+  `applyServerTLSOptions` read. `insecure` is reported only on the client side,
+  because the server never reads it. It never reports a *missing*
+  `min_version` -- a default is the runtime's business, and demanding the
+  option be written out would be style advice wearing a security rule's
+  clothes)
+- `unboundedResource` -> warning (`cidr_hosts` with more than 20 host bits, or
+  `range` longer than 10,000,000, from literal arguments. Neither builtin is
+  actually unbounded -- both raise -- so the finding is "this call fails at run
+  time", which puts the rule in `builtinArity`'s certainty class: it evaluates
+  exactly the predicate the builtin evaluates. There is no threshold here that
+  anybody chose; both numbers are read off the implementations and pinned by
+  test. `cidr_hosts("10.0.0.0/8")` is the call it exists for -- it reads as a
+  reasonable network sweep and it fails)
+- `weakCrypto` -> warning (a digest from `hash_md5`, `hash_sha1` or
+  `hash_crc32` compared for equality against a digest written into the program,
+  or an `hmac` over a literal `"md5"` / `"sha1"`. The rule does not look at the
+  algorithm, because in a forensic language MD5 *is* the job: matching an
+  artifact against a known-file set wants MD5 specifically, since the other side
+  of the comparison is MD5. It looks at the decision instead -- verifying
+  against an expected value is authenticity, and both algorithms have had
+  practical collisions for years. Comparing two computed digests, storing one,
+  printing one or passing one to `hashset_contains` is matching, and stays
+  quiet. `imphash`, `nt_hash` and `lm_hash` are never reported: they are MD5,
+  MD4 and DES by the definition of the artifact)
+- `hardcodedSecret` -> warning (a credential-shaped literal under a
+  credential-shaped name -- `let`, hash key or struct field -- or matching a
+  provider's published prefix: AWS, GitHub, Slack, a PEM private-key header, a
+  signed JWT. Three questions have to agree: is it called a secret or shaped
+  like one, does the value read as issued rather than as a word or a
+  placeholder, and does the program *use* it as a credential rather than take
+  it apart. That third one is the interesting one. A forensic language holds
+  credential-shaped strings for the same reason it holds malware -- they are
+  the subject -- so a value whose fate is `jwt_decode`, `base64_decode`,
+  `pem_decode` or `x509_parse` is a sample under examination and is never
+  reported. That keeps both sample JWTs in `examples/` quiet without a
+  suppression comment, because it is a statement about the program rather than
+  about the linter. A literal in a bare argument position carries no name
+  signal, which is what leaves `hmac("secret-key", ...)` alone)
+- `commandInjection` -> warning (a value interpolated or concatenated into the
+  string `exec_string` hands a shell, the line `cmd_add` adds to a builder, or
+  the script `lua_run_string` runs. `exec_string` does not run a program with
+  arguments -- it hands a whole string to a shell, which decides where one word
+  ends and the next begins, so a spliced value is syntax and not an argument.
+  The report sits on `cmd_add` rather than `cmd_run` because that is where the
+  string is assembled. A command built only from literals is a constant written
+  in pieces and stays quiet, and so does a value that first goes through
+  `url_encode`, `base64_encode`, `hex_encode`, `to_int`, `parse_int`,
+  `text_replace` or `regex_replace` -- the rule has to have a way to comply.
+  It says nothing about `exec_string(command)` where the whole string arrives
+  as one value: that is a question about where the value came from, which is
+  `pathTraversal`'s machinery)
+- `evidenceMutation` -> warning (`fs_write`, `fs_append`, `fs_delete`,
+  `fs_move`, or the *destination* of `fs_copy`, aimed at a path the same program
+  opened as evidence -- `raw_open`, `ewf_open`, `vhdi_open`, a filesystem or
+  hive opener, an archive. The rule only this language can write: elsewhere a
+  path is a path, but here the opener says out loud that the file is an exhibit,
+  and a hash taken after the write no longer matches the one in the notes.
+  Certainty comes from comparing what the author wrote -- the same identifier in
+  the same scope, or the same string literal anywhere in the file -- so a
+  derived path or a containing directory is never reported. `fs_copy` *from* the
+  evidence is the correct procedure and is silent. `db_open_disk` and
+  `cache_open` are deliberately not openers: those are the analyst's own files)
+- `pathTraversal` -> warning (a path built from a value the program did not
+  write, reaching `fs_*`, a `*_read_file` or an archive entry, with nothing
+  looking at the value in between. The only rule in the family with taint
+  tracking, and so the last one built. Sources are `gets`, `serve_arg`,
+  `net_conn_read`, and the HTTP request and response builtins; the taint follows
+  one hop of `let` through concatenation and interpolation, computed as a fixed
+  point rather than a forward pass because a path may be assembled above the
+  source that feeds it; it stops at a function boundary. Any mention of the
+  value as an argument to a text-inspecting builtin -- `text_contains`,
+  `regex_match`, `str_starts_with`, `text_replace`, `hashset_contains` and
+  their relatives -- counts as the check. The rule cannot read *which*
+  characters were looked for and takes the author's word, which over-suppresses
+  on purpose)
+
+Each rule owns one file named for it, and the three seams a new rule must be
+threaded through each have a reflection test over `LintConfig`:
+`TestEveryLintRuleIsSettable` (settings reach the field),
+`TestEveryLintRuleReachesItsSeverity` (the field reaches `severityForRule`, whose
+`default` arm otherwise silently switches a rule off), and
+`TestEveryLintRuleIsExposedByTheExtension` (the field has a manifest entry).
 
 Config ingestion path:
 

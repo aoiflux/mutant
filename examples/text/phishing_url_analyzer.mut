@@ -71,7 +71,13 @@ let url_count = len(urls);
 for (let i = 0; i < url_count; i = i + 1) {
     let url = urls[i];
 
-    let extract_lua = "local u='" + url + "'; local d=string.match(u,'^https?://([^/]+)'); if not d then return '' end; return d";
+    // The URL is the untrusted half of this program -- it comes from the
+    // input file and is, by the nature of the task, attacker-authored. Here it
+    // goes inside a Lua single-quoted string, where a `'` of its own would
+    // close the string and leave the rest to be read as Lua. Strip the quote
+    // and the backslash before splicing.
+    let url_for_lua = text_replace(text_replace(url, "'", ""), "\\", "");
+    let extract_lua = "local u='" + url_for_lua + "'; local d=string.match(u,'^https?://([^/]+)'); if not d then return '' end; return d";
     let extracted, err = lua_run_string(extract_lua);
     check_err(err, "lua_run_string extract");
     // lua_run_string wraps the script's return value in
@@ -80,7 +86,11 @@ for (let i = 0; i < url_count; i = i + 1) {
     // and hands db_index_prop a HASH where it wants a STRING.
     let domain = extracted["result"];
 
-    let listed_lua = "local data,err=mutant.read_file('" + feed_file_path + "'); if not data then return '0' end; local d='" + domain + "'; local pad='\\n'..data..'\\n'; if string.find(pad,'\\n'..d..'\\n',1,true) then return '1' end; return '0'";
+    // Same again: the domain came out of the URL, so it inherits the URL's
+    // provenance, and the feed path goes into a Lua string literal too.
+    let domain_for_lua = text_replace(text_replace(domain, "'", ""), "\\", "");
+    let feed_path_for_lua = text_replace(text_replace(feed_file_path, "'", ""), "\\", "");
+    let listed_lua = "local data,err=mutant.read_file('" + feed_path_for_lua + "'); if not data then return '0' end; local d='" + domain_for_lua + "'; local pad='\\n'..data..'\\n'; if string.find(pad,'\\n'..d..'\\n',1,true) then return '1' end; return '0'";
     let listed_result, err = lua_run_string(listed_lua);
     check_err(err, "lua_run_string listed");
 

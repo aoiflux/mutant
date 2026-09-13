@@ -60,7 +60,11 @@ if (feed_write == false) {
     putln("failed to write feed file");
 };
 
-let lua_extract = "local data,err=mutant.read_file('" + feed_file_path + "'); if not data then return '[]' end; local q=string.char(34); local out={}; local count=0; for line in string.gmatch(data, '[^\\n]+') do line=string.gsub(line,'\\r',''); if line ~= '' then table.insert(out,q..line..q); count=count+1; if count >= 200 then break end end end; return '['..table.concat(out,',')..']'";
+// The path goes inside a Lua single-quoted string, so a `'` in it would end
+// that string and everything after it would be read as Lua. Strip the two
+// characters that can do that before the path is spliced in.
+let feed_path_for_lua = text_replace(text_replace(feed_file_path, "'", ""), "\\", "");
+let lua_extract = "local data,err=mutant.read_file('" + feed_path_for_lua + "'); if not data then return '[]' end; local q=string.char(34); local out={}; local count=0; for line in string.gmatch(data, '[^\\n]+') do line=string.gsub(line,'\\r',''); if line ~= '' then table.insert(out,q..line..q); count=count+1; if count >= 200 then break end end end; return '['..table.concat(out,',')..']'";
 let lua_result, err = lua_run_string(lua_extract);
 check_err(err, "lua_run_string extract");
 if (err) {
