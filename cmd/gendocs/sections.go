@@ -215,6 +215,11 @@ var categorySections = []categorySection{
 		blurb:    "Normalize timestamps across epochs and merge/sort artifact events into a single supertimeline; Sleuth Kit bodyfile/mactime interop.",
 	},
 	{
+		category: "schema interchange",
+		heading:  "Schema Interchange",
+		blurb:    "Normalize any parsed artifact into one event vocabulary, so a timeline built here can be handed to Timesketch, plaso, or a SIEM without a bespoke mapping per artifact. `events_from` maps an artifact's entries onto a fixed set of event fields -- one event per timestamp the artifact recorded, with the source entry carried verbatim in `extra` so nothing is lost -- and `event_kinds()` reports what each supported artifact maps. An artifact Mutant does not know is described with a mapping hash rather than waiting for support. See [INTERCHANGE_SCHEMAS.md](INTERCHANGE_SCHEMAS.md).",
+	},
+	{
 		category: "email forensics",
 		heading:  "Email Forensics",
 		blurb:    "Parse raw email into headers/body/attachments/URLs and cryptographically verify DKIM (with SPF/DMARC reporting).",

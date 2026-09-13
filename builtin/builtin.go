@@ -470,6 +470,9 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTimelineMerge, &BuiltIn{TimelineMerge}},
 	{BuiltinNameBodyfileParse, &BuiltIn{BodyfileParse}},
 	{BuiltinNameMactime, &BuiltIn{Mactime}},
+	// forensic: schema interchange
+	{BuiltinNameEventsFrom, &BuiltIn{EventsFrom}},
+	{BuiltinNameEventKinds, &BuiltIn{EventKinds}},
 	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
 	// forensic: real registry hive parsing

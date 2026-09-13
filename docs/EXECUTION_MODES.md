@@ -103,6 +103,14 @@ file rather than readings taken of the host. `--compat` would downgrade them to 
 warning and run the artifact anyway, so those events name the artifact as the
 thing to fix instead.
 
+**Two commands pick the posture for you.** `mutant test` and `mutant debug` run
+their program with the responses advisory, as `--compat` does, and take no mode
+flag. Both are development activities on the developer's own machine, and for
+both the alternative was a command that could not do its job: secure mode ended
+every debug session launched on a virtual machine, before its first step. The
+probes are still compiled into the bytecode either command runs; only the
+verdict is advisory. See [DEBUGGING.md](DEBUGGING.md).
+
 ## Passwords
 
 A password is required in every mode. The only exception is `--dev`, and only

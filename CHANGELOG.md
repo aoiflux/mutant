@@ -18,6 +18,56 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **One event vocabulary across every parser.** Two builtins in a new
+  `schema interchange` category: `events_from(artifact, kind_or_mapping)`
+  normalizes any parsed artifact into a fixed set of event fields, and
+  `event_kinds()` reports what each supported artifact maps.
+
+  The parsers each hand back their own shape, because each artifact *is* its own
+  shape -- an `$MFT` record carries eight timestamps, a Prefetch file carries a
+  list of run times, a syslog line carries one. That is right for a parser and
+  wrong for a timeline, and wrong for anything downstream that wants one row
+  format. The alternative to normalizing was a table per (artifact, schema) pair:
+  thirteen artifacts and three interchange schemas is thirty-nine tables, each of
+  which drifts the moment either side changes. With one hop in between it is
+  thirteen plus three, and a new parser reaches every schema by writing one
+  mapping.
+
+  Thirteen source kinds are mapped: `mft`, `prefetch`, `evtx`, `lnk`, `amcache`,
+  `shimcache`, `jumplist`, `syslog`, `browser_history`, `browser_cookies`,
+  `browser_downloads`, `bodyfile` and `mactime`. Every kind produces the same
+  shape, so a supertimeline across all of them is a `timeline_merge` of the
+  results.
+
+  Three rules keep the output honest. **An unknown field is absent, not empty**
+  -- an empty string in a forensic record reads as "the artifact recorded nothing
+  here", which is usually a claim the parser never made; a `size` of zero is kept
+  because an empty file has a real size of zero. **A zero timestamp produces no
+  event**, because these artifacts use 0 for "not recorded" and an `$MFT` has
+  plenty; emitting them would bury the real rows under thousands of 1970 ones.
+  **`extra` carries the source entry verbatim**, so normalizing is additive and
+  nothing the parser found is lost -- a normalized view of evidence that quietly
+  drops fields is a view an examiner cannot testify from.
+
+  `severity` is a word (`informational` through `fatal`) rather than a number,
+  because the numeric scales disagree about direction: syslog counts down from 0
+  Emergency, Windows event Levels count up from 1 Critical. Converting once in
+  the source mapping means each downstream schema converts from one known thing.
+  Windows Level 0 (`LogAlways`) asserts nothing about severity, so it produces
+  none rather than a guessed `informational`.
+
+  `$FILE_NAME` timestamps are described apart from `$STANDARD_INFORMATION` ones,
+  because the disagreement between the two sets is the timestomping tell and a
+  timeline that merged them would hide it. Amcache and Shimcache are categorised
+  as `execution` with the action `present`, not `run`: both record that a program
+  was on the host, which is evidence of execution rather than proof of it.
+
+  An artifact Mutant does not parse is described with a mapping hash --
+  timestamps, their meanings and formats, and which source field fills which
+  event field -- rather than waiting for a source kind to be added. It is the
+  same mechanism the built-in kinds use; there is no privileged path. See
+  [docs/INTERCHANGE_SCHEMAS.md](docs/INTERCHANGE_SCHEMAS.md).
+
 - **Chain of custody.** Eight builtins in a new `chain of custody` capability
   category -- `case_open`, `case_note`, `case_evidence`, `case_verify`,
   `case_manifest`, `case_write`, `case_manifest_verify`, `case_close` -- and the
@@ -420,6 +470,19 @@ claim the README makes becomes verifiable.
   configuration is under design; no interface is specified.*
 
 ### Fixed
+
+- **The debugger refused to run on a virtual machine.** A debug session built
+  its VM in secure mode, so the injected sandbox probe fired on launch and the
+  security policy ended the session before the first line could be stepped.
+  Every CI runner is a virtual machine and so is every malware-analysis
+  workstation, which is to say the debugger stopped exactly where a forensic
+  tool is most likely to be pointed at something.
+
+  A session now runs in the posture `--compat` gives a run, the same one
+  `mutant test` already used: the probes are still compiled into the bytecode
+  being stepped and still execute, but a hit warns instead of terminating.
+  `VM.SecureMode()` reports which posture a machine was built with, so a caller
+  that chose the advisory one can say so rather than imply it.
 
 - **A frame's unassigned local slots held the previous call's values.** The
   calling convention never cleared the region between a new frame's arguments

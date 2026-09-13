@@ -299,6 +299,40 @@ func TestTheCommandLineProgramIsTheDefault(t *testing.T) {
 	c.event("initialized")
 }
 
+// A launched program runs with the tamper responses advisory, the way a program
+// under `mutant test` does.
+//
+// It is the sandbox probe that makes this load-bearing. Malware is examined on a
+// virtual machine, and so is every CI runner, and the detector cannot tell that
+// VM from the one an adversary would use -- so in secure mode the probe fired on
+// launch and ended the session before the first line was stepped. The probes are
+// still compiled into the bytecode being stepped; only the response changes.
+//
+// The session is driven directly rather than through a client: this is about the
+// machine the launch builds, and the wire has nothing to say about it.
+func TestALaunchedProgramRunsWithAdvisoryTamperResponses(t *testing.T) {
+	program := write(t, "posture.mut", "let a = 1;\na;\n")
+
+	s := &session{conn: newConn(strings.NewReader(""), io.Discard), refs: make(map[int]varSource)}
+	t.Cleanup(s.shutdown)
+
+	if err := s.onLaunch(&request{
+		Seq:       1,
+		Type:      "request",
+		Command:   "launch",
+		Arguments: json.RawMessage(fmt.Sprintf(`{"program":%q}`, program)),
+	}); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if s.machine == nil {
+		t.Fatal("the launch built no machine")
+	}
+	if s.machine.SecureMode() {
+		t.Error("a debug session runs in secure mode: a sandbox probe hit ends it instead of warning")
+	}
+}
+
 // ------------------------------------------------------------ a full session
 
 func TestASessionStopsAtABreakpointAndReadsTheFrame(t *testing.T) {

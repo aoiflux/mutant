@@ -576,6 +576,12 @@ func NewWithPasswordAndGlobalStoreMode(bc *compiler.ByteCode, password string, g
 	return vm
 }
 
+// SecureMode reports whether a tamper probe that fires ends the run or only
+// warns. The constructors default it to true; the callers that build a VM for a
+// development activity -- `mutant test`, a debug session -- pass false, and this
+// is what lets them state which posture they chose rather than imply it.
+func (vm *VM) SecureMode() bool { return vm != nil && vm.secureMode }
+
 func (vm *VM) ensureFrameBoundaries() {
 	if vm == nil || vm.password == "" {
 		return

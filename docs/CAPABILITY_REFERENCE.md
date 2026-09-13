@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **477 registered builtins** across **36 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **479 registered builtins** across **37 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -733,6 +733,15 @@ Normalize timestamps across epochs and merge/sort artifact events into a single 
 | `timeline_merge(sources: ARRAY, field?: STRING) -> ARRAY` | all | Flattens an array of event arrays into one supertimeline sorted by a numeric timestamp field (default "ts"). |
 | `timeline_sort(events: ARRAY, field?: STRING) -> ARRAY` | all | Returns events (array of hashes) sorted ascending by a numeric timestamp field (default "ts"); events missing the field sort last. Stable. |
 | `timestamp_normalize(value: INTEGER\|STRING, format?: STRING) -> (HASH, ERROR)` | all | Normalizes a timestamp to {unix, unix_ms, iso, format}. Formats: unix (s/ms/us/ns), filetime (Windows), webkit/chrome, dos (packed 32-bit), iso (RFC3339 string). Default "auto" detects unix magnitude or parses an ISO string. Returns (result, err). |
+
+## Schema Interchange (2)
+
+Normalize any parsed artifact into one event vocabulary, so a timeline built here can be handed to Timesketch, plaso, or a SIEM without a bespoke mapping per artifact. `events_from` maps an artifact's entries onto a fixed set of event fields -- one event per timestamp the artifact recorded, with the source entry carried verbatim in `extra` so nothing is lost -- and `event_kinds()` reports what each supported artifact maps. An artifact Mutant does not know is described with a mapping hash rather than waiting for support. See [INTERCHANGE_SCHEMAS.md](INTERCHANGE_SCHEMAS.md).
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `event_kinds() -> []HASH` | all | Lists the artifact kinds events_from understands, each with the envelope category and action it maps to, the key its entries live under, the timestamps it reads and what each one means, and the envelope fields it fills. |
+| `events_from(artifact: HASH\|ARRAY, kind_or_mapping: STRING\|HASH) -> ([]HASH, ERROR)` | all | Normalizes a parsed artifact into interchange events: one event per timestamp the artifact records, in a fixed vocabulary the ECS/OCSF/Timesketch emitters are written against. The second argument names a built-in source kind (event_kinds() lists them) or is a mapping hash {kind, category, action, entries, message, times:[{field, desc, format?, ns_field?, array?}], fields:{envelope: source}} describing an artifact this tree does not know. Unknown fields are omitted rather than emitted empty, a zero timestamp yields no event, and `extra` carries the source entry verbatim so normalizing loses nothing. Accepts a parser's (result, err) pair directly. Returns (events, err). |
 
 ## Email Forensics (5)
 

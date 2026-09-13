@@ -437,6 +437,9 @@ const (
 	BuiltinNameTimelineMerge      = "timeline_merge"
 	BuiltinNameBodyfileParse      = "bodyfile_parse"
 	BuiltinNameMactime            = "mactime"
+	// forensic: schema interchange (ECS / OCSF / Timesketch / plaso / STIX)
+	BuiltinNameEventsFrom = "events_from"
+	BuiltinNameEventKinds = "event_kinds"
 	// forensic: Windows artifacts
 	BuiltinNameLnkParse = "lnk_parse"
 	// forensic: real registry hive parsing (regf binary format)

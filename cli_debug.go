@@ -118,6 +118,12 @@ Notes:
   another one, so it does not trip the anti-debugging probes a Mutant program
   carries.
 
+  The probes are still compiled in and still run, but a session runs them in
+  the posture --compat gives a run: a hit warns rather than ending the session.
+  The sandbox probe is why. It cannot tell an analysis VM from the virtual
+  machine an analyst chose to work in, and a debugger that will not start where
+  malware is examined is a debugger nobody can use.
+
 VS Code:
   The Mutant extension contributes a "mutant" debug type; press F5 on a .mut.
 

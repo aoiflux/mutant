@@ -160,6 +160,18 @@ injected, and values still live encrypted on the stack — the debugger reads th
 through the same decryption every other reader goes through. The program you
 step is the program that runs.
 
+What does change is the **response** to a probe that fires. A session runs in the
+posture [`--compat`](EXECUTION_MODES.md) gives a run, the same one `mutant test`
+uses: a hit prints a `[security]` line on stderr and the session continues,
+rather than ending it.
+
+The sandbox probe is the reason. It cannot tell an analysis VM from the virtual
+machine an analyst chose to work in, and malware is examined on a virtual
+machine — so in secure mode the probe fired on launch and every session ended
+before its first step. A debugger that will not start where it is needed is not
+a stricter debugger, it is an unusable one. The probe still runs and still
+reports; only the verdict is advisory.
+
 ---
 
 ## Troubleshooting

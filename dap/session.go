@@ -265,7 +265,18 @@ func (s *session) onLaunch(req *request) error {
 	sealed := mutil.EncryptByteCode(bytecode, password)
 
 	globals := make([]object.Object, global.GlobalSize)
-	s.machine = vm.NewWithPasswordAndGlobalStore(sealed, password, globals)
+
+	// Not secure mode, for the reason `mutant test` is not: a debug session is a
+	// development activity, so the tamper responses are advisory here the way they
+	// are under --compat. The probes are still compiled in and still run -- the
+	// bytecode being stepped is the bytecode that ships -- but a hit warns instead
+	// of ending the session.
+	//
+	// Secure mode terminated every launch on a virtual machine, because the sandbox
+	// detector cannot tell an analysis VM from the VM the analyst chose to work in.
+	// A debugger that refuses to run where malware is examined is a debugger nobody
+	// can use for the job it exists to do.
+	s.machine = vm.NewWithPasswordAndGlobalStoreMode(sealed, password, globals, false)
 
 	s.dbg, err = vm.NewDebugger(s.machine, vm.DebugOptions{StopOnEntry: args.StopOnEntry && !args.NoDebug})
 	if err != nil {
