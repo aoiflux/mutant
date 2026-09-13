@@ -152,6 +152,125 @@ than proof of it, and the action they carry is `present` rather than `run`.
 `reg_timeline` is deliberately not a source kind. Its rows are free-form JSON
 with no stable shape, so there is nothing to map.
 
+## Writing it out
+
+Three emitters take envelope events and render them in the schema the next tool
+reads. Each takes one event or a whole timeline and hands back the same shape,
+because a timeline is the normal case — one `$MFT` is hundreds of thousands of
+events, and mapping over it a row at a time would mean a `(value, err)` pair per
+row.
+
+```
+let events, err = events_from(mft_parse(mft_path), "mft");
+let rows, err   = timesketch_event(events, {"host": "WS01"});
+let jsonl, err  = ndjson_stringify(rows);
+```
+
+All three take the same four options, so changing schema is not relearning the
+knobs:
+
+| Option | Meaning |
+| --- | --- |
+| `host`, `user` | Fill in what the artifact structurally could not record. An `$MFT` knows every path on the volume and nothing about which host the volume came out of; the examiner who mounted the image does. What the artifact *did* record wins — the option fills a gap, it does not overwrite evidence |
+| `tags` | An array of strings: ECS `tags`, OCSF `metadata.labels`, Timesketch `tag` |
+| `extra` | `false` leaves the verbatim source entry out. The default is to carry it |
+
+A fifth option differs by schema: `version` for `ecs_event` (default `8.11.0`)
+and `ocsf_event` (default `1.1.0`), `data_type` for `timesketch_event`.
+
+An unknown option key is an error rather than something ignored, and so is a
+hash that did not come out of `events_from`. A raw parser entry has no `ts` and
+no `iso`, so emitting it would produce a document with no timestamp and every
+mapped field missing — which looks like a real document, indexes like one, and
+is not one.
+
+### `ecs_event` — Elastic Common Schema
+
+Nested ECS 8.11: `@timestamp`, `event.*`, `host.name`, `user.name`, `file.*`
+(including `file.hash.md5|sha1|sha256`), `process.*`, `source.*`,
+`destination.*`, `url.full`, `registry.path`.
+
+`event.type` is read off the timestamp's meaning rather than the artifact's
+kind, because the envelope has already split one record into one event per
+timestamp: a creation time is `creation`, an access time is `access`, a record
+of presence is `info`. `event.category` is left out entirely where ECS has no
+honest value — there is no log category, and every value ECS does have would be
+a claim about what the line recorded.
+
+Severity is emitted twice: the envelope's word in `log.level`, and a number in
+`event.severity` running the syslog way, 0 worst. That is the scale ECS's own
+example uses. The word is there so that nothing has to know the direction.
+
+ECS has no field for what a timestamp means, and without one the four documents
+an `$MFT` record produces are the same document four times. That, the source
+kind, the category and the verbatim entry go under a custom `mutant` namespace,
+which is what ECS says to do with fields it does not define.
+
+### `ocsf_event` — OCSF 1.1
+
+An OCSF class describes activity a sensor observed. A forensic artifact is a
+record that activity happened, which is a different claim — so the class here
+says where the record belongs, not that Mutant watched it happen.
+
+| Envelope category | Class |
+| --- | --- |
+| `file` | 1001 File System Activity |
+| `web` | 6001 Web Resources Activity |
+| `network` / `dns` / `email` | 4001 / 4003 / 4009 |
+| `authentication` | 3002 Authentication |
+| `process` / `module` / `scheduled_job` | 1007 / 1005 / 1006 |
+| everything else | 0 Base Event |
+
+Two of those "everything else" cases are deliberate. `execution` is not 1007
+Process Activity: Amcache and Shimcache record that a program was *present*, and
+a detection written against 1007 would fire on that. `registry` is not the `win`
+extension's 201002, because an extension uid means nothing to a consumer that
+has not loaded that extension.
+
+`activity_id` comes from the timestamp for file events — a creation time is
+`Create`, a content modification is `Update`, an access is `Read`, a metadata
+change is `Set Attributes`. Anything else is 99 Other with the envelope's action
+as `activity_name`, or 0 Unknown when the artifact did not say what happened.
+Both keep the reading somewhere a consumer can still read it.
+
+`severity_id` is the envelope's word mapped one to one, which is what the word
+vocabulary was chosen for. An event with no severity is 0 Unknown — OCSF's own
+way of saying the source did not report one — and the same reasoning puts
+`file.type_id` at 0 rather than guessing Regular File.
+
+What OCSF has no home for goes in `unmapped`, the field OCSF keeps for exactly
+that: the source kind, the timestamp description, the registry path, and the
+verbatim entry.
+
+### `timesketch_event` — Timesketch / plaso
+
+A record ready for `ndjson_stringify`. Timesketch *drops* a record missing any
+of `message`, `datetime` or `timestamp_desc` rather than flagging it, so all
+three are always filled: an event whose source spec built no message falls back
+to whatever the event does identify, and last of all to naming its own kind. A
+row reading `shimcache event` is still a row on the timeline; a dropped row is
+not.
+
+`timestamp` counts plaso's microseconds. `data_type` is the plaso string
+Timesketch's analyzers and saved searches key off:
+
+| Kind | `data_type` |
+| --- | --- |
+| `mft` | `fs:stat:ntfs` |
+| `prefetch` | `windows:prefetch:execution` |
+| `evtx` | `windows:evtx:record` |
+| `lnk` | `windows:lnk:link` |
+| `amcache` | `windows:registry:amcache` |
+| `shimcache` | `windows:registry:appcompatcache` |
+| `jumplist` | `olecf:dest_list:entry` |
+| `syslog` | `syslog:line` |
+| `bodyfile`, `mactime` | `fs:mactime:line` |
+| the browser kinds | by the browser in `dataset`: `chrome:history:page_visited`, `firefox:places:page_visited`, and so on |
+
+A kind with no plaso equivalent gets `mutant:<kind>:event` rather than the
+nearest plaso string. An analyzer that matched a borrowed `data_type` would run
+over rows it was never written for, and report on them.
+
 ## Mapping an artifact Mutant does not know
 
 Pass a hash instead of a kind name:
@@ -197,7 +316,7 @@ wrong type".
 
 ## See also
 
-- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#schema-interchange-2) — the
+- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#schema-interchange-5) — the
   generated signatures.
 - [COOKBOOK.md](COOKBOOK.md) — timeline recipes.
 - [STRUCTURED_DATA.md](STRUCTURED_DATA.md) — `ndjson_stringify`, which is how a

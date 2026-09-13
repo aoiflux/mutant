@@ -473,6 +473,9 @@ var Builtins = []BuiltinDefinition{
 	// forensic: schema interchange
 	{BuiltinNameEventsFrom, &BuiltIn{EventsFrom}},
 	{BuiltinNameEventKinds, &BuiltIn{EventKinds}},
+	{BuiltinNameEcsEvent, &BuiltIn{EcsEvent}},
+	{BuiltinNameOcsfEvent, &BuiltIn{OcsfEvent}},
+	{BuiltinNameTimesketchEvent, &BuiltIn{TimesketchEvent}},
 	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
 	// forensic: real registry hive parsing

@@ -217,7 +217,7 @@ var categorySections = []categorySection{
 	{
 		category: "schema interchange",
 		heading:  "Schema Interchange",
-		blurb:    "Normalize any parsed artifact into one event vocabulary, so a timeline built here can be handed to Timesketch, plaso, or a SIEM without a bespoke mapping per artifact. `events_from` maps an artifact's entries onto a fixed set of event fields -- one event per timestamp the artifact recorded, with the source entry carried verbatim in `extra` so nothing is lost -- and `event_kinds()` reports what each supported artifact maps. An artifact Mutant does not know is described with a mapping hash rather than waiting for support. See [INTERCHANGE_SCHEMAS.md](INTERCHANGE_SCHEMAS.md).",
+		blurb:    "Normalize any parsed artifact into one event vocabulary, then write that vocabulary out in whichever schema the next tool reads. `events_from` maps an artifact's entries onto a fixed set of event fields -- one event per timestamp the artifact recorded, with the source entry carried verbatim in `extra` so nothing is lost -- and `event_kinds()` reports what each supported artifact maps. `ecs_event`, `ocsf_event` and `timesketch_event` render those events as Elastic Common Schema documents, OCSF events, or the plaso records Timesketch ingests, one event or a whole timeline at a time. Thirteen artifacts and three schemas cost sixteen mappings here rather than thirty-nine, so a new parser reaches every schema by describing itself once. An artifact Mutant does not know is described with a mapping hash rather than waiting for support. See [INTERCHANGE_SCHEMAS.md](INTERCHANGE_SCHEMAS.md).",
 	},
 	{
 		category: "email forensics",

@@ -18,10 +18,13 @@ claim the README makes becomes verifiable.
 
 ### Added
 
-- **One event vocabulary across every parser.** Two builtins in a new
-  `schema interchange` category: `events_from(artifact, kind_or_mapping)`
-  normalizes any parsed artifact into a fixed set of event fields, and
-  `event_kinds()` reports what each supported artifact maps.
+- **One event vocabulary across every parser, and three ways out of it.** Five
+  builtins in a new `schema interchange` category.
+  `events_from(artifact, kind_or_mapping)` normalizes any parsed artifact into a
+  fixed set of event fields and `event_kinds()` reports what each supported
+  artifact maps; `ecs_event`, `ocsf_event` and `timesketch_event` write that
+  vocabulary out as Elastic Common Schema documents, OCSF events, or the plaso
+  records Timesketch ingests.
 
   The parsers each hand back their own shape, because each artifact *is* its own
   shape -- an `$MFT` record carries eight timestamps, a Prefetch file carries a
@@ -61,6 +64,37 @@ claim the README makes becomes verifiable.
   timeline that merged them would hide it. Amcache and Shimcache are categorised
   as `execution` with the action `present`, not `run`: both record that a program
   was on the host, which is evidence of execution rather than proof of it.
+
+  **The three emitters each take one event or a whole timeline** and hand back
+  the same shape, so an `$MFT` normalized and handed to Timesketch is two calls
+  and an `ndjson_stringify` rather than a map over three hundred thousand rows
+  with a `(value, err)` pair on each. All three take the same options: `host` and
+  `user` fill in what an artifact structurally cannot record -- an `$MFT` knows
+  every path on the volume and nothing about which host the volume came out of --
+  without ever overwriting what the artifact did record; `tags` lands in each
+  schema's own tag field; `extra: false` leaves the verbatim source entry out. An
+  unknown option key is an error, and so is a hash that did not come out of
+  `events_from`: emitting a raw parser entry would produce a document with no
+  timestamp and every mapped field missing, which looks like a real document and
+  indexes like one.
+
+  **The emitters carry the envelope's honesty into each schema** rather than
+  filling required fields with guesses. ECS `event.type` is read off what the
+  timestamp records rather than off the artifact's kind, and `event.category` is
+  omitted where ECS has no honest value instead of filing a log line under
+  something it is not; severity is emitted as both the word (`log.level`) and a
+  syslog-direction number (`event.severity`), so nothing downstream has to know
+  which way the scale runs. OCSF classes say where a record belongs, not that
+  Mutant observed it happen: `execution` stays on the Base Event rather than
+  taking 1007 Process Activity, because Amcache records presence and a detection
+  written against 1007 would fire on it, and `registry` stays there rather than
+  borrowing the `win` extension's uid, which means nothing to a consumer that has
+  not loaded it; `severity_id` 0 and `file.type_id` 0 are OCSF's own way of
+  saying the source did not report one. Timesketch's three required fields --
+  `message`, `datetime` and `timestamp_desc` -- are never left empty, because
+  Timesketch drops such a record on ingest rather than flagging it, and a kind
+  with no plaso equivalent gets `mutant:<kind>:event` rather than a borrowed
+  `data_type` that an analyzer would then run over and report on.
 
   An artifact Mutant does not parse is described with a mapping hash --
   timestamps, their meanings and formats, and which source field fills which
