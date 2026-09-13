@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **469 registered builtins** across **35 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **477 registered builtins** across **36 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -581,6 +581,21 @@ PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signat
 | `go_buildinfo(path: STRING) -> (HASH, ERROR)` | all | Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err). |
 | `go_symbols(path: STRING, mode?: STRING) -> (HASH, ERROR)` | all | Recovers function symbols from a Go binary via the pclntab — works even on STRIPPED binaries. Returns {go_version, arch, os, pclntab_va, function_count, user_function_count, std_function_count, functions:[{name, package, start, end, stdlib}]}. mode is "all" (default), "user", or "std". Returns (result, err). |
 | `go_types(path: STRING) -> (HASH, ERROR)` | all | Recovers type and interface definitions from a Go binary via GoReSym typelink/itablink parsing, including reconstructed Go source for structs/interfaces where possible. Returns {go_version, type_count, itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}. Type recovery needs a parseable moduledata; GoReSym v1.7.1 supports it up to ~Go 1.24 and returns an honest error on newer toolchains. Returns (result, err). |
+
+## Chain of Custody (8)
+
+A case session that records who opened what, when, with which build of the tool. `case_open(id, examiner)` starts it; from there every evidence opener records its source into the manifest and every builtin that reads through an evidence handle is counted against that source. `case_verify` re-measures the sources and reports drift; `case_write` seals the manifest with a SHA-256 over its own contents and an Ed25519 signature, and `case_manifest_verify` checks both from the file alone. Nothing is recorded until a case is opened, so a program that does not use this is unaffected by it. The read-only guarantee the manifest asserts is machine-checked: see [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md).
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `case_close() -> (HASH, ERROR)` | all | Closes the case and returns its final manifest. After this, evidence openers stop recording. |
+| `case_evidence(path: STRING, options?: HASH) -> (HASH, ERROR)` | all | Brings a file under custody that no evidence opener will touch -- a carved file, an export, a hash list handed over with the drive. Registers its size, modification time and, under the case's hash policy, its digest. |
+| `case_manifest() -> (HASH, ERROR)` | all | Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes. |
+| `case_manifest_verify(path: STRING) -> (HASH, ERROR)` | all | Checks a written manifest: that its contents still hash to the value in its seal, and that the signature over them holds. A function of the file alone -- it needs neither the case that produced it nor any key the reader does not already hold. |
+| `case_note(text: STRING, data?) -> (HASH, ERROR)` | all | Records an examiner's note in the case timeline, with an optional value alongside it. The timeline holds what the analyst did -- opens, notes, verifications, the close -- and never grows with what the program read. |
+| `case_open(id: STRING, examiner: STRING, options?: HASH) -> (HASH, ERROR)` | all | Opens a chain-of-custody session. From here until `case_close`, every evidence opener records its source into the case manifest and every builtin that reads through an evidence handle is counted against that source. Only one case may be open at a time. |
+| `case_verify() -> (HASH, ERROR)` | all | Re-measures every source under custody and reports what moved. A case opened with a hash policy compares digests; one opened without compares size and modification time. Each source says which basis was used, so a weaker check is never mistaken for a stronger one. |
+| `case_write(path: STRING, options?: HASH) -> (HASH, ERROR)` | all | Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file. |
 
 ## Registry Forensics (15)
 

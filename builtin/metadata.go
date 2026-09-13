@@ -1095,6 +1095,63 @@ var builtinDocs = map[string]builtinDoc{
 		params:  []builtinParamDoc{param("message", "Why the test failed.", ParamString)},
 		returns: ret("an error carrying the message; the failure is recorded either way", ParamError)},
 
+	// Chain of custody (F-1). Nothing in this family records anything until
+	// `case_open` is called, so the hooks these rely on -- in every evidence
+	// opener and every handle resolver -- cost a program that does not open a
+	// case exactly one atomic load.
+	BuiltinNameCaseOpen: {
+		signature: "case_open(id, examiner, options?)",
+		summary:   "Opens a chain-of-custody session. From here until `case_close`, every evidence opener records its source into the case manifest and every builtin that reads through an evidence handle is counted against that source. Only one case may be open at a time.",
+		params: []builtinParamDoc{
+			param("id", "The case identifier this investigation is filed under.", ParamString),
+			param("examiner", "Who is conducting it. A manifest nobody signed for is not a chain of custody, so this may not be empty.", ParamString),
+			param("options?", "`{\"hash\": \"sha256\"}` digests each source as it is opened. The default is `\"none\"`, because the alternative is `raw_open` silently reading half a terabyte before it returns a handle; a manifest then states which it was. Also accepts `\"md5\"` and `\"sha1\"`.", ParamHash),
+		},
+		returns: pairRet("the opened case", ParamHash).withFields("examiner", "hash_policy", "id", "opened_at", "status")},
+	BuiltinNameCaseNote: {
+		signature: "case_note(text, data?)",
+		summary:   "Records an examiner's note in the case timeline, with an optional value alongside it. The timeline holds what the analyst did -- opens, notes, verifications, the close -- and never grows with what the program read.",
+		params: []builtinParamDoc{
+			param("text", "What happened, in the examiner's words.", ParamString),
+			param("data?", "Any value to record with the note; it is stored as written.", ParamAny),
+		},
+		returns: pairRet("the recorded entry", ParamHash).withFields("at", "elapsed_ms", "event", "status", "text")},
+	BuiltinNameCaseEvidence: {
+		signature: "case_evidence(path, options?)",
+		summary:   "Brings a file under custody that no evidence opener will touch -- a carved file, an export, a hash list handed over with the drive. Registers its size, modification time and, under the case's hash policy, its digest.",
+		params: []builtinParamDoc{
+			param("path", "The file to place under custody.", ParamString),
+			param("options?", "`{\"hash\": \"sha256\"}` digests this one file even in a case opened without a hash policy, because an examiner who names a single file is willing to wait for it.", ParamHash),
+		},
+		returns: pairRet("the evidence record", ParamHash).withFields("elapsed_ms", "hash", "hash_algo", "hashed", "mod_time", "on_disk", "opens", "path", "registered_at", "size", "touches")},
+	BuiltinNameCaseVerify: {
+		signature: "case_verify()",
+		summary:   "Re-measures every source under custody and reports what moved. A case opened with a hash policy compares digests; one opened without compares size and modification time. Each source says which basis was used, so a weaker check is never mistaken for a stronger one.",
+		returns:   pairRet("the drift report", ParamHash).withFields("changed", "checked", "missing", "not_on_disk", "sources", "unchanged")},
+	BuiltinNameCaseManifest: {
+		signature: "case_manifest()",
+		summary:   "Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes.",
+		returns:   pairRet("the case manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+	BuiltinNameCaseWrite: {
+		signature: "case_write(path, options?)",
+		summary:   "Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file.",
+		params: []builtinParamDoc{
+			param("path", "Where to write the manifest.", ParamString),
+			param("options?", "`{\"sign\": false}` writes the hash but no signature, for a machine with no key store. The document then says `\"signed\": false` rather than looking signed.", ParamHash),
+		},
+		returns: pairRet("what was written", ParamHash).withFields("bytes", "manifest_hash", "path", "signed", "status")},
+	BuiltinNameCaseManifestVerify: {
+		signature: "case_manifest_verify(path)",
+		summary:   "Checks a written manifest: that its contents still hash to the value in its seal, and that the signature over them holds. A function of the file alone -- it needs neither the case that produced it nor any key the reader does not already hold.",
+		params:    []builtinParamDoc{param("path", "The manifest to check.", ParamString)},
+		returns: pairRet("the verification result", ParamHash).withFields(
+			"case_id", "computed_hash", "examiner", "hash_matches", "manifest_hash", "path",
+			"signature_detail", "signature_valid", "signed")},
+	BuiltinNameCaseClose: {
+		signature: "case_close()",
+		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
+		returns:   pairRet("the final manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+
 	BuiltinNameKeys: {
 		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
 		params:  []builtinParamDoc{param("hash", "Hash to read keys from.", ParamHash)},
@@ -2449,8 +2506,10 @@ var capabilityCategories = []capabilityCategory{
 	{"nt_hash", "fingerprinting"},
 	{"lm_hash", "fingerprinting"},
 	{"ja3", "fingerprinting"},
-	// policy / cache
+	// policy / cache / custody. "case_" is listed before "cache_" only for
+	// readability -- neither is a prefix of the other, so the order is free.
 	{"policy_", "policy"},
+	{"case_", "chain of custody"},
 	{"cache_", "cache"},
 	// system / process / memory forensics
 	{"process_", "process forensics"},

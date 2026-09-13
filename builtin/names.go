@@ -499,4 +499,13 @@ const (
 	BuiltinNameAssertErr      = "assert_err"
 	BuiltinNameAssertOk       = "assert_ok"
 	BuiltinNameFail           = "fail"
+	// chain of custody: the case session and its manifest (append-only)
+	BuiltinNameCaseOpen           = "case_open"
+	BuiltinNameCaseNote           = "case_note"
+	BuiltinNameCaseEvidence       = "case_evidence"
+	BuiltinNameCaseVerify         = "case_verify"
+	BuiltinNameCaseManifest       = "case_manifest"
+	BuiltinNameCaseWrite          = "case_write"
+	BuiltinNameCaseManifestVerify = "case_manifest_verify"
+	BuiltinNameCaseClose          = "case_close"
 )

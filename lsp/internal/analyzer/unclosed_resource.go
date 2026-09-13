@@ -92,6 +92,21 @@ var resourceFamilies = []resourceFamily{
 	},
 }
 
+// nonResourceClosers are builtins whose name ends in `_close` but which close
+// nothing a name can hold, with the reason for each.
+//
+// This is an allowlist rather than a silence: TestResourceFamiliesCoverEveryCloser
+// requires every `*_close` in the registry to be either a family above or an
+// entry here, so a genuinely new resource cannot slip past the rule by being
+// forgotten.
+var nonResourceClosers = map[string]string{
+	builtin.BuiltinNameCaseClose: "`case_close` ends the chain-of-custody session (F-1), which is " +
+		"process-wide rather than a handle: `case_open` returns no handle to hold and `case_close` " +
+		"takes no arguments, so there is nothing for this rule to follow from one to the other. Nor " +
+		"is a case left open a leak -- `case_write` seals the manifest without it, and the manifest " +
+		"of an open case says `\"status\": \"open\"` rather than pretending otherwise.",
+}
+
 // openerFamilies indexes the table by opener name, which is how the walker asks
 // about a call it just found.
 var openerFamilies = func() map[string]resourceFamily {

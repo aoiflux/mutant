@@ -419,6 +419,7 @@ func resolveHive(arg object.Object, op string) (*regfHive, *object.Error) {
 	if !found {
 		return nil, newError("%s: invalid hive handle %q (call hive_open first)", op, handle.Value)
 	}
+	custodyRecordTouch(op, handle.Value)
 	return hive, nil
 }
 
@@ -444,6 +445,8 @@ func HiveOpen(args ...object.Object) (result object.Object) {
 	handle := fmt.Sprintf("hive-%d", hiveStore.next)
 	hiveStore.hives[handle] = hive
 	hiveStore.Unlock()
+
+	custodyRecordOpen("hive_open", handle, path)
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
 		"path":   stringObj(path),
@@ -465,6 +468,7 @@ func HiveClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("hive_close: invalid handle %q", handle))
 	}
+	custodyRecordTouch("hive_close", handle)
 	return resultAndError(boolObj(true), nil)
 }
 

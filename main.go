@@ -31,7 +31,7 @@ const (
 	LINTCMD    = "lint"
 	TESTCMD    = "test"
 	DEBUGCMD   = "debug"
-	VERSION    = "Version: 2.4.0"
+	VERSION    = "Version: " + global.Version
 )
 
 type cliRuntime struct {

@@ -490,6 +490,8 @@ func NtfsOpen(args ...object.Object) object.Object {
 	}
 	ntfsStore.Unlock()
 
+	custodyRecordOpen("ntfs_open", handle, volumePathObj.Value)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
 		"path":   stringObj(volumePathObj.Value),
@@ -641,6 +643,8 @@ func NtfsClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ntfs_close: unknown ntfs handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("ntfs_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ntfs_close: %s", err.Error()))
 	}
@@ -680,6 +684,8 @@ func FatOpen(args ...object.Object) object.Object {
 		Session:    session,
 	}
 	fatStore.Unlock()
+
+	custodyRecordOpen("fat_open", handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -832,6 +838,8 @@ func FatClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("fat_close: unknown fat handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("fat_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("fat_close: %s", err.Error()))
 	}
@@ -871,6 +879,8 @@ func XFATOpen(args ...object.Object) object.Object {
 		Session:    session,
 	}
 	xfatStore.Unlock()
+
+	custodyRecordOpen("xfat_open", handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1022,6 +1032,8 @@ func XFATClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("xfat_close: unknown xfat handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("xfat_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("xfat_close: %s", err.Error()))
 	}
@@ -1061,6 +1073,8 @@ func ExtOpen(args ...object.Object) object.Object {
 		Session:    session,
 	}
 	extStore.Unlock()
+
+	custodyRecordOpen("ext_open", handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1205,6 +1219,8 @@ func ExtClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ext_close: unknown ext handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("ext_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ext_close: %s", err.Error()))
 	}
@@ -1244,6 +1260,8 @@ func HFSOpen(args ...object.Object) object.Object {
 		Session:    session,
 	}
 	hfsStore.Unlock()
+
+	custodyRecordOpen("hfs_open", handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1390,6 +1408,8 @@ func HFSClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("hfs_close: unknown hfs handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("hfs_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("hfs_close: %s", err.Error()))
 	}
@@ -1429,6 +1449,8 @@ func XFSOpen(args ...object.Object) object.Object {
 		Session:    session,
 	}
 	xfsStore.Unlock()
+
+	custodyRecordOpen("xfs_open", handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1571,6 +1593,8 @@ func XFSClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("xfs_close: unknown xfs handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("xfs_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("xfs_close: %s", err.Error()))
 	}
@@ -1595,6 +1619,8 @@ func resolveNTFSHandle(arg object.Object, op string) (ntfsHandleState, *object.E
 		return ntfsHandleState{}, newError("%s: unknown ntfs handle: %s", op, handleObj.Value)
 	}
 
+	custodyRecordTouch(op, handleObj.Value)
+
 	return state, nil
 }
 
@@ -1610,6 +1636,8 @@ func resolveFATHandle(arg object.Object, op string) (fatHandleState, *object.Err
 	if !exists {
 		return fatHandleState{}, newError("%s: unknown fat handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }
@@ -1627,6 +1655,8 @@ func resolveXFATHandle(arg object.Object, op string) (xfatHandleState, *object.E
 		return xfatHandleState{}, newError("%s: unknown xfat handle: %s", op, handleObj.Value)
 	}
 
+	custodyRecordTouch(op, handleObj.Value)
+
 	return state, nil
 }
 
@@ -1642,6 +1672,8 @@ func resolveEXTHandle(arg object.Object, op string) (extHandleState, *object.Err
 	if !exists {
 		return extHandleState{}, newError("%s: unknown ext handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }
@@ -1659,6 +1691,8 @@ func resolveHFSHandle(arg object.Object, op string) (hfsHandleState, *object.Err
 		return hfsHandleState{}, newError("%s: unknown hfs handle: %s", op, handleObj.Value)
 	}
 
+	custodyRecordTouch(op, handleObj.Value)
+
 	return state, nil
 }
 
@@ -1674,6 +1708,8 @@ func resolveXFSHandle(arg object.Object, op string) (xfsHandleState, *object.Err
 	if !exists {
 		return xfsHandleState{}, newError("%s: unknown xfs handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }

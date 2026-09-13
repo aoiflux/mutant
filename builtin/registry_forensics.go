@@ -84,6 +84,8 @@ func RegOpen(args ...object.Object) object.Object {
 	registryStore.backends[handle] = backend
 	registryStore.Unlock()
 
+	custodyRecordOpen("reg_open", handle, pathObj.Value)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":      stringObj(handle),
 		"path":        stringObj(pathObj.Value),
@@ -228,6 +230,7 @@ func RegClose(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("reg_close: unknown hive handle: %s", handleObj.Value))
 	}
+	custodyRecordTouch("reg_close", handleObj.Value)
 	backend.close()
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handleObj.Value),
@@ -287,6 +290,7 @@ func resolveRegistryBackend(obj object.Object, opName string) (registryBackend, 
 	if !found {
 		return nil, newError("%s: unknown hive handle: %s", opName, handleObj.Value)
 	}
+	custodyRecordTouch(opName, handleObj.Value)
 	return backend, nil
 }
 

@@ -232,9 +232,17 @@ func TestResourceFamiliesCoverEveryCloser(t *testing.T) {
 		if !strings.HasSuffix(entry.Name, "_close") {
 			continue
 		}
-		if _, covered := claimed[entry.Name]; !covered {
-			t.Errorf("%s closes something the rule knows nothing about; add its family to resourceFamilies", entry.Name)
+		if _, covered := claimed[entry.Name]; covered {
+			continue
 		}
+		if reason, exempt := nonResourceClosers[entry.Name]; exempt {
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s is exempt from the rule with no reason given", entry.Name)
+			}
+			continue
+		}
+		t.Errorf("%s closes something the rule knows nothing about; add its family to resourceFamilies, "+
+			"or -- if it closes nothing a name can hold -- to nonResourceClosers with the reason", entry.Name)
 	}
 }
 

@@ -551,6 +551,14 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameAssertErr, assertErrBuiltin},
 	{BuiltinNameAssertOk, assertOkBuiltin},
 	{BuiltinNameFail, failBuiltin},
+	{BuiltinNameCaseOpen, &BuiltIn{CaseOpen}},
+	{BuiltinNameCaseNote, &BuiltIn{CaseNote}},
+	{BuiltinNameCaseEvidence, &BuiltIn{CaseEvidence}},
+	{BuiltinNameCaseVerify, &BuiltIn{CaseVerify}},
+	{BuiltinNameCaseManifest, &BuiltIn{CaseManifest}},
+	{BuiltinNameCaseWrite, &BuiltIn{CaseWrite}},
+	{BuiltinNameCaseManifestVerify, &BuiltIn{CaseManifestVerify}},
+	{BuiltinNameCaseClose, &BuiltIn{CaseClose}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

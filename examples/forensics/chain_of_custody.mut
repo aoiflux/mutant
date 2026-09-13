@@ -1,0 +1,125 @@
+// chain_of_custody.mut — open a case, touch evidence, and seal the manifest.
+//
+// Everything needed to make a forensic report defensible was already in this
+// language: digests, timestamps, a deterministic compiler, signing. What a case
+// session adds is the discipline that ties them to one investigation.
+//
+// Nothing is recorded until `case_open` is called. From there every evidence
+// opener records its source, and every builtin that reads through an evidence
+// handle is counted against that source — so the manifest at the end is a
+// statement about what this program did, not about what it meant to do.
+//
+// Safe use: reads examples/data/sample_win.exe and examples/data/phish.eml, and
+// never writes to either. The only file written is the manifest.
+
+putln("=== chain_of_custody ===");
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error]", op, ":", err);
+        return true;
+    };
+    return false;
+};
+
+let output_directory = "example_output/chain_of_custody";
+let manifest_path = output_directory + "/manifest.json";
+
+// The evidence. Two files: one opened through a handle, one registered directly.
+let image_path = "examples/data/sample_win.exe";
+let exhibit_path = "examples/data/phish.eml";
+
+let run = fn() {
+    let _, err = fs_mkdir(output_directory);
+    if (check_err(err, "fs_mkdir")) { return false; };
+
+    // --- open the case -------------------------------------------------------
+    // The hash policy is opt-in. Without it the manifest records each source's
+    // size and modification time and says plainly that it took no digest — the
+    // default, because `raw_open` on a 500 GB image should not silently read
+    // the whole thing before handing back a handle.
+    let opened, err = case_open("IR-2026-0413", "example examiner", {"hash": "sha256"});
+    if (check_err(err, "case_open")) { return false; };
+    putln("case:", opened["id"], " examiner:", opened["examiner"], " hash policy:", opened["hash_policy"]);
+
+    let _, err = case_note("acquired from the evidence locker, seal EV-99812");
+    if (check_err(err, "case_note")) { return false; };
+
+    // --- touch some evidence -------------------------------------------------
+    // raw_open registers the source. Nothing else here mentions custody.
+    let image, err = raw_open(image_path);
+    if (check_err(err, "raw_open")) { return false; };
+    let handle = image["handle"];
+
+    let header, err = raw_read_at(handle, 0, 2);
+    if (check_err(err, "raw_read_at header")) { return false; };
+    putln("first two bytes of the image:", header);
+
+    let meta, err = raw_metadata(handle);
+    if (check_err(err, "raw_metadata")) { return false; };
+    putln("image size:", meta["file_size"], "bytes");
+
+    let _, err = raw_close(handle);
+    if (check_err(err, "raw_close")) { return false; };
+
+    // A file no opener will ever touch still belongs in the record.
+    let exhibit, err = case_evidence(exhibit_path);
+    if (check_err(err, "case_evidence")) { return false; };
+    putln("registered exhibit:", exhibit["path"], " sha256:", exhibit["hash"]);
+
+    // --- verify --------------------------------------------------------------
+    // Re-measures every source and reports what moved. With a hash policy it
+    // compares digests; without one it compares size and modification time, and
+    // each source says which basis was used.
+    let drift, err = case_verify();
+    if (check_err(err, "case_verify")) { return false; };
+    putln("verify:", drift["checked"], "checked,", drift["unchanged"], "unchanged,",
+        drift["changed"], "changed,", drift["missing"], "missing");
+
+    // --- seal ----------------------------------------------------------------
+    // The written document carries a SHA-256 over every field except its own
+    // seal, and an Ed25519 signature over the same bytes. The public key travels
+    // in the document, so the check below needs nothing but the file.
+    let written, err = case_write(manifest_path);
+    if (check_err(err, "case_write")) { return false; };
+    putln("manifest:", written["path"], " ", written["bytes"], "bytes  signed:", written["signed"]);
+    putln("manifest hash:", written["manifest_hash"]);
+
+    let check, err = case_manifest_verify(manifest_path);
+    if (check_err(err, "case_manifest_verify")) { return false; };
+    putln("hash matches:", check["hash_matches"], " signature valid:", check["signature_valid"]);
+    putln("  ", check["signature_detail"]);
+
+    // --- close ---------------------------------------------------------------
+    let manifest, err = case_close();
+    if (check_err(err, "case_close")) { return false; };
+
+    let integrity = manifest["integrity"];
+    putln("--- manifest ---");
+    putln("sources:", integrity["sources_total"], " hashed:", integrity["sources_hashed"],
+        " evidence read-only:", integrity["evidence_read_only"]);
+
+    // What every builtin did to the image. The record is aggregated per builtin
+    // rather than logged per call, so a program that reads a hundred thousand
+    // files does not produce a hundred-thousand-line manifest.
+    each(manifest["evidence"], fn(source) {
+        putln("evidence:", source["path"]);
+        putln("  size:", source["size"], " hashed:", source["hashed"]);
+        each(source["touches"], fn(touch) {
+            putln("  touched by", touch["builtin"], "x" + to_string(touch["count"]));
+        });
+    });
+
+    // The reproducibility record. This is populated when the program was started
+    // through the Mutant runner; run from source it honestly says it was not.
+    let program = manifest["program"];
+    if (program["recorded"]) {
+        putln("produced by:", program["path"], " sha256:", program["hash"]);
+    } else {
+        putln("produced by: not recorded --", program["detail"]);
+    };
+
+    return true;
+};
+
+run();

@@ -91,6 +91,13 @@ func Run(srcpath string, opts Options) (error, errrs.ErrorType) {
 	}
 	defer security.SecureZero(signedCode)
 
+	// The reproducibility record (F-1). These are the exact bytes that are about
+	// to run, before verification, decoding or execution could have altered
+	// anything -- so a case manifest written by this program names the artifact
+	// that actually produced it. Nothing is recorded unless the program opens a
+	// case; this is a digest and an assignment.
+	builtin.SetProgramIdentity(srcpath, signedCode)
+
 	if secureMode && enforceSignerAuth {
 		trustedPublicKey, generated, keyDir, keyErr := security.ResolveTrustedPublicKeyHexFromPath(opts.TrustedKeyPath)
 		if keyErr != nil {

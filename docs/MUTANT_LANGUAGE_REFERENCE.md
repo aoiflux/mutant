@@ -918,42 +918,45 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-**Total builtins currently registered: 459**, across 34 capability categories.
+**Total builtins currently registered: 477**, across 36 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
 | Category | Count | What it covers |
 | --- | --- | --- |
-| [Standard library](CAPABILITY_REFERENCE.md#standard-library-56) | 56 | Core primitives, collection/hash ops, higher-order functions (including parallel `pmap`/`peach`), I/O, introspection |
+| [Standard library](CAPABILITY_REFERENCE.md#standard-library-59) | 59 | Core primitives, collection/hash ops, higher-order functions (including parallel `pmap`/`peach`), I/O, introspection |
+| [Testing](CAPABILITY_REFERENCE.md#testing-10) | 10 | `test`/`before_each`/`after_each` and the assertions `mutant test` reads |
 | [Concurrency](CAPABILITY_REFERENCE.md#concurrency-8) | 8 | Background tasks (`spawn`/`task_wait`) and channels for passing values between them |
 | [Strings](CAPABILITY_REFERENCE.md#strings-18) | 18 | Rune-aware string manipulation |
 | [Text analysis](CAPABILITY_REFERENCE.md#text-analysis-14) | 14 | Search, split/replace, regex, fuzzy matching |
-| [Structured data](CAPABILITY_REFERENCE.md#structured-data-25) | 25 | JSON, encoding, compression, type/base conversion, plist |
+| [Structured data](CAPABILITY_REFERENCE.md#structured-data-46) | 46 | JSON, encoding, compression, type/base conversion, plist |
 | [Math](CAPABILITY_REFERENCE.md#math-5) | 5 | Constants and random helpers |
 | [Hashing](CAPABILITY_REFERENCE.md#hashing-11) | 11 | Digests, HMAC, UUID/ID generators |
 | [Time](CAPABILITY_REFERENCE.md#time-7) | 7 | Unix timestamps, formatting, parsing, arithmetic |
-| [Bytes](CAPABILITY_REFERENCE.md#bytes-30) | 30 | Binary buffer read/write, cursor, slicing |
-| [Filesystem](CAPABILITY_REFERENCE.md#filesystem-19) | 19 | Files/dirs plus file-level forensics (hash, entropy, magic, carve, deleted) |
-| [Network](CAPABILITY_REFERENCE.md#network-32) | 32 | Sockets, TLS/CA, HTTP inspection, WebSocket, scanning, pcap |
+| [Bytes](CAPABILITY_REFERENCE.md#bytes-31) | 31 | Binary buffer read/write, cursor, slicing |
+| [Archives](CAPABILITY_REFERENCE.md#archives-10) | 10 | ZIP and TAR containers: entry listing, reading, and guarded extraction |
+| [Filesystem](CAPABILITY_REFERENCE.md#filesystem-20) | 20 | Files/dirs plus file-level forensics (hash, entropy, magic, carve, deleted) |
+| [Network](CAPABILITY_REFERENCE.md#network-33) | 33 | Sockets, TLS/CA, HTTP inspection, WebSocket, scanning, pcap |
 | [Http](CAPABILITY_REFERENCE.md#http-11) | 11 | HTTP client + request/response parse/build |
 | [Graph database](CAPABILITY_REFERENCE.md#graph-database-14) | 14 | Nodes/edges/relations, traversal, pathfinding, stats |
 | [Cache](CAPABILITY_REFERENCE.md#cache-8) | 8 | In-memory key/value cache with TTLs |
 | [Policy](CAPABILITY_REFERENCE.md#policy-5) | 5 | Allow/deny policy evaluation and tracing |
 | [Runtime integration](CAPABILITY_REFERENCE.md#runtime-integration-3) | 3 | Sandboxed Lua execution |
 | [Command execution](CAPABILITY_REFERENCE.md#command-execution-4) | 4 | Guarded external command execution |
-| [Cryptography](CAPABILITY_REFERENCE.md#cryptography-5) | 5 | X.509, JWT, PEM, AES-GCM |
+| [Cryptography](CAPABILITY_REFERENCE.md#cryptography-6) | 6 | X.509, JWT, PEM, AES-GCM |
 | [Fingerprinting](CAPABILITY_REFERENCE.md#fingerprinting-4) | 4 | imphash, JA3, NT/LM hashes |
 | [Network intelligence](CAPABILITY_REFERENCE.md#network-intelligence-11) | 11 | IOC defang/refang, IP/CIDR, domain/eTLD+1, IOC extraction |
 | [Detection](CAPABILITY_REFERENCE.md#detection-5) | 5 | Injection, beaconing, persistence, priv-esc, suspicious files |
 | [Process forensics](CAPABILITY_REFERENCE.md#process-forensics-9) | 9 | Live process inspection, memory scan, modules |
-| [Memory forensics](CAPABILITY_REFERENCE.md#memory-forensics-6) | 6 | Memory-dump analysis, PE/shellcode discovery |
+| [Memory forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
+| [Chain of custody](CAPABILITY_REFERENCE.md#chain-of-custody-8) | 8 | Case session, evidence record, drift verification, signed manifest |
 | [Registry forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
-| [Filesystem forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-31) | 31 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
-| [Disk image forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-17) | 17 | Raw/EWF/VHD(X) images, MBR/GPT tables |
-| [Windows artifacts](CAPABILITY_REFERENCE.md#windows-artifacts-4) | 4 | Prefetch, EVTX, LNK, Jump Lists |
+| [Filesystem forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-37) | 37 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
+| [Disk image forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-20) | 20 | Raw/EWF/VHD(X) images, MBR/GPT tables |
+| [Windows artifacts](CAPABILITY_REFERENCE.md#windows-artifacts-5) | 5 | Prefetch, EVTX, LNK, Jump Lists |
 | [Unix artifacts](CAPABILITY_REFERENCE.md#unix-artifacts-1) | 1 | syslog (RFC 5424 / 3164) |
-| [Browser artifacts](CAPABILITY_REFERENCE.md#browser-artifacts-4) | 4 | Chromium/Firefox history/cookies/downloads, SQLite |
+| [Browser artifacts](CAPABILITY_REFERENCE.md#browser-artifacts-5) | 5 | Chromium/Firefox history/cookies/downloads, SQLite |
 | [Forensic timeline](CAPABILITY_REFERENCE.md#forensic-timeline-5) | 5 | Timestamp normalize, merge/sort, bodyfile/mactime |
 | [Email forensics](CAPABILITY_REFERENCE.md#email-forensics-5) | 5 | Header/body/attachment parsing, DKIM verification |
 | [Hash-set forensics](CAPABILITY_REFERENCE.md#hash-set-forensics-3) | 3 | NSRL-style known-file filtering |
@@ -966,6 +969,56 @@ Almost every builtin is pure-Go and cross-platform — the forensic parsers oper
 - `process_modules` — Windows, Linux
 - `reg_open` — cross-platform for hive-file/JSON inputs; the live-registry path (`HKLM\...`) is Windows-only
 - `process_kill` — cross-platform; on Windows only SIGKILL semantics apply
+
+### Chain of custody
+
+A forensic answer is only worth what its provenance is worth. `case_open` starts
+a session that records the investigation as it happens:
+
+```mutant
+let opened, err = case_open("IR-2026-0413", "G. Gogia", {"hash": "sha256"});
+
+let image, err = raw_open("/evidence/laptop.E01");     // recorded: path, size, digest
+let header, err = raw_read_at(image["handle"], 0, 2);  // recorded: raw_read_at x1
+
+let drift, err = case_verify();                        // re-measures every source
+let written, err = case_write("case.json");            // sealed and signed
+let manifest, err = case_close();
+```
+
+Four properties are worth knowing before you reach for it.
+
+**Nothing is recorded until `case_open` is called.** The hooks sit in every
+evidence opener and every handle resolver, so a program that does not open a case
+pays one atomic load and behaves exactly as it did before.
+
+**Hashing is opt-in, and the manifest says which it was.** `{"hash": "sha256"}`
+digests each source as it is opened; the default is no digest, because the
+alternative is `raw_open` on a 500 GB image silently reading the whole thing
+before it hands back a handle. A case without digests records size and
+modification time and states `"hash_policy": "none"` — and `case_verify` then
+says `"basis": "size and mod time"` per source, so a weaker check is never
+mistaken for a stronger one.
+
+**The touch record is aggregated, not logged.** Per source, per builtin: first
+touch, last touch, and a count. A program that reads a hundred thousand files
+produces a manifest a person can read.
+
+**The seal is checkable by someone else.** `case_write` puts a SHA-256 over every
+field except the seal itself, plus an Ed25519 signature over the same bytes and
+the public key that verifies it, into the document. `case_manifest_verify(path)`
+is then a function of the file alone — it needs neither the case that produced it
+nor any key the reader does not already hold. Reformatting the JSON does not
+break it; altering a single character does.
+
+The manifest also carries a reproducibility record: the tool build, and the path
+and digest of the exact `.mu` that produced the document. And it asserts
+`integrity.evidence_read_only: true` — a claim backed by a guard that fails the
+build if any evidence-reading code asks the operating system to change something.
+See [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md) for the rule and
+its two reviewed exceptions, and
+[`examples/forensics/chain_of_custody.mut`](../examples/forensics/chain_of_custody.mut)
+for a program that runs the whole cycle.
 
 ## Quick Example
 

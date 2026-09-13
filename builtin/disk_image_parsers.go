@@ -201,6 +201,8 @@ func VHDIOpen(args ...object.Object) object.Object {
 	vhdiStore.handles[handle] = vhdiHandleState{ImagePath: pathObj.Value, Session: session}
 	vhdiStore.Unlock()
 
+	custodyRecordOpen("vhdi_open", handle, pathObj.Value)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
 		"path":   stringObj(pathObj.Value),
@@ -346,6 +348,8 @@ func VHDIClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("vhdi_close: unknown vhdi handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("vhdi_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("vhdi_close: %s", err.Error()))
 	}
@@ -382,6 +386,8 @@ func EWFOpen(args ...object.Object) object.Object {
 	ewfStore.Lock()
 	ewfStore.handles[handle] = ewfHandleState{SegmentPaths: segmentPaths, Session: session}
 	ewfStore.Unlock()
+
+	custodyRecordOpen("ewf_open", handle, segmentPaths...)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":        stringObj(handle),
@@ -499,6 +505,8 @@ func EWFClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ewf_close: unknown ewf handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("ewf_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ewf_close: %s", err.Error()))
 	}
@@ -538,6 +546,8 @@ func RAWOpen(args ...object.Object) object.Object {
 	rawStore.Lock()
 	rawStore.handles[handle] = rawHandleState{ImagePath: pathObj.Value, Session: session}
 	rawStore.Unlock()
+
+	custodyRecordOpen("raw_open", handle, pathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -636,6 +646,8 @@ func RAWClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("raw_close: unknown raw handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("raw_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("raw_close: %s", err.Error()))
 	}
@@ -660,6 +672,8 @@ func resolveVHDIHandle(arg object.Object, op string) (vhdiHandleState, *object.E
 		return vhdiHandleState{}, newError("%s: unknown vhdi handle: %s", op, handleObj.Value)
 	}
 
+	custodyRecordTouch(op, handleObj.Value)
+
 	return state, nil
 }
 
@@ -676,6 +690,8 @@ func resolveEWFHandle(arg object.Object, op string) (ewfHandleState, *object.Err
 		return ewfHandleState{}, newError("%s: unknown ewf handle: %s", op, handleObj.Value)
 	}
 
+	custodyRecordTouch(op, handleObj.Value)
+
 	return state, nil
 }
 
@@ -691,6 +707,8 @@ func resolveRAWHandle(arg object.Object, op string) (rawHandleState, *object.Err
 	if !exists {
 		return rawHandleState{}, newError("%s: unknown raw handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }

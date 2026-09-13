@@ -258,6 +258,8 @@ func ZipOpen(args ...object.Object) object.Object {
 	zipStore.handles[handle] = zipHandleState{Path: archivePath, Reader: reader}
 	zipStore.Unlock()
 
+	custodyRecordOpen("zip_open", handle, archivePath)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":             stringObj(handle),
 		"path":               stringObj(archivePath),
@@ -387,6 +389,8 @@ func ZipClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("zip_close: unknown zip handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("zip_close", handleObj.Value)
+
 	if err := state.Reader.Close(); err != nil {
 		return resultAndError(nil, newError("zip_close: %s", err.Error()))
 	}
@@ -429,6 +433,8 @@ func resolveZipHandle(arg object.Object, op string) (zipHandleState, *object.Err
 	if !exists {
 		return zipHandleState{}, newError("%s: unknown zip handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }
@@ -651,6 +657,8 @@ func TarOpen(args ...object.Object) object.Object {
 	tarStore.handles[handle] = state
 	tarStore.Unlock()
 
+	custodyRecordOpen("tar_open", handle, archivePath)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":             stringObj(handle),
 		"path":               stringObj(archivePath),
@@ -849,6 +857,8 @@ func TarClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tar_close: unknown tar handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("tar_close", handleObj.Value)
+
 	if err := state.File.Close(); err != nil {
 		return resultAndError(nil, newError("tar_close: %s", err.Error()))
 	}
@@ -872,6 +882,8 @@ func resolveTarHandle(arg object.Object, op string) (tarHandleState, *object.Err
 	if !exists {
 		return tarHandleState{}, newError("%s: unknown tar handle: %s", op, handleObj.Value)
 	}
+
+	custodyRecordTouch(op, handleObj.Value)
 
 	return state, nil
 }

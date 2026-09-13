@@ -175,6 +175,11 @@ var categorySections = []categorySection{
 		blurb:    "PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signature scanning, and Go-binary metadata recovery (GoReSym).",
 	},
 	{
+		category: "chain of custody",
+		heading:  "Chain of Custody",
+		blurb:    "A case session that records who opened what, when, with which build of the tool. `case_open(id, examiner)` starts it; from there every evidence opener records its source into the manifest and every builtin that reads through an evidence handle is counted against that source. `case_verify` re-measures the sources and reports drift; `case_write` seals the manifest with a SHA-256 over its own contents and an Ed25519 signature, and `case_manifest_verify` checks both from the file alone. Nothing is recorded until a case is opened, so a program that does not use this is unaffected by it. The read-only guarantee the manifest asserts is machine-checked: see [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md).",
+	},
+	{
 		category: "registry forensics",
 		heading:  "Registry Forensics",
 		blurb:    "Windows registry across three sources via one polymorphic API (regf hive file, hive-JSON, or live Windows registry), plus Amcache and Shimcache execution evidence.",

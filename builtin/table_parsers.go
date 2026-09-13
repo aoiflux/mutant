@@ -112,6 +112,8 @@ func TableOpen(args ...object.Object) object.Object {
 	tableStore.handles[handle] = tableHandleState{ImagePath: pathObj.Value, Session: session}
 	tableStore.Unlock()
 
+	custodyRecordOpen("table_open", handle, pathObj.Value)
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":          stringObj(handle),
 		"path":            stringObj(pathObj.Value),
@@ -196,6 +198,8 @@ func TableClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("table_close: unknown table handle: %s", handleObj.Value))
 	}
 
+	custodyRecordTouch("table_close", handleObj.Value)
+
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("table_close: %s", err.Error()))
 	}
@@ -244,6 +248,8 @@ func resolveTableHandle(arg object.Object, opName string) (tableHandleState, *ob
 	if !ok {
 		return tableHandleState{}, newError("%s: unknown table handle: %s", opName, handleObj.Value)
 	}
+
+	custodyRecordTouch(opName, handleObj.Value)
 
 	return state, nil
 }

@@ -18,6 +18,60 @@ claim the README makes becomes verifiable.
 
 ### Added
 
+- **Chain of custody.** Eight builtins in a new `chain of custody` capability
+  category -- `case_open`, `case_note`, `case_evidence`, `case_verify`,
+  `case_manifest`, `case_write`, `case_manifest_verify`, `case_close` -- and the
+  discipline that ties the pieces this language already had (digests,
+  timestamps, a deterministic compiler, Ed25519 signing) to one investigation.
+
+  `case_open(id, examiner)` starts a session. From there every evidence opener
+  (`raw_open`, `ewf_open`, `vhdi_open`, the six filesystem parsers, `table_open`,
+  `hive_open`, `reg_open`, `zip_open`, `tar_open`) records its source into the
+  manifest, and every builtin that reads or closes an evidence handle is counted
+  against that source. `case_close` returns a document naming the examiner, the
+  tool build, every source with its size and digest, every builtin that touched
+  each one, the timeline, and the run's security telemetry.
+
+  Four decisions shape it. **Nothing is recorded until a case is opened** -- the
+  hooks sit on the hot path of every forensic program ever written in this
+  language, so not using the feature costs one atomic load and changes nothing.
+  **Hashing is opt-in and the manifest says which it was**: `{"hash": "sha256"}`
+  digests each source as it is opened, and the default is no digest, because the
+  alternative is `raw_open` on a 500 GB image silently reading the whole thing
+  before it returns a handle. A case without digests records size and
+  modification time and states `"hash_policy": "none"`; `case_verify` then
+  reports `"basis": "size and mod time"` per source, so a weaker check is never
+  mistaken for a stronger one. **The touch record is aggregated, not logged** --
+  first touch, last touch and a count per builtin per source -- because a program
+  that reads a hundred thousand files must not produce a hundred-thousand-line
+  manifest. **The seal is checkable by someone else**: `case_write` puts a
+  SHA-256 over every field but the seal, an Ed25519 signature over the same
+  bytes, and the public key that verifies it into the document, and
+  `case_manifest_verify(path)` is a function of the file alone. Reformatting the
+  JSON does not break it; altering a character does.
+
+  The manifest also carries the reproducibility record -- the path and digest of
+  the exact `.mu` that produced it, taken by the runner from the signed bytecode
+  before any of it executed. Not "a tool wrote this" but "this bytecode wrote
+  this".
+
+- **Evidence is read-only, and now provably.** A second machine-checked policy
+  in `policy/`, alongside the environment-variable guard.
+  `policy/evidence_guard_test.go` parses every file that reads evidence and
+  fails the build on any call that asks the operating system to create,
+  truncate, rename, delete or chmod anything, or to open a file with a writable
+  flag. Two reviewed exceptions, both writing somewhere other than the evidence:
+  the temp file libxfat demands, and the temp copy `withSQLiteCopy` takes
+  precisely so an evidence database is never opened by something that wants to
+  write a journal beside it. Each is pinned to an exact line count, so a new
+  write inside an already-permitted function still fails.
+
+  The invariant already held. Writing it down is what lets a manifest assert
+  `integrity.evidence_read_only: true` and have that mean something -- a
+  manifest that claims what nobody checks is worse than one that stays quiet.
+  The rule, its reasoning and what the guard deliberately does not look for are
+  in `docs/EVIDENCE_HANDLING_POLICY.md`.
+
 - **Seven security lint rules.** `commandInjection`, `pathTraversal`,
   `weakCrypto`, `tlsVerificationDisabled`, `hardcodedSecret`,
   `evidenceMutation` and `unboundedResource`, each settable through

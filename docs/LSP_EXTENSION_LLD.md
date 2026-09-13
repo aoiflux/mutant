@@ -282,7 +282,9 @@ Current lint rules (rule id -> default severity):
   in a loop over a corpus or a long-running server. Curated opener/closer table
   in [unclosed_resource.go](../lsp/internal/analyzer/unclosed_resource.go),
   pinned to the registry by test so a new `*_close` family cannot be added
-  without being accounted for. The rule declines whenever the handle is used
+  without being accounted for -- a closer that closes nothing a name can hold
+  (`case_close` ends a process-wide session and takes no arguments) goes in
+  `nonResourceClosers` with its reason rather than being silently skipped. The rule declines whenever the handle is used
   somewhere it cannot follow -- returned, passed to a helper, stored, printed --
   when the closer is named anywhere in the scope including inside the string
   `with_resource` takes, and when the resource is held by something with no
