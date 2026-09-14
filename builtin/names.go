@@ -443,6 +443,8 @@ const (
 	BuiltinNameEcsEvent        = "ecs_event"
 	BuiltinNameOcsfEvent       = "ocsf_event"
 	BuiltinNameTimesketchEvent = "timesketch_event"
+	BuiltinNameStixBundle      = "stix_bundle"
+	BuiltinNameStixPattern     = "stix_pattern"
 	// forensic: Windows artifacts
 	BuiltinNameLnkParse = "lnk_parse"
 	// forensic: real registry hive parsing (regf binary format)

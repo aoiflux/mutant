@@ -918,7 +918,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-**Total builtins currently registered: 482**, across 37 capability categories.
+**Total builtins currently registered: 484**, across 37 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
@@ -958,7 +958,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Unix artifacts](CAPABILITY_REFERENCE.md#unix-artifacts-1) | 1 | syslog (RFC 5424 / 3164) |
 | [Browser artifacts](CAPABILITY_REFERENCE.md#browser-artifacts-5) | 5 | Chromium/Firefox history/cookies/downloads, SQLite |
 | [Forensic timeline](CAPABILITY_REFERENCE.md#forensic-timeline-5) | 5 | Timestamp normalize, merge/sort, bodyfile/mactime |
-| [Schema interchange](CAPABILITY_REFERENCE.md#schema-interchange-5) | 5 | One event vocabulary for every artifact, written out as ECS, OCSF or Timesketch/plaso |
+| [Schema interchange](CAPABILITY_REFERENCE.md#schema-interchange-7) | 7 | One event vocabulary for every artifact, written out as ECS, OCSF or Timesketch/plaso; indicators written out as STIX 2.1 |
 | [Email forensics](CAPABILITY_REFERENCE.md#email-forensics-5) | 5 | Header/body/attachment parsing, DKIM verification |
 | [Hash-set forensics](CAPABILITY_REFERENCE.md#hash-set-forensics-3) | 3 | NSRL-style known-file filtering |
 

@@ -476,6 +476,8 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameEcsEvent, &BuiltIn{EcsEvent}},
 	{BuiltinNameOcsfEvent, &BuiltIn{OcsfEvent}},
 	{BuiltinNameTimesketchEvent, &BuiltIn{TimesketchEvent}},
+	{BuiltinNameStixBundle, &BuiltIn{StixBundle}},
+	{BuiltinNameStixPattern, &BuiltIn{StixPattern}},
 	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
 	// forensic: real registry hive parsing

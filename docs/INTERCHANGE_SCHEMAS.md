@@ -271,6 +271,102 @@ A kind with no plaso equivalent gets `mutant:<kind>:event` rather than the
 nearest plaso string. An analyzer that matched a borrowed `data_type` would run
 over rows it was never written for, and report on them.
 
+## Indicators out: STIX 2.1
+
+Everything above carries *what happened*. `stix_bundle` carries *what to look
+for*: the values an investigation decided are worth watching for, in the form
+the platforms that hunt them read.
+
+It takes no envelope events, because an indicator is not an event. The input is
+the hash `extract_iocs` returns, or one written by hand in the same shape:
+
+```
+let iocs = extract_iocs(fs_read("report.txt"));
+let bundle, err = stix_bundle(iocs, {"indicators": true, "created": "2026-01-31T09:00:00Z"});
+let doc, err = json_stringify(bundle);
+```
+
+| Key | Becomes |
+| --- | --- |
+| `ipv4`, `ipv6` | `ipv4-addr`, `ipv6-addr` |
+| `domains` | `domain-name` |
+| `urls` | `url` |
+| `emails` | `email-addr` |
+| `md5`, `sha1`, `sha256` | `file`, carrying that one algorithm in `hashes` |
+
+Each value is a string or a list of strings, and the singular spellings
+(`domain`, `url`, `email`) are accepted too. A key no type claims is an error
+rather than something skipped — a bundle quietly missing its hashes because they
+arrived under `hash` would look like a clean extraction.
+
+So is a value that is not what its key says. A forty-character digest filed
+under `sha256` would become a file observable whose id nothing else computes,
+and a STIX object nothing matches produces no report at all: the pipeline that
+ignores it reports success.
+
+### Why every id is derived rather than generated
+
+An observable's id is a UUIDv5 over the canonical JSON of the properties STIX
+says identify it, under the namespace the specification fixes for the purpose.
+That is not a choice; it is how two tools that saw the same indicator agree they
+saw the same one.
+
+Mutant extends it to the bundle and the indicators, which the specification
+would let be random. A random id is a new id every run, and two bundles built
+from one body of evidence would then differ in every identifier while describing
+exactly the same findings — impossible to diff, and impossible to say what
+changed between two readings of one artifact. Reproducible evidence is worth
+more than the version nibble, which no consumer reads.
+
+Values are normalized before they are hashed, for the same reason: a digest in
+upper case and the same digest in lower case would otherwise be two objects.
+Digests, domain names and email addresses are lowercased, and an IPv6 address is
+written the short way.
+
+Three digests of one file therefore become three file observables rather than
+one file with three hashes. Nothing in a list of digests says they describe the
+same file, and merging them on the guess that they do would invent a file nobody
+observed.
+
+### Indicators
+
+`indicators: true` adds an Indicator beside each observable, carrying the
+pattern that matches it.
+
+| Option | Meaning |
+| --- | --- |
+| `indicators` | `true` adds an Indicator per observable. Default `false` |
+| `created` | RFC 3339; stamps `created`, `modified` and `valid_from` |
+| `tags` | Each Indicator's `labels`. Needs `indicators: true`, since a STIX observable has no labels property to put them in |
+
+The three timestamps an Indicator requires all come from `created`, which
+defaults to now. Pin it to when the case was collected and the whole bundle is
+byte-identical between runs, indicators included; an indicator's own id comes
+from its pattern alone, so re-stamping a case does not renumber it.
+
+Every indicator is typed `unknown` rather than `malicious-activity`. The
+extraction found a value written in a document — it concluded nothing about it,
+and a bundle that says otherwise carries that conclusion into every platform it
+is shared with.
+
+A bundle from an extraction that found nothing has no `objects` key at all,
+because an empty STIX list property must be left out. Count the indicators
+before bundling if a script needs to branch on that.
+
+### `stix_pattern(type, value)`
+
+The same pattern, one at a time, for a query rather than a bundle:
+
+```
+let pattern, err = stix_pattern("sha256", digest);
+// [file:hashes.'SHA-256' = '...']
+```
+
+It takes the type names `stix_bundle` takes, normalizes and checks the value the
+same way, and escapes it: a quote inside a URL would otherwise close the
+pattern's own string and leave the rest of the value sitting in the grammar as
+if someone had written it there.
+
 ## Mapping an artifact Mutant does not know
 
 Pass a hash instead of a kind name:
@@ -316,7 +412,7 @@ wrong type".
 
 ## See also
 
-- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#schema-interchange-5) — the
+- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#schema-interchange-7) — the
   generated signatures.
 - [COOKBOOK.md](COOKBOOK.md) — timeline recipes.
 - [STRUCTURED_DATA.md](STRUCTURED_DATA.md) — `ndjson_stringify`, which is how a

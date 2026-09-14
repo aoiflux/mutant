@@ -19,7 +19,7 @@ claim the README makes becomes verifiable.
 ### Added
 
 - **One event vocabulary across every parser, and three ways out of it.** Five
-  builtins in a new `schema interchange` category.
+  of the seven builtins in a new `schema interchange` category.
   `events_from(artifact, kind_or_mapping)` normalizes any parsed artifact into a
   fixed set of event fields and `event_kinds()` reports what each supported
   artifact maps; `ecs_event`, `ocsf_event` and `timesketch_event` write that
@@ -101,6 +101,37 @@ claim the README makes becomes verifiable.
   event field -- rather than waiting for a source kind to be added. It is the
   same mechanism the built-in kinds use; there is no privileged path. See
   [docs/INTERCHANGE_SCHEMAS.md](docs/INTERCHANGE_SCHEMAS.md).
+
+- **Indicators out as STIX 2.1.** `stix_bundle` renders indicators as a bundle
+  of Cyber-observable Objects, taking `extract_iocs` output directly, and
+  `stix_pattern` renders the pattern that matches one of them for a query.
+  Addresses, domains, URLs and email addresses each become their own observable;
+  each MD5, SHA-1 and SHA-256 digest becomes a file observable carrying that one
+  algorithm, because nothing in a list of digests says they describe the same
+  file, and merging them on the guess that they do would invent a file nobody
+  observed.
+
+  **Every id is derived from the object rather than generated.** An observable's
+  id is the UUIDv5 over the canonical form of its identifying properties that
+  STIX specifies, so the same indicator is the same object wherever it is seen --
+  twice in one case, or here and in someone else's platform. The bundle and the
+  indicators get derived ids too, which the specification would let be random: a
+  random id is a new id on every run, and two bundles built from one body of
+  evidence would then differ in every identifier while describing exactly the
+  same findings, which is impossible to diff and impossible to testify from.
+  Values are normalized before they are hashed for the same reason -- a digest in
+  upper case and the same digest in lower case are one object, not two.
+
+  `indicators: true` adds an Indicator beside each observable, typed `unknown`
+  rather than `malicious-activity`: the extraction found a value written in a
+  document and concluded nothing about it, and a bundle that says otherwise
+  carries that conclusion into every platform it is shared with. The three
+  timestamps an Indicator requires come from a `created` option rather than a
+  clock, so pinning it to when the case was collected makes the bundle
+  byte-identical between runs. A key no indicator type claims is an error, and so
+  is a value that is not what its key says: a forty-character digest filed under
+  `sha256` would become an observable whose id nothing else computes, and a STIX
+  object nothing matches produces no report at all.
 
 - **Chain of custody.** Eight builtins in a new `chain of custody` capability
   category -- `case_open`, `case_note`, `case_evidence`, `case_verify`,
