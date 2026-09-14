@@ -452,6 +452,7 @@ const (
 	BuiltinNameReportList    = "report_list"
 	BuiltinNameReportTable   = "report_table"
 	BuiltinNameReportRender  = "report_render"
+	BuiltinNameReportWrite   = "report_write"
 	// forensic: Windows artifacts
 	BuiltinNameLnkParse = "lnk_parse"
 	// forensic: real registry hive parsing (regf binary format)
@@ -522,5 +523,7 @@ const (
 	BuiltinNameCaseManifest       = "case_manifest"
 	BuiltinNameCaseWrite          = "case_write"
 	BuiltinNameCaseManifestVerify = "case_manifest_verify"
+	BuiltinNameCaseReport         = "case_report"
+	BuiltinNameCaseBundle         = "case_bundle"
 	BuiltinNameCaseClose          = "case_close"
 )

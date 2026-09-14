@@ -1,4 +1,5 @@
-// chain_of_custody.mut — open a case, touch evidence, and seal the manifest.
+// chain_of_custody.mut — open a case, touch evidence, seal the manifest, and
+// write the bundle somebody else opens.
 //
 // Everything needed to make a forensic report defensible was already in this
 // language: digests, timestamps, a deterministic compiler, signing. What a case
@@ -10,7 +11,8 @@
 // statement about what this program did, not about what it meant to do.
 //
 // Safe use: reads examples/data/sample_win.exe and examples/data/phish.eml, and
-// never writes to either. The only file written is the manifest.
+// never writes to either. Everything written goes under
+// example_output/chain_of_custody: the manifest, and the handover bundle.
 
 putln("=== chain_of_custody ===");
 
@@ -89,6 +91,22 @@ let run = fn() {
     if (check_err(err, "case_manifest_verify")) { return false; };
     putln("hash matches:", check["hash_matches"], " signature valid:", check["signature_valid"]);
     putln("  ", check["signature_detail"]);
+
+    // --- the handover -------------------------------------------------------
+    //
+    // A manifest is a document for a machine. `case_bundle` writes what a person
+    // is handed: the manifest, the same facts rendered as a report in HTML and
+    // Markdown, and a SHA256SUMS that any `sha256sum -c` checks.
+    //
+    // The reports are written first and the manifest records what they hashed
+    // to, so the seal above covers them as well -- a report edited after the
+    // handover no longer matches a document whose own signature still verifies.
+    let bundle, err = case_bundle(output_directory + "/handover");
+    if (check_err(err, "case_bundle")) { return false; };
+    putln("bundle:", bundle["dir"], " signed:", bundle["signed"]);
+    each(bundle["files"], fn(entry) {
+        putln("  ", entry["name"], " ", entry["bytes"], "bytes ", entry["sha256"]);
+    });
 
     // --- close ---------------------------------------------------------------
     let manifest, err = case_close();

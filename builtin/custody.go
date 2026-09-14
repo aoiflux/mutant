@@ -265,6 +265,41 @@ func CaseNote(args ...object.Object) object.Object {
 	}), nil)
 }
 
+// custodyRecordArtifact records that the program wrote a document out of the
+// case: the path, the format, and what the file hashed to.
+//
+// It is the other direction of the chain. Evidence comes in and is measured on
+// the way; a report goes out and is measured on the way, and the manifest is the
+// one place both measurements meet. An examiner holding a report and a manifest
+// can then ask whether they belong together, without holding the machine that
+// produced either.
+//
+// Like every other custody recorder this does nothing when no case is open, and
+// nothing when the case is closed -- a timeline that grew after its own
+// `case_close` event would be a document that contradicts itself.
+func custodyRecordArtifact(event, detail string, data map[string]any) {
+	if !custodyActive.Load() {
+		return
+	}
+
+	custodyStore.Lock()
+	defer custodyStore.Unlock()
+
+	session := custodyStore.session
+	if session == nil || session.Closed {
+		return
+	}
+
+	now := custodyNow()
+	session.timeline = append(session.timeline, custodyEvent{
+		At:      now,
+		Elapsed: now.Sub(session.OpenedAt),
+		Event:   event,
+		Detail:  detail,
+		Data:    data,
+	})
+}
+
 // CaseEvidence brings a file under custody that no evidence opener will ever
 // touch: a carved file, an export, a hash list handed over with the drive.
 func CaseEvidence(args ...object.Object) object.Object {

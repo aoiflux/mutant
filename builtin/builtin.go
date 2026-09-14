@@ -485,6 +485,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameReportList, &BuiltIn{ReportList}},
 	{BuiltinNameReportTable, &BuiltIn{ReportTable}},
 	{BuiltinNameReportRender, &BuiltIn{ReportRender}},
+	{BuiltinNameReportWrite, &BuiltIn{ReportWrite}},
 	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
 	// forensic: real registry hive parsing
@@ -573,6 +574,8 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameCaseManifest, &BuiltIn{CaseManifest}},
 	{BuiltinNameCaseWrite, &BuiltIn{CaseWrite}},
 	{BuiltinNameCaseManifestVerify, &BuiltIn{CaseManifestVerify}},
+	{BuiltinNameCaseReport, &BuiltIn{CaseReport}},
+	{BuiltinNameCaseBundle, &BuiltIn{CaseBundle}},
 	{BuiltinNameCaseClose, &BuiltIn{CaseClose}},
 }
 

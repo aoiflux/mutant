@@ -93,25 +93,34 @@ func ReportNew(args ...object.Object) object.Object {
 		}
 	}
 
-	// The one field that cannot be derived from the document is when it was
-	// written, so it is an option rather than only a clock read. Pin it and two
-	// renders of one investigation are the same bytes, which is what makes a
-	// report diffable against the last one.
-	stamp, errObj := opts.str("generated", "")
+	generated, errObj := reportGenerated(opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
-	}
-	generated := time.Now().UTC().Format(time.RFC3339)
-	if stamp != "" {
-		at, err := time.Parse(time.RFC3339, stamp)
-		if err != nil {
-			return resultAndError(nil, newError("report_new: option %q must be an RFC 3339 timestamp: %s", "generated", err.Error()))
-		}
-		generated = at.UTC().Format(time.RFC3339)
 	}
 	values["generated"] = stringObj(generated)
 
 	return resultAndError(makeHashObject(values), nil)
+}
+
+// reportGenerated reads the `generated` option, defaulting to now.
+//
+// The one field that cannot be derived from a document is when it was written,
+// so it is an option rather than only a clock read. Pin it and two renders of
+// one investigation are the same bytes, which is what makes a report diffable
+// against the last one -- the same rule `stix_bundle` applies to `created`.
+func reportGenerated(opts *formatOptions) (string, *object.Error) {
+	stamp, errObj := opts.str("generated", "")
+	if errObj != nil {
+		return "", errObj
+	}
+	if stamp == "" {
+		return time.Now().UTC().Format(time.RFC3339), nil
+	}
+	at, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return "", newError("%s: option %q must be an RFC 3339 timestamp: %s", opts.op, "generated", err.Error())
+	}
+	return at.UTC().Format(time.RFC3339), nil
 }
 
 var reportSectionOptions = []string{"level"}
@@ -303,28 +312,40 @@ func ReportRender(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	doc, errObj := readReport(reportHash)
+	text, errObj := renderReport("report_render", reportHash, format, opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	return resultAndError(stringObj(text), nil)
+}
+
+// reportFormats are the renderings, in the order the refusals list them.
+var reportFormats = []string{"html", "markdown", "csv"}
+
+// renderReport validates a document and renders it. `report_render` and
+// `report_write` share it, so the two cannot disagree about what a report is or
+// about what a format produces -- the file on disk is the string the program
+// could have printed. The op is threaded rather than assumed so a refusal names
+// the builtin the program actually called.
+func renderReport(op string, reportHash *object.Hash, format string, opts *formatOptions) (string, *object.Error) {
+	doc, errObj := readReport(op, reportHash)
+	if errObj != nil {
+		return "", errObj
 	}
 
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "html":
 		fragment, errObj := opts.boolean("fragment", false)
 		if errObj != nil {
-			return resultAndError(nil, errObj)
+			return "", errObj
 		}
-		return resultAndError(stringObj(renderReportHTML(doc, fragment)), nil)
+		return renderReportHTML(doc, fragment), nil
 	case "markdown", "md":
-		return resultAndError(stringObj(renderReportMarkdown(doc)), nil)
+		return renderReportMarkdown(doc), nil
 	case "csv":
-		text, errObj := renderReportCSV(doc, opts)
-		if errObj != nil {
-			return resultAndError(nil, errObj)
-		}
-		return resultAndError(stringObj(text), nil)
+		return renderReportCSV(doc, opts)
 	default:
-		return resultAndError(nil, newError("report_render: unknown format %q (accepted: html, markdown, csv)", format))
+		return "", newError("%s: unknown format %q (accepted: %s)", op, format, strings.Join(reportFormats, ", "))
 	}
 }
 
@@ -472,17 +493,17 @@ type reportDocBlock struct {
 // and because the alternative -- rendering the blocks it recognises and
 // stepping over the rest -- produces a report that looks complete and is
 // missing a finding. Every refusal names the section and block it came from.
-func readReport(hash *object.Hash) (*reportDoc, *object.Error) {
+func readReport(op string, hash *object.Hash) (*reportDoc, *object.Error) {
 	doc := &reportDoc{}
 
-	title, errObj := reportString(hash, "title", "report_render", true)
+	title, errObj := reportString(hash, "title", op, true)
 	if errObj != nil {
 		return nil, errObj
 	}
 	doc.title = title
 
 	for _, key := range []string{"subtitle", "examiner", "case_id", "generated"} {
-		value, errObj := reportString(hash, key, "report_render", false)
+		value, errObj := reportString(hash, key, op, false)
 		if errObj != nil {
 			return nil, errObj
 		}
@@ -498,16 +519,16 @@ func readReport(hash *object.Hash) (*reportDoc, *object.Error) {
 		}
 	}
 
-	sections, errObj := reportSections("report_render", hash)
+	sections, errObj := reportSections(op, hash)
 	if errObj != nil {
 		return nil, errObj
 	}
 	for i, element := range sections {
 		section, ok := element.(*object.Hash)
 		if !ok {
-			return nil, newError("report_render: section %d is %s, not a HASH", i, element.Type())
+			return nil, newError("%s: section %d is %s, not a HASH", op, i, element.Type())
 		}
-		read, errObj := readReportSection(section, i)
+		read, errObj := readReportSection(op, section, i)
 		if errObj != nil {
 			return nil, errObj
 		}
@@ -516,10 +537,10 @@ func readReport(hash *object.Hash) (*reportDoc, *object.Error) {
 	return doc, nil
 }
 
-func readReportSection(section *object.Hash, index int) (*reportDocSection, *object.Error) {
+func readReportSection(op string, section *object.Hash, index int) (*reportDocSection, *object.Error) {
 	where := fmt.Sprintf("section %d", index)
 
-	heading, errObj := reportString(section, "heading", "report_render", false)
+	heading, errObj := reportString(section, "heading", op, false)
 	if errObj != nil {
 		return nil, errObj
 	}
@@ -528,29 +549,29 @@ func readReportSection(section *object.Hash, index int) (*reportDocSection, *obj
 	if value := hashValueByKey(section, "level"); value != nil {
 		level, ok := value.(*object.Integer)
 		if !ok {
-			return nil, newError("report_render: %s: `level` must be INTEGER, got %s", where, value.Type())
+			return nil, newError("%s: %s: `level` must be INTEGER, got %s", op, where, value.Type())
 		}
 		if level.Value < 1 || level.Value > reportMaxLevel {
-			return nil, newError("report_render: %s: `level` must be between 1 and %d, got %d", where, reportMaxLevel, level.Value)
+			return nil, newError("%s: %s: `level` must be between 1 and %d, got %d", op, where, reportMaxLevel, level.Value)
 		}
 		out.level = int(level.Value)
 	}
 
 	blocksValue := hashValueByKey(section, "blocks")
 	if blocksValue == nil {
-		return nil, newError("report_render: %s has no `blocks` array", where)
+		return nil, newError("%s: %s has no `blocks` array", op, where)
 	}
 	blocks, ok := blocksValue.(*object.Array)
 	if !ok {
-		return nil, newError("report_render: %s: `blocks` must be an ARRAY, got %s", where, blocksValue.Type())
+		return nil, newError("%s: %s: `blocks` must be an ARRAY, got %s", op, where, blocksValue.Type())
 	}
 
 	for i, element := range blocks.Elements {
 		block, ok := element.(*object.Hash)
 		if !ok {
-			return nil, newError("report_render: %s, block %d is %s, not a HASH", where, i, element.Type())
+			return nil, newError("%s: %s, block %d is %s, not a HASH", op, where, i, element.Type())
 		}
-		read, errObj := readReportBlock(block, where, i)
+		read, errObj := readReportBlock(op, block, where, i)
 		if errObj != nil {
 			return nil, errObj
 		}
@@ -559,16 +580,16 @@ func readReportSection(section *object.Hash, index int) (*reportDocSection, *obj
 	return out, nil
 }
 
-func readReportBlock(block *object.Hash, where string, index int) (*reportDocBlock, *object.Error) {
+func readReportBlock(op string, block *object.Hash, where string, index int) (*reportDocBlock, *object.Error) {
 	at := fmt.Sprintf("%s, block %d", where, index)
 
 	kindValue := hashValueByKey(block, "kind")
 	if kindValue == nil {
-		return nil, newError("report_render: %s has no `kind` (one of %s, %s, %s)", at, reportBlockText, reportBlockList, reportBlockTable)
+		return nil, newError("%s: %s has no `kind` (one of %s, %s, %s)", op, at, reportBlockText, reportBlockList, reportBlockTable)
 	}
 	kind, ok := kindValue.(*object.String)
 	if !ok {
-		return nil, newError("report_render: %s: `kind` must be STRING, got %s", at, kindValue.Type())
+		return nil, newError("%s: %s: `kind` must be STRING, got %s", op, at, kindValue.Type())
 	}
 	out := &reportDocBlock{kind: kind.Value}
 
@@ -576,16 +597,16 @@ func readReportBlock(block *object.Hash, where string, index int) (*reportDocBlo
 	case reportBlockText:
 		value := hashValueByKey(block, "text")
 		if value == nil {
-			return nil, newError("report_render: %s is a %s block with no `text`", at, reportBlockText)
+			return nil, newError("%s: %s is a %s block with no `text`", op, at, reportBlockText)
 		}
 		text, ok := value.(*object.String)
 		if !ok {
-			return nil, newError("report_render: %s: `text` must be STRING, got %s", at, value.Type())
+			return nil, newError("%s: %s: `text` must be STRING, got %s", op, at, value.Type())
 		}
 		out.text = text.Value
 
 	case reportBlockList:
-		items, errObj := reportStringList(block, "items", at)
+		items, errObj := reportStringList(op, block, "items", at)
 		if errObj != nil {
 			return nil, errObj
 		}
@@ -593,13 +614,13 @@ func readReportBlock(block *object.Hash, where string, index int) (*reportDocBlo
 		if value := hashValueByKey(block, "ordered"); value != nil {
 			ordered, ok := value.(*object.Boolean)
 			if !ok {
-				return nil, newError("report_render: %s: `ordered` must be BOOLEAN, got %s", at, value.Type())
+				return nil, newError("%s: %s: `ordered` must be BOOLEAN, got %s", op, at, value.Type())
 			}
 			out.ordered = ordered.Value
 		}
 
 	case reportBlockTable:
-		columns, errObj := reportStringList(block, "columns", at)
+		columns, errObj := reportStringList(op, block, "columns", at)
 		if errObj != nil {
 			return nil, errObj
 		}
@@ -607,22 +628,22 @@ func readReportBlock(block *object.Hash, where string, index int) (*reportDocBlo
 
 		rowsValue := hashValueByKey(block, "rows")
 		if rowsValue == nil {
-			return nil, newError("report_render: %s has no `rows` array", at)
+			return nil, newError("%s: %s has no `rows` array", op, at)
 		}
 		rows, ok := rowsValue.(*object.Array)
 		if !ok {
-			return nil, newError("report_render: %s: `rows` must be an ARRAY, got %s", at, rowsValue.Type())
+			return nil, newError("%s: %s: `rows` must be an ARRAY, got %s", op, at, rowsValue.Type())
 		}
 		for i, element := range rows.Elements {
 			row, ok := element.(*object.Array)
 			if !ok {
-				return nil, newError("report_render: %s, row %d is %s, not an ARRAY", at, i, element.Type())
+				return nil, newError("%s: %s, row %d is %s, not an ARRAY", op, at, i, element.Type())
 			}
 			cells := make([]string, 0, len(row.Elements))
 			for j, cell := range row.Elements {
-				text, errObj := csvFieldText("report_render", cell, i, j)
+				text, errObj := csvFieldText(op, cell, i, j)
 				if errObj != nil {
-					return nil, newError("report_render: %s, row %d column %d is %s; a table cell must be a scalar", at, i, j, cell.Type())
+					return nil, newError("%s: %s, row %d column %d is %s; a table cell must be a scalar", op, at, i, j, cell.Type())
 				}
 				cells = append(cells, text)
 			}
@@ -632,13 +653,13 @@ func readReportBlock(block *object.Hash, where string, index int) (*reportDocBlo
 		if value := hashValueByKey(block, "caption"); value != nil {
 			caption, ok := value.(*object.String)
 			if !ok {
-				return nil, newError("report_render: %s: `caption` must be STRING, got %s", at, value.Type())
+				return nil, newError("%s: %s: `caption` must be STRING, got %s", op, at, value.Type())
 			}
 			out.caption = caption.Value
 		}
 
 	default:
-		return nil, newError("report_render: %s has kind %q, which nothing renders (one of %s, %s, %s)", at, kind.Value, reportBlockText, reportBlockList, reportBlockTable)
+		return nil, newError("%s: %s has kind %q, which nothing renders (one of %s, %s, %s)", op, at, kind.Value, reportBlockText, reportBlockList, reportBlockTable)
 	}
 	return out, nil
 }
@@ -658,20 +679,20 @@ func reportString(hash *object.Hash, key, op string, required bool) (string, *ob
 	return text.Value, nil
 }
 
-func reportStringList(hash *object.Hash, key, at string) ([]string, *object.Error) {
+func reportStringList(op string, hash *object.Hash, key, at string) ([]string, *object.Error) {
 	value := hashValueByKey(hash, key)
 	if value == nil {
 		return nil, nil
 	}
 	list, ok := value.(*object.Array)
 	if !ok {
-		return nil, newError("report_render: %s: %q must be an ARRAY, got %s", at, key, value.Type())
+		return nil, newError("%s: %s: %q must be an ARRAY, got %s", op, at, key, value.Type())
 	}
 	out := make([]string, 0, len(list.Elements))
 	for i, element := range list.Elements {
 		text, ok := element.(*object.String)
 		if !ok {
-			return nil, newError("report_render: %s: %q element %d is %s, not a STRING", at, key, i, element.Type())
+			return nil, newError("%s: %s: %q element %d is %s, not a STRING", op, at, key, i, element.Type())
 		}
 		out = append(out, text.Value)
 	}
@@ -967,18 +988,18 @@ func markdownCell(text string) string {
 func renderReportCSV(doc *reportDoc, opts *formatOptions) (string, *object.Error) {
 	tables, labels := reportTables(doc)
 	if len(tables) == 0 {
-		return "", newError("report_render: csv carries rows and this report has none; render it as html or markdown")
+		return "", newError("%s: csv carries rows and this report has none; render it as html or markdown", opts.op)
 	}
 
 	chosen := 0
 	if value, ok := opts.pairs["table"]; ok {
-		index, errObj := reportChooseTable(value, tables, labels)
+		index, errObj := reportChooseTable(opts, value, tables, labels)
 		if errObj != nil {
 			return "", errObj
 		}
 		chosen = index
 	} else if len(tables) > 1 {
-		return "", newError("report_render: this report has %d tables and a CSV file holds one; name it with {\"table\": n} or its caption -- %s",
+		return "", newError("%s: this report has %d tables and a CSV file holds one; name it with {\"table\": n} or its caption -- %s", opts.op,
 			len(tables), strings.Join(labels, "; "))
 	}
 
@@ -986,7 +1007,7 @@ func renderReportCSV(doc *reportDoc, opts *formatOptions) (string, *object.Error
 	if errObj != nil {
 		return "", errObj
 	}
-	comma, errObj := singleRune("report_render", "delimiter", delimiter)
+	comma, errObj := singleRune(opts.op, "delimiter", delimiter)
 	if errObj != nil {
 		return "", errObj
 	}
@@ -1008,11 +1029,11 @@ func renderReportCSV(doc *reportDoc, opts *formatOptions) (string, *object.Error
 	writer := csv.NewWriter(&out)
 	writer.Comma = comma
 	if err := writer.WriteAll(records); err != nil {
-		return "", newError("report_render: %s", err.Error())
+		return "", newError("%s: %s", opts.op, err.Error())
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		return "", newError("report_render: %s", err.Error())
+		return "", newError("%s: %s", opts.op, err.Error())
 	}
 	return out.String(), nil
 }
@@ -1041,11 +1062,11 @@ func reportTables(doc *reportDoc) ([]reportDocBlock, []string) {
 	return tables, labels
 }
 
-func reportChooseTable(value object.Object, tables []reportDocBlock, labels []string) (int, *object.Error) {
+func reportChooseTable(opts *formatOptions, value object.Object, tables []reportDocBlock, labels []string) (int, *object.Error) {
 	switch chooser := value.(type) {
 	case *object.Integer:
 		if chooser.Value < 0 || chooser.Value >= int64(len(tables)) {
-			return 0, newError("report_render: option %q is %d but this report has %d tables -- %s",
+			return 0, newError("%s: option %q is %d but this report has %d tables -- %s", opts.op,
 				"table", chooser.Value, len(tables), strings.Join(labels, "; "))
 		}
 		return int(chooser.Value), nil
@@ -1056,17 +1077,17 @@ func reportChooseTable(value object.Object, tables []reportDocBlock, labels []st
 				continue
 			}
 			if matched >= 0 {
-				return 0, newError("report_render: option %q is %q and this report has more than one table with that caption; use its index instead", "table", chooser.Value)
+				return 0, newError("%s: option %q is %q and this report has more than one table with that caption; use its index instead", opts.op, "table", chooser.Value)
 			}
 			matched = i
 		}
 		if matched < 0 {
-			return 0, newError("report_render: option %q is %q, which is no table's caption -- %s",
+			return 0, newError("%s: option %q is %q, which is no table's caption -- %s", opts.op,
 				"table", chooser.Value, strings.Join(labels, "; "))
 		}
 		return matched, nil
 	default:
-		return 0, newError("report_render: option %q must be INTEGER or STRING, got %s", "table", value.Type())
+		return 0, newError("%s: option %q must be INTEGER or STRING, got %s", opts.op, "table", value.Type())
 	}
 }
 

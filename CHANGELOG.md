@@ -102,10 +102,10 @@ claim the README makes becomes verifiable.
   same mechanism the built-in kinds use; there is no privileged path. See
   [docs/INTERCHANGE_SCHEMAS.md](docs/INTERCHANGE_SCHEMAS.md).
 
-- **Investigations end in a report.** Six builtins in a new `reporting`
+- **Investigations end in a report.** Seven builtins in a new `reporting`
   category. `report_new` starts one and `report_section`, `report_text`,
-  `report_list` and `report_table` fill it in; `report_render` writes it as
-  HTML, Markdown or CSV. The report is a plain hash, so it can be JSON-encoded,
+  `report_list` and `report_table` fill it in; `report_render` renders it as
+  HTML, Markdown or CSV, and `report_write` renders and writes it in one step. The report is a plain hash, so it can be JSON-encoded,
   stored, diffed against the last one or written by hand, and every builder
   returns a new document rather than changing the one it was given. `generated`
   defaults to now and is pinnable, so two renders of one investigation are the
@@ -134,6 +134,43 @@ claim the README makes becomes verifiable.
   report with several tables is refused for the same reason until one is named:
   two different headers stacked into one file is not something a spreadsheet
   reads the way it was meant.
+
+- **The handover: `case_report` and `case_bundle`.** `case_report()` renders the
+  open case as a report value -- the header, the evidence with its digests, what
+  each builtin touched and how often, the timeline, the integrity statement and
+  the security counters. It is built from the manifest rather than from the
+  session, so the report a person reads and the document a machine verifies
+  cannot disagree about what was examined; and because it is a value, an
+  examiner's conclusions go in with `report_section` and `report_text` before
+  anything is rendered.
+
+  `case_bundle(dir)` writes what actually gets handed over: `manifest.json`,
+  `report.html`, `report.md`, and a `SHA256SUMS` any `sha256sum -c` can check.
+
+  **Which document vouches for which, and why it only works one way.** The
+  reports are written first and the manifest records what they hashed to, so the
+  seal over the manifest -- the SHA-256 over every other field, plus the Ed25519
+  signature over the same bytes -- covers the reports as well. Edit one byte of
+  `report.html` and it no longer matches a digest inside a document whose own
+  integrity still verifies, which is a thing the recipient can establish with the
+  file alone. The reverse ordering cannot be made honest: a report quoting the
+  manifest's hash would have to quote it before the manifest was written, and
+  would be quoting a document that was about to change. `SHA256SUMS` is the
+  convenience on top of that, not the guarantee underneath it.
+
+- **`report_write(report, path)`** renders and writes in one step, taking the
+  format from the path's extension -- `.html`, `.htm`, `.md`, `.markdown`,
+  `.csv` -- or from `{"format": ...}` for a name that says nothing. It returns
+  `{path, bytes, format, sha256}`.
+
+  The digest is the reason it exists. A report is written to be given to
+  somebody, and the only useful thing to say about a file that has left your
+  hands is what it hashed to when it left them. So the digest is read back off
+  the disk and checked against the document that was meant to be there: a short
+  write, a full disk or a filter driver that rewrote the bytes on the way past is
+  a refusal rather than a hash of something nobody can reproduce. When a case is
+  open, the write becomes a timeline entry carrying the path and that digest --
+  the whole of the link between an investigation and the documents it produced.
 
 - **Indicators out as STIX 2.1.** `stix_bundle` renders indicators as a bundle
   of Cyber-observable Objects, taking `extract_iocs` output directly, and
@@ -501,7 +538,7 @@ claim the README makes becomes verifiable.
   Mutant binary. That sentence was in no help text and no document.
 
 - **`mlsp --version`** — the language server now says which release it was built
-  from and how many builtins it linked (`mlsp 2.5.0 (490 builtins)`). It ships
+  from and how many builtins it linked (`mlsp 2.5.0 (493 builtins)`). It ships
   as a binary inside the editor extension, built from a checkout that can be
   older than the language it is asked to teach, and until now nothing it
   reported distinguished a current server from one cut months earlier. Both

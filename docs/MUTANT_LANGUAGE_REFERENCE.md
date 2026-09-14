@@ -918,7 +918,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-**Total builtins currently registered: 490**, across 38 capability categories.
+**Total builtins currently registered: 493**, across 38 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
@@ -950,8 +950,8 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Process forensics](CAPABILITY_REFERENCE.md#process-forensics-9) | 9 | Live process inspection, memory scan, modules |
 | [Memory forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
-| [Reporting](CAPABILITY_REFERENCE.md#reporting-6) | 6 | Build a report as a value, render it as HTML, Markdown or CSV |
-| [Chain of custody](CAPABILITY_REFERENCE.md#chain-of-custody-8) | 8 | Case session, evidence record, drift verification, signed manifest |
+| [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
+| [Chain of custody](CAPABILITY_REFERENCE.md#chain-of-custody-10) | 10 | Case session, evidence record, drift verification, signed manifest, the handover bundle |
 | [Registry forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-37) | 37 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
 | [Disk image forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-20) | 20 | Raw/EWF/VHD(X) images, MBR/GPT tables |
@@ -982,8 +982,9 @@ let r, err = report_text(r, "Two hosts beaconed to the same domain within four m
 let r, err = report_section(r, "Indicators");
 let r, err = report_table(r, iocs, {"columns": ["type", "value", "first_seen"]});
 
-let page, err = report_render(r, "html");
-let _, err = fs_write("case.html", page);
+let page, err = report_render(r, "html");          // the document as a string
+let wrote, err = report_write(r, "case.html");    // or straight to disk
+putln(wrote["sha256"]);
 ```
 
 The report is a plain hash — a title, a `generated` stamp and a list of
@@ -1027,6 +1028,20 @@ output that will be parsed rather than opened.
 A CSV file holds one table, so `report_render(r, "csv")` on a report with
 several refuses until one is named with `{"table": 1}` or its caption, rather
 than stacking two different headers into a file no spreadsheet reads correctly.
+
+**Writing one out.** `report_write(report, path)` renders and writes in one
+step, taking the format from the path's extension — `.html`, `.htm`, `.md`,
+`.markdown`, `.csv` — or from `{"format": ...}` when the name says nothing. It
+hands back `{path, bytes, format, sha256}`.
+
+The digest is the point of it. A report is written to be given to someone, and
+the only useful thing to say about a file that has left your hands is what it
+hashed to when it left them. So the digest is read back off the disk and checked
+against the document that was meant to be there: a short write or a filter that
+rewrote the bytes on the way past is a refusal, not a hash of something nobody
+can reproduce. And when a case is open, the write becomes a timeline entry
+carrying the path and that digest — which is the whole of the link between an
+investigation and the documents it produced.
 
 **A block nothing renders is an error, not a gap.** `report_render` validates
 the whole document before writing any of it and refuses by section and block
@@ -1073,6 +1088,32 @@ the public key that verifies it, into the document. `case_manifest_verify(path)`
 is then a function of the file alone — it needs neither the case that produced it
 nor any key the reader does not already hold. Reformatting the JSON does not
 break it; altering a single character does.
+
+**The handover.** `case_report()` renders the case itself as a report value —
+the header, the evidence with its digests, what each builtin touched and how
+often, the timeline, the integrity statement and the security counters. It is
+built from the manifest rather than from the session, so the report and the
+manifest cannot disagree about what was examined; and because it is a value, an
+examiner's conclusions go in with `report_section` and `report_text` before
+anything is rendered.
+
+```mutant
+let bundle, err = case_bundle("handover/IR-2026-0413");
+putln(bundle["manifest_hash"]);
+```
+
+`case_bundle(dir)` writes the four documents somebody else opens:
+`manifest.json`, `report.html`, `report.md`, and a `SHA256SUMS` that any
+`sha256sum -c` can check.
+
+**Which document vouches for which.** The reports are written first and the
+manifest records what they hashed to, so the manifest's seal — the SHA-256 over
+every other field, and the Ed25519 signature over the same bytes — covers the
+reports too. Edit a byte of `report.html` and it no longer matches the digest
+inside a document whose own integrity still verifies. The binding runs one way on
+purpose: a report quoting the manifest's hash would have to quote it before the
+manifest existed, and would be quoting a document that was about to change.
+`SHA256SUMS` is the convenience on top of that, not the guarantee underneath it.
 
 The manifest also carries a reproducibility record: the tool build, and the path
 and digest of the exact `.mu` that produced the document. And it asserts

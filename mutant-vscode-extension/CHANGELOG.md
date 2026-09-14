@@ -9,14 +9,14 @@
   `mutant.cli.path` setting, so the binary that runs a program is the binary
   that debugs it.
 - **Every builtin is highlighted.** The grammar's list of builtin names was
-  maintained by hand and had fallen to 76 of the language's 490 — the reporting,
+  maintained by hand and had fallen to 76 of the language's 493 — the reporting,
   chain-of-custody and schema-interchange families were all invisible, and so
   were most of `net_*` and `str_*`. The list is now generated from the builtin
   registry by `cmd/gendocs`, with a test in the repo that fails if the two ever
   disagree, so a builtin is highlighted as soon as it exists.
 - **The bundled language server says what it is.** `mlsp --version` prints the
   release it was built from and the number of builtins it knows
-  (`mlsp 2.5.0 (490 builtins)`), so "which version of the language does my
+  (`mlsp 2.5.0 (493 builtins)`), so "which version of the language does my
   editor actually understand?" is a question with an answer. The packaging
   scripts ask it too: a VSIX can no longer be built around a server older than
   the language in the tree it was cut from.

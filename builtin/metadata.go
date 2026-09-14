@@ -1147,6 +1147,19 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the verification result", ParamHash).withFields(
 			"case_id", "computed_hash", "examiner", "hash_matches", "manifest_hash", "path",
 			"signature_detail", "signature_valid", "signed")},
+	BuiltinNameCaseReport: {
+		signature: "case_report(opts?)",
+		summary:   "Renders the open case as a report value, in the shape report_new builds: the case header, the evidence with its digests, what each builtin touched and how often, the timeline, the integrity statement and the security counters. It is read from the manifest rather than from the session, so the report and the manifest cannot disagree about what was examined; and it is a value, so an examiner's conclusions can be added with report_section and report_text before anything is rendered.",
+		params:    []builtinParamDoc{param("opts?", "Optional {title, subtitle, generated}. title defaults to \"Case <id>\"; generated is RFC 3339 and defaults to now, and pinning it makes two renders of one case the same bytes.", ParamHash)},
+		returns:   pairRet("the case as a report", ParamHash).withFields("case_id", "examiner", "generated", "sections", "title")},
+	BuiltinNameCaseBundle: {
+		signature: "case_bundle(dir, opts?)",
+		summary:   "Writes the handover: manifest.json, report.html, report.md and a SHA256SUMS any sha256sum can check. The reports are written first and the manifest records what they hashed to, so the seal over the manifest -- a SHA-256 over every other field, signed with the local key pair -- covers the reports too: edit a byte of report.html and it no longer matches the case it claims to be from. The binding runs one way on purpose; a report quoting the manifest's hash would be quoting a document that had not been written yet. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("dir", "The directory to write into; created if it does not exist.", ParamString),
+			param("opts?", "Optional {title, subtitle, generated, sign}. The first three are case_report's; sign:false writes the hash but no signature, for a machine with no key store.", ParamHash),
+		},
+		returns: pairRet("what the bundle contains", ParamHash).withFields("checksums", "dir", "files", "manifest", "manifest_hash", "signed", "status")},
 	BuiltinNameCaseClose: {
 		signature: "case_close()",
 		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
@@ -1310,6 +1323,15 @@ var builtinDocs = map[string]builtinDoc{
 			param("opts?", "html: {fragment} omits the document wrapper. csv: {table} names which table by index or caption -- required when there is more than one, since a CSV file holds one; {delimiter}; {formula_guard} false writes cells beginning = + - @ unaltered, for output that will be parsed rather than opened in a spreadsheet.", ParamHash),
 		},
 		returns: pairRet("the rendered report", ParamString)},
+	BuiltinNameReportWrite: {
+		signature: "report_write(report, path, opts?)",
+		summary:   "Renders a report and writes it to disk, returning what the file turned out to be: {path, bytes, format, sha256}. The format comes from the path's extension -- .html, .htm, .md, .markdown, .csv -- or from {\"format\": ...} for a path whose name says nothing. The digest is read back off the disk and checked against the document that was meant to be there, so a short write or a full disk is a refusal rather than a hash of something nobody can reproduce. When a case is open the write becomes a timeline entry carrying the path and the digest, which is the whole of the link between an investigation and the documents it produced. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("report", "The report to write.", ParamHash),
+			param("path", "Where to write it. The file is created 0600.", ParamString),
+			param("opts?", "Optional {format} plus every report_render option: {fragment} for html, {table}, {delimiter} and {formula_guard} for csv.", ParamHash),
+		},
+		returns: pairRet("what was written", ParamHash).withFields("bytes", "format", "path", "sha256")},
 	BuiltinNameMactime: {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge).", returns: ret("one row per distinct timestamp, in chronological order", ParamArray).ofElem(ParamHash).withFields("gid", "inode", "iso", "macb", "md5", "mode", "name", "size", "ts", "uid"), params: []builtinParamDoc{param("entries", "Entries from bodyfile_parse.", ParamArray)}},
 	// security: fingerprinting
 	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{param("pe_path", "Path to a PE (Windows) binary.", ParamString)}, returns: pairRet("the PE import hash and the counts it was computed over", ParamHash).withFields("dll_count", "imphash", "import_count")},
