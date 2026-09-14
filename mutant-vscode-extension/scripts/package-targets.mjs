@@ -22,6 +22,13 @@ const targets = [
 
 mkdirSync("dist", { recursive: true });
 
+// This script stages from lsp/dist without building, so nothing else stands
+// between a months-old binary and six published VSIXs. The check is here
+// rather than in the wrapper because the wrapper builds first and would only
+// ever be asking a question it had just answered.
+console.log("=== Checking staged LSP binaries against the sources ===");
+execSync("node ./scripts/stage-lsp-binaries.mjs --check", { stdio: "inherit" });
+
 for (const target of targets) {
   const out = `dist/mutant-language-tools-${target}-${version}.vsix`;
   console.log(`\n=== Packaging ${target} -> ${out} ===`);

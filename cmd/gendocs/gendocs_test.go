@@ -90,6 +90,27 @@ func TestEveryBuiltinAppearsExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestMatchExistingNewlinesKeepsTheWorkingCopysEndings covers the difference
+// between regenerating a document and rewriting every line of it. This tree is
+// checked out with CRLF; a generator that emits LF turns a one-line change
+// into a whole-file diff and leaves the reference as the only document in the
+// tree that disagrees with its neighbours.
+func TestMatchExistingNewlinesKeepsTheWorkingCopysEndings(t *testing.T) {
+	const rendered = "first\nsecond\n"
+
+	if got := matchExistingNewlines(rendered, []byte("old\r\nfile\r\n")); got != "first\r\nsecond\r\n" {
+		t.Errorf("over a CRLF file, matchExistingNewlines = %q, want CRLF", got)
+	}
+	if got := matchExistingNewlines(rendered, []byte("old\nfile\n")); got != rendered {
+		t.Errorf("over an LF file, matchExistingNewlines = %q, want it unchanged", got)
+	}
+	// A file that does not exist yet, or has a single line and so no ending to
+	// read, gets what the generator produced rather than a guess.
+	if got := matchExistingNewlines(rendered, nil); got != rendered {
+		t.Errorf("over a missing file, matchExistingNewlines = %q, want it unchanged", got)
+	}
+}
+
 // TestTableCellsAreEscaped pins the escaping that keeps prose from breaking out
 // of a table cell — a pipe in a summary would otherwise start a new column.
 func TestTableCellsAreEscaped(t *testing.T) {

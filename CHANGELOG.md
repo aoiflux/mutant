@@ -500,6 +500,14 @@ claim the README makes becomes verifiable.
   at all, because the development key is a compile-time constant shared by every
   Mutant binary. That sentence was in no help text and no document.
 
+- **`mlsp --version`** — the language server now says which release it was built
+  from and how many builtins it linked (`mlsp 2.5.0 (490 builtins)`). It ships
+  as a binary inside the editor extension, built from a checkout that can be
+  older than the language it is asked to teach, and until now nothing it
+  reported distinguished a current server from one cut months earlier. Both
+  numbers are read from the same source as everything else: `global.Version` and
+  `builtin.Builtins`.
+
 ### Changed
 
 - **Enum equality is typed rather than textual.** Comparing an enum value with
@@ -554,6 +562,37 @@ claim the README makes becomes verifiable.
   coupled debuggability to a security downgrade.
 - The polymorphic engine carries line tables through the offset remap it already
   builds for jump targets, so mutated builds keep their positions.
+- **The editor's builtin highlighting is generated from the registry.** The
+  TextMate grammar carried a hand-copied list of builtin names, and a
+  hand-copied list of 490 names is a list that falls behind: it had 76 of them,
+  missing every `report_*`, `case_*`, `stix_*`, `ocsf_*` and `ecs_*` builtin
+  along with 25 of the 26 `net_*`. `cmd/gendocs` now writes that one rule from
+  `builtin.Builtins`, and `TestGrammarHighlightsEveryBuiltin` fails when the
+  grammar and the registry disagree — because a generator nobody runs is the
+  same drift one step further away. Only the builtin rule is generated; the
+  rest of the grammar stays hand-written.
+
+  Hover, completion, signature help and every diagnostic already covered all
+  490, since those come from the language server and it derives them from
+  `builtin/metadata.go`. What was actually wrong was narrower and still worth
+  fixing: a `report_new` call read as an unknown identifier next to a
+  highlighted `putln`, which tells the reader the wrong thing about what the
+  language knows.
+- `cmd/gendocs` writes each document with the line endings the file already
+  had, instead of always writing LF into a tree checked out with CRLF.
+- **The staleness check on the shipped language server was looking in the wrong
+  place, and nothing ran it.** `check:lsp-bins` compared the staged `mlsp`
+  binaries against the Go files under `lsp/` — but the analyzer derives arity,
+  parameter kinds, result types and deprecation from `builtin/metadata.go` in
+  the parent module, so registering a builtin changes what the server teaches
+  and leaves every file under `lsp/` untouched. A server could fall a release
+  behind the language and the check would call it current. It now compares
+  against the whole module, requires all six binaries rather than passing on
+  whichever ones happen to be present, and — for the one target the machine
+  running it can execute — asks the binary for `--version` and compares that
+  with what the sources build, because mtimes lie after a fresh clone. The check
+  had also never been wired into anything; `scripts/package-targets.mjs`, which
+  stages from `lsp/dist` without building, now runs it before it publishes.
 
 ### Removed
 

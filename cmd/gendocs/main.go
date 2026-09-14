@@ -1,5 +1,6 @@
-// Command gendocs writes docs/CAPABILITY_REFERENCE.md from the builtin
-// metadata.
+// Command gendocs writes the two artifacts that describe the builtin registry
+// to somebody outside it: docs/CAPABILITY_REFERENCE.md, and the builtin
+// highlighting rule in the VS Code grammar.
 //
 // The reference has always claimed to be "generated from the builtin metadata",
 // but until now nothing generated it, so its signatures and counts could drift
@@ -7,10 +8,14 @@
 // signature, parameter type, platform set, summary, and count in the document
 // is read from builtin.Builtins and the metadata beside it.
 //
-//	go run ./cmd/gendocs           # rewrite the reference
-//	go run ./cmd/gendocs -check    # fail if the reference is out of date
+// The grammar was the same problem in a different file, and had drifted
+// further: 76 of 490 builtins highlighted. Its builtin alternation is now read
+// from the same registry; see grammar.go for what is and is not generated.
 //
-// The -check mode is the drift gate: it makes an out-of-date reference a
+//	go run ./cmd/gendocs           # rewrite both
+//	go run ./cmd/gendocs -check    # fail if either is out of date
+//
+// The -check mode is the drift gate: it makes an out-of-date artifact a
 // failure rather than something a reader has to notice.
 package main
 
@@ -29,38 +34,81 @@ const defaultOutputPath = "docs/CAPABILITY_REFERENCE.md"
 
 func main() {
 	output := flag.String("o", defaultOutputPath, "path to write the capability reference to")
-	check := flag.Bool("check", false, "report whether the file on disk is up to date instead of writing it")
+	grammarOutput := flag.String("grammar", defaultGrammarPath, "path to the TextMate grammar whose builtin pattern is generated")
+	check := flag.Bool("check", false, "report whether the generated files are up to date instead of writing them")
 	flag.Parse()
 
 	document, err := renderDocument()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gendocs: %v\n", err)
-		os.Exit(1)
+		fail(err)
+	}
+
+	existingDocument, err := os.ReadFile(*output)
+	if err != nil {
+		fail(err)
+	}
+	document = matchExistingNewlines(document, existingDocument)
+
+	// The grammar is rewritten from the copy on disk rather than rendered from
+	// nothing, because only one rule in it is generated.
+	existingGrammar, err := os.ReadFile(*grammarOutput)
+	if err != nil {
+		fail(err)
+	}
+	grammar, err := renderGrammar(string(existingGrammar))
+	if err != nil {
+		fail(err)
+	}
+
+	names, err := builtinNames()
+	if err != nil {
+		fail(err)
 	}
 
 	if *check {
-		existing, err := os.ReadFile(*output)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gendocs: %v\n", err)
-			os.Exit(1)
-		}
+		// Both artifacts are reported before exiting. Being told about one
+		// stale file, regenerating, and then being told about the other is two
+		// round trips where one will do.
+		//
 		// Compare with line endings normalised: the working tree may be checked
 		// out with CRLF, which says nothing about whether the content drifted.
-		if normalizeNewlines(string(existing)) != normalizeNewlines(document) {
+		stale := false
+		if normalizeNewlines(string(existingDocument)) != normalizeNewlines(document) {
 			fmt.Fprintf(os.Stderr, "gendocs: %s is out of date; run `go run ./cmd/gendocs`\n", *output)
+			stale = true
+		}
+		if normalizeNewlines(string(existingGrammar)) != normalizeNewlines(grammar) {
+			fmt.Fprintf(os.Stderr, "gendocs: %s is out of date; run `go run ./cmd/gendocs`\n", *grammarOutput)
+			stale = true
+		}
+		if stale {
 			os.Exit(1)
 		}
 		fmt.Printf("gendocs: %s is up to date (%d builtins, %d categories)\n",
 			*output, len(builtin.Builtins), len(categorySections))
+		fmt.Printf("gendocs: %s is up to date (%d builtins highlighted)\n",
+			*grammarOutput, len(names))
 		return
 	}
 
 	if err := os.WriteFile(*output, []byte(document), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "gendocs: %v\n", err)
-		os.Exit(1)
+		fail(err)
 	}
 	fmt.Printf("gendocs: wrote %s (%d builtins, %d categories)\n",
 		*output, len(builtin.Builtins), len(categorySections))
+
+	if err := os.WriteFile(*grammarOutput, []byte(grammar), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Printf("gendocs: wrote %s (%d builtins highlighted)\n",
+		*grammarOutput, len(names))
+}
+
+// fail reports a generator error and stops. Writing half the artifacts would
+// leave the tree in a state where -check disagrees with itself.
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "gendocs: %v\n", err)
+	os.Exit(1)
 }
 
 // renderDocument builds the whole reference. It returns an error rather than
@@ -213,4 +261,20 @@ func joinWithAnd(items []string) string {
 
 func normalizeNewlines(text string) string {
 	return string(bytes.ReplaceAll([]byte(text), []byte("\r\n"), []byte("\n")))
+}
+
+// matchExistingNewlines gives a rendered document the line endings the file it
+// is about to replace already had.
+//
+// The documents are built with "\n", and this tree is checked out with CRLF.
+// Writing LF over a CRLF file turns a one-line regeneration into a whole-file
+// rewrite that says nothing about the content, and leaves one file disagreeing
+// with every other file beside it. The grammar rewrite preserves endings for
+// free because it edits the document it was handed; this is the same guarantee
+// for the reference, which is rendered from scratch.
+func matchExistingNewlines(rendered string, existing []byte) string {
+	if !bytes.Contains(existing, []byte("\r\n")) {
+		return rendered
+	}
+	return strings.ReplaceAll(normalizeNewlines(rendered), "\n", "\r\n")
 }

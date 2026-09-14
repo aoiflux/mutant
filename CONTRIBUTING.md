@@ -29,10 +29,11 @@ go test ./...
 go install            # puts `mutant` on your PATH
 ```
 
-The language server is a separate module:
+The language server is a separate binary in the same module:
 
 ```bash
-cd lsp && go build ./cmd/mlsp
+go build ./lsp/cmd/mlsp
+./mlsp --version    # the release and the builtin count this server teaches
 ```
 
 Release packaging uses `scripts/build.sh` (Linux/macOS/WSL) or
@@ -108,11 +109,14 @@ the implementation in `builtin/builtin.go`, then declare its contract in
 tier if it is not the default `stable`. Regenerate the catalogue:
 
 ```bash
-go run ./cmd/gendocs          # rewrites docs/CAPABILITY_REFERENCE.md
+go run ./cmd/gendocs          # rewrites the reference and the editor grammar
 go run ./cmd/gendocs -check   # what CI's test asserts
 ```
 
-`docs/CAPABILITY_REFERENCE.md` is **generated**. Never hand-edit it.
+Two files are **generated**, and neither is ever hand-edited:
+`docs/CAPABILITY_REFERENCE.md`, and the builtin highlighting rule inside
+`mutant-vscode-extension/syntaxes/mutant.tmLanguage.json`. Everything else in
+that grammar — strings, keywords, operators — is hand-written and stays so.
 
 Conformance probes in `builtin/` call every builtin with deliberately wrong
 arguments and assert that the metadata matches what the implementation actually
@@ -121,7 +125,34 @@ before you arrived — fix the declaration, don't weaken the probe.
 
 The language server derives hover, completion, signature help and the
 `builtinArgType` diagnostic from this metadata. Declaring it accurately is what
-makes the editor correct; there is usually nothing to add on the LSP side.
+makes the editor correct; there is nothing to add on the LSP side.
+
+Syntax highlighting used to be the exception — the grammar carried a hand-copied
+list of names, and it had fallen 414 builtins behind before anyone noticed,
+because no test had an opinion about it. It is generated now, and
+`TestGrammarHighlightsEveryBuiltin` fails when it drifts. So a new builtin is
+taught by the editor the moment it is registered and `gendocs` is run: a feature
+is not done when the compiler accepts it, it is done when the editor teaches it.
+
+### Shipping the language server
+
+The `mlsp` binaries the extension carries are build output: six cross-compiled
+targets in `lsp/dist`, staged into `mutant-vscode-extension/bin` at package
+time, committed nowhere. That makes them the one editor surface that can sit
+months behind the language while every file in the tree looks current — the
+analyzer derives what it knows from `builtin/metadata.go`, so registering a
+builtin changes what the server teaches without touching a single file under
+`lsp/`.
+
+`npm run check:lsp-bins` is what stands in the way, and
+`scripts/package-targets.mjs` runs it before it publishes anything. It compares
+the staged binaries against the Go sources of the whole module, not just
+`lsp/**`, and — for the one target the machine running it can execute — asks
+the binary for `--version` and compares that with what the sources build.
+Mtimes are a coverage net for the other five; they lie after a fresh clone,
+which is exactly when a stale server is hardest to notice.
+
+Rebuild with `lsp/build.ps1` or `lsp/build.sh` when cutting a release.
 
 ### Changing the language
 
