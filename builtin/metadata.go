@@ -1258,7 +1258,59 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameTimesketchEvent:    {signature: "timesketch_event(event, opts?)", summary: "Renders events_from() events as Timesketch/plaso records, ready for ndjson_stringify: one record, or one per event when given a whole timeline. Fills all three fields Timesketch requires -- message, datetime, timestamp_desc -- and never leaves one empty, because a record missing any of them is dropped on ingest rather than flagged. `timestamp` counts plaso microseconds. `data_type` is the plaso string its analyzers key off (mft to fs:stat:ntfs, prefetch to windows:prefetch:execution, the browser kinds by which browser the entry came out of); a kind with no plaso equivalent gets mutant:<kind>:event rather than borrowing one an analyzer would then run over and report on. Returns (record(s), err).", params: []builtinParamDoc{param("event", "An events_from() event, or an array of them.", ParamHash, ParamArray), param("opts?", "Optional {host, user, tags, extra, data_type}. host and user fill in what an artifact structurally cannot record; tags becomes Timesketch's tag list; extra:false leaves the verbatim source entry out; data_type overrides the plaso type.", ParamHash)}, returns: pairRet("a Timesketch record, or one per event when given an array", ParamHash, ParamArray)},
 	BuiltinNameStixBundle:         {signature: "stix_bundle(iocs, opts?)", summary: "Renders indicators as a STIX 2.1 bundle, taking extract_iocs() output directly. ipv4 and ipv6 become ipv4-addr and ipv6-addr observables, domains become domain-name, urls url, emails email-addr, and each md5/sha1/sha256 digest becomes a file observable carrying that one algorithm -- three digests of one file are three observables, because nothing in a list of digests says they describe the same file. Every id is a UUIDv5 over the object's ID contributing properties under the namespace STIX fixes for the purpose, so the same indicator is the same object wherever it is seen and a re-run over the same evidence is the same bundle byte for byte. `indicators: true` adds an Indicator beside each observable, typed `unknown` rather than `malicious-activity`: extraction found the value, it did not conclude anything about it. A key no indicator type claims is an error, and so is a value that is not what its key says -- a 40-character digest under sha256 would become an observable nothing else can match. A bundle with no indicators in it has no `objects` key, because an empty STIX list property must be left out. Returns (bundle, err).", params: []builtinParamDoc{param("iocs", "Indicators grouped by type, as extract_iocs returns: {ipv4, ipv6, domains, urls, emails, md5, sha1, sha256}. Each value is a STRING or an ARRAY of STRING.", ParamHash), param("opts?", "Optional {indicators, created, tags}. indicators:true adds Indicator objects; created stamps them (RFC 3339, default now) and pinning it makes even those byte-identical between runs; tags becomes each Indicator's labels, and needs indicators:true, since a STIX observable has no labels property.", ParamHash)}, returns: pairRet("a STIX 2.1 bundle", ParamHash).withFields("id", "objects", "type")},
 	BuiltinNameStixPattern:        {signature: "stix_pattern(type, value)", summary: "Renders the STIX pattern that matches one indicator: stix_pattern(\"sha256\", digest) gives [file:hashes.'SHA-256' = '...']. Takes the same type names stix_bundle accepts (ipv4, ipv6, domains, urls, emails, md5, sha1, sha256, and their singular spellings), normalizes and checks the value the same way, and escapes it for the pattern. Returns (pattern, err).", params: []builtinParamDoc{param("type", "Indicator type: ipv4, ipv6, domains, urls, emails, md5, sha1 or sha256.", ParamString), param("value", "The indicator itself.", ParamString)}, returns: pairRet("a STIX pattern string", ParamString)},
-	BuiltinNameMactime:            {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge).", returns: ret("one row per distinct timestamp, in chronological order", ParamArray).ofElem(ParamHash).withFields("gid", "inode", "iso", "macb", "md5", "mode", "name", "size", "ts", "uid"), params: []builtinParamDoc{param("entries", "Entries from bodyfile_parse.", ParamArray)}},
+	BuiltinNameReportNew: {
+		signature: "report_new(title, opts?)",
+		summary:   "Starts a report. The report is a plain hash -- title, generated, and a sections array -- so it can be JSON-encoded, diffed against yesterday's, or written by hand; every builder here returns a new document rather than changing the one it was given. `generated` defaults to now and is the only field that cannot be derived from the document, so pinning it makes two renders of one investigation the same bytes. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("title", "What was examined. A report without one is refused.", ParamString),
+			param("opts?", "Optional {subtitle, examiner, case_id, generated}. generated is RFC 3339 and defaults to now; pin it for byte-identical output.", ParamHash),
+		},
+		returns: pairRet("a new report", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportSection: {
+		signature: "report_section(report, heading, opts?)",
+		summary:   "Opens a section. Everything added afterwards lands in it, until the next one. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("heading", "The section heading.", ParamString),
+			param("opts?", "Optional {level}: the heading depth, 1 to 6, default 2. The title is always the level above.", ParamHash),
+		},
+		returns: pairRet("the report with the section opened", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportText: {
+		signature: "report_text(report, text)",
+		summary:   "Adds a paragraph. Line breaks inside it survive every format. A paragraph written before the first report_section lands in a lead section that renders without a heading, because a report usually opens with a summary. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("text", "The paragraph. Rendered as text in every format -- nothing in it is ever interpreted as markup.", ParamString),
+		},
+		returns: pairRet("the report with the paragraph added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportList: {
+		signature: "report_list(report, items, opts?)",
+		summary:   "Adds a bulleted list, or a numbered one with {\"ordered\": true}. Items are scalars, rendered the way a CSV cell is, so a count that arrived as an INTEGER needs no conversion. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("items", "The list items: STRING, INTEGER, FLOAT, BOOLEAN or NULL. A nested hash is refused here rather than appearing mid-sentence in the output.", ParamArray),
+			param("opts?", "Optional {ordered}: true numbers the list. Default false.", ParamHash),
+		},
+		returns: pairRet("the report with the list added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportTable: {
+		signature: "report_table(report, rows, opts?)",
+		summary:   "Adds a table. Rows arrive in either shape csv_stringify takes -- an array of arrays written positionally, or an array of hashes written against a column list -- and go through the same normalization, so a table in a report and the same table written straight to CSV cannot disagree about what a cell contains. A table with no rows and no columns is refused: pass `columns` to record that a search found nothing. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("rows", "An ARRAY of ARRAYs, or an ARRAY of HASHes. Cells are scalars.", ParamArray),
+			param("opts?", "Optional {columns, caption, header}. columns names and orders the fields, and for hash rows selects them; header:false drops the header row.", ParamHash),
+		},
+		returns: pairRet("the report with the table added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportRender: {
+		signature: "report_render(report, format, opts?)",
+		summary:   "Renders a report as \"html\", \"markdown\" or \"csv\". The whole document is validated first and a block nothing renders is an error naming its section and index, because a renderer that steps over what it does not understand produces a report that looks complete and is missing a finding. HTML is the format to hand to a person: every string is escaped, the stylesheet is inlined, there is no script, font or image, and evidence text is never turned into a link -- a report that makes the attacker's URL clickable is a report that can be clicked. Markdown is escaped for structure, so a pipe in a filename cannot shift a table column. CSV carries one table, and guards the cells a spreadsheet would execute. Returns (text, err).",
+		params: []builtinParamDoc{
+			param("report", "The report to render.", ParamHash),
+			param("format", "\"html\", \"markdown\" (or \"md\"), or \"csv\".", ParamString),
+			param("opts?", "html: {fragment} omits the document wrapper. csv: {table} names which table by index or caption -- required when there is more than one, since a CSV file holds one; {delimiter}; {formula_guard} false writes cells beginning = + - @ unaltered, for output that will be parsed rather than opened in a spreadsheet.", ParamHash),
+		},
+		returns: pairRet("the rendered report", ParamString)},
+	BuiltinNameMactime: {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge).", returns: ret("one row per distinct timestamp, in chronological order", ParamArray).ofElem(ParamHash).withFields("gid", "inode", "iso", "macb", "md5", "mode", "name", "size", "ts", "uid"), params: []builtinParamDoc{param("entries", "Entries from bodyfile_parse.", ParamArray)}},
 	// security: fingerprinting
 	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{param("pe_path", "Path to a PE (Windows) binary.", ParamString)}, returns: pairRet("the PE import hash and the counts it was computed over", ParamHash).withFields("dll_count", "imphash", "import_count")},
 	BuiltinNameNTHash:  {signature: "nt_hash(password)", summary: "Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use.", returns: ret("the NTLM NT hash (MD4 of the UTF-16LE password) as hex", ParamString), params: []builtinParamDoc{param("password", "Password to hash.", ParamString)}},
@@ -2523,6 +2575,7 @@ var capabilityCategories = []capabilityCategory{
 	// policy / cache / custody. "case_" is listed before "cache_" only for
 	// readability -- neither is a prefix of the other, so the order is free.
 	{"policy_", "policy"},
+	{"report_", "reporting"},
 	{"case_", "chain of custody"},
 	{"cache_", "cache"},
 	// system / process / memory forensics

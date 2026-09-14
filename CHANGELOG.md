@@ -102,6 +102,39 @@ claim the README makes becomes verifiable.
   same mechanism the built-in kinds use; there is no privileged path. See
   [docs/INTERCHANGE_SCHEMAS.md](docs/INTERCHANGE_SCHEMAS.md).
 
+- **Investigations end in a report.** Six builtins in a new `reporting`
+  category. `report_new` starts one and `report_section`, `report_text`,
+  `report_list` and `report_table` fill it in; `report_render` writes it as
+  HTML, Markdown or CSV. The report is a plain hash, so it can be JSON-encoded,
+  stored, diffed against the last one or written by hand, and every builder
+  returns a new document rather than changing the one it was given. `generated`
+  defaults to now and is pinnable, so two renders of one investigation are the
+  same bytes.
+
+  **The escaping is the substance of it.** Nearly every string in a report came
+  from the evidence, which is to say it was written by the subject of the
+  investigation, so the model holds values and each format is escaped for the
+  thing that actually goes wrong in it. HTML is the boundary: every string is
+  escaped, the stylesheet is inlined, and the document carries no script, font,
+  image or link -- a report that fetches something tells whoever serves it that
+  the examiner opened it, and evidence text is never made clickable, because a
+  report that links to the attacker's URL is one that can be clicked. Markdown
+  is escaped for structure, since a pipe in a filename ends a table cell and
+  shifts every column after it, and a line-leading `#` turns a finding into a
+  heading. CSV is guarded against formula injection: a cell beginning `=`, `+`,
+  `-` or `@` is executed by a spreadsheet when the file is opened, so it is
+  written with the leading apostrophe spreadsheets strip on display -- unless it
+  is simply a signed number, because a report whose numbers all gained an
+  apostrophe is one nobody can sort.
+
+  **A block nothing renders is an error rather than a gap.** `report_render`
+  validates the whole document before writing any of it and refuses by section
+  and block index; a renderer that stepped over what it did not understand would
+  hand back a report that looks complete and is missing a finding. A CSV of a
+  report with several tables is refused for the same reason until one is named:
+  two different headers stacked into one file is not something a spreadsheet
+  reads the way it was meant.
+
 - **Indicators out as STIX 2.1.** `stix_bundle` renders indicators as a bundle
   of Cyber-observable Objects, taking `extract_iocs` output directly, and
   `stix_pattern` renders the pattern that matches one of them for a query.

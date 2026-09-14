@@ -478,6 +478,13 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameTimesketchEvent, &BuiltIn{TimesketchEvent}},
 	{BuiltinNameStixBundle, &BuiltIn{StixBundle}},
 	{BuiltinNameStixPattern, &BuiltIn{StixPattern}},
+	// reporting
+	{BuiltinNameReportNew, &BuiltIn{ReportNew}},
+	{BuiltinNameReportSection, &BuiltIn{ReportSection}},
+	{BuiltinNameReportText, &BuiltIn{ReportText}},
+	{BuiltinNameReportList, &BuiltIn{ReportList}},
+	{BuiltinNameReportTable, &BuiltIn{ReportTable}},
+	{BuiltinNameReportRender, &BuiltIn{ReportRender}},
 	// forensic: Windows artifacts
 	{BuiltinNameLnkParse, &BuiltIn{LnkParse}},
 	// forensic: real registry hive parsing

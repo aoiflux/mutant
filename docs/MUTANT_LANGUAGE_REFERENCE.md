@@ -918,7 +918,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-**Total builtins currently registered: 484**, across 37 capability categories.
+**Total builtins currently registered: 490**, across 38 capability categories.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
@@ -950,6 +950,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Process forensics](CAPABILITY_REFERENCE.md#process-forensics-9) | 9 | Live process inspection, memory scan, modules |
 | [Memory forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
+| [Reporting](CAPABILITY_REFERENCE.md#reporting-6) | 6 | Build a report as a value, render it as HTML, Markdown or CSV |
 | [Chain of custody](CAPABILITY_REFERENCE.md#chain-of-custody-8) | 8 | Case session, evidence record, drift verification, signed manifest |
 | [Registry forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-37) | 37 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
@@ -970,6 +971,67 @@ Almost every builtin is pure-Go and cross-platform — the forensic parsers oper
 - `process_modules` — Windows, Linux
 - `reg_open` — cross-platform for hive-file/JSON inputs; the live-registry path (`HKLM\...`) is Windows-only
 - `process_kill` — cross-platform; on Windows only SIGKILL semantics apply
+
+### Reporting
+
+An investigation ends in a report, not a stdout dump.
+
+```mutant
+let r, err = report_new("Laptop triage", {"examiner": "G. Gogia", "case_id": "IR-2026-0413"});
+let r, err = report_text(r, "Two hosts beaconed to the same domain within four minutes.");
+let r, err = report_section(r, "Indicators");
+let r, err = report_table(r, iocs, {"columns": ["type", "value", "first_seen"]});
+
+let page, err = report_render(r, "html");
+let _, err = fs_write("case.html", page);
+```
+
+The report is a plain hash — a title, a `generated` stamp and a list of
+sections — so it can be JSON-encoded, stored, diffed against the last one, or
+written by hand without going through the builders at all. Every builder returns
+a new document rather than changing the one it was given, so a report can be
+branched: two summaries over one body of findings do not interfere.
+
+`generated` defaults to now and is the only thing in the document that cannot be
+derived from the rest of it, so it is an option. Pin it and two renders of one
+investigation are the same bytes — the same rule `stix_bundle`'s `created`
+follows, and for the same reason.
+
+**Why the escaping is the interesting part.** Nearly every string in a report
+came from the evidence, which is to say it was written by the subject of the
+investigation: a filename off a disk image, a registry value, a URL out of a
+phishing mail. So the model holds values, and text becomes markup in exactly one
+place per format — each escaped for the thing that actually goes wrong in it.
+
+*HTML is the security boundary.* Every string is escaped, the stylesheet is
+inlined, and the document contains no script, font, image or link at all. A
+report that fetches something tells whoever serves it that the examiner opened
+it, and when. Evidence text is never turned into a link either: a report that
+makes the attacker's URL clickable is a report that can be clicked.
+
+*Markdown is structural.* A pipe inside a table cell ends the cell and a newline
+ends the row, so an unescaped one silently shifts every column after it and the
+row reads as evidence it is not. A line-leading `#` or `4.` in a paragraph
+becomes a heading or item four. All of that is escaped — but Markdown is escaped
+so it reads correctly, not so it is safe to convert. When the output is going to
+be looked at in a browser, render HTML.
+
+*CSV is formula injection.* Excel and LibreOffice execute a cell that begins
+`=`, `+`, `-` or `@` when the file is opened, so a filename recovered from an
+image is code on the examiner's workstation. Such a cell is written with a
+leading apostrophe, which spreadsheets strip on display; a value that is simply
+a signed number is left alone, since a report whose numbers all gained an
+apostrophe is one nobody can sort. `{"formula_guard": false}` turns it off for
+output that will be parsed rather than opened.
+
+A CSV file holds one table, so `report_render(r, "csv")` on a report with
+several refuses until one is named with `{"table": 1}` or its caption, rather
+than stacking two different headers into a file no spreadsheet reads correctly.
+
+**A block nothing renders is an error, not a gap.** `report_render` validates
+the whole document before writing any of it and refuses by section and block
+index. A renderer that stepped over what it did not understand would hand back a
+report that looks complete and is missing a finding.
 
 ### Chain of custody
 

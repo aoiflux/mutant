@@ -175,6 +175,11 @@ var categorySections = []categorySection{
 		blurb:    "PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signature scanning, and Go-binary metadata recovery (GoReSym).",
 	},
 	{
+		category: "reporting",
+		heading:  "Reporting",
+		blurb:    "An investigation ends in a report, not a stdout dump. `report_new` starts one and `report_section`/`report_text`/`report_list`/`report_table` fill it in; the report itself is a plain hash, so it can be JSON-encoded, diffed against the last one, or written by hand, and every builder returns a new document rather than changing the one it was given. `report_render` writes it as HTML, Markdown or CSV. Nearly every string in a report came from the evidence, which is to say it was written by the subject of the investigation, so the model holds values and each format is escaped for the thing that actually goes wrong in it: HTML is the boundary, and never turns evidence text into a link; Markdown is escaped for structure, so a pipe in a filename cannot shift a table column; CSV guards the cells a spreadsheet would execute when the file is opened.",
+	},
+	{
 		category: "chain of custody",
 		heading:  "Chain of Custody",
 		blurb:    "A case session that records who opened what, when, with which build of the tool. `case_open(id, examiner)` starts it; from there every evidence opener records its source into the manifest and every builtin that reads through an evidence handle is counted against that source. `case_verify` re-measures the sources and reports drift; `case_write` seals the manifest with a SHA-256 over its own contents and an Ed25519 signature, and `case_manifest_verify` checks both from the file alone. Nothing is recorded until a case is opened, so a program that does not use this is unaffected by it. The read-only guarantee the manifest asserts is machine-checked: see [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md).",

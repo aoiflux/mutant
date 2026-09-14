@@ -445,6 +445,13 @@ const (
 	BuiltinNameTimesketchEvent = "timesketch_event"
 	BuiltinNameStixBundle      = "stix_bundle"
 	BuiltinNameStixPattern     = "stix_pattern"
+	// reporting
+	BuiltinNameReportNew     = "report_new"
+	BuiltinNameReportSection = "report_section"
+	BuiltinNameReportText    = "report_text"
+	BuiltinNameReportList    = "report_list"
+	BuiltinNameReportTable   = "report_table"
+	BuiltinNameReportRender  = "report_render"
 	// forensic: Windows artifacts
 	BuiltinNameLnkParse = "lnk_parse"
 	// forensic: real registry hive parsing (regf binary format)

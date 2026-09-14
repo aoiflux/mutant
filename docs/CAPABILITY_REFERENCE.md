@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **484 registered builtins** across **37 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **490 registered builtins** across **38 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -581,6 +581,19 @@ PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signat
 | `go_buildinfo(path: STRING) -> (HASH, ERROR)` | all | Extracts Go build info from a binary: go_version, module path, main module, dependencies (path/version/sum), and build settings (GOOS/GOARCH/vcs.*). Returns (info, err). |
 | `go_symbols(path: STRING, mode?: STRING) -> (HASH, ERROR)` | all | Recovers function symbols from a Go binary via the pclntab — works even on STRIPPED binaries. Returns {go_version, arch, os, pclntab_va, function_count, user_function_count, std_function_count, functions:[{name, package, start, end, stdlib}]}. mode is "all" (default), "user", or "std". Returns (result, err). |
 | `go_types(path: STRING) -> (HASH, ERROR)` | all | Recovers type and interface definitions from a Go binary via GoReSym typelink/itablink parsing, including reconstructed Go source for structs/interfaces where possible. Returns {go_version, type_count, itab_count, types:[{va, name, kind, reconstructed}], itabs:[...]}. Type recovery needs a parseable moduledata; GoReSym v1.7.1 supports it up to ~Go 1.24 and returns an honest error on newer toolchains. Returns (result, err). |
+
+## Reporting (6)
+
+An investigation ends in a report, not a stdout dump. `report_new` starts one and `report_section`/`report_text`/`report_list`/`report_table` fill it in; the report itself is a plain hash, so it can be JSON-encoded, diffed against the last one, or written by hand, and every builder returns a new document rather than changing the one it was given. `report_render` writes it as HTML, Markdown or CSV. Nearly every string in a report came from the evidence, which is to say it was written by the subject of the investigation, so the model holds values and each format is escaped for the thing that actually goes wrong in it: HTML is the boundary, and never turns evidence text into a link; Markdown is escaped for structure, so a pipe in a filename cannot shift a table column; CSV guards the cells a spreadsheet would execute when the file is opened.
+
+| Builtin | Platforms | Description |
+| --- | --- | --- |
+| `report_list(report: HASH, items: ARRAY, opts?: HASH) -> (HASH, ERROR)` | all | Adds a bulleted list, or a numbered one with {"ordered": true}. Items are scalars, rendered the way a CSV cell is, so a count that arrived as an INTEGER needs no conversion. Returns (report, err). |
+| `report_new(title: STRING, opts?: HASH) -> (HASH, ERROR)` | all | Starts a report. The report is a plain hash -- title, generated, and a sections array -- so it can be JSON-encoded, diffed against yesterday's, or written by hand; every builder here returns a new document rather than changing the one it was given. `generated` defaults to now and is the only field that cannot be derived from the document, so pinning it makes two renders of one investigation the same bytes. Returns (report, err). |
+| `report_render(report: HASH, format: STRING, opts?: HASH) -> (STRING, ERROR)` | all | Renders a report as "html", "markdown" or "csv". The whole document is validated first and a block nothing renders is an error naming its section and index, because a renderer that steps over what it does not understand produces a report that looks complete and is missing a finding. HTML is the format to hand to a person: every string is escaped, the stylesheet is inlined, there is no script, font or image, and evidence text is never turned into a link -- a report that makes the attacker's URL clickable is a report that can be clicked. Markdown is escaped for structure, so a pipe in a filename cannot shift a table column. CSV carries one table, and guards the cells a spreadsheet would execute. Returns (text, err). |
+| `report_section(report: HASH, heading: STRING, opts?: HASH) -> (HASH, ERROR)` | all | Opens a section. Everything added afterwards lands in it, until the next one. Returns (report, err). |
+| `report_table(report: HASH, rows: ARRAY, opts?: HASH) -> (HASH, ERROR)` | all | Adds a table. Rows arrive in either shape csv_stringify takes -- an array of arrays written positionally, or an array of hashes written against a column list -- and go through the same normalization, so a table in a report and the same table written straight to CSV cannot disagree about what a cell contains. A table with no rows and no columns is refused: pass `columns` to record that a search found nothing. Returns (report, err). |
+| `report_text(report: HASH, text: STRING) -> (HASH, ERROR)` | all | Adds a paragraph. Line breaks inside it survive every format. A paragraph written before the first report_section lands in a lead section that renders without a heading, because a report usually opens with a summary. Returns (report, err). |
 
 ## Chain of Custody (8)
 

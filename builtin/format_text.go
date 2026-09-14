@@ -306,7 +306,7 @@ func CsvStringify(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	records, defaultHeader, errObj := csvRecords(rows, columns, columnsGiven)
+	records, defaultHeader, errObj := csvRecords("csv_stringify", rows, columns, columnsGiven)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -335,7 +335,11 @@ func CsvStringify(args ...object.Object) object.Object {
 // csvRecords renders rows as CSV records and reports whether it prepended a
 // header. An array of arrays is written positionally and has no header; an
 // array of hashes is written against a column list and gets one.
-func csvRecords(rows *object.Array, columns []string, columnsGiven bool) ([][]string, bool, *object.Error) {
+//
+// Shared with report_table, so a table in a report and the same table written
+// straight to CSV cannot disagree about what a cell contains. It takes the
+// caller's name because its refusals point at a line of someone's program.
+func csvRecords(op string, rows *object.Array, columns []string, columnsGiven bool) ([][]string, bool, *object.Error) {
 	if len(rows.Elements) == 0 {
 		if columnsGiven {
 			return [][]string{columns}, true, nil
@@ -349,11 +353,11 @@ func csvRecords(rows *object.Array, columns []string, columnsGiven bool) ([][]st
 		for i, element := range rows.Elements {
 			row, ok := element.(*object.Array)
 			if !ok {
-				return nil, false, newError("csv_stringify: row 0 is an ARRAY but row %d is %s; a table cannot mix the two", i, element.Type())
+				return nil, false, newError("%s: row 0 is an ARRAY but row %d is %s; a table cannot mix the two", op, i, element.Type())
 			}
 			record := make([]string, 0, len(row.Elements))
 			for j, field := range row.Elements {
-				text, errObj := csvFieldText("csv_stringify", field, i, j)
+				text, errObj := csvFieldText(op, field, i, j)
 				if errObj != nil {
 					return nil, false, errObj
 				}
@@ -372,13 +376,13 @@ func csvRecords(rows *object.Array, columns []string, columnsGiven bool) ([][]st
 		for i, element := range rows.Elements {
 			row, ok := element.(*object.Hash)
 			if !ok {
-				return nil, false, newError("csv_stringify: row 0 is a HASH but row %d is %s; a table cannot mix the two", i, element.Type())
+				return nil, false, newError("%s: row 0 is a HASH but row %d is %s; a table cannot mix the two", op, i, element.Type())
 			}
 			lookup := make(map[string]object.Object, len(row.Pairs))
 			for _, pair := range row.Pairs {
 				key, errText := nativeKeyText(pair.Key)
 				if errText != nil {
-					return nil, false, newError("csv_stringify: row %d: %s", i, errText.Error())
+					return nil, false, newError("%s: row %d: %s", op, i, errText.Error())
 				}
 				lookup[key] = pair.Value
 			}
@@ -389,7 +393,7 @@ func csvRecords(rows *object.Array, columns []string, columnsGiven bool) ([][]st
 					record = append(record, "")
 					continue
 				}
-				text, errObj := csvFieldText("csv_stringify", value, i, j)
+				text, errObj := csvFieldText(op, value, i, j)
 				if errObj != nil {
 					return nil, false, errObj
 				}
@@ -400,7 +404,7 @@ func csvRecords(rows *object.Array, columns []string, columnsGiven bool) ([][]st
 		return records, true, nil
 
 	default:
-		return nil, false, newError("csv_stringify: rows must be ARRAYs or HASHes, got %s", rows.Elements[0].Type())
+		return nil, false, newError("%s: rows must be ARRAYs or HASHes, got %s", op, rows.Elements[0].Type())
 	}
 }
 
