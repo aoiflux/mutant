@@ -51,13 +51,33 @@ func newSessionFromBytecode(t *testing.T, bc *compiler.ByteCode, options DebugOp
 	}
 	t.Cleanup(dbg.Terminate)
 
-	dbg.Run()
+	// Attached, not started. Starting here would race every test that sets a
+	// breakpoint on the next line: the executor runs on its own goroutine and
+	// these programs finish in microseconds, so whether the breakpoint was
+	// armed in time came down to the scheduler. It surfaced as a stray
+	// `stopped for "exited", want "breakpoint"` under the load of a full test
+	// run, and passed every time the test was looked at on its own.
+	//
+	// The adapter has the same problem and answers it the same way: dap's
+	// session calls Run from onConfigurationDone, once the editor has sent
+	// every breakpoint it has. The first wait is this harness's
+	// configurationDone.
 	return &session{t: t, vm: machine, dbg: dbg}
 }
 
-// next waits for the session's next stop.
+// start runs the program. Run is idempotent, so every wait calls it and a
+// test only calls it directly when it needs the program moving before it waits
+// for anything.
+func (s *session) start() {
+	s.t.Helper()
+	s.dbg.Run()
+}
+
+// next waits for the session's next stop, starting the program if nothing has
+// yet -- see newSessionFromBytecode for why that does not happen at attach time.
 func (s *session) next() Stop {
 	s.t.Helper()
+	s.start()
 
 	select {
 	case stop, open := <-s.dbg.Events():
@@ -894,6 +914,12 @@ func TestAnOuterFrameCanBeInspected(t *testing.T) {
 // is a data race, and a debugger's wrong answer is worse than no answer.
 func TestReadingStateWhileRunningIsRefused(t *testing.T) {
 	s := newSession(t, "let a = 1;\na;\n", DebugOptions{})
+
+	// This one asks its question before it waits for anything, so it has to
+	// start the program itself. Whether the read lands mid-run or after the
+	// exit is the scheduler's business: the refusal is the same either way,
+	// and both are checked below.
+	s.start()
 
 	if _, err := s.dbg.Frames(); err == nil {
 		t.Error("the stack was read while the program was running")

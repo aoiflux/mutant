@@ -69,7 +69,11 @@ if (process.argv.includes("--check")) {
   // and for every change the version line does not move: a lint rule, a fix in
   // the parser. They lie after a fresh clone or a copied tree, which is why
   // they are the second question rather than the only one.
-  const newestSource = newestMTime(repoRoot, (name) => name.endsWith(".go"));
+  //
+  // Test files are excluded because no byte of one reaches a binary, and a
+  // gate that demands a rebuild after an edit no shipped artifact can see is a
+  // gate people learn to skip.
+  const newestSource = newestMTime(repoRoot, (name) => name.endsWith(".go") && !name.endsWith("_test.go"));
   const oldestBinary = oldestBinaryMTime();
   if (newestSource !== null && oldestBinary !== null && newestSource > oldestBinary) {
     console.error("LSP binaries are older than the module's Go sources. Rebuild with lsp/build.ps1 or lsp/build.sh.");
