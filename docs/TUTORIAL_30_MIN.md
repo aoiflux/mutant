@@ -36,7 +36,7 @@ That puts `mutant` on your `PATH`. Check it:
 
 ```bash
 $ mutant --version
-Version: 2.4.0
+Version: 2.5.0
 ```
 
 Now write a first program. Call it `hello.mut`:
