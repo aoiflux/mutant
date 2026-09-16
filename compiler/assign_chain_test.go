@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"mutant/code"
+	"mutant/object"
 )
 
 // A write through more than one container used to be emitted as a mutation of
@@ -117,5 +118,63 @@ func TestTheLastIndexMayHaveSideEffects(t *testing.T) {
 	const src = "let f = fn() { return 0; }; let a = [[1]]; let i = 0; a[i][f()] = 1;"
 	if err := compileErr(src); err != nil {
 		t.Errorf("refused %q: %s", src, err)
+	}
+}
+
+// The spill slot the compiler uses for the assigned value is storage, not a
+// variable. It holds a slot, so it reaches the name tables that feed the
+// debugger's variable view and the REPL's completion -- and it must arrive
+// there nameless, because nobody wrote it and nobody can refer to it.
+//
+// DefineInternal is what makes that true, by leaving Symbol.Name empty, which
+// is the existing contract for "a slot with nothing to show".
+func TestTheCompilersOwnSlotIsNotAVariable(t *testing.T) {
+	const src = `let counts = {"a": [0]};
+counts["a"][0] = 1;
+let probe = fn() {
+    let rows = [[1]];
+    rows[0][0] = 2;
+    return rows;
+};`
+
+	compiler := New()
+	if err := compiler.Compile(parse(src)); err != nil {
+		t.Fatalf("compile: %s", err)
+	}
+	bytecode := compiler.ByteCode()
+
+	for slot, name := range bytecode.GlobalNames {
+		if strings.HasPrefix(name, " ") {
+			t.Errorf("global slot %d is named %q: the compiler's own storage is showing up as a variable", slot, name)
+		}
+	}
+
+	// The named globals are still all there -- suppressing the temporary must
+	// not suppress the program's own bindings.
+	named := map[string]bool{}
+	for _, name := range bytecode.GlobalNames {
+		if name != "" {
+			named[name] = true
+		}
+	}
+	for _, want := range []string{"counts", "probe"} {
+		if !named[want] {
+			t.Errorf("global %q is missing from the name table: %q", want, bytecode.GlobalNames)
+		}
+	}
+
+	for _, constant := range bytecode.Constants {
+		function, ok := constant.(*object.CompiledFunction)
+		if !ok {
+			continue
+		}
+		for slot, name := range function.LocalNames {
+			if strings.HasPrefix(name, " ") {
+				t.Errorf("local slot %d is named %q inside a function", slot, name)
+			}
+		}
+		if len(function.LocalNames) != 0 && len(function.LocalNames) != function.NumLocals {
+			t.Errorf("LocalNames has %d entries for %d locals", len(function.LocalNames), function.NumLocals)
+		}
 	}
 }

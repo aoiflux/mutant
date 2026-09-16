@@ -78,39 +78,132 @@ func TestNonCapturingAccumulationParity(t *testing.T) {
 	}
 }
 
-// Two divergences this file found that Tier 1 deliberately does not settle.
-// They are recorded as tests rather than prose so they turn green on their own
-// the day someone fixes them, instead of living in a document nobody re-reads.
-
-// `arr[0] = 42` as a tail expression yields the assigned value in the evaluator
-// and the whole container in the VM.
+// An assignment evaluates to the value assigned.
 //
-// The VM is the odd one out against its own other two assignment forms:
-// identifier assignment reloads the variable and field assignment emits
-// OpGetField, so both yield the assigned value, and only index assignment
-// leaves what OpSetIndex happened to leave on the stack. Every language this
-// one resembles yields the value, and the existing operator-parity test already
-// pins `let i = 5; i += 1` as 6 rather than as the variable.
+// `arr[0] = 42` used to yield 42 in the evaluator and the whole container in
+// the VM, and the VM was the odd one out against its own other forms:
+// identifier assignment reloads the variable and field assignment emitted
+// OpGetField, so both answered with the value, and only index assignment
+// answered with whatever OpSetIndex had left on the stack.
 //
-// It is left alone because the cheap fix is not available: making the VM yield
-// the value means getting the value back on top after the container has been
-// stored, and the only ways there are a stack-shuffling opcode or recompiling
-// the index expression -- which would evaluate its side effects twice. Both are
-// larger than a scope switch, and which engine is right is a language decision
-// rather than a defect against a reference implementation.
-func TestIndexAssignmentValueParity(t *testing.T) {
-	t.Skip("known divergence: the VM yields the container, the evaluator the assigned value")
+// Which engine was right was never really open. Every language where assignment
+// is an expression -- C, C++, Java, C#, JavaScript, PHP, Perl, Ruby -- yields
+// the assigned value, and none yields the container; the other tradition makes
+// assignment a statement with no value at all. Ruby is the closest precedent,
+// because `a[0] = 42` there dispatches to a method and Ruby explicitly discards
+// that method's return value in favour of the right-hand side, for exactly the
+// reason this row exists: so indexed assignment cannot answer differently from
+// plain assignment.
+//
+// The old comment here said the fix was unavailable without a stack-shuffling
+// opcode or re-evaluating the index. There is a third way, which is what the
+// compiler now does: spill the value to a slot of its own where it was already
+// being compiled, and read it back after the stores. Nothing is re-evaluated,
+// no opcode was added, and the last index stays free to be a call.
+func TestAssignmentYieldsTheValueAssigned(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"let arr = [1, 2, 3]; arr[0] = 42", "INTEGER(42)"},
+		{`let h = {"k": 1}; h["k"] = 7`, "INTEGER(7)"},
+		{`let h = {"k": 1}; h["new"] = 7`, "INTEGER(7)"},
+		{"let n = 0; n = 5", "INTEGER(5)"},
+		{"let n = 5; n += 1", "INTEGER(6)"},
+		{"struct P { x; }; let p = P { x: 1 }; p.x = 9", "INTEGER(9)"},
+		// The shapes the write-back chain added. The value is the one the
+		// program wrote, not the container it landed in at any depth.
+		{"let g = [[1, 2]]; g[0][1] = 9", "INTEGER(9)"},
+		{`let h = {"a": {"b": 1}}; h["a"]["b"] = 2`, "INTEGER(2)"},
+		{"let d = [[[1]]]; d[0][0][0] = 5", "INTEGER(5)"},
+		{`let c = {"n": [10]}; c["n"][0] += 5`, "INTEGER(15)"},
+		{"struct I { v; }; struct O { i; }; let o = O { i: I { v: 1 } }; o.i.v = 42", "INTEGER(42)"},
+		// A value that is not a number, in case anything ever reads the
+		// container back instead of the value and gets away with it.
+		{`let arr = [1]; arr[0] = "z"`, `STRING("z")`},
+		{"let arr = [1]; arr[0] = [7]", "ARRAY([7])"},
+	}
 
-	const input = "let arr = [1, 2, 3]; arr[0] = 42"
+	for _, testCase := range cases {
+		evalRes := normalize(evalViaEvaluator(testCase.input))
+		vmObj, vmErr := evalViaVM(t, testCase.input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR: " + vmErr.Error()
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", testCase.input, evalRes, vmRes)
+		}
+		if vmRes != testCase.want {
+			t.Errorf("%q = %s, want %s", testCase.input, vmRes, testCase.want)
+		}
+	}
+}
+
+// An assignment nested inside another one keeps its own value.
+//
+// The compiler spills the value being assigned to a slot, and there is one such
+// slot per scope, so these are the shapes where the two could collide: an
+// assignment in the index of a target, in the value of another assignment, and
+// inside the fold of a compound one. They do not collide, because the spill is
+// written where the value expression was already being compiled and read with
+// nothing of the program's in between -- the inner assignment is always done
+// with the slot before the outer writes it. These rows are what says so.
+func TestAnAssignmentInsideAnotherKeepsItsOwnValue(t *testing.T) {
+	inputs := []string{
+		`let q = [0]; let r = [9, 9]; r[q[0] = 1] = 77; [q, r]`,
+		`let b = [0]; let a = [0]; let v = (a[0] = (b[0] = 5)); [v, a, b]`,
+		`let c = [1]; let d = [0]; let v = (c[0] += (d[0] = 5)); [v, c, d]`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR: " + vmErr.Error()
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+
+	const input = `let q = [0]; let r = [9, 9]; r[q[0] = 1] = 77; [q, r]`
 
 	evalRes := normalize(evalViaEvaluator(input))
 	vmObj, vmErr := evalViaVM(t, input)
 	vmRes := normalize(vmObj)
 	if vmErr != nil {
-		vmRes = "ERROR"
+		vmRes = "ERROR: " + vmErr.Error()
 	}
 	if evalRes != vmRes {
 		t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+	}
+	if want := "ARRAY([[1], [9, 77]])"; vmRes != want {
+		t.Errorf("%q = %s, want %s", input, vmRes, want)
+	}
+}
+
+// Spilling the value must not move it. A program's side effects run in the
+// order it wrote them: the container, then the index, then the value.
+func TestAssignmentEvaluatesItsPartsInSourceOrder(t *testing.T) {
+	const input = `let order = [];
+let note = fn(tag, n) { order = push(order, tag); return n; };
+let a = [7, 7];
+a[note("index", 0)] = note("value", 5);
+order`
+
+	evalRes := normalize(evalViaEvaluator(input))
+	vmObj, vmErr := evalViaVM(t, input)
+	vmRes := normalize(vmObj)
+	if vmErr != nil {
+		vmRes = "ERROR: " + vmErr.Error()
+	}
+	if evalRes != vmRes {
+		t.Errorf("engine divergence: evaluator=%s vm=%s", evalRes, vmRes)
+	}
+	if want := "ARRAY([index, value])"; vmRes != want {
+		t.Errorf("evaluation order = %s, want %s", vmRes, want)
 	}
 }
 
@@ -152,5 +245,36 @@ func TestNestedIndexAssignmentParity(t *testing.T) {
 		if evalRes != vmRes {
 			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
 		}
+	}
+}
+
+// A compound assignment reads its target before its right-hand side.
+//
+// The compiler desugars `x += v` to `x = x <op> v` and compiles that infix
+// expression left to right, so the target is read first. The evaluator folds
+// the two itself and could pick either order; it used to pick the other one.
+//
+// Both halves have to have a side effect for the order to be visible at all,
+// which is why the target's index is a call here: `a[note("idx")] += note("val")`
+// reads the index, reads it again as part of reading the target, and only then
+// evaluates the right-hand side.
+func TestCompoundAssignmentReadsItsTargetFirst(t *testing.T) {
+	const input = `let order = [];
+let note = fn(tag, n) { order = push(order, tag); return n; };
+let a = [1, 1];
+a[note("idx", 0)] += note("val", 5);
+[order, a]`
+
+	evalRes := normalize(evalViaEvaluator(input))
+	vmObj, vmErr := evalViaVM(t, input)
+	vmRes := normalize(vmObj)
+	if vmErr != nil {
+		vmRes = "ERROR: " + vmErr.Error()
+	}
+	if evalRes != vmRes {
+		t.Errorf("engine divergence: evaluator=%s vm=%s", evalRes, vmRes)
+	}
+	if want := "ARRAY([[idx, idx, val], [6, 1]])"; vmRes != want {
+		t.Errorf("compound assignment = %s, want %s", vmRes, want)
 	}
 }

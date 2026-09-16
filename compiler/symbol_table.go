@@ -122,6 +122,38 @@ func (st *SymbolTable) Define(name string) Symbol {
 	st.numDefinitions++
 	return symbol
 }
+
+// DefineInternal claims a slot the compiler needs and no source line can name.
+//
+// It is Define with an empty Symbol.Name, which is the existing contract for "a
+// slot with nothing to show": the debugger, the REPL's completion and the name
+// tables all read Symbol.Name, and a compiler temporary is not a variable anyone
+// wrote. key still has to be unique within the table, because the store is keyed
+// by it -- callers use a spelling no lexer will produce.
+func (st *SymbolTable) DefineInternal(key string) Symbol {
+	symbol := Symbol{Index: st.numDefinitions}
+	storeKey := key
+	if st.Outer == nil {
+		symbol.Scope = GlobalScope
+		storeKey = qualify(st.currentModule, key)
+	} else {
+		symbol.Scope = LocalScope
+	}
+	st.store[storeKey] = symbol
+	st.numDefinitions++
+	return symbol
+}
+
+// ResolveInternal finds a slot DefineInternal claimed, so one compilation scope
+// reuses its temporary rather than claiming a new slot per assignment.
+func (st *SymbolTable) ResolveInternal(key string) (Symbol, bool) {
+	storeKey := key
+	if st.Outer == nil {
+		storeKey = qualify(st.currentModule, key)
+	}
+	symbol, ok := st.store[storeKey]
+	return symbol, ok
+}
 func (st *SymbolTable) Resolve(name string) (Symbol, bool) {
 	obj, ok := st.own(name)
 
@@ -398,6 +430,13 @@ func slotNames(store map[string]Symbol, scope SymbolScope, count int) []string {
 	populated := false
 	for _, symbol := range store {
 		if symbol.Scope != scope || symbol.Index < 0 || symbol.Index >= count {
+			continue
+		}
+		// A nameless symbol is a compiler temporary (see DefineInternal). It
+		// holds a slot but answers to nothing, so it leaves its entry empty and
+		// does not on its own make the table worth reporting -- a function whose
+		// only slot is a temporary has no variables to show.
+		if symbol.Name == "" {
 			continue
 		}
 		names[symbol.Index] = symbol.Name

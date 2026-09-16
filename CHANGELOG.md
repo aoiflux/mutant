@@ -86,6 +86,32 @@ exhaustive lists.
   `assignmentTarget` lint rule whose answers are pinned against the compiler's
   so the two cannot drift.
 
+- **Index assignment evaluated to the container instead of the value assigned.**
+  `arr[0] = 42` answered with `[42, 2, 3]`, and `h["k"] = 7` with the whole hash,
+  while `x = 5`, `p.x = 9` and `x += 1` all answered with the value -- and so did
+  the evaluator, in every case. `let bound = arr[0] = 42` bound the array.
+
+  Every language where assignment is an expression yields the assigned value and
+  none yields the container, so this was an unfinished implementation rather than
+  a choice: index assignment simply left whatever `OpSetIndex` had put on the
+  stack. The compiler now spills the value to storage of its own, where the value
+  expression was already being compiled, and reads it back after the stores.
+  Nothing is re-evaluated, no opcode was added, and the last index stays free to
+  be a call -- `counts[etld1(url)] = 1` still compiles.
+
+  `TestIndexAssignmentValueParity` was skipped as a known divergence and is now
+  `TestAssignmentYieldsTheValueAssigned`, covering all five forms at three
+  depths.
+
+- **The two engines evaluated an assignment's parts in different orders.** The
+  compiler emits the container, then the index, then the value; the evaluator
+  read the value first, and folded a compound assignment's right-hand side
+  before its target. Invisible until both halves have side effects --
+  `a[note("index")] = note("value")` recorded them in opposite orders -- and it
+  reached real programs through macros, since the evaluator is what computes
+  `unquote(...)` at expansion time. The evaluator now follows source order.
+  Found by the test written for the change above.
+
 - **Twenty-one example programs were in no README.** Among them workshop step 6,
   a whole numbered lesson in a sequence the reader is told to follow in order.
   The ten filesystem format demos, the two `net_serve` server pairs and every

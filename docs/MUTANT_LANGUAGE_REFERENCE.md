@@ -669,6 +669,18 @@ The last index is compiled once and is free to be anything, including a call.
 The editor reports both refusals where they are written, under the
 `assignmentTarget` rule.
 
+**An assignment evaluates to the value assigned**, at any depth and through any
+target — the same answer `x = 1`, `p.x = 1` and `x += 1` give:
+
+```mutant
+let grid = [[1, 2]];
+let stored = (grid[0][1] = 9);   // 9, not [1, 9] and not [[1, 9]]
+```
+
+The parts of an assignment are evaluated in the order they are written: the
+container, then the index, then the value. A compound assignment reads its
+target before its right-hand side, because `x += v` is `x = x + v`.
+
 ### Macros (`macro`, `quote`, `unquote`)
 
 A macro is a template the compiler expands before it generates any code. It

@@ -655,27 +655,22 @@ func evalEnumStatement(node *ast.EnumStatement, env *object.Environment) object.
 	return NULL
 }
 
+// evalAssignExpression evaluates the target's parts before the value, because
+// that is the order they are written in and the order the compiler emits.
+//
+// It used to evaluate the value first, which nothing reveals until both sides
+// have side effects -- `a[note("index")] = note("value")` recorded them in
+// opposite orders in the two engines. That matters beyond tidiness: this
+// evaluator is what computes `unquote(...)` during macro expansion, so the same
+// line meant two different things depending on whether it was written inside a
+// macro or inline.
 func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) object.Object {
-	value := eval(node.Value, env)
-	if isError(value) {
-		return value
-	}
-
-	// Compound assignment (x += v, x++): fold the current value of the target
-	// with the right-hand side using the base operator before storing.
-	if node.Operator != "" {
-		current := eval(node.Left, env)
-		if isError(current) {
-			return current
-		}
-		value = evalInfixExpression(node.Operator, current, value)
+	// Handle simple identifier assignment: x = value
+	if ident, ok := node.Left.(*ast.Identifier); ok {
+		value := evalAssignedValue(node, env)
 		if isError(value) {
 			return value
 		}
-	}
-
-	// Handle simple identifier assignment: x = value
-	if ident, ok := node.Left.(*ast.Identifier); ok {
 		if _, updated := env.Update(ident.Value, value); !updated {
 			env.Set(ident.Value, value)
 		}
@@ -694,6 +689,11 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 		structObj, ok := obj.(*object.Struct)
 		if !ok {
 			return newError("cannot assign field on non-struct: %s", obj.Type())
+		}
+
+		value := evalAssignedValue(node, env)
+		if isError(value) {
+			return value
 		}
 
 		// Assign the field
@@ -716,6 +716,11 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 			return index
 		}
 
+		value := evalAssignedValue(node, env)
+		if isError(value) {
+			return value
+		}
+
 		if err := evalSetIndex(container, index, value); err != nil {
 			return err
 		}
@@ -723,6 +728,31 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	}
 
 	return newError("invalid assignment target")
+}
+
+// evalAssignedValue is what the assignment stores: the right-hand side, or, for
+// a compound assignment, the target's current value folded with it.
+//
+// The target is read before the right-hand side because the compiler desugars
+// `x += v` to `x = x <op> v` and then compiles that infix expression left to
+// right. Reading them the other way round is a divergence nothing catches until
+// both have side effects.
+func evalAssignedValue(node *ast.AssignExpression, env *object.Environment) object.Object {
+	if node.Operator == "" {
+		return eval(node.Value, env)
+	}
+
+	current := eval(node.Left, env)
+	if isError(current) {
+		return current
+	}
+
+	value := eval(node.Value, env)
+	if isError(value) {
+		return value
+	}
+
+	return evalInfixExpression(node.Operator, current, value)
 }
 
 // evalSetIndex stores value at index inside container, mirroring the VM's

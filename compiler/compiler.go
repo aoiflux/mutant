@@ -1424,17 +1424,30 @@ func boxCapturedLocals(ins code.Instructions, captured []int) {
 // enclosing frame can still read. Builtins and the enclosing function's own name
 // are not storage and never should have compiled; they are refused here.
 func (c *Compiler) emitAssignStore(symbol Symbol) error {
+	if err := c.emitStoreOnly(symbol); err != nil {
+		return err
+	}
+	// Reloading is what makes an assignment evaluate to the value assigned,
+	// which is what every other assignment form here does and what the
+	// evaluator does. loadSymbol reads back through exactly the storage
+	// emitStoreOnly wrote to, scope for scope.
+	c.loadSymbol(symbol)
+	return nil
+}
+
+// emitStoreOnly writes the value on top of the stack into symbol's storage and
+// leaves nothing behind. Callers that want the assignment to have a value say
+// so by reloading something afterwards.
+func (c *Compiler) emitStoreOnly(symbol Symbol) error {
 	switch symbol.Scope {
 	case GlobalScope:
 		c.emit(code.OpSetGlobal, symbol.Index)
-		c.emit(code.OpGetGlobal, symbol.Index)
 	case LocalScope:
 		// Rewritten to the cell forms by boxCapturedLocals if it turns out
 		// something captures this slot, which is not known yet: the capture is
 		// discovered when the inner literal is compiled, and that has not
 		// happened at the point this runs.
 		c.emit(code.OpSetLocal, symbol.Index)
-		c.emit(code.OpGetLocal, symbol.Index)
 	case FreeScope:
 		// The write goes through the shared cell, so the enclosing frame and
 		// every other closure over the same variable see it -- which is what
@@ -1448,7 +1461,6 @@ func (c *Compiler) emitAssignStore(symbol Symbol) error {
 			return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
 		}
 		c.emit(code.OpSetFree, symbol.Index)
-		c.emit(code.OpGetFree, symbol.Index)
 	case BuiltinScope:
 		return fmt.Errorf("cannot assign to builtin: %s", symbol.Name)
 	case FunctionScope:
@@ -1861,9 +1873,66 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 		}
 	}
 
-	return c.emitAssignChain(symbol, steps, len(steps), func() error {
-		return c.Compile(valueExpr)
-	})
+	// The value is compiled once, into a slot, and read back from there both as
+	// the innermost store's operand and as what the whole expression evaluates
+	// to. That is the only way the assigned value survives a chain: every store
+	// on the way out consumes three stack slots and leaves one, so the value the
+	// program wrote is gone by the time the outermost store finishes, and before
+	// that it sits underneath intermediate containers with nothing to reach it.
+	// Reading the target back instead would answer with what the container now
+	// holds rather than with what was assigned, and would force the last index
+	// to be re-evaluated -- so `counts[etld1(url)] = 1` would stop compiling.
+	//
+	// The spill happens where the value expression was already being compiled,
+	// so the order a program's side effects run in does not change: container,
+	// then index, then value, exactly as before.
+	spill := c.internalSlot("assign")
+	if err := c.emitAssignChain(symbol, steps, len(steps), func() error {
+		if err := c.Compile(valueExpr); err != nil {
+			return err
+		}
+		if err := c.emitStoreOnly(spill); err != nil {
+			return err
+		}
+		c.loadSymbol(spill)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// An assignment evaluates to the value assigned -- the same answer the
+	// evaluator gives, the same answer `x = 1`, `p.x = 1` and `x += 1` give
+	// here, and the same answer every language where assignment is an
+	// expression gives. Index assignment used to be the one exception, yielding
+	// whatever OpSetIndex happened to leave on the stack, which was the
+	// container.
+	c.loadSymbol(spill)
+	return nil
+}
+
+// internalSlot hands back the compiler's own storage for kind in the scope being
+// compiled, claiming it the first time it is asked for.
+//
+// One slot per scope is enough, and it is worth saying why, because the obvious
+// worry is an assignment nested inside another one -- `r[q[0] = 1] = 77`, or
+// `a[0] = (b[0] = 5)`. Nothing of the program's runs between this slot being
+// written and being read: the value is spilled where the value expression was
+// already being compiled, and everything between that point and the final read
+// is the chain's own stores. An inner assignment is therefore always finished
+// with the slot before an outer one writes it, and its result is already on the
+// stack. A slot per nesting depth was written first and removed: it guarded
+// against an ordering that spilling in source order had already ruled out, and
+// a safety mechanism nothing can make fail is one that only looks like safety.
+//
+// The key is spelled with a space so no source line can collide with it, and
+// DefineInternal leaves the symbol nameless so it stays out of the debugger and
+// the REPL's completion.
+func (c *Compiler) internalSlot(kind string) Symbol {
+	key := " " + kind
+	if symbol, ok := c.symbolTable.ResolveInternal(key); ok {
+		return symbol
+	}
+	return c.symbolTable.DefineInternal(key)
 }
 
 // assignStep is one hop of an assignment target: `[i]` or `.f`. Every target is
@@ -1965,15 +2034,9 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 		if err := store(); err != nil {
 			return err
 		}
-		if err := c.emitAssignStore(symbol); err != nil {
-			return err
-		}
-		// A field assignment evaluates to the field, the way it always has;
-		// an index assignment evaluates to the container.
-		if last.field != "" {
-			c.emit(code.OpGetField, c.addConstant(&object.String{Value: last.field}))
-		}
-		return nil
+		// Nothing is reloaded here: the chain leaves the stack as it found it,
+		// and the caller pushes the assigned value.
+		return c.emitStoreOnly(symbol)
 	}
 
 	return c.emitAssignChain(symbol, steps, depth-1, func() error {
