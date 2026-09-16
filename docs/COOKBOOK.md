@@ -24,10 +24,11 @@ through them in order:
 - `unallocated.bin` — ~6.8 KiB of random bytes with a PNG, a ZIP header, a PE
   header and a second PNG embedded at known offsets
 
-Two of the recipes read fixtures that ship with the repository, so you can run
+Three of the recipes read fixtures that ship with the repository, so you can run
 them unchanged: [`examples/data/autoruns_hive.json`](../examples/data/autoruns_hive.json)
-(recipe 7) and [`examples/data/phish.eml`](../examples/data/phish.eml)
-(recipe 9). Both are synthetic — no real host or mailbox data.
+(recipe 7), [`examples/data/phish.eml`](../examples/data/phish.eml) (recipe 9)
+and [`examples/data/browser_history.sqlite`](../examples/data/browser_history.sqlite)
+(recipe 15). All three are synthetic — no real host, mailbox or browsing data.
 
 Run each recipe the usual way — compile, then run:
 
@@ -219,6 +220,11 @@ carving. `matched` is the **number of rules** that hit, not a boolean.
 For structure rather than strings, `fs_carve(path, type)` scans for known
 artifact signatures and reports the offsets where they begin. It reports
 offsets only — it does not extract the artifact or work out its length.
+
+**Sigma, on the other hand, is real here.** Where YARA matches bytes and needs
+a C library to do it, a Sigma rule matches *fields on events* and needs nothing
+but YAML, so `sigma_parse_all` and `sigma_scan` run a ruleset over an
+`events_from` timeline directly — recipe 15, and [DETECTION_RULES.md](DETECTION_RULES.md).
 
 ---
 
@@ -834,15 +840,117 @@ as strings across platforms, normalise first.
 
 ---
 
+## 15. Run a Sigma ruleset over what you just parsed
+
+Recipe 13 built one timeline from several sources. A Sigma rule is the portable
+way to say what in it matters, and Mutant evaluates the rule rather than
+compiling it for someone else's SIEM.
+
+This one runs against a fixture that ships with the repository, so it runs
+unchanged: [`examples/data/browser_history.sqlite`](../examples/data/browser_history.sqlite).
+
+```mutant
+let hist, herr = browser_history("examples/data/browser_history.sqlite");
+if (herr) { putln("[error] browser_history:", herr); };
+
+let events, eerr = events_from(hist, "browser_history");
+if (eerr) { putln("[error] events_from:", eerr); };
+
+let ruleset = r"""
+title: Browsing to a High-Risk TLD
+id: 6c2a1f77-3b4d-4e11-9a80-2f5c1d33ab90
+detection:
+  selection:
+    url|contains:
+      - '.top/'
+      - '.win/'
+  condition: selection
+level: medium
+---
+title: Fake Software Update Download
+id: 1d7e4a02-55c9-4f3a-bb16-90d2e6c4f781
+detection:
+  selection:
+    url|re: 'update-[a-z]+\.(win|top)/'
+  extension:
+    url|endswith: '.exe'
+  condition: selection and extension
+level: high
+""";
+
+let rules, rerr = sigma_parse_all(ruleset);
+if (rerr) { putln("[error] sigma_parse_all:", rerr); };
+
+let report, serr = sigma_scan(rules, events);
+if (serr) { putln("[error] sigma_scan:", serr); };
+
+putf("%d hits from %d rules over %d events\n\n", report["matched"],
+     report["rules"], report["events"]);
+each(report["hits"], fn(h) {
+    putf("%-7s %-32s %s\n", h["level"], h["title"], h["event"]["extra"]["url"]);
+});
+
+putln("");
+putln("fields no event carried:", report["unmatched_fields"]);
+```
+
+```
+3 hits from 2 rules over 6 events
+
+medium  Browsing to a High-Risk TLD      https://cdn.malvert-delivery.top/loader.js
+medium  Browsing to a High-Risk TLD      https://update-flashplayer.win/download/setup.exe
+high    Fake Software Update Download    https://update-flashplayer.win/download/setup.exe
+
+fields no event carried: []
+```
+
+Three hits from two rules over six events: the fake-update URL trips both, which
+is what you want to see -- the low-confidence rule that says "this TLD is
+unusual" and the high-confidence one that says "and it handed you an
+executable".
+
+**Write inline rules in a raw triple-quoted string** (`r"""..."""`). A Sigma
+rule is full of backslashes and single quotes, and a raw block leaves both
+exactly as written.
+
+**The fields the rules read come out of `extra`.** A Sigma rule names fields in
+its source's taxonomy -- `Image`, `CommandLine`, `EventID` for Windows, `url`
+here -- and `events_from` keeps the parser's entry verbatim under `extra`, so
+the rule finds them with no mapping file in between. The same two rules run
+unchanged over `evtx_parse` output, or over a proxy log, as long as the field is
+called what the rule calls it.
+
+**Check `unmatched_fields` before you believe a zero.**
+
+```mutant
+if (len(report["unmatched_fields"]) > 0) {
+    putln("[warn] no event carried:", report["unmatched_fields"]);
+};
+```
+
+A ruleset pointed at an artifact that does not carry its fields returns zero
+hits and is perfectly correct about it. That zero is not a clean host; it is a
+ruleset that never ran, and `unmatched_fields` is the only thing that tells the
+two apart.
+
+**A rule this engine cannot evaluate fails at `sigma_parse`,** rather than
+loading and never firing. Aggregations (`| count()`), `near`, `timeframe`, rule
+collections and unknown modifiers are all errors that name themselves. If a
+ruleset will not load, that is the answer -- lift the aggregating rules out and
+write those detections in Mutant, where counting across events is what the
+language is for.
+
+---
+
 ## Where to go next
 
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
-- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 459 builtins,
+- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 497 builtins,
   with signatures and return shapes
 - **[MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md)** — syntax and
   semantics
 - **[Why Mutant, and when not to](COMPARISON.md)** — how this compares with
   plaso, Velociraptor, osquery and a YARA+Sigma pipeline
-- **`examples/`** — 104 runnable programs, including `examples/workshop/` for
+- **`examples/`** — 116 runnable programs, including `examples/workshop/` for
   guided exercises and `examples/forensics/supertimeline.mut` for a longer
   timeline build

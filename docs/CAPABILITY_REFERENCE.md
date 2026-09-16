@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **493 registered builtins** across **38 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **497 registered builtins** across **38 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -519,9 +519,9 @@ IOC handling: defang/refang, IP/CIDR math, domain/eTLD+1 extraction, validation,
 | `refang(ioc: STRING) -> STRING` | all | Reverses common defang encodings ([.]/(.)/[dot]->., hxxp->http, [at]->@). |
 | `tld_extract(domain: STRING) -> STRING\|HASH` | all | Returns {domain, etld1, suffix} using the public suffix list. |
 
-## Detection (5)
+## Detection (9)
 
-Heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation, and suspicious files, driven by supplied evidence.
+Two ways to decide that something is worth looking at. The `detect_*` builtins are heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation and suspicious files, driven by supplied evidence. The `sigma_*` builtins run real [Sigma](https://sigmahq.io) rules -- the portable YAML detection format -- over `events_from()` timelines: `sigma_parse` and `sigma_parse_all` compile a rule or a whole ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a ruleset over a timeline. A rule this engine cannot evaluate is a compile error rather than a silent non-match, and both `sigma_match` and `sigma_scan` report the fields a rule read that the evidence never carried -- a rule that could not have fired is not a host that came back clean. See [DETECTION_RULES.md](DETECTION_RULES.md).
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
@@ -530,6 +530,10 @@ Heuristic detectors for code injection, C2 beaconing, persistence, privilege esc
 | `detect_persistence(facts: HASH) -> (HASH, ERROR)` | all | Detects persistence indicators from host evidence facts. |
 | `detect_priv_esc(facts: HASH) -> (HASH, ERROR)` | all | Detects potential privilege-escalation indicators from host facts. |
 | `detect_suspicious_files(paths: ARRAY) -> (HASH, ERROR)` | all | Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe). |
+| `sigma_match(rule: STRING\|HASH, event: HASH) -> (HASH, ERROR)` | all | Asks one rule about one event. A field named in the rule is looked up on the event and then inside `extra`, where events_from() keeps the source entry verbatim, so a rule written in a source's own taxonomy -- Image, CommandLine, EventID -- runs against a normalized Mutant event with no field-mapping file in between. String comparison is case-insensitive unless \|cased, values carry Sigma's * and ? wildcards, and a field holding a list matches when any element does. `fields_missing` names the fields the rule read and this event did not carry: a rule that did not match because the field was never there is a different answer from a rule that looked and disagreed, and only one of them means clean. Accepts the rule as YAML text or as a sigma_parse hash; the hash is recompiled on every call, which is the cost sigma_scan exists to avoid. Returns (result, err). |
+| `sigma_parse(rule: STRING\|BYTES) -> (HASH, ERROR)` | all | Compiles one Sigma detection rule from YAML. The rule is validated rather than accepted: a condition naming a search identifier the detection block does not define, an `all of filter*` that matches no identifier, a modifier this engine does not implement, a rule collection, `timeframe`, `near` and aggregation pipes are all errors. That is deliberate -- a rule this engine cannot evaluate has to fail where you can see it, because a detection that silently never fires reads as coverage on a report and is a blind spot in the evidence. Supported value modifiers: contains, startswith, endswith, all, cased, re (with i/m/s), base64, base64offset, utf16/utf16le/utf16be/wide, windash, cidr, lt/lte/gt/gte, exists, fieldref. The returned hash carries the detection block verbatim, so it is a rule and not a description of one: sigma_match and sigma_scan take it straight back. Returns (rule, err). |
+| `sigma_parse_all(ruleset: STRING\|BYTES) -> ([]HASH, ERROR)` | all | Compiles every rule in a multi-document YAML ruleset, which is the shape a Sigma ruleset ships in. One rule that does not compile fails the call rather than being dropped quietly: a ruleset that loads 43 of its 44 rules is a ruleset you believe covers something it does not. Returns (rules, err). |
+| `sigma_scan(rules: STRING\|HASH\|ARRAY, events: ARRAY\|HASH) -> (HASH, ERROR)` | all | Runs a ruleset over a timeline, compiling each rule once and then walking the events. Every hit records which rule fired, which of its searches held, and the event itself, so a hit is reviewable without a second lookup. `unmatched_fields` names the fields no event in the whole scan carried, which is the honest answer to whether the ruleset had anything to look at: a rule reading Image against a timeline that has no Image field did not clear the host, it never ran. Returns (report, err). |
 
 ## Process Forensics (9)
 

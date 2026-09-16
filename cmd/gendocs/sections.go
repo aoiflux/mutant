@@ -157,7 +157,7 @@ var categorySections = []categorySection{
 	{
 		category: "detection",
 		heading:  "Detection",
-		blurb:    "Heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation, and suspicious files, driven by supplied evidence.",
+		blurb:    "Two ways to decide that something is worth looking at. The `detect_*` builtins are heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation and suspicious files, driven by supplied evidence. The `sigma_*` builtins run real [Sigma](https://sigmahq.io) rules -- the portable YAML detection format -- over `events_from()` timelines: `sigma_parse` and `sigma_parse_all` compile a rule or a whole ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a ruleset over a timeline. A rule this engine cannot evaluate is a compile error rather than a silent non-match, and both `sigma_match` and `sigma_scan` report the fields a rule read that the evidence never carried -- a rule that could not have fired is not a host that came back clean. See [DETECTION_RULES.md](DETECTION_RULES.md).",
 	},
 	{
 		category: "process forensics",

@@ -11,8 +11,8 @@ Mutant does not.
 
 ## What Mutant actually is
 
-A programming language and toolchain for security and forensic work. 459
-builtins across 33 categories — filesystem and disk-image parsers, registry and
+A programming language and toolchain for security and forensic work. 497
+builtins across 38 categories — filesystem and disk-image parsers, registry and
 Windows artifacts, binary analysis, memory, network, email, crypto, timelines
 — in a language with functions, closures, structs, enums, macros and
 concurrency. Pure Go, no cgo, cross-compiles to `darwin`, `linux` and `windows`
@@ -132,7 +132,19 @@ answer — it is reviewable, shareable, and the ecosystem does half your work.
 you give it, case-sensitively or not. No conditions, no wildcards, no modules,
 no rule syntax. A real YARA engine requires cgo, and this project's hard
 constraint is that everything builds under `CGO_ENABLED=0`. If you need YARA,
-use YARA. There is no Sigma support at all.
+use YARA.
+
+**Sigma is a different answer, because it is a different problem.** A Sigma rule
+is YAML and a matching model, neither of which needs a C library, so Mutant
+evaluates Sigma rules directly: `sigma_parse`, `sigma_parse_all`, `sigma_match`
+and `sigma_scan` run a rule or a ruleset over an `events_from` timeline. Fields
+are looked up on the event and then inside `extra`, where the parser's entry is
+kept verbatim, so a rule written in a source's own taxonomy runs with no
+field-mapping configuration in between. What is *not* supported is anything that
+counts or correlates across events — aggregations, `near`, `timeframe` — along
+with rule collections and the backend-specific `|expand`; each of those is a
+compile error naming itself rather than a rule that quietly never fires. See
+[DETECTION_RULES.md](DETECTION_RULES.md).
 
 **Where Mutant fits alongside them: everything around the match.** Rules tell
 you *that* something matched. The work of getting the bytes in front of the
@@ -154,8 +166,9 @@ advertising.
 - **You need maximum artifact coverage on a full-disk timeline.** plaso parses
   more formats. Use plaso, and pull its output into Mutant if you want the
   analysis in one language.
-- **You need real YARA rules or Sigma.** Neither is supported, and the cgo
-  constraint means YARA is not coming.
+- **You need real YARA rules.** Not supported, and the cgo constraint means it
+  is not coming. (Sigma is supported — see above — except for rules that
+  aggregate or correlate across events.)
 - **You need continuous live-state monitoring.** That is osquery's job.
 - **You need a large ecosystem, or the guarantee it implies.** One maintainer,
   no formal governance, a small community, and no rule corpus to draw on. A
@@ -197,7 +210,7 @@ program.
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
 - **[Cookbook](COOKBOOK.md)** — fourteen complete programs, organised by
   investigation
-- **[Capability Reference](CAPABILITY_REFERENCE.md)** — all 459 builtins with
+- **[Capability Reference](CAPABILITY_REFERENCE.md)** — all 497 builtins with
   signatures and return shapes; read this before deciding coverage is enough
 - **[Security model](SECURITY_LLD.md)** — what the signing, encryption, tamper
   detection and mutation actually promise, and what they do not

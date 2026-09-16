@@ -1909,6 +1909,26 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
 		params:    []builtinParamDoc{param("paths", "Array of filesystem paths to inspect.", ParamArray)},
 		returns:   pairRet("the files flagged, and why each was flagged", ParamHash)},
+	BuiltinNameSigmaParse: {
+		signature: "sigma_parse(rule)",
+		summary:   "Compiles one Sigma detection rule from YAML. The rule is validated rather than accepted: a condition naming a search identifier the detection block does not define, an `all of filter*` that matches no identifier, a modifier this engine does not implement, a rule collection, `timeframe`, `near` and aggregation pipes are all errors. That is deliberate -- a rule this engine cannot evaluate has to fail where you can see it, because a detection that silently never fires reads as coverage on a report and is a blind spot in the evidence. Supported value modifiers: contains, startswith, endswith, all, cased, re (with i/m/s), base64, base64offset, utf16/utf16le/utf16be/wide, windash, cidr, lt/lte/gt/gte, exists, fieldref. The returned hash carries the detection block verbatim, so it is a rule and not a description of one: sigma_match and sigma_scan take it straight back. Returns (rule, err).",
+		params:    []builtinParamDoc{param("rule", "One Sigma rule as YAML text.", ParamString, ParamBytes)},
+		returns:   pairRet("the compiled rule, with the fields it reads and the search identifiers it defines", ParamHash).withFields("author", "condition", "description", "detection", "falsepositives", "fields", "id", "level", "logsource", "references", "searches", "status", "tags", "title")},
+	BuiltinNameSigmaParseAll: {
+		signature: "sigma_parse_all(ruleset)",
+		summary:   "Compiles every rule in a multi-document YAML ruleset, which is the shape a Sigma ruleset ships in. One rule that does not compile fails the call rather than being dropped quietly: a ruleset that loads 43 of its 44 rules is a ruleset you believe covers something it does not. Returns (rules, err).",
+		params:    []builtinParamDoc{param("ruleset", "A multi-document YAML ruleset.", ParamString, ParamBytes)},
+		returns:   pairRet("one compiled rule per document, in file order", ParamArray).ofElem(ParamHash).withFields("author", "condition", "description", "detection", "falsepositives", "fields", "id", "level", "logsource", "references", "searches", "status", "tags", "title")},
+	BuiltinNameSigmaMatch: {
+		signature: "sigma_match(rule, event)",
+		summary:   "Asks one rule about one event. A field named in the rule is looked up on the event and then inside `extra`, where events_from() keeps the source entry verbatim, so a rule written in a source's own taxonomy -- Image, CommandLine, EventID -- runs against a normalized Mutant event with no field-mapping file in between. String comparison is case-insensitive unless |cased, values carry Sigma's * and ? wildcards, and a field holding a list matches when any element does. `fields_missing` names the fields the rule read and this event did not carry: a rule that did not match because the field was never there is a different answer from a rule that looked and disagreed, and only one of them means clean. Accepts the rule as YAML text or as a sigma_parse hash; the hash is recompiled on every call, which is the cost sigma_scan exists to avoid. Returns (result, err).",
+		params:    []builtinParamDoc{param("rule", "A Sigma rule as YAML text, or the hash sigma_parse returned.", ParamString, ParamHash), param("event", "One event -- an events_from() event, or any hash.", ParamHash)},
+		returns:   pairRet("whether the rule matched, which searches held, and what it could not find", ParamHash).withFields("condition", "fields_missing", "fields_read", "id", "level", "matched", "searches", "tags", "title")},
+	BuiltinNameSigmaScan: {
+		signature: "sigma_scan(rules, events)",
+		summary:   "Runs a ruleset over a timeline, compiling each rule once and then walking the events. Every hit records which rule fired, which of its searches held, and the event itself, so a hit is reviewable without a second lookup. `unmatched_fields` names the fields no event in the whole scan carried, which is the honest answer to whether the ruleset had anything to look at: a rule reading Image against a timeline that has no Image field did not clear the host, it never ran. Returns (report, err).",
+		params:    []builtinParamDoc{param("rules", "A ruleset as YAML text, a sigma_parse hash, or an array of either.", ParamString, ParamHash, ParamArray), param("events", "An events_from() timeline, or a single event.", ParamArray, ParamHash)},
+		returns:   pairRet("what matched, counted per level and per rule", ParamHash).withFields("by_level", "by_rule", "events", "hits", "matched", "rules", "unmatched_fields")},
 	BuiltinNameNetResolve:    {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses.", returns: pairRet("the addresses the host resolves to", ParamArray).ofElem(ParamString), params: []builtinParamDoc{param("host", "Host name to resolve.", ParamString)}},
 	BuiltinNameNetDial:       {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{param("address", "host:port endpoint.", ParamString), param("timeoutMs", "Dial timeout in ms.", ParamInt)}, returns: pairRet("whether the address answered, and how long it took", ParamHash).withFields("error", "latency_ms", "ok")},
 	BuiltinNameDbOpen:        {signature: "db_open()", summary: "Creates an in-memory graph database handle.", returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
@@ -2615,6 +2635,7 @@ var capabilityCategories = []capabilityCategory{
 	{"email_", "email forensics"},
 	// detection
 	{"detect_", "detection"},
+	{"sigma_", "detection"},
 	// windows execution artifacts
 	{"prefetch_", "windows artifacts"},
 	{"evtx_", "windows artifacts"},

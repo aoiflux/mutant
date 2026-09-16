@@ -206,6 +206,10 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameDetectNetworkBeacon, &BuiltIn{DetectNetworkBeacon}},
 	{BuiltinNameDetectPrivEsc, &BuiltIn{DetectPrivEsc}},
 	{BuiltinNameDetectSuspiciousFiles, &BuiltIn{DetectSuspiciousFiles}},
+	{BuiltinNameSigmaParse, &BuiltIn{SigmaParse}},
+	{BuiltinNameSigmaParseAll, &BuiltIn{SigmaParseAll}},
+	{BuiltinNameSigmaMatch, &BuiltIn{SigmaMatch}},
+	{BuiltinNameSigmaScan, &BuiltIn{SigmaScan}},
 	// http
 	{BuiltinNameHttpGet, &BuiltIn{HttpGet}},
 	{BuiltinNameHttpPost, &BuiltIn{HttpPost}},

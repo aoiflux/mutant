@@ -375,7 +375,7 @@ hash with `"ok": false` rather than dropping out entirely is the idiom worth
 copying — a triage tool that silently skips a file is worse than one that says
 it failed.
 
-The whole forensic standard library is reached this way: 469 builtins across 35
+The whole forensic standard library is reached this way: 497 builtins across 38
 categories, catalogued in the [Capability Reference](CAPABILITY_REFERENCE.md).
 `fs_*` for files, `bin_*` for PE/ELF/Mach-O, `reg_*` for registry hives, `mft_*`
 and the filesystem parsers for disk images, `evtx_*` and `prefetch_*` for
@@ -522,7 +522,7 @@ $ printf '%s' "$SECRET" | mutant gen --src triage.mut --password-stdin
 - **[Language reference](MUTANT_LANGUAGE_REFERENCE.md)** — structs, enums,
   macros, concurrency (`spawn`, channels, `pmap`), and the `bytes` type for
   binary data.
-- **[`examples/`](../examples/)** — 104 runnable programs grouped by subject.
+- **[`examples/`](../examples/)** — 116 runnable programs grouped by subject.
   `examples/workshop/` is the closest thing to a continuation of this tutorial.
 - **[What is Mutant?](WHAT_IS_MUTANT.md)** — why the language exists and what it
   is for.

@@ -13,7 +13,66 @@ exhaustive lists.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Sigma rules, evaluated here.** Four builtins in the `detection` category:
+  `sigma_parse` and `sigma_parse_all` compile a rule or a multi-document
+  ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a
+  ruleset over an `events_from` timeline, compiling each rule once.
+
+  Supported: search identifiers as mappings, lists of mappings or keyword lists;
+  `and`/`or`/`not`, parentheses and the `all of`/`N of`/`any of` quantifiers over
+  `them` and over identifier patterns; and the value modifiers `contains`,
+  `startswith`, `endswith`, `all`, `cased`, `re` (with `i`/`m`/`s`), `base64`,
+  `base64offset`, `utf16`/`utf16le`/`utf16be`/`wide`, `windash`, `cidr`,
+  `lt`/`lte`/`gt`/`gte`, `exists` and `fieldref`, with Sigma's `*` and `?`
+  wildcards and its case-insensitive default.
+
+  This is possible where a YARA engine is not, and the difference is worth
+  stating: YARA needs libyara, libyara needs cgo, and everything here builds
+  under `CGO_ENABLED=0`. A Sigma rule is YAML and a matching model, and the two
+  things it needed already existed -- `yaml_parse_all`, because a ruleset is a
+  multi-document YAML file, and `events_from`, because a rule needs something
+  uniform to match against.
+
+  Field names are looked up on the event and then inside `extra`, where
+  `events_from` keeps the parser's entry verbatim, so a rule written in a
+  source's own taxonomy runs against a normalized Mutant event with no
+  field-mapping configuration in between.
+
+  **A rule this engine cannot evaluate is a compile error, never a silent
+  non-match.** Aggregations, `near`, `timeframe`, rule collections, `|expand`
+  and unknown modifiers are all refused by name, as are a condition naming an
+  undefined search identifier and an `all of filter*` that matches none. A rule
+  that quietly never fires counts toward coverage and finds nothing, and nobody
+  goes looking for it. For the same reason `sigma_parse_all` fails the whole
+  ruleset when one rule in it does not compile.
+
+  `sigma_match` and `sigma_scan` also report the fields a rule read that the
+  evidence never carried -- `fields_missing` and `unmatched_fields`. A ruleset
+  pointed at an artifact without its fields returns zero hits and is correct
+  about it, and that zero is a rule that never ran rather than a clean host.
+
+  See [DETECTION_RULES.md](docs/DETECTION_RULES.md),
+  `examples/detection/sigma_rules.mut` and cookbook recipe 15.
+  `docs/COMPARISON.md` said "there is no Sigma support at all"; it no longer
+  does, and it still says what a rule engine is better at.
+
+### Fixed
+
+- **Four documents described a standard library three releases old.**
+  `WHAT_IS_MUTANT.md`, `WASM_REPL_REFERENCE.md` and `COMPARISON.md` each said
+  459 builtins, `TUTORIAL_30_MIN.md` said 469, against 497; the category counts
+  (33, 34, 35) were all wrong too, and two documents undercounted `examples/` by
+  twelve programs. Corrected, and gated: `TestProseCountsMatchTheRegistry` and
+  `TestProseExampleCountsMatchTheTree` in `cmd/gendocs` now fail when a document
+  claims a number the registry or the tree does not support.
+
+  This is ED-1's defect in a different file type -- a hand-written claim about
+  the registry with nothing that fails when the registry moves -- so it gets
+  ED-1's answer. Counts in `CHANGELOG.md`, `CONTRIBUTING.md` and the roadmap are
+  deliberately outside the gate: those record what was true at a past release,
+  and correcting history would be the untruth.
 
 ## [2.5.0] — 2026-09-14
 
