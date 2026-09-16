@@ -28,7 +28,59 @@ func writeTestImage(t *testing.T, name string, size int) (string, string) {
 	}
 
 	sum := sha256.Sum256(payload)
-	return path, hex.EncodeToString(sum[:])
+
+	// Returned as custody will record it, not as the test typed it. Windows
+	// hands back an 8.3 short path for a TEMP under a username longer than
+	// eight characters -- `C:\Users\RUNNER~1\...` -- and custodyResolvePath
+	// expands it, so a test comparing against the spelling it passed in failed
+	// on exactly that kind of host and passed on every other one. The two
+	// spellings naming one file is the point, and
+	// TestTwoSpellingsOfOneFileAreOneEvidenceEntry is what pins it.
+	return custodyResolvePath(path), hex.EncodeToString(sum[:])
+}
+
+// The manifest keys evidence on the resolved path, so a file reached by two
+// names is one exhibit rather than two. Nothing pinned that until a Windows
+// runner found it the hard way: a short path and a long path for one file were
+// the same file, and a test that assumed otherwise failed there and nowhere
+// else.
+func TestTwoSpellingsOfOneFileAreOneEvidenceEntry(t *testing.T) {
+	useTestKeyStore(t)
+
+	direct, _ := writeTestImage(t, "carved.bin", 1024)
+	openTestCase(t, "IR-2", "examiner", makeHashObject(map[string]object.Object{
+		"hash": stringObj("none"),
+	}))
+
+	// A second spelling of the same file: down into a real directory and back
+	// out. A traversal rather than a symlink, because creating a symlink on
+	// Windows needs a privilege the test cannot assume it has -- and the
+	// directory is really created, so filepath.EvalSymlinks resolves the path
+	// rather than failing and handing the work to the Abs fallback. Built by
+	// concatenation because filepath.Join cleans the "sub/.." straight back out.
+	dir := filepath.Dir(direct)
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatalf("creating the directory to traverse: %v", err)
+	}
+	sep := string(filepath.Separator)
+	indirect := dir + sep + "sub" + sep + ".." + sep + filepath.Base(direct)
+	if indirect == direct {
+		t.Fatalf("the two spellings came out identical: %q", direct)
+	}
+
+	for _, spelling := range []string{direct, indirect} {
+		if _, errObj := unwrapPair(t, CaseEvidence(stringObj(spelling))); errObj != nil {
+			t.Fatalf("case_evidence(%q) failed: %s", spelling, errObj.Message)
+		}
+	}
+
+	entries := evidenceEntries(t, currentManifest(t))
+	if len(entries) != 1 {
+		t.Fatalf("two names for one file made %d evidence entries, want 1", len(entries))
+	}
+	if got := mustHashStringValue(t, entries[0], "path"); got != direct {
+		t.Fatalf("the entry records %q, want the resolved %q", got, direct)
+	}
 }
 
 func evidenceEntries(t *testing.T, manifest *object.Hash) []*object.Hash {

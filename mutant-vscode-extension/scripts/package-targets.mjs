@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Builds one platform-specific .vsix per target. Staging runs here, once per
 // target, rather than inside vscode:prepublish -- a prepublish hook cannot be
@@ -29,11 +31,30 @@ mkdirSync("dist", { recursive: true });
 console.log("=== Checking staged LSP binaries against the sources ===");
 execSync("node ./scripts/stage-lsp-binaries.mjs --check", { stdio: "inherit" });
 
+const packaged = [];
 for (const target of targets) {
-  const out = `dist/mutant-language-tools-${target}-${version}.vsix`;
+  const name = `mutant-language-tools-${target}-${version}.vsix`;
+  const out = `dist/${name}`;
   console.log(`\n=== Packaging ${target} -> ${out} ===`);
   execSync(`node ./scripts/stage-lsp-binaries.mjs --target ${target}`, { stdio: "inherit" });
   execSync(`npx @vscode/vsce package --target ${target} -o ${out}`, { stdio: "inherit" });
+  packaged.push(name);
 }
 
+// SHA256SUMS in the format `sha256sum -c` reads, so someone who downloads a
+// VSIX from a release page can verify it with a tool they already have. Bare
+// names and LF endings: it sits in dist/ beside what it covers, and the reader
+// is as likely to be Linux as Windows. Sorted, so the same build writes the
+// same file.
+const sums = packaged
+  .slice()
+  .sort()
+  .map((name) => {
+    const digest = createHash("sha256").update(readFileSync(join("dist", name))).digest("hex");
+    return `${digest}  ${name}`;
+  })
+  .join("\n");
+writeFileSync(join("dist", "SHA256SUMS"), sums + "\n");
+
 console.log(`\nPackaged ${targets.length} platform VSIXs into dist/.`);
+console.log("Wrote dist/SHA256SUMS -- verify with: cd dist && sha256sum -c SHA256SUMS");

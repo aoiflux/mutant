@@ -27,6 +27,9 @@ Options:
   --output-dir <dir>  Output directory for binaries (default: dist)
   --final-name <name> Final binary name prefix (default: mlsp)
   --host-only         Build only GOHOSTOS/GOHOSTARCH target
+
+Writes a SHA256SUMS beside the binaries, checkable with
+`cd <dir> && sha256sum -c SHA256SUMS`.
 EOF
       exit 0
       ;;
@@ -157,6 +160,67 @@ if [[ "$HOST_ONLY" -eq 1 ]]; then
   TARGETS=("${FILTERED[@]}")
 fi
 
+# SHA256SUMS is written in the format `sha256sum -c` reads, so whoever downloads
+# a binary can verify it with a tool they already have and nothing from this
+# project: lowercase hex, two spaces, the file's bare name. Names are bare and
+# the file sits beside what it covers, so checking is `cd <dir> && sha256sum -c
+# SHA256SUMS` -- which also means a directory the build writes elsewhere gets its
+# own SHA256SUMS rather than a path reaching out of this one.
+sha256_of() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$file" | cut -d' ' -f1
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -- "$file" | cut -d' ' -f1
+    return
+  fi
+
+  # Windows without the coreutils that ship with Git for Windows.
+  if command -v powershell.exe >/dev/null 2>&1; then
+    local win="$file"
+    if command -v cygpath >/dev/null 2>&1; then
+      win="$(cygpath -w -- "$file")"
+    fi
+    win="${win//\'/\'\'}"
+    powershell.exe -NoProfile -Command \
+      "(Get-FileHash -Algorithm SHA256 -LiteralPath '$win').Hash.ToLower()" | tr -d '\r'
+    return
+  fi
+
+  echo "No SHA-256 tool found. Install coreutils (sha256sum), or run this on a host with shasum or PowerShell." >&2
+  return 1
+}
+
+# write_checksums <dir> <name>... -- sorted under LC_ALL=C so the same build
+# writes the same file, and refusing rather than recording a hash of nothing if
+# a name is missing.
+write_checksums() {
+  local dir="$1"
+  shift
+
+  local sums="$dir/SHA256SUMS"
+  local tmp="$sums.tmp"
+  : >"$tmp"
+
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ ! -f "$dir/$name" ]]; then
+      rm -f -- "$tmp"
+      echo "Cannot checksum a file the build did not produce: $dir/$name" >&2
+      return 1
+    fi
+    printf '%s  %s\n' "$(sha256_of "$dir/$name")" "$name" >>"$tmp"
+  done < <(printf '%s\n' "$@" | LC_ALL=C sort)
+
+  mv -f -- "$tmp" "$sums"
+  echo "    checksums: $sums"
+}
+
 mkdir -p "$OUTPUT_PATH"
 cd "$LSP_ROOT"
 
@@ -166,20 +230,26 @@ OLD_GOARCH="${GOARCH-}"
 
 export CGO_ENABLED=0
 
+BINARY_NAMES=()
 for target in "${TARGETS[@]}"; do
   read -r T_GOOS T_GOARCH T_EXE_SUFFIX <<<"$target"
 
   export GOOS="$T_GOOS"
   export GOARCH="$T_GOARCH"
 
-  FINAL_BIN="$OUTPUT_PATH/$FINAL_NAME-$T_GOOS-$T_GOARCH$T_EXE_SUFFIX"
+  BINARY_NAME="$FINAL_NAME-$T_GOOS-$T_GOARCH$T_EXE_SUFFIX"
+  FINAL_BIN="$OUTPUT_PATH/$BINARY_NAME"
   echo "Building $T_GOOS/$T_GOARCH -> $FINAL_BIN"
   run_tool "$GO_BIN" build "${GO_BUILD_FLAGS[@]}" -o "$FINAL_BIN" "$MAIN_PACKAGE"
+  BINARY_NAMES+=("$BINARY_NAME")
 done
 
 export CGO_ENABLED="$OLD_CGO_ENABLED"
 export GOOS="$OLD_GOOS"
 export GOARCH="$OLD_GOARCH"
 
+write_checksums "$OUTPUT_PATH" "${BINARY_NAMES[@]}"
+
 echo "LSP build complete."
 echo "  Output directory: $OUTPUT_PATH"
+echo "  Verify with: cd \"$OUTPUT_PATH\" && sha256sum -c SHA256SUMS"

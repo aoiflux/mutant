@@ -58,7 +58,62 @@ exhaustive lists.
   `docs/COMPARISON.md` said "there is no Sigma support at all"; it no longer
   does, and it still says what a rule engine is better at.
 
+- **Every build script writes a `SHA256SUMS` beside what it produced.**
+  `scripts/build.sh` and `scripts/build.ps1` write one next to the six binaries
+  and another next to the wasm REPL artifacts; `lsp/build.sh` and
+  `lsp/build.ps1` write one next to the six language servers; both VS Code
+  packaging wrappers write one next to the vsix, and `npm run package` writes
+  one covering all six per-platform vsix files.
+
+  It is the format `sha256sum -c` reads -- lowercase hex, two spaces, the
+  file's bare name -- so someone who downloads a binary verifies it with a tool
+  they already have and nothing from this project. The same format
+  `case_bundle` has always written, for the same reason. Names are bare and
+  each file sits beside what it covers, so checking is
+  `cd <dir> && sha256sum -c SHA256SUMS`. Lines are sorted under `LC_ALL=C` and
+  the PowerShell scripts sort to match, so the shell and PowerShell halves emit
+  byte-identical files; a script refuses rather than recording a digest for a
+  file the build did not produce, and the bootstrap binary is deleted before
+  the sums are taken rather than sitting unlisted in the output directory.
+
+  This is not a substitute for signed binaries, which is still open. A checksum
+  published beside the file it covers proves the download arrived intact, not
+  that it came from us.
+
+### Changed
+
+- **The GitHub Actions workflow is gone, and the docs no longer claim it runs.**
+  `.github/workflows/ci.yml` built, vetted and tested on Linux, Windows and
+  macOS, cross-compiled six targets and ran `go mod verify`. Those are still
+  the gates -- they are now commands a contributor runs, listed in
+  [CONTRIBUTING.md](CONTRIBUTING.md), and nothing runs them automatically.
+
+  Four documents asserted otherwise and have been corrected:
+  `CONTRIBUTING.md`, `docs/CONFIGURATION_POLICY.md`, `docs/SECURITY_LLD.md` and
+  `docs/SECURITY_LLD_TRACEABILITY.md`. Two claims in them were already false
+  before this change: `SECURITY_LLD.md` §16.2 described a
+  `.github/workflows/security-profile.yml` that was never written, and the
+  traceability matrix's `C` evidence level meant "CI wired" -- it now means
+  wired into the repository-wide `go test ./...` gate, which is what those rows
+  were actually describing. SEC-015 ("the security suites must run on every
+  supported OS") drops from `I/C` to `I/P`, because nothing automates the
+  "every OS" half any more.
+
 ### Fixed
+
+- **A test compared an evidence path against the spelling it typed, not the
+  one custody records.** `case_evidence` stores the resolved path -- that is
+  how two handles on one file become one exhibit -- and Windows hands back an
+  8.3 short path for a `TEMP` under a username longer than eight characters, so
+  `TestCaseReportSaysOnlyWhatTheManifestSays` looked for
+  `C:\Users\RUNNER~1\...` in a report that carried
+  `C:\Users\runneradmin\...`. It failed on that one kind of host and passed
+  on every other, including every machine this was developed on.
+
+  The helper now returns the path as custody will record it. The product
+  behaviour was correct and is unchanged; what was missing was a test saying
+  so, and `TestTwoSpellingsOfOneFileAreOneEvidenceEntry` now registers one file
+  under two names and fails if the manifest grows two entries.
 
 - **A write through more than one container was silently lost.**
   `grid[0][1] = 9`, `h["a"]["b"] = 2`, `rows[0]["n"] = 99`, `o.inner.v = 42` --

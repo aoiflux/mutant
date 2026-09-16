@@ -11,7 +11,7 @@ It is implementation-accurate to the current codebase and intended for:
 - Security engineering and code reviews
 - Incident response and operations enablement
 - Regression prevention for future security changes
-- Test strategy and CI policy enforcement
+- Test strategy and policy enforcement
 
 This LLD focuses on anti-tamper and anti-piracy controls under an offline-first
 threat model.
@@ -917,13 +917,21 @@ flowchart TD
 
 - integrity tamper behavior under `warn`, `delay`, `terminate`
 
-### 16.2 CI Security Profile
+### 16.2 Running the Security Profile
 
-Workflow `.github/workflows/security-profile.yml`:
+The project runs no CI. This section described a
+`.github/workflows/security-profile.yml` that was never written, and the
+repository-wide workflow that did exist has been removed; the security suites
+are run the same way every other suite is, by hand before a release:
 
-- strict defaults (`terminate`, delay=0, audit=1)
-- targeted security packages + VM policy test
-- optional telemetry artifact upload
+```bash
+CGO_ENABLED=0 go test ./security/... ./runner/... ./vm/... ./policy/...
+```
+
+`go test ./...` covers all of it, and the strict defaults under test
+(`terminate`, delay=0, audit=1) are the defaults in the code, not settings a
+runner supplies — there is nowhere else for them to come from, because Mutant
+takes no configuration from the environment.
 
 ---
 
@@ -948,7 +956,9 @@ Workflow `.github/workflows/security-profile.yml`:
 3. Userland anti-debug remains bypassable by binary patching.
 4. No hardware trust anchor or attestation.
 5. Deterministic fallback password is convenience-only and not secret.
-6. Full Windows runtime integration tests on real CI runners remain pending.
+6. Full Windows runtime integration tests on clean Windows hosts remain
+   pending, and with no CI there is no automated coverage of the other two
+   platforms either — a release is validated on whichever host cuts it.
 7. Full compile-sign-run-tamper rerun lifecycle tests remain incomplete.
 
 ---
@@ -1053,7 +1063,7 @@ question; the table states what the code does.
 3. Any new opcode/operand decode remains offset-aware.
 4. Any metadata schema changes preserve strict parse/validation behavior.
 5. Any new compatibility shortcut is explicitly blocked in secure mode.
-6. Any CI changes preserve targeted security profile execution.
+6. The security suites are run before a release, on the host cutting it.
 
 ---
 

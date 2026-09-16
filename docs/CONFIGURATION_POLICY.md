@@ -201,8 +201,8 @@ all flags. Run `mutant --help` for the current list.
 
 ## 5. The guard
 
-`go test ./policy/...`, which runs as part of the ordinary `go test ./...` in
-CI, parses every `.go` file in the repository and fails on:
+`go test ./policy/...`, which runs as part of the ordinary `go test ./...`,
+parses every `.go` file in the repository and fails on:
 
 - any string literal that is a Mutant-prefixed variable name (rule 1, no
   allowlist consulted);
@@ -227,9 +227,9 @@ to say why.
 ### Known gap
 
 The guard is Go-only. The VS Code extension's `.mjs` build scripts are not
-machine-checked, and CI runs nothing for the extension today. The extension's
-own build-target variable was removed in favour of a `--target` argument, but
-nothing prevents a new one being added.
+machine-checked by it, and since the project runs no CI, nothing checks them on
+a schedule either. The extension's own build-target variable was removed in
+favour of a `--target` argument, but nothing prevents a new one being added.
 
 ---
 

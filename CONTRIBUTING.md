@@ -19,7 +19,7 @@ Security issues do **not** go through the normal issue tracker — see
 
 ## Getting set up
 
-Go **1.26.2** or newer (the version in `go.mod` is what CI uses). Nothing else.
+Go **1.26.2** or newer (`go.mod` pins the floor). Nothing else.
 
 ```bash
 git clone https://github.com/aoiflux/mutant
@@ -42,7 +42,8 @@ needed any more.
 
 ## The two hard constraints
 
-CI enforces both on every push. A change that breaks either will not be merged,
+There is no CI. Both constraints are enforced by commands you run before you
+open a pull request, and a change that breaks either will not be merged,
 regardless of what it adds.
 
 1. **Pure Go, no cgo.** The whole module must build and test under
@@ -110,7 +111,7 @@ tier if it is not the default `stable`. Regenerate the catalogue:
 
 ```bash
 go run ./cmd/gendocs          # rewrites the reference and the editor grammar
-go run ./cmd/gendocs -check   # what CI's test asserts
+go run ./cmd/gendocs -check   # what the generated-docs test asserts
 ```
 
 Two files are **generated**, and neither is ever hand-edited:
@@ -213,8 +214,26 @@ cd lsp && go test ./...
   under ~70 characters; the body says what was wrong, what the change does, and
   which alternatives were rejected and why. Read `git log` for the register the
   project uses — this is a real expectation here, not boilerplate.
-- CI must be green on Linux, Windows and macOS, plus the cross-compile matrix
-  and `go mod verify`.
+- **Run the gates yourself — nothing runs them for you.** At minimum:
+
+  ```bash
+  CGO_ENABLED=0 go build ./... && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...
+  go mod verify
+  go run ./cmd/sweep                 # every example still runs
+  ```
+
+  Then the cross-compile matrix, which is the only place the pure-Go constraint
+  is actually proved:
+
+  ```bash
+  for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+    CGO_ENABLED=0 GOOS="${t%/*}" GOARCH="${t#*/}" go build ./... || echo "FAILED $t"
+  done
+  ```
+
+  Say in the PR which of these you ran, and on which OS. One person's machine is
+  not three platforms, so a change that touches `//go:build`-tagged code needs a
+  reviewer on the other platform.
 - Say in the PR description how you tested it. "Tests pass" is not a test plan
   for a parser or a security path.
 

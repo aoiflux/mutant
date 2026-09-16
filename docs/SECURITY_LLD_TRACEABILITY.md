@@ -10,7 +10,7 @@ It maps:
 1. Security requirements and controls
 2. Implementation anchors (functions/files)
 3. Runtime configuration surfaces (flags/env)
-4. Test coverage and CI enforcement
+4. Test coverage and how it is enforced
 5. Residual gaps and next validation actions
 
 ---
@@ -22,7 +22,7 @@ flowchart LR
     A[Security Objective] --> B[LLD Section]
     B --> C[Code Implementation]
     C --> D[Test Case]
-    D --> E[CI Security Profile]
+    D --> E[Repository test gate]
     E --> F[Operational Decision]
 ```
 
@@ -30,7 +30,7 @@ Evidence levels used in this matrix:
 
 - `I` = implemented
 - `T` = tested
-- `C` = CI wired
+- `C` = wired into the repository-wide `go test ./...` gate
 - `P` = partial / pending depth
 
 ---
@@ -53,7 +53,7 @@ Evidence levels used in this matrix:
 | SEC-012 | Security telemetry must support atomic counters and secure export                  | Telemetry subsystem           | [security/telemetry.go](../security/telemetry.go#L20), [security/telemetry.go](../security/telemetry.go#L35), [security/telemetry.go](../security/telemetry.go#L48)                                                                                                                                                                      | None; in-process API only                                 | [security/security_test.go](../security/security_test.go#L205), [security/security_test.go](../security/security_test.go#L230) | I/T/C  |
 | SEC-013 | CLI must clearly resolve secure/compat/dev mode and developer fallback semantics   | CLI posture controls          | [main.go](../main.go#L165), [main.go](../main.go#L180), [main.go](../main.go#L118), [main.go](../main.go#L129)                                                                                                                                                                                                                              | `--secure`, `--compat`, `--dev`, `-pwd`                   | operationally validated in local runtime use; no dedicated CLI parsing tests yet                                                                                                                                            | I/P    |
 | SEC-014 | Generator must use a stable per-host signing identity                              | Signing workflow              | [generator/generate.go](../generator/generate.go#L36), [generator/generate.go](../generator/generate.go#L80), [security/key_bootstrap.go](../security/key_bootstrap.go#L37)                                                                                                                                                                              | None; local keystore only                                 | indirectly validated by signature verification tests                                                                                                                                                                        | I/P    |
-| SEC-015 | CI must run the security suites on every supported OS                              | CI control plane              | [.github/workflows/ci.yml](../.github/workflows/ci.yml#L15), [.github/workflows/ci.yml](../.github/workflows/ci.yml#L36)                                                                                                                                                       | CI env defaults and artifact upload                       | workflow itself + package tests invoked by CI                                                                                                                                                                               | I/C    |
+| SEC-015 | The security suites must run on every supported OS before a release                | Release validation            | [CONTRIBUTING.md](../CONTRIBUTING.md), [SECURITY_LLD.md](SECURITY_LLD.md#162-running-the-security-profile)                                                                                                                                                                     | None; `go test ./...` with `CGO_ENABLED=0`                | the suites themselves; **nothing automates the "every OS" half** since the CI workflow was removed                                                                                                                           | I/P    |
 | SEC-016 | Protection profile must define default tamper behavior                             | Runtime policy profile        | [security/profile.go](../security/profile.go), [security/response_policy.go](../security/response_policy.go)                                                                                                                                                                                                                          | None; fixed at `standard`                                 | [security/security_test.go](../security/security_test.go)                                                                                                                                                                      | I/T    |
 | SEC-017 | Builtin capability configuration (under design)                                    | Builtin capability gates      | [builtin/builtin.go](../builtin/builtin.go), [builtin/command_exec.go](../builtin/command_exec.go), [builtin/fs.go](../builtin/fs.go), [builtin/net.go](../builtin/net.go), [builtin/http.go](../builtin/http.go)                                                                                                                              | Under design                                              | [builtin/command_exec_test.go](../builtin/command_exec_test.go)                                                                                                                                                                | I/T    |
 | SEC-018 | Standalone release artifacts must carry profile attestation and provenance         | Release trailer attestation   | [generator/writebinary.go](../generator/writebinary.go), [runner/runner.go](../runner/runner.go), [security/profile.go](../security/profile.go), [security/const.go](../security/const.go)                                                                                                                                                  | build profile + release generation path                   | [runner/runner_test.go](../runner/runner_test.go)                                                                                                                                                                              | I/T    |
@@ -209,8 +209,9 @@ integration depth:
    behavior.
 2. Add e2e fixture tests that produce real `.mu` artifacts and validate tamper
    outcomes in all policies.
-3. Add a Windows CI job for runtime anti-debug policy verification on
-   hosted/self-hosted runner.
+3. Verify runtime anti-debug policy on a clean Windows host before each
+   release. This was a CI job in the backlog; with no CI it is a release step,
+   and it is manual.
 4. Done: negative tests for a malformed, wrong-sized and missing
    `--trusted-key` file
    ([security/key_bootstrap_test.go](../security/key_bootstrap_test.go)).
@@ -227,8 +228,9 @@ integration depth:
 2. Any signature, debugger, or integrity event routes through policy layer.
 3. Telemetry increments occur before policy returns error on terminate.
 4. VM operand/opcode decode remains offset-aware.
-5. CI still runs `go test ./...` on Windows, Linux and macOS, which includes
-   the security suites and the configuration guard in `policy/`.
+5. `go test ./...` has been run for this change — it includes the security
+   suites and the configuration guard in `policy/`. Nothing runs it for you;
+   say in the PR which OS you ran it on.
 6. Dev mode remains explicit and does not silently alter secure mode defaults
    unless chosen.
 

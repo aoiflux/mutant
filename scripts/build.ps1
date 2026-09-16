@@ -24,7 +24,7 @@ $targets = @(
     @{ GoOS = "darwin"; GoArch = "arm64"; ExeSuffix = "" }
 )
 
-$totalSteps = if ($buildWasmRepl) { 4 } else { 3 }
+$totalSteps = if ($buildWasmRepl) { 5 } else { 4 }
 $step = 0
 $goBuildArgs = @("-trimpath", "-buildvcs=false", "-ldflags", "-s -w -buildid=")
 
@@ -55,6 +55,43 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw "$What failed with exit code $LASTEXITCODE"
     }
+}
+
+# SHA256SUMS is written in the format `sha256sum -c` reads, so whoever downloads
+# a binary can verify it with a tool they already have and nothing from this
+# project: lowercase hex, two spaces, the file's bare name, LF line endings and
+# no BOM -- the reader is as likely to be Linux as Windows. Names are bare and
+# the file sits beside what it covers, so checking is
+# `cd <dir>; sha256sum -c SHA256SUMS`.
+function Write-Sha256Sums {
+    Param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    # Ordinal sort, to match `LC_ALL=C sort` in the shell scripts: the same
+    # build has to write the same file whichever script cut it.
+    $ordered = $Names | Sort-Object -CaseSensitive
+    $lines = foreach ($name in $ordered) {
+        $path = Join-Path $Directory $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Cannot checksum a file the build did not produce: $path"
+        }
+
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
+        "$hash  $name"
+    }
+
+    $sumsPath = Join-Path $Directory "SHA256SUMS"
+    [System.IO.File]::WriteAllText(
+        $sumsPath,
+        (($lines -join "`n") + "`n"),
+        (New-Object System.Text.UTF8Encoding $false))
+
+    # No return value: every caller wants the file, not the path, and a bare
+    # `return` in PowerShell puts the string on the pipeline where it surfaces as
+    # a stray line of build output.
+    Write-Host "    checksums: $sumsPath" -ForegroundColor DarkGray
 }
 
 function Assert-ReleaseAssetsDataClean {
@@ -133,6 +170,7 @@ try {
     Write-Host "    Assets directory: $(Join-Path $repoRoot $AssetsOut)" -ForegroundColor DarkGray
 
     Start-Step "Recompile final Go binaries with release assets"
+    $binaryNames = @()
     $oldCGOEnabled = $env:CGO_ENABLED
     $oldGoos = $env:GOOS
     $oldGoarch = $env:GOARCH
@@ -155,6 +193,7 @@ try {
             Invoke-Checked -What "Go final build for $targetLabel" -Command {
                 go build @goBuildArgs -o $finalPath .
             }
+            $binaryNames += $targetName
             Write-Host "      binary: $finalPath" -ForegroundColor DarkGray
         }
     }
@@ -198,12 +237,24 @@ try {
         }
     }
 
+    # The bootstrap binary goes before the checksums are taken: it is
+    # scaffolding, it is not shipped, and leaving it in the output directory
+    # while SHA256SUMS is written invites the question of why it is not listed.
+    Remove-Item $bootstrapPath
+    Write-Host "Cleaned Bootstrap Bin" -ForegroundColor Blue
+
+    Start-Step "Write SHA256SUMS for the release artifacts"
+    $outputPath = Join-Path $repoRoot $OutputDir
+    Write-Sha256Sums -Directory $outputPath -Names $binaryNames
+    if ($buildWasmRepl) {
+        Write-Sha256Sums -Directory (Join-Path $repoRoot $WasmOutDir) `
+            -Names @("mutant_repl.wasm", "wasm_exec.js")
+    }
+
     Write-Progress -Activity "Mutant Full Build" -Status "Done" -PercentComplete 100 -Completed
     Write-Host "Build complete." -ForegroundColor Green
-    Write-Host "  Final binaries in: $(Join-Path $repoRoot $OutputDir)" -ForegroundColor Green
-
-    Remove-Item $bootstrapPath;
-    Write-Host "Cleaned Bootstrap Bin" -ForegroundColor Blue;
+    Write-Host "  Final binaries in: $outputPath" -ForegroundColor Green
+    Write-Host "  Verify with: cd `"$outputPath`"; sha256sum -c SHA256SUMS" -ForegroundColor Green
 }
 finally {
     Pop-Location
