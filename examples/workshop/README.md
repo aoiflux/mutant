@@ -17,6 +17,7 @@ construction**, and **custom analysis logic** — are the same in any language.
 | 3 | [03_timeline_construction.mut](03_timeline_construction.mut) | Merge multi-source events into one ordered supertimeline | none |
 | 4 | [04_custom_analysis_logic.mut](04_custom_analysis_logic.mut) | Score/flag artifacts with your own rules (map/filter) | none |
 | 5 | [05_timestomp_detection.mut](05_timestomp_detection.mut) | Detect NTFS timestomping (SI vs FN timestamps) | **an NTFS `$MFT`** |
+| 6 | [06_malvertising_chain.mut](06_malvertising_chain.mut) | Cross-check two artifacts against each other: reconstruct redirect chains from history, then find the hosts that set a cookie without ever appearing in it | two shipped fixtures |
 
 ## More examples to pick from (each self-contained, ~15–25 lines)
 

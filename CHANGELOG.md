@@ -60,6 +60,49 @@ exhaustive lists.
 
 ### Fixed
 
+- **A write through more than one container was silently lost.**
+  `grid[0][1] = 9`, `h["a"]["b"] = 2`, `rows[0]["n"] = 99`, `o.inner.v = 42` --
+  every shape with more than one hop in its target -- compiled, ran, changed
+  nothing and reported nothing. The compiler emitted the store back into the
+  variable only when the container expression was a plain identifier; anything
+  deeper mutated a value nothing stored back. Globals and locals are held
+  encrypted, so a load hands back a copy, and the write went into the copy.
+
+  For a tool that reports on evidence this is the worst failure available: the
+  report is wrong and looks right. The idiom it breaks is the ordinary one --
+  `counts[host]["n"] = counts[host]["n"] + 1` over a timeline.
+
+  The compiler now flattens an assignment target to the variable under it plus
+  its hops, and stores every container it passed through back where it came
+  from. What it still cannot emit correctly it refuses by name: a target with no
+  variable under it (`[1, 2][0] = 9`) has nowhere to store its result, and an
+  index before the last one is loaded again on the way out, so it has to be a
+  name or a literal rather than something with a side effect. The last index is
+  compiled once and is free to be a call.
+
+  The two engines now agree on ten shapes that used to diverge
+  (`TestNestedIndexAssignmentParity`, previously skipped as a known divergence),
+  and the editor reports both refusals where they are written, under a new
+  `assignmentTarget` lint rule whose answers are pinned against the compiler's
+  so the two cannot drift.
+
+- **Twenty-one example programs were in no README.** Among them workshop step 6,
+  a whole numbered lesson in a sequence the reader is told to follow in order.
+  The ten filesystem format demos, the two `net_serve` server pairs and every
+  macro example were likewise unlisted. All of them are now described where they
+  live, and `TestEveryExampleIsListedInItsReadme` fails when a directory that
+  has a README gains a program it does not mention.
+
+- **Workshop step 6 warned about a defect that had been fixed.** Its style note
+  said a closure writing an outer variable does not write back. It does, and has
+  since captured locals became cells; the one case that still does not is a
+  callback running on its own VM, which the editor already reports. A false
+  caveat is worse than none: it teaches a reader to avoid something that works.
+
+- **An example pointed at someone's dev machine.** `ext_example.mut` opened
+  `N:\dev\dataset\img6_ext4.dd` where every one of its nine siblings uses a
+  relative placeholder. It is `./disk.ext4` now, like the rest.
+
 - **Four documents described a standard library three releases old.**
   `WHAT_IS_MUTANT.md`, `WASM_REPL_REFERENCE.md` and `COMPARISON.md` each said
   459 builtins, `TUTORIAL_30_MIN.md` said 469, against 497; the category counts

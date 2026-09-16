@@ -167,7 +167,7 @@ let report, err = sigma_scan(rules, events);
 
 for (hit in report["hits"]) {
   putln(hit["level"], hit["title"], "->", hit["event"]["iso"]);
-};
+}
 ```
 
 `examples/detection/sigma_rules.mut` is this shape, runnable. Compiled and run

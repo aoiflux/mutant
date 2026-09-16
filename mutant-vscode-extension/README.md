@@ -79,6 +79,31 @@ VS Code language support for Mutant.
   short. Quiet unless it is certain: a literal pattern, two different enums, an
   imported enum, a `_` arm, or a name that is both an enum and a binding all
   suppress it
+- `mutant.lint.rules.assignmentTarget.severity`: severity for an assignment
+  target the compiler refuses -- one with no variable under it (`[1, 2][0] = 9`),
+  or an index before the last one that is not a name or a literal and would
+  therefore be evaluated more than once. Both are build failures, so this reports
+  them where they are written. Defaults to `error`, matching the build
+
+The security family. These report a program that compiles and runs, which is
+what makes them worth having: nothing else in the toolchain objects.
+
+- `mutant.lint.rules.tlsVerificationDisabled.severity`: severity for turning off
+  certificate verification, or accepting a TLS version that is no longer safe
+- `mutant.lint.rules.weakCrypto.severity`: severity for reaching for a broken or
+  obsolete algorithm where a current one takes the same call
+- `mutant.lint.rules.hardcodedSecret.severity`: severity for a credential written
+  into the source, where it outlives the program and travels with the file
+- `mutant.lint.rules.commandInjection.severity`: severity for building a shell
+  command out of a value the program did not choose
+- `mutant.lint.rules.pathTraversal.severity`: severity for building a filesystem
+  path out of a value the program did not choose
+- `mutant.lint.rules.unboundedResource.severity`: severity for reading something
+  whose size the program does not control into memory with no ceiling on it
+- `mutant.lint.rules.evidenceMutation.severity`: severity for writing to evidence
+  a case opened read-only -- the one rule here about the report rather than the
+  machine, because an altered artifact is an artifact that proves nothing
+
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

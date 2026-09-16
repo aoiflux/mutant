@@ -637,6 +637,38 @@ let n = 100;
 n -= 30;   n /= 2;   n %= 9;    // chained: 100 -> 70 -> 35 -> 8
 ```
 
+### Assigning through a container
+
+A target is a variable, optionally followed by any number of index and field
+hops. Every container on the way is written back, so a write through several of
+them lands where you wrote it:
+
+```mutant
+let counts = {};
+for (host in ["a", "b", "a"]) {
+    if (!has_key(counts, host)) { counts[host] = {"n": 0}; };
+    counts[host]["n"] = counts[host]["n"] + 1;   // {a: {n: 2}, b: {n: 1}}
+}
+
+let grid = [[1, 2], [3, 4]];
+grid[0][1] = 9;                                  // [[1, 9], [3, 4]]
+```
+
+Two targets are refused, and both are compile errors rather than writes that go
+nowhere:
+
+- **A target with no variable under it** — `[1, 2][0] = 9`, `f()[0] = 1`. There
+  is nothing to store the result in, so the write would land in a value the
+  program immediately drops.
+- **An index before the last one that is not a name or a literal** —
+  `a[f()][0] = 1`. Every hop but the last is loaded again on the way back out,
+  so anything with a side effect would run a number of times the source does not
+  say. Bind it first: `let k = f(); a[k][0] = 1;`.
+
+The last index is compiled once and is free to be anything, including a call.
+The editor reports both refusals where they are written, under the
+`assignmentTarget` rule.
+
 ### Macros (`macro`, `quote`, `unquote`)
 
 A macro is a template the compiler expands before it generates any code. It

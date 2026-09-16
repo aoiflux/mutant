@@ -109,7 +109,7 @@ putln("hits:", report["matched"], "by level:", report["by_level"]);
 for (hit in report["hits"]) {
     putln("  ", hit["level"], "|", hit["title"], "| event", hit["event_index"],
           "|", hit["event"]["iso"]);
-};
+}
 
 // A field no event in the whole scan carried. Zero hits from a ruleset whose
 // fields are absent is not a finding -- the ruleset never ran.

@@ -1807,96 +1807,197 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 		}
 	}
 
+	base, steps, ok := flattenAssignTarget(node.Left)
+	if !ok {
+		return fmt.Errorf("invalid assignment target")
+	}
+
 	// Handle identifier assignment: x = value
-	if ident, ok := node.Left.(*ast.Identifier); ok {
+	if len(steps) == 0 {
 		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
-		symbol, ok := c.symbolTable.Resolve(ident.Value)
+		symbol, ok := c.symbolTable.Resolve(base.Value)
 		if !ok {
 			// If not found, define it as global
-			symbol = c.symbolTable.Define(ident.Value)
+			symbol = c.symbolTable.Define(base.Value)
 		}
 
+		return c.emitAssignStore(symbol)
+	}
+
+	// Assigning through an import namespace would read as "give that module a
+	// different value", which no module system here can honour: the target is
+	// another file's global slot and the write would be invisible at its
+	// declaration. Say so, rather than letting it fall through to "undefined
+	// variable: <namespace>".
+	if steps[0].field != "" {
+		if key, bound := c.symbolTable.LookupNamespace(base.Value); bound {
+			return fmt.Errorf(
+				"cannot assign to %s.%s: %s belongs to %s, and a module owns its own top-level names",
+				base.Value, steps[0].field, steps[0].field, c.moduleName(key),
+			)
+		}
+	}
+
+	symbol, resolved := c.symbolTable.Resolve(base.Value)
+	if !resolved {
+		return fmt.Errorf("undefined variable: %s", base.Value)
+	}
+
+	// Every hop but the last is loaded again on the way back out, so an index
+	// that is a call would run more than once. Refuse that rather than emit it:
+	// the workaround is one line (`let k = f(); a[k][j] = v`) and the failure it
+	// replaces -- a side effect happening a number of times the source does not
+	// say -- is not one anybody would find by reading the program.
+	for _, step := range steps[:len(steps)-1] {
+		if step.index != nil && !pureAssignIndex(step.index) {
+			return fmt.Errorf(
+				"cannot assign through %s: an index before the last one is evaluated more than once, "+
+					"so it has to be a name or a literal -- bind it to a variable first",
+				node.Left.String(),
+			)
+		}
+	}
+
+	return c.emitAssignChain(symbol, steps, len(steps), func() error {
+		return c.Compile(valueExpr)
+	})
+}
+
+// assignStep is one hop of an assignment target: `[i]` or `.f`. Every target is
+// a base identifier followed by zero or more of them, and flattening it that way
+// is what lets a write through more than one container be emitted at all --
+// `grid[0][1] = 9` used to mutate a container nothing stored back, and the write
+// disappeared with no error.
+type assignStep struct {
+	index ast.Expression // set for a[i]
+	field string         // set for a.f
+}
+
+// flattenAssignTarget peels an assignment target down to the variable it
+// ultimately writes, returning the hops in source order. It reports false for a
+// target with no variable under it (`f()[0] = 1`, `[1, 2][0] = 1`), which the
+// caller turns into a compile error: there is nowhere to store the result, and
+// emitting a mutation of a temporary would be a write the program never sees.
+func flattenAssignTarget(target ast.Expression) (*ast.Identifier, []assignStep, bool) {
+	var steps []assignStep
+	for {
+		switch t := target.(type) {
+		case *ast.Identifier:
+			for i, j := 0, len(steps)-1; i < j; i, j = i+1, j-1 {
+				steps[i], steps[j] = steps[j], steps[i]
+			}
+			return t, steps, true
+		case *ast.IndexExpression:
+			if t.Index == nil {
+				return nil, nil, false
+			}
+			steps = append(steps, assignStep{index: t.Index})
+			target = t.Left
+		case *ast.FieldExpression:
+			if t.Field == nil {
+				return nil, nil, false
+			}
+			steps = append(steps, assignStep{field: t.Field.Value})
+			target = t.Left
+		default:
+			return nil, nil, false
+		}
+	}
+}
+
+// pureAssignIndex reports whether an index expression can be evaluated more than
+// once without changing what the program does. Names and literals can; a call
+// cannot, and neither can anything built out of one.
+func pureAssignIndex(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Boolean:
+		return true
+	case *ast.IndexExpression:
+		return pureAssignIndex(e.Left) && pureAssignIndex(e.Index)
+	case *ast.FieldExpression:
+		return pureAssignIndex(e.Left)
+	default:
+		return false
+	}
+}
+
+// emitAssignChain writes emitValue into base + steps[:depth], storing every
+// container it passed through back where it came from.
+//
+// Both stores leave the container they mutated on the stack, which is the whole
+// trick: the new value of a container one level up is exactly "load that level,
+// mutate it, and take what OpSetIndex hands back". So a nested write is the
+// shallower write with a deeper one supplying its value, and the recursion
+// bottoms out at the base variable, where emitAssignStore finally puts something
+// somewhere that outlives the expression.
+//
+// The alternative -- mutating in place and trusting the containers to be shared
+// -- is what the compiler used to do, and it is only true when a load hands back
+// the same object the slot holds. Globals and locals are stored encrypted, so a
+// load hands back a copy, and the write went into the copy.
+func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int, emitValue func() error) error {
+	last := steps[depth-1]
+
+	// store mutates the container already on the stack and leaves it there.
+	store := func() error {
+		if last.index != nil {
+			if err := c.Compile(last.index); err != nil {
+				return err
+			}
+			if err := emitValue(); err != nil {
+				return err
+			}
+			c.emit(code.OpSetIndex)
+			return nil
+		}
+		if err := emitValue(); err != nil {
+			return err
+		}
+		c.emit(code.OpSetField, c.addConstant(&object.String{Value: last.field}))
+		return nil
+	}
+
+	if depth == 1 {
+		c.loadSymbol(symbol)
+		if err := store(); err != nil {
+			return err
+		}
 		if err := c.emitAssignStore(symbol); err != nil {
 			return err
 		}
+		// A field assignment evaluates to the field, the way it always has;
+		// an index assignment evaluates to the container.
+		if last.field != "" {
+			c.emit(code.OpGetField, c.addConstant(&object.String{Value: last.field}))
+		}
 		return nil
 	}
 
-	// Handle field assignment: struct.field = value
-	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
-		// Assigning through an import namespace would read as "give that
-		// module a different value", which no module system here can honour:
-		// the target is another file's global slot and the write would be
-		// invisible at its declaration. Say so, rather than letting it fall
-		// through to "undefined variable: <namespace>".
-		if ident, isIdent := fieldExpr.Left.(*ast.Identifier); isIdent {
-			if key, bound := c.symbolTable.LookupNamespace(ident.Value); bound {
-				return fmt.Errorf(
-					"cannot assign to %s.%s: %s belongs to %s, and a module owns its own top-level names",
-					ident.Value, fieldExpr.Field.Value, fieldExpr.Field.Value, c.moduleName(key),
-				)
-			}
-		}
-
-		if err := c.Compile(fieldExpr.Left); err != nil {
+	return c.emitAssignChain(symbol, steps, depth-1, func() error {
+		if err := c.emitPathLoad(symbol, steps, depth-1); err != nil {
 			return err
 		}
+		return store()
+	})
+}
 
-		fieldNameIndex := c.addConstant(&object.String{Value: fieldExpr.Field.Value})
-
-		if err := c.Compile(valueExpr); err != nil {
-			return err
-		}
-
-		c.emit(code.OpSetField, fieldNameIndex)
-
-		// If assigning to a named variable field (e.g., p.x = 1), persist the updated struct.
-		if ident, ok := fieldExpr.Left.(*ast.Identifier); ok {
-			symbol, resolved := c.symbolTable.Resolve(ident.Value)
-			if !resolved {
-				return fmt.Errorf("undefined variable: %s", ident.Value)
-			}
-
-			if err := c.emitAssignStore(symbol); err != nil {
+// emitPathLoad pushes the value of base + steps[:depth].
+func (c *Compiler) emitPathLoad(symbol Symbol, steps []assignStep, depth int) error {
+	c.loadSymbol(symbol)
+	for _, step := range steps[:depth] {
+		if step.index != nil {
+			if err := c.Compile(step.index); err != nil {
 				return err
 			}
-			c.emit(code.OpGetField, fieldNameIndex)
+			c.emit(code.OpIndex)
+			continue
 		}
-		return nil
+		c.emit(code.OpGetField, c.addConstant(&object.String{Value: step.field}))
 	}
-
-	// Handle index assignment: a[i] = value / h[k] = value
-	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
-		if err := c.Compile(idxExpr.Left); err != nil {
-			return err
-		}
-		if err := c.Compile(idxExpr.Index); err != nil {
-			return err
-		}
-		if err := c.Compile(valueExpr); err != nil {
-			return err
-		}
-		c.emit(code.OpSetIndex)
-
-		// If the container is a simple variable, persist the mutated container
-		// back into its slot (mirrors field assignment) and leave it as the
-		// expression's value.
-		if ident, ok := idxExpr.Left.(*ast.Identifier); ok {
-			symbol, resolved := c.symbolTable.Resolve(ident.Value)
-			if !resolved {
-				return fmt.Errorf("undefined variable: %s", ident.Value)
-			}
-			if err := c.emitAssignStore(symbol); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	return fmt.Errorf("invalid assignment target")
+	return nil
 }
 
 // claimTypeName records that the module being compiled declares a struct or

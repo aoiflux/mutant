@@ -45,7 +45,7 @@ let popcount = fn(n) {
     for (let i = 0; i < 64; i++) {
         count = count + ((n >> i) & 1);
     }
-    count
+    count;
 };
 putf("popcount(7)   = %d\n", popcount(7));
 putf("popcount(240) = %d\n", popcount(240));

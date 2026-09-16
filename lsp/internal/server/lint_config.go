@@ -57,6 +57,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "builtinPairReturn", &config.BuiltinPairReturn)
 	applyRuleSeverity(rulesMap, "builtinDeprecated", &config.BuiltinDeprecated)
 	applyRuleSeverity(rulesMap, "spawnGlobalWrite", &config.SpawnGlobalWrite)
+	applyRuleSeverity(rulesMap, "assignmentTarget", &config.AssignmentTarget)
 	applyRuleSeverity(rulesMap, "unclosedResource", &config.UnclosedResource)
 	applyRuleSeverity(rulesMap, "uncheckedError", &config.UncheckedError)
 	applyRuleSeverity(rulesMap, "matchExhaustiveness", &config.MatchExhaustiveness)

@@ -144,3 +144,29 @@ func TestEveryLintRuleIsExposedByTheExtension(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryLintRuleIsDocumentedByTheExtension is the third half of the same
+// seam. The two tests above prove a setting exists and that it reaches the
+// config; this one proves a reader is told it exists at all.
+//
+// It drifted: the extension README listed 16 of the 24 rules, and the eight it
+// omitted were the entire security family -- weak crypto, hardcoded secrets,
+// command injection, path traversal, TLS verification, unbounded resources,
+// evidence mutation. Those are the rules most worth knowing about and the least
+// likely to be discovered by scrolling a settings pane.
+func TestEveryLintRuleIsDocumentedByTheExtension(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "mutant-vscode-extension", "README.md"))
+	if err != nil {
+		t.Skipf("extension README not readable here: %v", err)
+	}
+	text := string(readme)
+
+	configType := reflect.TypeOf(analyzer.LintConfig{})
+	for i := 0; i < configType.NumField(); i++ {
+		rule := ruleNameForField(configType.Field(i).Name)
+		setting := "mutant.lint.rules." + rule + ".severity"
+		if !strings.Contains(text, setting) {
+			t.Errorf("the extension README does not mention %s, so nothing tells a reader the rule exists", setting)
+		}
+	}
+}

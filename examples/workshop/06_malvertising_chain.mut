@@ -15,8 +15,11 @@
 //        (synthetic Chromium fixtures; swap in a real profile's History/Cookies).
 //
 // STYLE NOTE: this file uses `for` loops, not each()/map() closures, wherever it
-// accumulates into a variable. Assigning to a captured outer variable from
-// inside a closure does not currently write back (see README) -- `for` does.
+// accumulates into a variable. That is a readability choice and nothing more --
+// a closure writing an outer variable does write back, and has since captured
+// locals became cells. The one place it still does not is a callback that runs
+// on its own VM (spawn, pmap, peach), which gets a copy of the globals; the
+// editor reports those.
 
 let HISTORY = "examples/data/browser_history.sqlite";
 let COOKIES = "examples/data/browser_cookies.sqlite";

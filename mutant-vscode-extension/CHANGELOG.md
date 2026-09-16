@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+New this release:
 
 - **Debugging** — a `mutant` debug type. Press F5 on a `.mut` file with no
   `launch.json` and the extension debugs the file in front of you; a saved
@@ -9,17 +11,35 @@
   `mutant.cli.path` setting, so the binary that runs a program is the binary
   that debugs it.
 - **Every builtin is highlighted.** The grammar's list of builtin names was
-  maintained by hand and had fallen to 76 of the language's 493 — the reporting,
+  maintained by hand and had fallen to 76 of the language's 497 — the reporting,
   chain-of-custody and schema-interchange families were all invisible, and so
   were most of `net_*` and `str_*`. The list is now generated from the builtin
   registry by `cmd/gendocs`, with a test in the repo that fails if the two ever
   disagree, so a builtin is highlighted as soon as it exists.
 - **The bundled language server says what it is.** `mlsp --version` prints the
   release it was built from and the number of builtins it knows
-  (`mlsp 2.5.0 (493 builtins)`), so "which version of the language does my
+  (`mlsp 2.5.0 (497 builtins)`), so "which version of the language does my
   editor actually understand?" is a question with an answer. The packaging
   scripts ask it too: a VSIX can no longer be built around a server older than
   the language in the tree it was cut from.
+- **Sigma rules are highlighted and hoverable.** The language gained four
+  `sigma_*` builtins that parse and evaluate Sigma detection rules, and the
+  generated grammar and the server's hover cards picked them up with no change
+  here — which is the point of generating both from the registry.
+- **A new diagnostic: `assignmentTarget`.** The compiler used to accept
+  `counts[host]["n"] = 1` and quietly lose the write; it now emits the write-back
+  chain that makes it work, and refuses by name the two targets it still cannot
+  emit — one with no variable under it, and an index before the last one that
+  would be evaluated more than once. The editor reports both where they are
+  written rather than at the next build, and a test runs the analyzer and the
+  compiler over the same programs, so the two answers cannot drift apart.
+- **The settings documentation caught up with the settings.** This README listed
+  16 of the 24 lint rules; the eight it omitted were the whole security family —
+  weak crypto, hardcoded secrets, command injection, path traversal, TLS
+  verification, unbounded resources and evidence mutation. Those are the rules
+  most worth knowing about and the least likely to be found by scrolling a
+  settings pane. A test now fails when a rule exists that the README does not
+  mention.
 
 ## 0.1.0
 

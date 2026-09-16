@@ -58,6 +58,7 @@ type LintConfig struct {
 	HardcodedSecret              LintSeverity
 	CommandInjection             LintSeverity
 	EvidenceMutation             LintSeverity
+	AssignmentTarget             LintSeverity
 	PathTraversal                LintSeverity
 }
 
@@ -96,6 +97,12 @@ func DefaultLintConfig() LintConfig {
 		// still registered -- so this is a hint, not a warning. It is the one
 		// builtin rule that reports something the program does correctly.
 		BuiltinDeprecated: LintSeverityHint,
+		// Both shapes this reports are compile errors, so error is what the
+		// build will say too. It is the one lint rule that reports something
+		// the compiler refuses outright rather than something it accepts and
+		// runs badly -- which is why it exists: without it, the first anyone
+		// hears of either is a failed build.
+		AssignmentTarget: LintSeverityError,
 		// Writing a global from a spawned callback is the same shape: the write
 		// lands in that worker's copy of the globals and is gone when it
 		// finishes, and nothing at all reports it.
@@ -197,6 +204,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.HardcodedSecret
 	case "commandInjection":
 		severityName = c.CommandInjection
+	case "assignmentTarget":
+		severityName = c.AssignmentTarget
 	case "evidenceMutation":
 		severityName = c.EvidenceMutation
 	case "pathTraversal":
@@ -264,6 +273,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintWeakCrypto(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintHardcodedSecret(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintCommandInjection(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintAssignmentTargets(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintEvidenceMutation(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPathTraversal(snapshot, lintConfig)...)
 

@@ -13,5 +13,6 @@ Scripts:
 - db_example.mut
 - db_wrappers_example.mut
 - graph_detection_timeline.mut
+- incident_graph.mut — model an intrusion as a graph (process to file, process to network), then traverse it
 - mini_log_correlator.mut
 - mini_timeline_builder.mut

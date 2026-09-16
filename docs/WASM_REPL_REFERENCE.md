@@ -523,7 +523,7 @@ Supported:
 let items = ["bytecode", "sandbox", "signing", "lsp"];
 for (let i = 0; i < len(items); i = i + 1) {
   putln(items[i]);
-};
+}
 ```
 
 ### 9.2 Functions, structs, and enums

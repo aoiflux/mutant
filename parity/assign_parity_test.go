@@ -114,32 +114,43 @@ func TestIndexAssignmentValueParity(t *testing.T) {
 	}
 }
 
-// `grid[0][1] = 9` mutates in the evaluator and is silently lost in the VM.
+// `grid[0][1] = 9` used to mutate in the evaluator and vanish in the VM.
 //
-// This is the captured-variable defect wearing different clothes: one storage
-// location, two copies of it. The compiler only emits the write-back store when
-// the container expression is a plain identifier, and here it is `grid[0]`. In
-// the evaluator that costs nothing, because `grid[0]` is the same *object.Array
-// the outer array holds. In the VM it is fatal, because OpGetGlobal hands back a
-// decrypted copy -- the element mutated is inside a container nothing stores
-// back, and the write disappears with no error.
+// It was the captured-variable defect wearing different clothes: one storage
+// location, two copies of it. The compiler emitted the write-back store only
+// when the container expression was a plain identifier, and here it is
+// `grid[0]`. In the evaluator that costs nothing, because `grid[0]` is the same
+// *object.Array the outer array holds. In the VM it was fatal, because
+// OpGetGlobal hands back a decrypted copy -- the element mutated was inside a
+// container nothing stored back, and the write disappeared with no error.
 //
-// Out of scope for Tier 1, which refuses writes it cannot emit correctly rather
-// than teaching the compiler new ones. Worth stating that a refusal is not
-// available here either: this shape is not a scope the switch can see, so
-// fixing it means a real write-back chain for nested containers.
+// The fix is the write-back chain the old comment here said would be needed:
+// the compiler now flattens a target to a base variable plus its hops and
+// stores every container it passed through back where it came from. Each row
+// below is a shape that silently lost its write before that existed.
 func TestNestedIndexAssignmentParity(t *testing.T) {
-	t.Skip("known divergence: the VM loses a write through a nested container")
-
-	const input = "let grid = [[1, 2], [3, 4]]; grid[0][1] = 9; grid"
-
-	evalRes := normalize(evalViaEvaluator(input))
-	vmObj, vmErr := evalViaVM(t, input)
-	vmRes := normalize(vmObj)
-	if vmErr != nil {
-		vmRes = "ERROR"
+	inputs := []string{
+		"let grid = [[1, 2], [3, 4]]; grid[0][1] = 9; grid",
+		`let h = {"a": {"b": 1}}; h["a"]["b"] = 2; h`,
+		`let rows = [{"n": 1}, {"n": 2}]; rows[0]["n"] = 99; rows`,
+		`let deep = {"a": [1, 2]}; deep["a"][0] = 7; deep`,
+		"let d3 = [[[1]]]; d3[0][0][0] = 5; d3",
+		"let i = 0; let vi = [[1, 2]]; vi[i][i] = 3; vi",
+		`let c = {"n": [10]}; c["n"][0] += 5; c`,
+		`struct Inner { v; }; let db = {"rows": [Inner { v: 1 }]}; db["rows"][0].v = 7; db["rows"][0].v`,
+		"struct Inner { v; }; struct Outer { inner; }; let o = Outer { inner: Inner { v: 1 } }; o.inner.v = 42; o.inner.v",
+		`let probe = fn() { let m = {"k": [1, 2]}; m["k"][1] = 99; return m; }; probe()`,
 	}
-	if evalRes != vmRes {
-		t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR: " + vmErr.Error()
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
 	}
 }

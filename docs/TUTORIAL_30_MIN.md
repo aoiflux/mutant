@@ -154,22 +154,22 @@ for (let i = 0; i < len(hosts); i++) {
         continue;
     };
     putln("external:", hosts[i]);
-};
+}
 
 // When the elements are the point rather than the index, loop over them.
 // One binding gives an array's element but a hash's key; two give both.
 for (host in hosts) {
     putln("host: ${host}");
-};
+}
 for (key, value in finding) {
     putln("${key} = ${value}");
-};
+}
 
 // `while` is for a loop whose end is a condition rather than a count.
 let budget = 3;
 while (budget > 0) {
     budget = budget - 1;
-};
+}
 
 // `match` is an expression, so it produces a value. Patterns are literals,
 // enum variants, or `_`; alternatives are joined with `|`.
