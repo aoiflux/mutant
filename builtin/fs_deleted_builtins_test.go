@@ -90,6 +90,21 @@ func TestFsDeleted(t *testing.T) {
 	if raw, _ := hex.DecodeString(hStr(t, e, "resident_data")); string(raw) != content {
 		t.Errorf("recovered content = %q, want %q", raw, content)
 	}
+
+	// The sibling field carries the same bytes without the hex round trip, so
+	// recovering the file is fs_write(out, e["resident_data_bytes"]) rather than
+	// a string_to_bytes statement first. The two must not disagree.
+	buf, ok := hashValueByKey(e, "resident_data_bytes").(*object.Bytes)
+	if !ok {
+		t.Fatalf("resident_data_bytes is %T, want *object.Bytes", hashValueByKey(e, "resident_data_bytes"))
+	}
+	if string(buf.Value) != content {
+		t.Errorf("resident_data_bytes = %q, want %q", buf.Value, content)
+	}
+	if hex.EncodeToString(buf.Value) != hStr(t, e, "resident_data") {
+		t.Errorf("resident_data_bytes and resident_data disagree: %x vs %s",
+			buf.Value, hStr(t, e, "resident_data"))
+	}
 }
 
 func TestFsDeletedRejectsNonMFT(t *testing.T) {

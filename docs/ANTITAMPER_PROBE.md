@@ -23,19 +23,28 @@ Telemetry events used by this subsystem:
 
 ## 2. Enablement Model (Important)
 
-Anti-tamper probing has two gates:
+**Both gates are on, always. Neither is configurable.** They used to be
+environment variables; Mutant takes no configuration from the environment, and
+these are not per-run decisions. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-1. Master probe gate: `MUTANT_ENABLE_ANTITAMPER_PROBE=1`
-2. Runner process-protection gate: `MUTANT_ENABLE_PROCESS_PROTECTION`
+1. Master probe gate: `antiTamperProbeEnabled`
+   (`security/antitamper_probe.go`), a package-level `true`.
+   `SetAntiTamperProbeEnabledForTesting` exists only so tests can turn probing
+   off.
+2. Runner process-protection gate: `isProcessProtectionEnabled`
+   (`runner/runner.go`), which returns `true`.
 
 Behavior:
 
-1. If gate #1 is not `1`, `RunAntiTamperProbe` returns `enabled=false` and no
-   probes run.
-2. Gate #2 only matters when gate #1 is enabled and runner enforcement is being
-   evaluated.
-3. Gate #2 defaults to enabled when unset; disable values are `0`, `false`,
-   `off`, `no`.
+1. `RunAntiTamperProbe` returns `enabled=true` and runs the requested probes.
+   It returns `enabled=false` only inside a test that has flipped gate #1.
+2. Gate #2 governs runner enforcement only. `enforceProcessProtection` consults
+   it, then runs the five process-protection probes.
+3. What still varies per run is the *response*, not the probing: a signal at
+   confidence `>= 80` (`processProtectionTerminateConfidence`) terminates in
+   secure mode and warns under `--compat`/`--dev`. See
+   [ANTITAMPER_PROBE_ENABLEMENT_LLD.md](ANTITAMPER_PROBE_ENABLEMENT_LLD.md).
 
 ## 3. Probe Output Shape
 

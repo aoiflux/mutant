@@ -92,11 +92,13 @@ func (c *spawnWriteCollector) findCallbacks(node mast.Node) {
 		if !ok {
 			return
 		}
-		callee, ok := call.Function.(*mast.Identifier)
-		if !ok || callee == nil {
+		// nil bound: this site has no scope model and never had one, so a
+		// local `let spawn = ...` is as invisible here as it always was.
+		calleeName, _, ok := builtinCallee(call.Function, nil)
+		if !ok {
 			return
 		}
-		position, watched := spawnGlobalWriteCallbackArg[callee.Value]
+		position, watched := spawnGlobalWriteCallbackArg[calleeName]
 		if !watched || position >= len(call.Arguments) {
 			return
 		}
@@ -105,7 +107,7 @@ func (c *spawnWriteCollector) findCallbacks(node mast.Node) {
 			return
 		}
 
-		c.reportWrites(literal, callee.Value, shadowedNames(literal, nil))
+		c.reportWrites(literal, calleeName, shadowedNames(literal, nil))
 	})
 }
 
@@ -223,6 +225,19 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 			if n.Alternative != nil {
 				walkStatement(n.Alternative)
 			}
+		case *mast.MatchExpression:
+			walkExpression(n.Subject)
+			for _, arm := range n.Arms {
+				if arm == nil {
+					continue
+				}
+				for _, pattern := range arm.Patterns {
+					walkExpression(pattern)
+				}
+				if arm.Body != nil {
+					walkStatement(arm.Body)
+				}
+			}
 		}
 	}
 
@@ -247,6 +262,16 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 			}
 			walkExpression(n.Condition)
 			walkExpression(n.Post)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.WhileStatement:
+			walkExpression(n.Condition)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			walkExpression(n.Iterable)
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}
@@ -300,10 +325,21 @@ func collectLetNames(stmt mast.Statement, into map[string]struct{}) {
 	case *mast.ForStatement:
 		collectLetNames(n.Init, into)
 		collectLetNames(n.Body, into)
+	case *mast.WhileStatement:
+		collectLetNames(n.Body, into)
+	case *mast.ForInStatement:
+		collectLetNames(n.Body, into)
 	case *mast.ExpressionStatement:
-		if ifExpr, ok := n.Expression.(*mast.IfExpression); ok {
-			collectLetNames(ifExpr.Consequence, into)
-			collectLetNames(ifExpr.Alternative, into)
+		switch expr := n.Expression.(type) {
+		case *mast.IfExpression:
+			collectLetNames(expr.Consequence, into)
+			collectLetNames(expr.Alternative, into)
+		case *mast.MatchExpression:
+			for _, arm := range expr.Arms {
+				if arm != nil {
+					collectLetNames(arm.Body, into)
+				}
+			}
 		}
 	}
 }

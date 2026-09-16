@@ -12,6 +12,7 @@ const (
 	ERROR_OBJ        = "ERROR_OBJ"
 	FUNCTION_OBJ     = "FUNCTION"
 	STRING_OBJ       = "STRING"
+	BYTES_OBJ        = "BYTES"
 	BUILTIN_OBJ      = "BUILTIN"
 	ARRAY_OBJ        = "ARRAY"
 	HASH_OBJ         = "HASH"
@@ -25,6 +26,8 @@ const (
 	BREAK_OBJ        = "BREAK"
 	CONTINUE_OBJ     = "CONTINUE"
 	LUA_PATCH_OBJ    = "LUA_PATCH"
+	CELL_OBJ         = "CELL"
+	ITERATOR_OBJ     = "ITERATOR"
 )
 
 type Object interface {

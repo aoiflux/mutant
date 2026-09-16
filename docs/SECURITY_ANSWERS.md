@@ -5,14 +5,23 @@ behavior.
 
 ## 1) Is encryption password-based or deterministic?
 
-Both are supported.
+Password-based, always. There is no deterministic mode.
 
-1. If password is provided (`-password` or `-pwd`), password-based KDF path is
-   used.
-2. If password is omitted, deterministic mode is used.
+1. A password is required. The KDF path is the only path.
+2. Omitting a password is an error, not a fallback -- except under `--dev`,
+   which substitutes a built-in development key and says so on stderr. That key
+   is a compile-time constant shared by every Mutant binary, so it offers no
+   confidentiality and is refused for release artifacts.
 
-In both modes, runtime decrypts before execution and does not rely on plaintext
-bytecode files.
+This answer previously said an omitted password selected a deterministic mode.
+That was never true of the code: the encryption layer rejects an empty key
+outright. The claim also appeared in a comment on `generator.Generate`, and both
+were corrected together.
+
+The password itself does not have to appear on the command line -- prompt,
+`--password-file`, and `--password-stdin` are all supported, and `--password` is
+deprecated. In every case the runtime decrypts before execution and never relies
+on plaintext bytecode files.
 
 ## 2) How is authenticity enforced?
 
@@ -24,13 +33,14 @@ Secure mode behavior:
 2. Signer-auth is optional and can be explicitly enforced with `--signer-auth`.
 3. Without `--signer-auth`, secure mode keeps runtime hardening gates but does
    not run signer pinning verification.
-4. Trusted key pinning uses `MUTANT_TRUSTED_PUBLIC_KEY_HEX` (with local
-   bootstrap fallback if unset).
+4. Trusted key pinning uses the file named by `--trusted-key <path>`, falling
+   back to a locally bootstrapped keypair when the flag is absent.
 
 Compatibility/dev behavior:
 
 1. More permissive by default.
-2. Still supports policy-driven handling through tamper response configuration.
+2. The tamper response is `warn` rather than `terminate`. That follows from the
+   mode itself -- there is no separate response setting.
 
 ## 3) What are secure/compat/dev modes?
 
@@ -38,7 +48,12 @@ Compatibility/dev behavior:
 2. Compat mode (`--compat`): warn-oriented defaults.
 3. Dev mode (`--dev`): compat posture plus local convenience defaults.
 
-CLI rule: last mode flag wins when multiple are passed.
+CLI rule: a command line names at most one mode. `--secure --compat`,
+`--secure --dev` and `--signer-auth --no-signer-auth` exit non-zero naming both
+flags. `--dev --compat` is accepted, because dev mode implies compat mode.
+
+`--compat` weakens the response; `--dev` weakens the key. Full table:
+[EXECUTION_MODES.md](EXECUTION_MODES.md).
 
 ## 4) Is anti-debugging implemented?
 
@@ -63,11 +78,11 @@ Yes.
 
 Yes, as anti-tamper process-protection probes.
 
-Important gates:
+Important gates -- both are compile-time constants, not settings:
 
-1. `MUTANT_ENABLE_ANTITAMPER_PROBE=1` must be set to run probes.
-2. `MUTANT_ENABLE_PROCESS_PROTECTION` controls runner enforcement once probes
-   are enabled.
+1. `antiTamperProbeEnabled` is `true`, so probes always run.
+2. `isProcessProtectionEnabled()` returns `true`, so runner enforcement is
+   always active.
 
 Runner enforcement probes:
 
@@ -84,10 +99,10 @@ Threshold:
 
 Remote scan status:
 
-1. Remote scan manager integration exists behind
-   `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`.
-2. Mode gate is `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce`.
-3. Current Windows scanner is scaffolding-safe no-op, so integration is
+1. Remote scan manager integration exists but is off in every shipped binary:
+   `remoteScanConfigState.Enabled` is `false` and only tests can change it.
+2. The manager supports `off|observe|enforce` mode, defaulting to `observe`.
+3. The current Windows scanner is a scaffolding-safe no-op, so integration is
    present while detector depth is still partial.
 
 ## 7) Are polymorphic mutations fully active?
@@ -129,16 +144,19 @@ storage path today.
 
 ## 9) How does tamper policy work?
 
-Policy input:
+Policy input -- one thing only: the execution mode from the command line.
 
-1. `MUTANT_TAMPER_RESPONSE` = `warn`, `delay`, or `terminate`
-2. `MUTANT_TAMPER_DELAY_MS` for delay mode
-3. `MUTANT_PROTECTION_PROFILE` (`minimal`, `standard`, `paranoid`) for defaults
+`ResolveTamperResponse(secureMode)` returns:
 
-Precedence:
+1. `warn` in dev mode.
+2. `warn` when not in secure mode (`--compat`).
+3. Otherwise the profile default, which for the fixed `standard` profile is
+   `terminate` in secure mode.
 
-1. Explicit env override wins.
-2. Profile controls defaults.
+There is no precedence chain and no override. The profile is a constant, the
+delay is a constant (`DefaultTamperDelayMs = 250`), and `delay` is reachable in
+`ApplyTamperResponse` but no mode selects it. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 ## 10) What telemetry is available?
 
@@ -155,12 +173,18 @@ Key counters include:
 
 Export:
 
-1. Set `MUTANT_SECURITY_TELEMETRY_FILE` to export JSON at process exit.
-2. Set `MUTANT_SECURITY_AUDIT=1` for stderr audit lines.
+1. `SecurityTelemetrySnapshot()` and `SecurityTelemetryJSON()` read the counters
+   in-process; `ExportSecurityTelemetry(path)` writes them to a file.
+2. Nothing in the runner calls the exporter, and `auditEvent` is a no-op, so a
+   normal run emits no telemetry file and no audit lines.
 
 ## 11) What should students remember?
 
-1. Mutant security is policy-driven, not hardcoded to always kill the process.
+1. Mutant security is policy-driven, not hardcoded to always kill the process --
+   but the policy comes from the execution mode on the command line, never from
+   the environment.
 2. Probes are evidence producers; runner decides enforcement.
-3. Mode/profile/env combinations matter as much as cryptography.
+3. The mode you pass matters as much as the cryptography, and it is visible in
+   the command you ran. That is the point: a run is reproducible from its
+   invocation alone.
 4. Read confidence + detail together before drawing conclusions.

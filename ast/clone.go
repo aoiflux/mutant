@@ -61,6 +61,15 @@ func Clone(node Node) Node {
 		}
 		copied := *node
 		return &copied
+	case *ImportStatement:
+		if node == nil {
+			return nil
+		}
+		return &ImportStatement{
+			Token: node.Token,
+			Alias: cloneIdentifier(node.Alias),
+			Path:  cloneStringLiteral(node.Path),
+		}
 
 	/// ---------- expressions ---------- ///
 	case *PrefixExpression:
@@ -120,6 +129,31 @@ func Clone(node Node) Node {
 			Left:  cloneExpression(node.Left),
 			Field: cloneIdentifier(node.Field),
 		}
+	case *MatchExpression:
+		if node == nil {
+			return nil
+		}
+		copied := &MatchExpression{
+			Token:   node.Token,
+			Subject: cloneExpression(node.Subject),
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				copied.Arms = append(copied.Arms, nil)
+				continue
+			}
+			copiedArm := &MatchArm{
+				Token:  arm.Token,
+				Body:   cloneBlock(arm.Body),
+				Braced: arm.Braced,
+			}
+			for _, pattern := range arm.Patterns {
+				copiedArm.Patterns = append(copiedArm.Patterns, cloneExpression(pattern))
+			}
+			copied.Arms = append(copied.Arms, copiedArm)
+		}
+		return copied
+
 	case *IfExpression:
 		if node == nil {
 			return nil
@@ -156,6 +190,15 @@ func Clone(node Node) Node {
 		return &ArrayLiteral{
 			Token:    node.Token,
 			Elements: cloneExpressions(node.Elements),
+		}
+	case *TemplateLiteral:
+		if node == nil {
+			return nil
+		}
+		return &TemplateLiteral{
+			Token: node.Token,
+			Texts: append([]string(nil), node.Texts...),
+			Parts: cloneExpressions(node.Parts),
 		}
 	case *HashLiteral:
 		if node == nil {
@@ -239,6 +282,33 @@ func Clone(node Node) Node {
 			copied.ReturnValue = cloneExpression(node.ReturnValue)
 		}
 		return copied
+	case *ForInStatement:
+		if node == nil {
+			return nil
+		}
+		copied := &ForInStatement{
+			Token:    node.Token,
+			Iterable: cloneExpression(node.Iterable),
+			Body:     cloneBlock(node.Body),
+		}
+		if node.Key != nil {
+			copied.Key, _ = Clone(node.Key).(*Identifier)
+		}
+		if node.Value != nil {
+			copied.Value, _ = Clone(node.Value).(*Identifier)
+		}
+		return copied
+
+	case *WhileStatement:
+		if node == nil {
+			return nil
+		}
+		return &WhileStatement{
+			Token:     node.Token,
+			Condition: cloneExpression(node.Condition),
+			Body:      cloneBlock(node.Body),
+		}
+
 	case *ForStatement:
 		if node == nil {
 			return nil
@@ -319,6 +389,14 @@ func cloneIdentifier(identifier *Identifier) *Identifier {
 		return nil
 	}
 	copied := *identifier
+	return &copied
+}
+
+func cloneStringLiteral(literal *StringLiteral) *StringLiteral {
+	if literal == nil {
+		return nil
+	}
+	copied := *literal
 	return &copied
 }
 

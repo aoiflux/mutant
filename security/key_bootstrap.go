@@ -70,12 +70,53 @@ func EnsureLocalSigningKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, bool, s
 }
 
 func ResolveTrustedPublicKeyHex() (string, bool, string, error) {
-	_, publicKey, created, baseDir, err := EnsureLocalSigningKeyPair()
+	return ResolveTrustedPublicKeyHexFromPath("")
+}
+
+// ResolveTrustedPublicKeyHexFromPath reads the trusted verification key from
+// path, falling back to the local keystore when path is empty. It reports
+// whether a keystore pair had to be generated, and the directory the key came
+// from.
+//
+// A path, never key material: the operator names a file on the command line, so
+// the run stays reproducible from the invocation alone and the key itself never
+// travels through the process environment or a shell history.
+// See docs/CONFIGURATION_POLICY.md.
+func ResolveTrustedPublicKeyHexFromPath(path string) (string, bool, string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		_, publicKey, created, baseDir, err := EnsureLocalSigningKeyPair()
+		if err != nil {
+			return "", false, "", err
+		}
+
+		return hex.EncodeToString(publicKey), created, baseDir, nil
+	}
+
+	publicKey, err := loadTrustedPublicKeyFile(path)
 	if err != nil {
 		return "", false, "", err
 	}
 
-	return hex.EncodeToString(publicKey), created, baseDir, nil
+	return hex.EncodeToString(publicKey), false, filepath.Dir(path), nil
+}
+
+func loadTrustedPublicKeyFile(path string) (ed25519.PublicKey, error) {
+	publicHex, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read trusted public key %s: %w", filepath.Clean(path), err)
+	}
+
+	publicKey, err := hex.DecodeString(strings.TrimSpace(string(publicHex)))
+	if err != nil {
+		return nil, fmt.Errorf("invalid trusted public key encoding in %s: %w", filepath.Clean(path), err)
+	}
+	if len(publicKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid trusted public key size in %s: expected %d bytes, got %d",
+			filepath.Clean(path), ed25519.PublicKeySize, len(publicKey))
+	}
+
+	return ed25519.PublicKey(publicKey), nil
 }
 
 func loadLocalSigningKeyPair(baseDir string) (ed25519.PrivateKey, ed25519.PublicKey, error) {

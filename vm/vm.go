@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"mutant/object"
 	"mutant/security"
 	"os"
+	"strings"
 )
 
 // VM structure defines virtual machine
@@ -43,6 +45,15 @@ type VM struct {
 	structDefs      map[string]any // Struct definitions (field names)
 	enumDefs        map[string]any // Enum definitions (tag names)
 	memoryMode      string
+
+	// builtins is what an OpGetBuiltin operand indexes, resolved once at
+	// construction: from the program's own name table, or -- for bytecode
+	// predating names -- from the frozen ordinal snapshot. builtinsErr holds a
+	// resolution failure until Run can return it, because the constructors
+	// cannot.
+	builtins        []*builtin.BuiltIn
+	builtinsErr     error
+	builtinsVersion int
 
 	enforceSecurityCheckOpcodes bool
 
@@ -83,6 +94,30 @@ type VM struct {
 	serveContextSet bool
 	serveConn       int64
 	serveArg        object.Object
+
+	// debug is the attached debugger, or nil -- which is every run that is not
+	// a debug session, and the state the fetch loop is written to cost nothing
+	// in: one nil check per instruction, next to the integrity probe that is
+	// already there.
+	//
+	// It is set by NewDebugger rather than by a constructor, because attaching
+	// is a decision made after the VM exists and before it runs, and a
+	// constructor parameter would have to be threaded through all nine of them.
+	debug *Debugger
+
+	// cover is the line-coverage recorder, non-nil only under
+	// `mutant test --cover`. Like debug, it is one nil check per instruction on
+	// a run that is not using it. coverMain is the program's own function,
+	// captured before the run because it is the one function that is not in the
+	// constant pool. See coverage.go.
+	cover     *coverage
+	coverMain *object.CompiledFunction
+
+	// tests is the test-run ledger, created the first time the program calls
+	// one of the testing builtins and nil in every run that calls none. It is
+	// not on the instruction path: only the builtins themselves touch it, so a
+	// program that never asserts never learns it exists. See testing.go.
+	tests *testRun
 }
 
 var (
@@ -153,7 +188,16 @@ func (vm *VM) nextSweepInterval() uint64 {
 
 func New(bc *compiler.ByteCode) *VM {
 	mainInstructions := bc.Instructions
-	mainfn := &object.CompiledFunction{Instructions: mainInstructions}
+	// Named and given the program's own line table so that frame 0 is an
+	// ordinary frame: Traceback walks every frame the same way instead of
+	// special-casing the bottom of the stack.
+	mainfn := &object.CompiledFunction{
+		Instructions: mainInstructions,
+		Name:         mainFrameName,
+		LineTable:    bc.LineTable,
+		MacroTable:   bc.MacroTable,
+		EndTable:     bc.EndTable,
+	}
 	frames := make([]*Frame, initialFrameCapacity)
 
 	mainClosure := &object.Closure{Fn: mainfn}
@@ -189,7 +233,56 @@ func New(bc *compiler.ByteCode) *VM {
 	}
 	vm.nextIntegrityAt = 0
 	vm.nextSweepAt = vm.nextSweepInterval()
+	if bc != nil {
+		vm.builtinsVersion = bc.Version
+	}
+	vm.builtins, vm.builtinsErr = resolveBuiltins(bc)
 	return vm
+}
+
+// resolveBuiltins binds the builtin names a program references to the functions
+// this runtime actually has, before a single instruction runs.
+//
+// Doing it eagerly is the point: a missing builtin is a property of the artifact,
+// not of the path taken through it, and resolving lazily at the call site would
+// hide it behind whichever branch happens not to be exercised.
+func resolveBuiltins(bc *compiler.ByteCode) ([]*builtin.BuiltIn, error) {
+	if bc == nil {
+		return nil, nil
+	}
+	switch version := compiler.NormalizeVersion(bc.Version); {
+	case version > compiler.BytecodeVersion:
+		return nil, fmt.Errorf(
+			"this program uses bytecode container v%d; this mutant runtime reads up to v%d -- upgrade mutant, or recompile the program from source",
+			version, compiler.BytecodeVersion)
+	case version >= compiler.BytecodeVersionNamedBuiltins:
+		return builtin.ResolveNames(bc.BuiltinNames)
+	default:
+		return builtin.ResolveLegacyOrdinals()
+	}
+}
+
+// builtinTableIndex turns a raw OpGetBuiltin operand into a position in the
+// table resolved at construction.
+//
+// In a name-indexed program the operand carries code.BuiltinNameTableFlag, and
+// its absence means the container claims one format while its instructions were
+// written in the other -- a mismatch worth reporting rather than reading the
+// operand as though it were a registry ordinal.
+func (vm *VM) builtinTableIndex(operand uint16) (int, error) {
+	index := int(operand)
+	if compiler.NormalizeVersion(vm.builtinsVersion) >= compiler.BytecodeVersionNamedBuiltins {
+		if index&code.BuiltinNameTableFlag == 0 {
+			return 0, fmt.Errorf(
+				"OpGetBuiltin: operand %d is not a name-table index, but this program declares bytecode container v%d; the file is corrupt or was assembled by hand",
+				index, compiler.NormalizeVersion(vm.builtinsVersion))
+		}
+		index &^= code.BuiltinNameTableFlag
+	}
+	if index >= len(vm.builtins) {
+		return 0, fmt.Errorf("OpGetBuiltin: invalid builtin index=%d, len=%d", index, len(vm.builtins))
+	}
+	return index, nil
 }
 
 // normalizeOpcodeMap accepts a reverse opcode table only if it can address every
@@ -309,6 +402,12 @@ func (vm *VM) clearObjectSensitiveData(obj object.Object) {
 	case *object.Encrypted:
 		security.SecureZero(o.Value)
 		o.Value = nil
+	// A bytes is the one value type whose payload can actually be wiped: a
+	// string's bytes are immutable, so the conversion needed to zero them
+	// produces a copy and clears that instead. Key material held in a buffer is
+	// therefore gone here, not merely dereferenced.
+	case *object.Bytes:
+		o.Zero()
 	case *object.Array:
 		for i := range o.Elements {
 			vm.clearObjectSensitiveData(o.Elements[i])
@@ -320,6 +419,13 @@ func (vm *VM) clearObjectSensitiveData(obj object.Object) {
 			vm.clearObjectSensitiveData(pair.Value)
 			delete(o.Pairs, key)
 		}
+	// A captured variable's storage, which the frame slot and every closure over
+	// it share. Recursing is what makes a secret held in one reachable at all:
+	// the slot holds the cell, so wiping the slot alone leaves the value alive
+	// behind a pointer some closure is still holding.
+	case *object.Cell:
+		vm.clearObjectSensitiveData(o.Value)
+		o.Value = nil
 	case *object.Closure:
 		for i := range o.Free {
 			vm.clearObjectSensitiveData(o.Free[i])
@@ -470,6 +576,12 @@ func NewWithPasswordAndGlobalStoreMode(bc *compiler.ByteCode, password string, g
 	return vm
 }
 
+// SecureMode reports whether a tamper probe that fires ends the run or only
+// warns. The constructors default it to true; the callers that build a VM for a
+// development activity -- `mutant test`, a debug session -- pass false, and this
+// is what lets them state which posture they chose rather than imply it.
+func (vm *VM) SecureMode() bool { return vm != nil && vm.secureMode }
+
 func (vm *VM) ensureFrameBoundaries() {
 	if vm == nil || vm.password == "" {
 		return
@@ -612,6 +724,12 @@ func (vm *VM) prepareForExecution() {
 }
 
 func (vm *VM) Run() error {
+	// Reported before anything executes: a builtin this runtime does not have is
+	// a fact about the program, and running half of it first tells the user less.
+	if vm.builtinsErr != nil {
+		return vm.builtinsErr
+	}
+
 	vm.prepareForExecution()
 
 	if err := vm.validateSecurityCheckOpcodes("before-execution"); err != nil {
@@ -642,7 +760,13 @@ func (vm *VM) Run() error {
 // program path had none, so the same corrupt .mu file errored inside a worker
 // and panicked on the main thread. See vm/fault.go.
 func (vm *VM) execLoop(baseFrameIndex int) (err error) {
-	defer func() { containFault(recover(), &err) }()
+	defer func() {
+		containFault(recover(), &err)
+		// After containFault, so a fault is given a location too, and inside
+		// the same defer because the VM's frame stack still describes the
+		// failure at this point -- returning first would be too late.
+		err = vm.attachTraceback(err)
+	}()
 	return vm.runInstructions(baseFrameIndex)
 }
 
@@ -662,6 +786,20 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 		ip = vm.currentFrame().ip
 		ins = vm.currentFrame().Instructions()
 
+		// The debugger sees the instruction before it runs, with ip already
+		// advanced to it -- which is the position Traceback reports, so a stop
+		// here and a crash here name the same line. It blocks inside this call
+		// for as long as the session is parked.
+		if vm.debug != nil {
+			if err := vm.debug.step(); err != nil {
+				return err
+			}
+		}
+
+		if vm.cover != nil {
+			vm.cover.mark(vm.currentFrame().cl.Fn, ip)
+		}
+
 		opcodeByte, err := vm.xorStream.XOROneAt(ins[ip], int64(ip))
 		if err != nil {
 			return vm.runtimeErrorAt(ip, op, err)
@@ -676,6 +814,11 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 					logSecurityWarning("debugger_detected", "vm-run")
 					continue
 				}
+				// The security opcodes return their error directly rather than
+				// going through ApplyTamperResponse, so they explain themselves
+				// here instead. Without this the run stopped mid-instruction
+				// with one sentence naming no probe and no remedy. (M-7)
+				security.ExplainTamperTermination("debugger_detected", "vm-run", security.DebuggerTamperDetail())
 				return security.ErrDebuggerDetected
 			}
 		case code.OpChkSnd:
@@ -685,6 +828,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 					logSecurityWarning("sandbox_detected", "vm-run")
 					continue
 				}
+				security.ExplainTamperTermination("sandbox_detected", "vm-run", security.SandboxTamperDetail())
 				return security.ErrSandboxDetected
 			}
 		case code.OpConstant:
@@ -712,7 +856,12 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if err := vm.execMinusOperation(); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
-		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod:
+		case code.OpBitNot:
+			if err := vm.execBitNotOperation(); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod,
+			code.OpBitAnd, code.OpBitOr, code.OpBitXor, code.OpShiftLeft, code.OpShiftRight:
 			if err := vm.execBinaryOperation(op); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
@@ -740,6 +889,24 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			array := vm.buildArray(vm.stackPointer-numElements, vm.stackPointer)
 			vm.stackPointer = vm.stackPointer - numElements // pop the elements (OpHash does this; OpArray had omitted it)
 			if err := vm.push(array); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+		case code.OpConcat:
+			if ip+2 >= len(ins) {
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operand, len=%d", len(ins))
+			}
+			res, err := vm.readUint16(ins, ip+1)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			numPieces := int(res)
+			vm.currentFrame().ip += 2
+			if vm.stackPointer-numPieces < 0 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow for %d pieces (sp=%d)", numPieces, vm.stackPointer)
+			}
+			joined := vm.buildInterpolation(vm.stackPointer-numPieces, vm.stackPointer)
+			vm.stackPointer = vm.stackPointer - numPieces
+			if err := vm.push(joined); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpHash:
@@ -778,6 +945,80 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			pos := int(res)
 			vm.currentFrame().ip = pos - 1
+		case code.OpMatchFail:
+			// Reached only by falling past every arm of a match with no `_`.
+			// The subject is still on the stack because each arm drops it
+			// itself; naming it is the whole point of failing here rather
+			// than pushing a null and letting it flow on.
+			unmatched := vm.pop()
+			rendered := "null"
+			if unmatched != nil {
+				rendered = unmatched.Inspect()
+			}
+			return vm.runtimeErrorfAt(ip, op, "no match arm matched %s", rendered)
+
+		case code.OpIterInit:
+			iterable := vm.decryptForUse(vm.pop())
+			if iterable == nil {
+				return vm.runtimeErrorfAt(ip, op, "nothing to iterate over")
+			}
+			iterator, iterable_ok := object.NewIterator(iterable)
+			if !iterable_ok {
+				return vm.runtimeErrorfAt(ip, op, "cannot iterate over %s", iterable.Type())
+			}
+			if err := vm.push(iterator); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+
+		case code.OpIterNext:
+			if ip+3 >= len(ins) {
+				return vm.runtimeErrorfAt(ip, op, "not enough bytes for operands, len=%d", len(ins))
+			}
+			res, err := vm.readUint16(ins, ip+1)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			endPosition := int(res)
+			// readUint8, not ins[ip+3]: instruction bytes are not read raw
+			// here, and a direct index gives the obfuscated byte rather than
+			// the operand.
+			bindingCount, err := vm.readUint8(ins, ip+3)
+			if err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+			bindings := int(bindingCount)
+			vm.currentFrame().ip += 3
+
+			// Peeked, not popped: the cursor stays on the stack for the whole
+			// loop and is dropped by the OpPop at the loop's end, which is
+			// where both the exhausted jump and every break land.
+			if vm.stackPointer < 1 {
+				return vm.runtimeErrorfAt(ip, op, "stack underflow reading the loop cursor")
+			}
+			iterator, isIterator := vm.stack[vm.stackPointer-1].(*object.Iterator)
+			if !isIterator {
+				return vm.runtimeErrorfAt(ip, op, "loop cursor was replaced on the stack")
+			}
+
+			key, value, more := iterator.Next()
+			if !more {
+				vm.currentFrame().ip = endPosition - 1
+				break
+			}
+
+			if bindings == 2 {
+				if err := vm.push(key); err != nil {
+					return vm.runtimeErrorAt(ip, op, err)
+				}
+				if err := vm.push(value); err != nil {
+					return vm.runtimeErrorAt(ip, op, err)
+				}
+				break
+			}
+			if err := vm.push(iterator.Primary(key, value)); err != nil {
+				return vm.runtimeErrorAt(ip, op, err)
+			}
+
 		case code.OpJumpFalse:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpJumpFalse: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -860,11 +1101,15 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 				return err
 			}
 			vm.currentFrame().ip += 2
-			if int(builtinIndex) >= len(builtin.Builtins) {
-				return fmt.Errorf("OpGetBuiltin: invalid builtin index=%d, len=%d", builtinIndex, len(builtin.Builtins))
+			// Indexes the table resolved at construction -- this program's own
+			// referenced-builtin names, or the frozen ordinal snapshot for
+			// bytecode compiled before names travelled with the program. Never
+			// the live registry, whose order is no longer part of the ABI.
+			index, err := vm.builtinTableIndex(builtinIndex)
+			if err != nil {
+				return err
 			}
-			definition := builtin.Builtins[builtinIndex]
-			if err := vm.push(definition.Builtin); err != nil {
+			if err := vm.push(vm.builtins[index]); err != nil {
 				return err
 			}
 		case code.OpGetFree:
@@ -880,7 +1125,96 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
 				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
 			}
-			if err := vm.push(vm.decryptForUse(currentClosure.Free[freeIndex])); err != nil {
+			// A captured local is boxed, so the Free entry is the cell and the
+			// value is inside it. The two cases the type switch distinguishes
+			// are both real: a free whose original is the enclosing function's
+			// own name is captured by value for recursion and is a closure, not
+			// a cell, and every free in bytecode compiled before boxing existed
+			// is a plain value. Nothing a program can compute is ever a *Cell,
+			// so the test cannot be fooled by a user value.
+			captured := currentClosure.Free[freeIndex]
+			if cell, ok := captured.(*object.Cell); ok {
+				captured = cell.Value
+			}
+			if err := vm.push(vm.decryptForUse(captured)); err != nil {
+				return err
+			}
+		case code.OpSetFree:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("OpSetFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			freeIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
+			cell, ok := currentClosure.Free[freeIndex].(*object.Cell)
+			if !ok {
+				// The compiler refuses the one unboxed free it can produce (the
+				// enclosing function's own name), so reaching here means the
+				// bytecode did not come from this compiler.
+				return vm.runtimeErrorfAt(ip, op, "captured variable %d is not assignable storage", freeIndex)
+			}
+			cell.Value = vm.encryptForStorage(vm.pop())
+		case code.OpGetLocalCell, code.OpSetLocalCell, code.OpCaptureLocal:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("%s: not enough bytes for operand at ip=%d, len=%d", runtimeOpcodeName(op), ip, len(ins))
+			}
+			localIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			frame := vm.currentFrame()
+			slot := frame.bp + int(localIndex)
+			if slot < 0 || slot >= len(vm.stack) {
+				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
+			}
+			cell, ok := vm.stack[slot].(*object.Cell)
+			if !ok {
+				// callClosure boxes every slot named in CapturedLocals before a
+				// single instruction runs, and only slots in that list are given
+				// these opcodes. A miss means the function object and its
+				// instruction stream disagree.
+				return vm.runtimeErrorfAt(ip, op, "local slot %d is not boxed", localIndex)
+			}
+			switch op {
+			case code.OpGetLocalCell:
+				if err := vm.push(vm.decryptForUse(cell.Value)); err != nil {
+					return err
+				}
+			case code.OpSetLocalCell:
+				cell.Value = vm.encryptForStorage(vm.pop())
+			case code.OpCaptureLocal:
+				// The cell itself, not its contents: OpClosure copies what is on
+				// the stack into the new closure's Free list, and copying the
+				// pointer is what makes the two sides one location.
+				if err := vm.push(cell); err != nil {
+					return err
+				}
+			}
+		case code.OpCaptureFree:
+			if ip+1 >= len(ins) {
+				return fmt.Errorf("OpCaptureFree: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
+			}
+			freeIndex, err := vm.readUint8(ins, ip+1)
+			if err != nil {
+				return err
+			}
+			vm.currentFrame().ip++
+			currentClosure := vm.currentFrame().cl
+			if currentClosure == nil || int(freeIndex) >= len(currentClosure.Free) {
+				return vm.runtimeErrorfAt(ip, op, "free variable index=%d outside this closure's %d captured values", freeIndex, freeCount(currentClosure))
+			}
+			// Re-capturing a capture: a function three levels down closing over a
+			// variable two levels up. Passing this frame's entry along unread is
+			// what keeps all three levels pointing at the one cell the owner
+			// boxed.
+			if err := vm.push(currentClosure.Free[freeIndex]); err != nil {
 				return err
 			}
 		case code.OpIndex:
@@ -1081,17 +1415,29 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			fieldName := fieldObj.Value
 			obj := vm.pop()
-			if structObj, ok := obj.(*object.Struct); ok {
-				if val, exists := structObj.Fields[fieldName]; exists {
-					if err := vm.push(val); err != nil {
-						return err
-					}
-				} else {
-					if err := vm.push(global.Null); err != nil {
-						return err
-					}
+			switch target := obj.(type) {
+			case *object.Struct:
+				val, exists := target.Fields[fieldName]
+				if !exists {
+					val = global.Null
 				}
-			} else {
+				if err := vm.push(val); err != nil {
+					return err
+				}
+			case *object.Error:
+				// Errors read like structs, deliberately. An unknown name gives
+				// null here exactly as it does above, so inspecting an error
+				// never introduces a failure mode that inspecting a struct does
+				// not already have -- and a field that a stripped build stamps
+				// nothing into still reads, as 0 or "".
+				val, exists := target.Field(fieldName)
+				if !exists {
+					val = global.Null
+				}
+				if err := vm.push(val); err != nil {
+					return err
+				}
+			default:
 				return fmt.Errorf("cannot access field on non-struct: %s", obj.Type())
 			}
 		case code.OpSetField:
@@ -1163,6 +1509,18 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if err := vm.push(enumObj); err != nil {
 				return err
 			}
+		default:
+			// An opcode this build does not know. It reaches here in exactly one
+			// way: bytecode compiled by a newer toolchain, since opcodes are only
+			// ever appended and a value once emitted never changes meaning.
+			//
+			// Saying so is the whole point of the arm. Without it the switch
+			// simply matched nothing, the instruction pointer advanced by one,
+			// and the operand bytes of the instruction it did not recognise were
+			// executed as opcodes -- a program that runs to completion and
+			// answers with nonsense. Refusing to run half of it is the same
+			// choice Run() already makes for a builtin this runtime lacks.
+			return vm.runtimeErrorfAt(ip, op, "unknown opcode %d: this program was built by a newer version of mutant", byte(op))
 		}
 	}
 
@@ -1435,12 +1793,38 @@ func (vm *VM) pop() object.Object {
 	return obj
 }
 
+// bitwiseOperatorSymbol maps a bitwise opcode back to its source spelling.
+//
+// The VM does not compute bitwise results itself: it hands the spelling and the
+// two int64s to object.BitwiseInfix, which is the function the evaluator and the
+// WASM REPL call. The arithmetic opcodes are each a single Go operator with no
+// guard worth sharing, so they stay inline; the bitwise ones carry a negative-
+// shift check that has to answer the same way in all three engines, and one
+// implementation is the only way to be sure it does.
+var bitwiseOperatorSymbol = map[code.Opcode]string{
+	code.OpBitAnd:     "&",
+	code.OpBitOr:      "|",
+	code.OpBitXor:     "^",
+	code.OpShiftLeft:  "<<",
+	code.OpShiftRight: ">>",
+}
+
 func (vm *VM) execBinaryOperation(op code.Opcode) error {
 	right := vm.pop()
 	left := vm.pop()
 
 	rtype := right.Type()
 	ltype := left.Type()
+
+	// Bitwise operands are checked before the type dispatch below, not inside
+	// the integer path: a FLOAT would otherwise reach execBinaryFloatOperation
+	// and be turned away as an unknown float operator, which is not what went
+	// wrong. `1.5 & 1` is a type error, and it should say so.
+	if sym, ok := bitwiseOperatorSymbol[op]; ok {
+		if ltype != object.INTEGER_OBJ || rtype != object.INTEGER_OBJ {
+			return fmt.Errorf("%s", object.BitwiseOperandError(sym, left, right).Message)
+		}
+	}
 
 	if rtype == object.INTEGER_OBJ && ltype == object.INTEGER_OBJ {
 		return vm.execBinaryIntegerOperation(op, left, right)
@@ -1451,6 +1835,8 @@ func (vm *VM) execBinaryOperation(op code.Opcode) error {
 		return vm.execBinaryIntegerOperation(op, left, right)
 	case rtype == object.STRING_OBJ && ltype == object.STRING_OBJ:
 		return vm.execBinaryStringOperation(op, left, right)
+	case rtype == object.BYTES_OBJ && ltype == object.BYTES_OBJ:
+		return vm.execBinaryBytesOperation(op, left, right)
 	}
 
 	ans1 := mutil.AssertObjectTypes(string(rtype), object.INTEGER_OBJ, object.FLOAT_OBJ)
@@ -1473,6 +1859,15 @@ func (vm *VM) execBinaryOperation(op code.Opcode) error {
 func (vm *VM) execBinaryIntegerOperation(op code.Opcode, left, right object.Object) error {
 	rval := right.(*object.Integer).Value
 	lval := left.(*object.Integer).Value
+
+	if sym, ok := bitwiseOperatorSymbol[op]; ok {
+		bits := object.BitwiseInfix(sym, lval, rval)
+		if e, ok := bits.(*object.Error); ok {
+			return fmt.Errorf("%s", e.Message)
+		}
+		return vm.push(bits)
+	}
+
 	var result int64
 
 	switch op {
@@ -1542,6 +1937,27 @@ func (vm *VM) execBinaryStringOperation(op code.Opcode, left, right object.Objec
 
 // execSetIndex mutates a container in place for `container[index] = value` and
 // returns the (same) container so the caller can persist it to its variable slot.
+// execBinaryBytesOperation concatenates two buffers. Bytes deliberately support
+// no other operator: subtraction and division of buffers mean nothing, and the
+// alternative to refusing them is inventing a semantic nobody asked for.
+//
+// The result is a fresh buffer rather than an append onto the left operand,
+// because `a + b` must not mutate `a` -- append would when a has spare capacity.
+func (vm *VM) execBinaryBytesOperation(op code.Opcode, left, right object.Object) error {
+	if op != code.OpAdd {
+		return fmt.Errorf("unknown bytes operator: %d", op)
+	}
+
+	lval := left.(*object.Bytes).Value
+	rval := right.(*object.Bytes).Value
+
+	joined := make([]byte, 0, len(lval)+len(rval))
+	joined = append(joined, lval...)
+	joined = append(joined, rval...)
+
+	return vm.push(&object.Bytes{Value: joined})
+}
+
 func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object, error) {
 	switch c := container.(type) {
 	case *object.Array:
@@ -1553,6 +1969,26 @@ func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object
 			return nil, fmt.Errorf("array index out of bounds: %d (len %d)", idx.Value, len(c.Elements))
 		}
 		c.Elements[idx.Value] = value
+		return c, nil
+	case *object.Bytes:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return nil, fmt.Errorf("bytes index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Value)) {
+			return nil, fmt.Errorf("bytes index out of bounds: %d (len %d)", idx.Value, len(c.Value))
+		}
+		// A buffer holds bytes, so the only thing that can be stored in one is a
+		// value that is a byte. Truncating a larger integer silently would make
+		// b[0] = 256 write a zero.
+		val, ok := value.(*object.Integer)
+		if !ok {
+			return nil, fmt.Errorf("bytes element must be INTEGER, got %s", value.Type())
+		}
+		if val.Value < 0 || val.Value > 255 {
+			return nil, fmt.Errorf("bytes element out of range: %d (want 0-255)", val.Value)
+		}
+		c.Value[idx.Value] = byte(val.Value)
 		return c, nil
 	case *object.Hash:
 		hashKey, ok := index.(object.Hashable)
@@ -1577,11 +2013,25 @@ func (vm *VM) execIndexOperation(left, index object.Object) error {
 		return vm.execMultiValueIndex(left, index)
 	case left.Type() == object.STRING_OBJ && index.Type() == object.INTEGER_OBJ:
 		return vm.execStringIndex(left, index)
+	case left.Type() == object.BYTES_OBJ && index.Type() == object.INTEGER_OBJ:
+		return vm.execBytesIndex(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return vm.execHashIndex(left, index)
+	case left.Type() == object.ERROR_OBJ && index.Type() == object.STRING_OBJ:
+		return vm.execErrorField(left, index)
 	default:
 		return fmt.Errorf("index operator not supported: %s", left.Type())
 	}
+}
+
+// execErrorField reads err["message"] through the same table err.message reads,
+// so the two spellings cannot disagree. An unknown name is null, not a fault.
+func (vm *VM) execErrorField(errObj, index object.Object) error {
+	val, ok := errObj.(*object.Error).Field(index.(*object.String).Value)
+	if !ok {
+		return vm.push(global.Null)
+	}
+	return vm.push(val)
 }
 
 func (vm *VM) execMultiValueIndex(multiValue, index object.Object) error {
@@ -1606,6 +2056,29 @@ func (vm *VM) execStringIndex(str, index object.Object) error {
 	}
 	strObj := &object.String{Value: string(strVal[i])}
 	return vm.push(strObj)
+}
+
+// execBytesIndex yields the byte at i as an INTEGER 0-255.
+//
+// This is where bytes deliberately part company with strings, which yield a
+// one-character string. A buffer is indexed to compare a value -- b[0] == 0x4d
+// -- and returning a one-byte buffer would make every such test go through a
+// conversion. Negative indices count from the end, as they do everywhere else.
+func (vm *VM) execBytesIndex(buf, index object.Object) error {
+	data := buf.(*object.Bytes).Value
+	i := index.(*object.Integer).Value
+	max := int64(len(data) - 1)
+
+	if i > max {
+		return vm.push(global.Null)
+	}
+	if i < 0 {
+		if max+i+1 < 0 {
+			return vm.push(global.Null)
+		}
+		return vm.push(&object.Integer{Value: int64(data[max+i+1])})
+	}
+	return vm.push(&object.Integer{Value: int64(data[i])})
 }
 
 func (vm *VM) execArrayIndex(array, index object.Object) error {
@@ -1670,6 +2143,19 @@ func (vm *VM) execMinusOperation() error {
 	return fmt.Errorf("unknown object: %s", operand.Type())
 }
 
+// execBitNotOperation evaluates `~x`. Like the binary bitwise operators it
+// defers to object, so the complement and the message it refuses non-integers
+// with are written once.
+func (vm *VM) execBitNotOperation() error {
+	operand := vm.pop()
+
+	result := object.BitwiseNot(operand)
+	if e, ok := result.(*object.Error); ok {
+		return fmt.Errorf("%s", e.Message)
+	}
+	return vm.push(result)
+}
+
 func (vm *VM) execComparison(op code.Opcode) error {
 	right := vm.pop()
 	left := vm.pop()
@@ -1686,11 +2172,104 @@ func (vm *VM) execComparison(op code.Opcode) error {
 		return vm.execFloatComparison(op, left, right)
 	}
 
+	// The fallback below compares rendered forms, and Bytes renders as hex, so
+	// without this a buffer would equal the string spelling its own hex.
+	if ltype == object.BYTES_OBJ || rtype == object.BYTES_OBJ {
+		return vm.execBytesComparison(op, left, right)
+	}
+
+	// Errors are compared before the fallback too, and for a sharper reason:
+	// the fallback compares Inspect, Inspect renders the position, and only
+	// this engine stamps one. Comparing rendered errors would make equality an
+	// artefact of which engine ran the program.
+	if ltype == object.ERROR_OBJ || rtype == object.ERROR_OBJ {
+		return vm.execErrorComparison(op, left, right)
+	}
+
+	// Enum values, for the same reason as bytes: the fallback compares
+	// rendered forms, an enum renders as `Status.Ok(0)`, and a string spelling
+	// that text would otherwise compare equal to the variant. `match` makes
+	// that reachable in a way plain `==` rarely was.
+	if ltype == object.ENUM_VALUE_OBJ || rtype == object.ENUM_VALUE_OBJ {
+		return vm.execEnumComparison(op, left, right)
+	}
+
 	switch op {
 	case code.OpEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() == left.Inspect()))
 	case code.OpUnEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() != left.Inspect()))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execEnumComparison decides equality for any comparison with an enum value on
+// either side. Two variants are equal when they are the same variant of the
+// same enum, and an enum value is never equal to a value of another type --
+// whatever it renders as.
+//
+// Ordering is undefined, as it is for bytes and errors: a variant's ordinal
+// exists to identify it, and reading `Status.Ok < Status.Failed` as a fact
+// about severity is the kind of meaning a declaration order should not
+// silently acquire.
+func (vm *VM) execEnumComparison(op code.Opcode, left, right object.Object) error {
+	leftEnum, leftOK := left.(*object.EnumValue)
+	rightEnum, rightOK := right.(*object.EnumValue)
+	equal := leftOK && rightOK &&
+		leftEnum.TypeName == rightEnum.TypeName &&
+		leftEnum.Tag == rightEnum.Tag
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execErrorComparison decides equality for any comparison with an error on
+// either side. Only two errors can be equal; an error is never equal to a value
+// of another type, whatever it renders as.
+//
+// Ordering is undefined, as it is for bytes: `<` on two errors has no meaning
+// worth inventing, and the operand domains the analyzer derives from this
+// function are what its diagnostics are built on.
+func (vm *VM) execErrorComparison(op code.Opcode, left, right object.Object) error {
+	leftErr, leftOK := left.(*object.Error)
+	rightErr, rightOK := right.(*object.Error)
+	equal := leftOK && rightOK && leftErr.Equals(rightErr)
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execBytesComparison decides equality for any comparison with a bytes on
+// either side. Only two buffers can be equal: a bytes is never equal to a value
+// of another type, whatever it renders as.
+//
+// Ordering is not defined. `<` on two buffers has an obvious lexicographic
+// answer, but the operand domains the analyzer derives from this function are
+// what its diagnostics are built on, so widening the operator set is a language
+// decision rather than a convenience.
+func (vm *VM) execBytesComparison(op code.Opcode, left, right object.Object) error {
+	leftBytes, leftOK := left.(*object.Bytes)
+	rightBytes, rightOK := right.(*object.Bytes)
+	equal := leftOK && rightOK && bytes.Equal(leftBytes.Value, rightBytes.Value)
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
 	default:
 		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
 	}
@@ -1735,6 +2314,29 @@ func (vm *VM) buildArray(startIndex, endIndex int) object.Object {
 		elements[i-startIndex] = vm.decryptForUse(vm.stack[i])
 	}
 	return &object.Array{Elements: elements}
+}
+
+// buildInterpolation joins the pieces of a string literal's holes and text
+// into the one string they spell.
+//
+// A piece that is already a string contributes its own text; anything else
+// contributes what it would print. There is no conversion to fail and no
+// protocol for a value to implement, because a value this language can print
+// is a value it can interpolate.
+func (vm *VM) buildInterpolation(startIndex, endIndex int) object.Object {
+	var out strings.Builder
+	for i := startIndex; i < endIndex; i++ {
+		piece := vm.decryptForUse(vm.stack[i])
+		if piece == nil {
+			continue
+		}
+		if str, isString := piece.(*object.String); isString {
+			out.WriteString(str.Value)
+			continue
+		}
+		out.WriteString(piece.Inspect())
+	}
+	return &object.String{Value: out.String()}
 }
 
 func (vm *VM) buildMultiValue(startIndex, endIndex int) object.Object {
@@ -1851,7 +2453,42 @@ func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
 	vm.pushFrame(frame)
 	vm.ensureStackCapacity(frame.bp + cl.Fn.NumLocals)
 	vm.stackPointer = frame.bp + cl.Fn.NumLocals
+	// Before boxing, so a captured local starts its cell empty rather than
+	// holding whatever the previous frame left in that slot.
+	if vm.debug != nil {
+		vm.clearUnsetLocals(frame, cl.Fn)
+	}
+	vm.boxCapturedSlots(frame, cl.Fn)
 	return nil
+}
+
+// boxCapturedSlots replaces the frame slots an inner function closes over with
+// cells, so a write through the closure and a write through the frame land in
+// the same place.
+//
+// It runs after the arguments are already at their slots, which is the whole
+// reason a captured *parameter* needs no special case: slot i holds argument i,
+// and boxing it wraps the value that is already there. Slots above the
+// parameters have not been written yet -- a `let` always precedes any use of the
+// name it binds -- so they are boxed around Null rather than around whatever the
+// previous frame left on the stack.
+//
+// One cell per slot per frame, which is also the tree-walking evaluator's
+// scoping: it makes one environment per call and one per loop, not one per
+// iteration, so two closures made in different turns of the same loop share a
+// variable in both engines.
+func (vm *VM) boxCapturedSlots(frame *Frame, fn *object.CompiledFunction) {
+	for _, index := range fn.CapturedLocals {
+		slot := frame.bp + index
+		if slot < 0 || slot >= len(vm.stack) {
+			continue
+		}
+		if index < fn.NumParams {
+			vm.stack[slot] = &object.Cell{Value: vm.stack[slot]}
+			continue
+		}
+		vm.stack[slot] = &object.Cell{Value: global.Null}
+	}
 }
 
 // CallClosureSync runs a Mutant closure to completion from Go and returns its
@@ -1975,6 +2612,7 @@ func (vm *VM) callBuiltin(bi *builtin.BuiltIn, numArgs int) error {
 	if result == nil {
 		result = global.Null
 	}
+	result = vm.decorateError(result)
 
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 
@@ -1999,6 +2637,7 @@ func (vm *VM) callExecutorNative(kind string, numArgs int) error {
 	if result == nil {
 		result = global.Null
 	}
+	result = vm.decorateError(result)
 	vm.stackPointer = vm.stackPointer - numArgs - 1
 	return vm.push(result)
 }
@@ -2020,6 +2659,8 @@ func isTruthy(obj object.Object) bool {
 	case *object.Null:
 		return false
 	case *object.String:
+		return len(o.Value) != 0
+	case *object.Bytes:
 		return len(o.Value) != 0
 	case *object.Integer:
 		return o.Value != 0

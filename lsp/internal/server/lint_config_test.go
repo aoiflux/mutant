@@ -1,7 +1,11 @@
 package server
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"unicode"
 
@@ -86,6 +90,83 @@ func TestParseLintConfigFallsBackToDefaults(t *testing.T) {
 	} {
 		if got := parseLintConfig(settings); got != defaults {
 			t.Errorf("parseLintConfig(%#v) = %+v, want the defaults %+v", settings, got, defaults)
+		}
+	}
+}
+
+// TestEveryLintRuleIsExposedByTheExtension pins LintConfig against the
+// extension's settings schema.
+//
+// The server test above proves a setting reaches the config; this one proves
+// the setting exists to be sent. They are the two halves of the same seam, and
+// missing the second half is the quieter failure: the rule works, the default
+// applies, and there is simply no way for a user to turn it off. Comparing the
+// two lists rather than listing rule names means a rule added later is covered
+// without anyone remembering to extend this test.
+func TestEveryLintRuleIsExposedByTheExtension(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "mutant-vscode-extension", "package.json"))
+	if err != nil {
+		t.Skipf("extension manifest not readable here: %v", err)
+	}
+
+	var manifest struct {
+		Contributes struct {
+			Configuration struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"configuration"`
+		} `json:"contributes"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("the extension manifest does not parse: %v", err)
+	}
+
+	declared := make(map[string]struct{})
+	for key := range manifest.Contributes.Configuration.Properties {
+		if name, ok := strings.CutPrefix(key, "mutant.lint.rules."); ok {
+			if rule, ok := strings.CutSuffix(name, ".severity"); ok {
+				declared[rule] = struct{}{}
+			}
+		}
+	}
+
+	configType := reflect.TypeOf(analyzer.LintConfig{})
+	settable := make(map[string]struct{}, configType.NumField())
+	for i := 0; i < configType.NumField(); i++ {
+		rule := ruleNameForField(configType.Field(i).Name)
+		settable[rule] = struct{}{}
+		if _, ok := declared[rule]; !ok {
+			t.Errorf("%s is a lint rule the extension offers no setting for, so it cannot be turned off from an editor", rule)
+		}
+	}
+	for rule := range declared {
+		if _, ok := settable[rule]; !ok {
+			t.Errorf("the extension offers mutant.lint.rules.%s.severity, but LintConfig has no such rule; the knob does nothing", rule)
+		}
+	}
+}
+
+// TestEveryLintRuleIsDocumentedByTheExtension is the third half of the same
+// seam. The two tests above prove a setting exists and that it reaches the
+// config; this one proves a reader is told it exists at all.
+//
+// It drifted: the extension README listed 16 of the 24 rules, and the eight it
+// omitted were the entire security family -- weak crypto, hardcoded secrets,
+// command injection, path traversal, TLS verification, unbounded resources,
+// evidence mutation. Those are the rules most worth knowing about and the least
+// likely to be discovered by scrolling a settings pane.
+func TestEveryLintRuleIsDocumentedByTheExtension(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "mutant-vscode-extension", "README.md"))
+	if err != nil {
+		t.Skipf("extension README not readable here: %v", err)
+	}
+	text := string(readme)
+
+	configType := reflect.TypeOf(analyzer.LintConfig{})
+	for i := 0; i < configType.NumField(); i++ {
+		rule := ruleNameForField(configType.Field(i).Name)
+		setting := "mutant.lint.rules." + rule + ".severity"
+		if !strings.Contains(text, setting) {
+			t.Errorf("the extension README does not mention %s, so nothing tells a reader the rule exists", setting)
 		}
 	}
 }

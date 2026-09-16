@@ -114,6 +114,8 @@ func normalize(o object.Object) string {
 		return fmt.Sprintf("BOOLEAN(%t)", v.Value)
 	case *object.String:
 		return fmt.Sprintf("STRING(%q)", v.Value)
+	case *object.Bytes:
+		return fmt.Sprintf("BYTES(%x)", v.Value)
 	case *object.Error:
 		// Error message wording differs across engines by design; only the fact
 		// that both engines errored is what parity requires here.
@@ -176,6 +178,59 @@ func TestEvaluatorVMOperatorParity(t *testing.T) {
 	}
 }
 
+// Reading a field off an error has to mean the same thing in both engines.
+//
+// The two arrive at it very differently. The VM keeps its fatal errors as Go
+// errors, so an *object.Error on its stack is unambiguously a value. The
+// evaluator has one Error type doing both jobs, and evalInspectedOperand is what
+// stops the fatal-propagation short-circuit from swallowing `err.message` --
+// that divergence is exactly the kind this file exists to catch, and it is why
+// the dot and the index spelling are both listed rather than one standing in
+// for the other.
+//
+// The error is produced by a real failing builtin rather than constructed,
+// because nothing in the language constructs one yet, and because a builtin's
+// error is the only kind a .mut program can actually hold today.
+func TestErrorFieldAccessParity(t *testing.T) {
+	const raise = `let d, err = fs_read("/mutant/parity/no/such/path");`
+
+	inputs := []string{
+		raise + ` err.message`,
+		raise + ` err["message"]`,
+		raise + ` err.context`,
+		raise + ` err["context"]`,
+		// Stamped position: the evaluator never stamps one, and the VM only
+		// stamps when a line table survived. Both must agree on the *shape* --
+		// an INTEGER, not a missing field -- which is the whole point of §6.5.
+		raise + ` type_of(err.line)`,
+		raise + ` type_of(err.column)`,
+		raise + ` type_of(err.file)`,
+		raise + ` type_of(err.source_line)`,
+		// Composite fields.
+		raise + ` type_of(err.related)`,
+		raise + ` type_of(err.stack)`,
+		raise + ` len(err.related)`,
+		// An unknown name is null in both, not a fault in either.
+		raise + ` type_of(err.no_such_field)`,
+		raise + ` type_of(err["no_such_field"])`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+		if evalRes == "ERROR" {
+			t.Errorf("reading a field of an error faulted in both engines for %q", input)
+		}
+	}
+}
+
 // A value computed by the evaluator during macro expansion must equal the same
 // expression compiled straight to bytecode. This is the parity that still has
 // teeth: `unquote(...)` runs in the evaluator and splices its result into the
@@ -184,6 +239,118 @@ func TestEvaluatorVMOperatorParity(t *testing.T) {
 //
 // unquote splices back integers, booleans, and quoted nodes (see
 // convertObjectToASTNode), so the table stays within those.
+// A constructed error has to be the same value in both engines.
+//
+// This is the case that forced the evaluator's fault type. The VM keeps its
+// fatal errors as Go errors, so an *object.Error on its stack is a value by
+// construction; the evaluator used one *object.Error for both the language's
+// error value and its own "stop here" signal, so every one of these programs
+// aborted rather than binding. Nothing had exposed that, because until error()
+// every error a program could hold arrived inside a MULTI_VALUE, where the
+// fault check never looked.
+//
+// Position fields are deliberately absent below. Stamping is a VM facility --
+// decorateError reads a line table and a call stack, neither of which the
+// tree-walker has -- so `e.line` is 1 there and 0 here. That is the same rule a
+// stripped build follows, and it is a documented property of the field rather
+// than a disagreement about what error() means.
+func TestErrorConstructorParity(t *testing.T) {
+	inputs := []string{
+		`let e = error("boom"); type_of(e)`,
+		`let e = error("boom"); e.message`,
+		`let e = error("boom"); e.context`,
+		`let e = error("boom", "parser"); e.context`,
+		`let e = error("boom"); e["message"]`,
+		`let e = error("boom", "parser", {"path": "/d.img", "offset": 4096}); len(e.related)`,
+		`let e = error("b", "p", {"offset": 4096}); type_of(e.related["offset"])`,
+		// A constructed error survives a function return, a rebinding, and a
+		// place where a value is merely evaluated and discarded.
+		`let f = fn() { return error("inner"); }; let e = f(); e.message`,
+		`let e = error("boom"); let g = e; g.message`,
+		`if (true) { error("ignored"); 5 }`,
+		// Equality is by message, context and related -- never by position,
+		// which only one of these engines stamps.
+		`error("a") == error("a")`,
+		`error("a") == error("b")`,
+		`error("a", "x") == error("a", "y")`,
+		`error("a") != error("b")`,
+		`error("a") == "ERROR:a"`,
+		// Both engines must refuse the same construction mistakes.
+		`error()`,
+		`error(1)`,
+		`error("m", "c", {1: "a"})`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+}
+
+// with_resource makes the same promise in both engines, and the shapes it has
+// to agree on are the ones a program can see: what a completed call returns,
+// what a body's error becomes, whether the (value, err) convention is unwrapped
+// on the way out, and which mistakes are refused.
+//
+// A channel stands in for the twenty handle families because its closure is
+// observable from inside the language -- sending on a closed channel is an
+// error -- so the harness can ask whether the closer ran instead of assuming
+// it. Every program below opens its own channel, since the two engines run
+// against the same package-level handle store and a leaked handle would make
+// the next case's numbering depend on the previous one's outcome.
+//
+// The engines' one real difference is deliberately not here: a body that gives
+// up reaches the VM as a Go error and the tree-walker as a fault, and the run
+// ends either way, so there is no value left to compare. Each engine's own
+// tests pin that the closer still ran.
+func TestWithResourceParity(t *testing.T) {
+	inputs := []string{
+		`type_of(with_resource(chan_new(1), "chan_close", fn(c) { return 1; }))`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 42; }); v`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 42; }); type_of(e)`,
+		// The body's error is what comes back, and the value slot is null.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return error("gave up", "test"); }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return error("gave up"); }); type_of(v)`,
+		// A body ending in a fallible call hands its caller the halves, not a
+		// MULTI_VALUE to take apart.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return chan_send(c, 7, 0); }); v`,
+		// The closer really runs: the handle the body returns is already closed.
+		`let h, e = with_resource(chan_new(1), "chan_close", fn(c) { return c; }); let s, se = chan_send(h, 1, 0); s`,
+		// A closer may be a function rather than a name.
+		`let v, e = with_resource(chan_new(1), fn(c) { return chan_close(c); }, fn(c) { return 9; }); v`,
+		// A handle passed bare, rather than as the pair an opener returns.
+		`let c, ce = chan_new(1); let v, e = with_resource(c, "chan_close", fn(h) { return h == c; }); v`,
+		// Both engines must refuse the same mistakes, with the same message.
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c) { return 1; }, 4); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_clos", fn(c) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "each", fn(c) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", fn(c, extra) { return 1; }); e.message`,
+		`let v, e = with_resource(chan_new(1), "chan_close", 7); e.message`,
+		`let v, e = with_resource(chan_new(1), 7, fn(c) { return 1; }); e.message`,
+		// The open's own error passes through unchanged.
+		`let v, e = with_resource(ntfs_open("/no/such/image.dd"), "ntfs_close", fn(h) { return 1; }); e.context`,
+	}
+
+	for _, input := range inputs {
+		evalRes := normalize(evalViaEvaluator(input))
+		vmObj, vmErr := evalViaVM(t, input)
+		vmRes := normalize(vmObj)
+		if vmErr != nil {
+			vmRes = "ERROR"
+		}
+		if evalRes != vmRes {
+			t.Errorf("engine divergence for %q: evaluator=%s vm=%s", input, evalRes, vmRes)
+		}
+	}
+}
+
 func TestMacroExpansionMatchesDirectCompilation(t *testing.T) {
 	inputs := []string{
 		"1 + 2", "10 - 3", "6 * 7", "20 / 4", "7 % 3", "-5 + 2",

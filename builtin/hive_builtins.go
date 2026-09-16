@@ -250,7 +250,7 @@ func (h *regfHive) findValueRaw(nk *nkKey, name string) ([]byte, bool) {
 func (h *regfHive) valueMap(nk *nkKey) map[string]object.Object {
 	m := map[string]object.Object{}
 	for _, vk := range h.values(nk) {
-		_, data := h.valueData(vk)
+		_, data, _ := h.valueData(vk)
 		m[strings.ToLower(vk.name)] = data
 	}
 	return m
@@ -290,7 +290,16 @@ var regValueTypeNames = map[uint32]string{
 	11: "REG_QWORD",
 }
 
-func (h *regfHive) valueData(vk *vkValue) (string, object.Object) {
+// valueData decodes one value cell into the type name, the value as a Mutant
+// object, and -- only when that object is hex -- the stored bytes behind it.
+//
+// The third return is cloned rather than sliced. Both sources alias something
+// that outlives the call: h.cell hands back a window onto the whole hive buffer,
+// which stays open for the life of the handle, and vk.inlineRaw is reused by
+// every read of the same value. A *object.Bytes is mutable from a script
+// (b[0] = 0), so handing back either view would let one script statement rewrite
+// the hive that later reads still parse.
+func (h *regfHive) valueData(vk *vkValue) (string, object.Object, []byte) {
 	size := vk.dataSize & 0x7FFFFFFF
 	inline := vk.dataSize&0x80000000 != 0
 
@@ -304,7 +313,8 @@ func (h *regfHive) valueData(vk *vkValue) (string, object.Object) {
 	} else {
 		c, err := h.cell(vk.dataOff)
 		if err != nil {
-			return typeName(vk.dataType), stringObj("")
+			// Unreadable cell: there is no data, hex or otherwise, to hand back.
+			return typeName(vk.dataType), stringObj(""), nil
 		}
 		if int(size) <= len(c) {
 			raw = c[:size]
@@ -315,18 +325,18 @@ func (h *regfHive) valueData(vk *vkValue) (string, object.Object) {
 
 	switch vk.dataType {
 	case 1, 2, 6: // REG_SZ / EXPAND_SZ / LINK
-		return typeName(vk.dataType), stringObj(utf16leToString(raw))
+		return typeName(vk.dataType), stringObj(utf16leToString(raw)), nil
 	case 4: // REG_DWORD (LE)
 		if len(raw) >= 4 {
-			return typeName(vk.dataType), intObj(int64(binary.LittleEndian.Uint32(raw)))
+			return typeName(vk.dataType), intObj(int64(binary.LittleEndian.Uint32(raw))), nil
 		}
 	case 5: // REG_DWORD_BIG_ENDIAN
 		if len(raw) >= 4 {
-			return typeName(vk.dataType), intObj(int64(binary.BigEndian.Uint32(raw)))
+			return typeName(vk.dataType), intObj(int64(binary.BigEndian.Uint32(raw))), nil
 		}
 	case 11: // REG_QWORD (LE)
 		if len(raw) >= 8 {
-			return typeName(vk.dataType), intObj(int64(binary.LittleEndian.Uint64(raw)))
+			return typeName(vk.dataType), intObj(int64(binary.LittleEndian.Uint64(raw))), nil
 		}
 	case 7: // REG_MULTI_SZ
 		parts := splitUTF16MultiSZ(raw)
@@ -334,10 +344,13 @@ func (h *regfHive) valueData(vk *vkValue) (string, object.Object) {
 		for i, p := range parts {
 			elems[i] = stringObj(p)
 		}
-		return typeName(vk.dataType), &object.Array{Elements: elems}
+		return typeName(vk.dataType), &object.Array{Elements: elems}, nil
 	}
-	// REG_BINARY and everything else -> hex
-	return typeName(vk.dataType), stringObj(hex.EncodeToString(raw))
+	// REG_BINARY and everything else -> hex, plus the bytes themselves. A
+	// truncated DWORD or QWORD falls through to here too, which is right: the
+	// arms above only return an integer when the cell actually held one, and the
+	// bytes are what is left to look at when it did not.
+	return typeName(vk.dataType), stringObj(hex.EncodeToString(raw)), append([]byte(nil), raw...)
 }
 
 func typeName(t uint32) string {
@@ -406,6 +419,7 @@ func resolveHive(arg object.Object, op string) (*regfHive, *object.Error) {
 	if !found {
 		return nil, newError("%s: invalid hive handle %q (call hive_open first)", op, handle.Value)
 	}
+	custodyRecordTouch(op, handle.Value)
 	return hive, nil
 }
 
@@ -418,7 +432,7 @@ func HiveOpen(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("hive_open", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameHiveOpen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -431,6 +445,8 @@ func HiveOpen(args ...object.Object) (result object.Object) {
 	handle := fmt.Sprintf("hive-%d", hiveStore.next)
 	hiveStore.hives[handle] = hive
 	hiveStore.Unlock()
+
+	custodyRecordOpen(BuiltinNameHiveOpen, handle, path)
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
 		"path":   stringObj(path),
@@ -441,7 +457,7 @@ func HiveClose(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	handle, errObj := requireStringArg("hive_close", args[0], 1)
+	handle, errObj := requireStringArg(BuiltinNameHiveClose, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -452,12 +468,13 @@ func HiveClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("hive_close: invalid handle %q", handle))
 	}
+	custodyRecordTouch(BuiltinNameHiveClose, handle)
 	return resultAndError(boolObj(true), nil)
 }
 
 func HiveKeyInfo(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_key_info", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_key_info", args)
+	defer hiveRecover(BuiltinNameHiveKeyInfo, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveKeyInfo, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -475,8 +492,8 @@ func HiveKeyInfo(args ...object.Object) (result object.Object) {
 }
 
 func HiveListKeys(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_list_keys", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_list_keys", args)
+	defer hiveRecover(BuiltinNameHiveListKeys, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveListKeys, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -494,8 +511,8 @@ func HiveListKeys(args ...object.Object) (result object.Object) {
 }
 
 func HiveListValues(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_list_values", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_list_values", args)
+	defer hiveRecover(BuiltinNameHiveListValues, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveListValues, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -505,34 +522,30 @@ func HiveListValues(args ...object.Object) (result object.Object) {
 	}
 	out := make([]object.Object, 0)
 	for _, vk := range hive.values(nk) {
-		tname, data := hive.valueData(vk)
+		tname, data, raw := hive.valueData(vk)
 		name := vk.name
 		if name == "" {
 			name = "(default)"
 		}
-		out = append(out, makeHashObject(map[string]object.Object{
-			"name": stringObj(name),
-			"type": stringObj(tname),
-			"data": data,
-		}))
+		out = append(out, regEntryHash(regEntry{name: name, typ: tname, data: data, raw: raw}))
 	}
 	return resultAndError(&object.Array{Elements: out}, nil)
 }
 
 func HiveGetValue(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_get_value", &result)
+	defer hiveRecover(BuiltinNameHiveGetValue, &result)
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3 (handle, keypath, valuename)", len(args)))
 	}
-	hive, errObj := resolveHive(args[0], "hive_get_value")
+	hive, errObj := resolveHive(args[0], BuiltinNameHiveGetValue)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	path, errObj := requireStringArg("hive_get_value", args[1], 2)
+	path, errObj := requireStringArg(BuiltinNameHiveGetValue, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	valueName, errObj := requireStringArg("hive_get_value", args[2], 3)
+	valueName, errObj := requireStringArg(BuiltinNameHiveGetValue, args[2], 3)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -542,12 +555,8 @@ func HiveGetValue(args ...object.Object) (result object.Object) {
 	}
 	for _, vk := range hive.values(nk) {
 		if strings.EqualFold(vk.name, valueName) {
-			tname, data := hive.valueData(vk)
-			return resultAndError(makeHashObject(map[string]object.Object{
-				"name": stringObj(vk.name),
-				"type": stringObj(tname),
-				"data": data,
-			}), nil)
+			tname, data, raw := hive.valueData(vk)
+			return resultAndError(regEntryHash(regEntry{name: vk.name, typ: tname, data: data, raw: raw}), nil)
 		}
 	}
 	return resultAndError(nil, newError("hive_get_value: value %q not found under %q", valueName, path))

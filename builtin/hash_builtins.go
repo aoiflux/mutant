@@ -23,15 +23,24 @@ func hashHexOf(newHash func() hash.Hash, data []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// hashOneString takes the single argument every hash_* builtin hashes.
+//
+// It accepts a buffer as readily as text: a hash consumes bytes and has no
+// opinion about what they mean, which is exactly the case where refusing a
+// BYTES would be arbitrary. Hashing a disk image is the reason the type exists.
 func hashOneString(op string, args []object.Object) (string, *object.Error) {
 	if len(args) != 1 {
 		return "", newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	return requireStringArg(op, args[0], 1)
+	data, errObj := requireBinaryArg(op, args[0], 1)
+	if errObj != nil {
+		return "", errObj
+	}
+	return string(data), nil
 }
 
 func HashMD5(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_md5", args)
+	s, errObj := hashOneString(BuiltinNameHashMD5, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -39,7 +48,7 @@ func HashMD5(args ...object.Object) object.Object {
 }
 
 func HashSHA1(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_sha1", args)
+	s, errObj := hashOneString(BuiltinNameHashSHA1, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -47,7 +56,7 @@ func HashSHA1(args ...object.Object) object.Object {
 }
 
 func HashSHA256(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_sha256", args)
+	s, errObj := hashOneString(BuiltinNameHashSHA256, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -55,7 +64,7 @@ func HashSHA256(args ...object.Object) object.Object {
 }
 
 func HashSHA512(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_sha512", args)
+	s, errObj := hashOneString(BuiltinNameHashSHA512, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -63,7 +72,7 @@ func HashSHA512(args ...object.Object) object.Object {
 }
 
 func HashCRC32(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_crc32", args)
+	s, errObj := hashOneString(BuiltinNameHashCRC32, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -73,7 +82,7 @@ func HashCRC32(args ...object.Object) object.Object {
 }
 
 func HashBlake2(args ...object.Object) object.Object {
-	s, errObj := hashOneString("hash_blake2", args)
+	s, errObj := hashOneString(BuiltinNameHashBlake2, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -85,15 +94,19 @@ func HMAC(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3", len(args))
 	}
-	key, errObj := requireStringArg("hmac", args[0], 1)
+	// Both the key and the message may be binary: an HMAC key is bytes, and
+	// the thing being authenticated is very often a buffer.
+	keyBytes, errObj := requireBinaryArg(BuiltinNameHMAC, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	msg, errObj := requireStringArg("hmac", args[1], 2)
+	key := string(keyBytes)
+	msgBytes, errObj := requireBinaryArg(BuiltinNameHMAC, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
-	algo, errObj := requireStringArg("hmac", args[2], 3)
+	msg := string(msgBytes)
+	algo, errObj := requireStringArg(BuiltinNameHMAC, args[2], 3)
 	if errObj != nil {
 		return errObj
 	}
@@ -141,7 +154,7 @@ func RandomHex(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	n, errObj := requireIntArg("random_hex", args[0], 1)
+	n, errObj := requireIntArg(BuiltinNameRandomHex, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -161,7 +174,7 @@ func NanoID(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	n, errObj := requireIntArg("nanoid", args[0], 1)
+	n, errObj := requireIntArg(BuiltinNameNanoID, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}

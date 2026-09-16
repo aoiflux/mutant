@@ -33,7 +33,7 @@ func X509Parse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	input, errObj := requireStringArg("x509_parse", args[0], 1)
+	input, errObj := requireStringArg(BuiltinNameX509Parse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -77,7 +77,7 @@ func JWTDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	token, errObj := requireStringArg("jwt_decode", args[0], 1)
+	token, errObj := requireStringArg(BuiltinNameJWTDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -134,16 +134,16 @@ func AESEncrypt(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 (key, plaintext)", len(args)))
 	}
-	key, errObj := requireStringArg("aes_encrypt", args[0], 1)
+	key, errObj := requireStringArg(BuiltinNameAESEncrypt, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	plaintext, errObj := requireStringArg("aes_encrypt", args[1], 2)
+	plaintext, errObj := requireBinaryArg(BuiltinNameAESEncrypt, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	gcm, errObj := newAESGCM("aes_encrypt", key)
+	gcm, errObj := newAESGCM(BuiltinNameAESEncrypt, key)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -152,38 +152,48 @@ func AESEncrypt(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("aes_encrypt: %s", err.Error()))
 	}
 	// Prepend the nonce so aes_decrypt is self-contained.
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 	return resultAndError(stringObj(string(ciphertext)), nil)
 }
 
 func AESDecrypt(args ...object.Object) object.Object {
+	return aesDecrypt(args, BuiltinNameAESDecrypt, false)
+}
+
+// AESDecryptBytes decrypts into a buffer. Plaintext recovered from a cipher is
+// binary until something proves otherwise, and a buffer is also the form whose
+// contents the VM can actually wipe afterwards.
+func AESDecryptBytes(args ...object.Object) object.Object {
+	return aesDecrypt(args, BuiltinNameAESDecryptBytes, true)
+}
+
+func aesDecrypt(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 (key, ciphertext)", len(args)))
 	}
-	key, errObj := requireStringArg("aes_decrypt", args[0], 1)
+	key, errObj := requireStringArg(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	data, errObj := requireStringArg("aes_decrypt", args[1], 2)
+	raw, errObj := requireBinaryArg(opName, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	gcm, errObj := newAESGCM("aes_decrypt", key)
+	gcm, errObj := newAESGCM(opName, key)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	raw := []byte(data)
 	ns := gcm.NonceSize()
 	if len(raw) < ns {
-		return resultAndError(nil, newError("aes_decrypt: ciphertext too short (missing nonce)"))
+		return resultAndError(nil, newError("%s: ciphertext too short (missing nonce)", opName))
 	}
 	nonce, ciphertext := raw[:ns], raw[ns:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return resultAndError(nil, newError("aes_decrypt: %s (wrong key or corrupted data)", err.Error()))
+		return resultAndError(nil, newError("%s: %s (wrong key or corrupted data)", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(plaintext)), nil)
+	return resultAndError(binaryResult(binary, plaintext), nil)
 }
 
 func newAESGCM(op, key string) (cipher.AEAD, *object.Error) {
@@ -207,7 +217,7 @@ func PEMDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("pem_decode", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNamePEMDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

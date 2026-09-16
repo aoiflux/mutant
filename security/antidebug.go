@@ -48,3 +48,21 @@ func DetectDebuggerDetails() (bool, []string) {
 		return false, nil
 	}
 }
+
+// DebuggerTamperDetail reports which debugger checks fired, for a run that is
+// stopping because of one.
+//
+// It probes again rather than reusing the gate's answer. Unlike the sandbox
+// detector, debugger detection is deliberately not cached: a process that
+// started clean can have a debugger attached to it later, so a cached "no"
+// would be wrong for the rest of the run. The gate's answer is what terminates;
+// this is a second reading taken to describe it, and it reports nothing if the
+// debugger detached in between. (M-7)
+func DebuggerTamperDetail() TamperDetail {
+	detected, methods := DetectDebuggerDetails()
+	if !detected {
+		return TamperDetail{Detector: "debugger"}
+	}
+
+	return TamperDetail{Detector: "debugger", Signals: methods}
+}

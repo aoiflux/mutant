@@ -253,6 +253,16 @@ func compoundAssignBaseOperator(tt token.TokenType) string {
 		return "*"
 	case token.SLASH_ASSIGN:
 		return "/"
+	case token.AND_ASSIGN:
+		return "&"
+	case token.OR_ASSIGN:
+		return "|"
+	case token.XOR_ASSIGN:
+		return "^"
+	case token.SHL_ASSIGN:
+		return "<<"
+	case token.SHR_ASSIGN:
+		return ">>"
 	case token.MODULO_ASSIGN:
 		return "%"
 	default:

@@ -1,0 +1,69 @@
+// The three string spellings: interpolated, raw, and triple-quoted.
+//
+// They produce the same kind of value. What differs is what the source is
+// allowed to say without fighting the escape rules.
+
+let host = "10.0.0.7";
+let port = 4444;
+let hits = [92, 38, 12];
+
+// ---------------------------------------------------------------- ordinary --
+// `${` opens a hole; what is inside it is an ordinary expression. A value that
+// is already a string contributes its text, anything else contributes what it
+// would print -- so an integer needs no conversion.
+putln("beacon ${host}:${port}");
+putln("largest hit: ${ max(hits[0], hits[1], hits[2]) }, total ${ sum(hits) }");
+
+// The hole is compiled where it stands, so nothing rescans the result: a
+// percent sign is a percent sign.
+putln("coverage ${ len(hits) * 10 }% of the window");
+
+// A lone dollar is still a dollar. Only `${` opens a hole, and `\${` writes
+// those two characters literally.
+putln("price $5, template \${name}");
+
+// --------------------------------------------------------------------- raw --
+// A raw string decodes nothing: no escapes, no interpolation. This is the
+// spelling for paths and patterns, where doubling every backslash is how a
+// regex becomes unreadable.
+let runkey = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+let datestamp = r"\d{4}-\d{2}-\d{2}";
+
+putln(runkey);
+putln("matches a date? ${ regex_match(datestamp, "2026-09-12") }");
+
+// ---------------------------------------------------------- triple-quoted --
+// A triple-quoted literal spans lines, and is re-indented to its own left
+// margin: the closing delimiter says where that margin is, so the block below
+// carries none of this file's indentation.
+let summary = """
+    beacon report
+      endpoint : ${host}:${port}
+      hits     : ${ len(hits) }
+      loudest  : ${ max(hits[0], hits[1], hits[2]) }
+      run key  : ${runkey}
+    """;
+
+putln(summary);
+
+// Escapes and interpolation still work inside one, and a lone quote needs no
+// escaping because only three in a row end the literal.
+let quoted = """
+    the analyst said "check ${host}" and left
+    """;
+
+putln(quoted);
+
+// `r"""..."""` is the raw form: useful for rule text, which is full of both
+// backslashes and quotes.
+let rule = r"""
+    rule beacon_marker {
+      strings:
+        $path = "C:\Windows\Temp\svc.exe"
+        $re   = /\d{1,3}(\.\d{1,3}){3}/
+      condition:
+        $path or $re
+    }
+    """;
+
+putln(rule);

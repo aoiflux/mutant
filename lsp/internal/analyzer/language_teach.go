@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	mast "mutant/ast"
 	"mutant/builtin"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -16,11 +17,17 @@ var keywordHoverDocs = map[string]string{
 	"else":     "Alternative branch for an if expression.",
 	"return":   "Returns one or more values from the current function.",
 	"for":      "Loop construct with init, condition, and post expressions: for (init; cond; post) { ... }.",
+	"in":       "Names the collection a for loop walks: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds an index and an element -- or, over a hash, a key and a value. A single binding over a hash yields its keys.",
+	"while":    "Loop that repeats its body while the condition stays truthy: while (cond) { ... }. Unlike for, it has no init or post section, so continue goes straight back to the condition.",
+	"match":    "Expression that takes the first arm whose pattern equals the subject: match (x) { 1 | 2 => \"few\", Status.Ok => \"ok\", _ => \"other\" }. A pattern is a literal, a negated number, an enum variant, or `_` for anything, and alternatives are joined with `|`. An arm body is one expression or a block, and the match evaluates to it. Without a `_` arm, a subject that no arm matches is a run-time error rather than null.",
 	"break":    "Exits the nearest enclosing loop immediately.",
 	"continue": "Skips to the next iteration of the nearest enclosing loop.",
 	"struct":   "Declares a struct type with named fields.",
 	"enum":     "Declares a closed set of named variants.",
 	"macro":    "Declares a macro literal for AST-level metaprogramming.",
+	"import": "Loads another file as a module: import \"lib/util.mut\"; binds the namespace `util`, and import u \"lib/util.mut\"; binds `u` instead. " +
+		"Reach into it with `util.name`; the module's own top-level names are not visible unqualified, and a name beginning with _ is private to the file that declares it. " +
+		"The path resolves relative to this file's directory first, then against each --module-path directory in the order given. Top level only: an import inside a block is an error.",
 	"true":     "Boolean literal representing truth.",
 	"false":    "Boolean literal representing falsehood.",
 }
@@ -88,7 +95,35 @@ func builtinFooter(name string) []string {
 	if note != "" {
 		lines = append(lines, fmt.Sprintf("_Note: %s_", note))
 	}
+	if line := stabilityFooterLine(name); line != "" {
+		lines = append(lines, line)
+	}
 	return lines
+}
+
+// stabilityFooterLine states a builtin's stability tier, and says nothing at all
+// for the stable ones -- which is almost all of them, and where a line saying so
+// would be noise on every hover in the language.
+//
+// The tier is worth showing because it is now true rather than aspirational:
+// until bytecode stopped addressing builtins by registry ordinal, nothing could
+// be renamed or retired, so "deprecated" was advice with no path behind it.
+func stabilityFooterLine(name string) string {
+	stability, ok := builtin.StabilityOf(name)
+	if !ok {
+		return ""
+	}
+	switch stability {
+	case builtin.StabilityDeprecated:
+		if replacement, deprecated := builtin.DeprecatedBy(name); deprecated && replacement != "" {
+			return fmt.Sprintf("**Deprecated** — use `%s` instead. This name keeps working so existing programs still run.", replacement)
+		}
+		return "**Deprecated** — kept only so existing programs still run."
+	case builtin.StabilityExperimental:
+		return "**Experimental** — this builtin's name and arguments may change in a minor release."
+	default:
+		return ""
+	}
 }
 
 func keywordHoverText(keyword string) (string, bool) {
@@ -238,3 +273,37 @@ func builtinSignatureInformation(name string) (lsp.SignatureInformation, bool) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// importHoverText renders what an `import` actually bound, above the keyword's
+// own documentation.
+//
+// The namespace is the useful half: an unaliased import derives it from the
+// file name, so it is the one thing about the statement that is not written
+// out in front of the reader. Namespace() is asked rather than the base name
+// re-derived here, so hover cannot disagree with the compiler about what the
+// import is called.
+func importHoverText(node *mast.ImportStatement) string {
+	path := ""
+	if node != nil && node.Path != nil {
+		path = node.Path.Value
+	}
+
+	header := "module"
+	switch {
+	case node == nil:
+	case node.Namespace() != "":
+		header = fmt.Sprintf("module `%s`", node.Namespace())
+	default:
+		// Nothing usable could be derived -- an empty path, or a name that is
+		// all separators. Saying so is more use than an empty pair of ticks.
+		header = "module (no namespace could be derived from this path -- give it an alias)"
+	}
+	if path != "" {
+		header += fmt.Sprintf(" from `%s`", path)
+	}
+
+	if doc, ok := keywordHoverDocs["import"]; ok {
+		return header + "\n\n" + doc
+	}
+	return header
+}

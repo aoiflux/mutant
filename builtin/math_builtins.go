@@ -34,8 +34,8 @@ func Abs(args ...object.Object) object.Object {
 	}
 }
 
-func Min(args ...object.Object) object.Object { return minMax("min", args, true) }
-func Max(args ...object.Object) object.Object { return minMax("max", args, false) }
+func Min(args ...object.Object) object.Object { return minMax(BuiltinNameMin, args, true) }
+func Max(args ...object.Object) object.Object { return minMax(BuiltinNameMax, args, false) }
 
 func minMax(op string, args []object.Object, wantMin bool) object.Object {
 	if len(args) == 0 {
@@ -62,15 +62,15 @@ func Clamp(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3", len(args))
 	}
-	x, errObj := requireNumericArg("clamp", args[0], 1)
+	x, errObj := requireNumericArg(BuiltinNameClamp, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	lo, errObj := requireNumericArg("clamp", args[1], 2)
+	lo, errObj := requireNumericArg(BuiltinNameClamp, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
-	hi, errObj := requireNumericArg("clamp", args[2], 3)
+	hi, errObj := requireNumericArg(BuiltinNameClamp, args[2], 3)
 	if errObj != nil {
 		return errObj
 	}
@@ -85,7 +85,7 @@ func Clamp(args ...object.Object) object.Object {
 }
 
 func Pow(args ...object.Object) object.Object {
-	x, y, errObj := twoNumericArgs("pow", args)
+	x, y, errObj := twoNumericArgs(BuiltinNamePow, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -96,7 +96,7 @@ func Sqrt(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	x, errObj := requireNumericArg("sqrt", args[0], 1)
+	x, errObj := requireNumericArg(BuiltinNameSqrt, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -118,11 +118,11 @@ func Mod(args ...object.Object) object.Object {
 		}
 		return intObj(a % b)
 	}
-	a, errObj := requireNumericArg("mod", args[0], 1)
+	a, errObj := requireNumericArg(BuiltinNameMod, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	b, errObj := requireNumericArg("mod", args[1], 2)
+	b, errObj := requireNumericArg(BuiltinNameMod, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -132,9 +132,9 @@ func Mod(args ...object.Object) object.Object {
 	return floatObj(math.Mod(a, b))
 }
 
-func Floor(args ...object.Object) object.Object { return roundish("floor", args, math.Floor) }
-func Ceil(args ...object.Object) object.Object  { return roundish("ceil", args, math.Ceil) }
-func Round(args ...object.Object) object.Object { return roundish("round", args, math.Round) }
+func Floor(args ...object.Object) object.Object { return roundish(BuiltinNameFloor, args, math.Floor) }
+func Ceil(args ...object.Object) object.Object  { return roundish(BuiltinNameCeil, args, math.Ceil) }
+func Round(args ...object.Object) object.Object { return roundish(BuiltinNameRound, args, math.Round) }
 
 func roundish(op string, args []object.Object, fn func(float64) float64) object.Object {
 	if len(args) != 1 {
@@ -158,7 +158,7 @@ func Sum(args ...object.Object) object.Object {
 	allInt := true
 	var total float64
 	for i, el := range arr.Elements {
-		f, errObj := requireNumericArg("sum", el, i+1)
+		f, errObj := requireNumericArg(BuiltinNameSum, el, i+1)
 		if errObj != nil {
 			return newError("sum: element %d must be numeric, got %s", i, el.Type())
 		}
@@ -186,7 +186,7 @@ func Avg(args ...object.Object) object.Object {
 	}
 	var total float64
 	for i, el := range arr.Elements {
-		f, errObj := requireNumericArg("avg", el, i+1)
+		f, errObj := requireNumericArg(BuiltinNameAvg, el, i+1)
 		if errObj != nil {
 			return newError("avg: element %d must be numeric, got %s", i, el.Type())
 		}
@@ -206,11 +206,11 @@ func RandInt(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	lo, errObj := requireIntArg("rand_int", args[0], 1)
+	lo, errObj := requireIntArg(BuiltinNameRandInt, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	hi, errObj := requireIntArg("rand_int", args[1], 2)
+	hi, errObj := requireIntArg(BuiltinNameRandInt, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -224,7 +224,7 @@ func RandBytes(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	n, errObj := requireIntArg("rand_bytes", args[0], 1)
+	n, errObj := requireIntArg(BuiltinNameRandBytes, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}

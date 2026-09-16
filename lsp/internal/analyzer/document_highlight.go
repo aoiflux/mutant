@@ -78,6 +78,15 @@ func (s *Snapshot) collectStatementWriteRanges(stmt mast.Statement, targetName s
 		s.collectExpressionWriteRanges(node.Condition, targetName, out)
 		s.collectExpressionWriteRanges(node.Post, targetName, out)
 		s.collectStatementWriteRanges(node.Body, targetName, out)
+	case *mast.WhileStatement:
+		s.collectExpressionWriteRanges(node.Condition, targetName, out)
+		s.collectStatementWriteRanges(node.Body, targetName, out)
+	case *mast.ForInStatement:
+		// The bindings themselves are not collected, matching the LetStatement
+		// arm above: this walk reports assignments to an existing name, and a
+		// loop binding is a declaration.
+		s.collectExpressionWriteRanges(node.Iterable, targetName, out)
+		s.collectStatementWriteRanges(node.Body, targetName, out)
 	}
 }
 
@@ -104,6 +113,15 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 		s.collectExpressionWriteRanges(node.Condition, targetName, out)
 		s.collectStatementWriteRanges(node.Consequence, targetName, out)
 		s.collectStatementWriteRanges(node.Alternative, targetName, out)
+	case *mast.MatchExpression:
+		// Patterns are deliberately not walked: this collects writes, and a
+		// pattern is a literal or an enum path, never an assignment target.
+		s.collectExpressionWriteRanges(node.Subject, targetName, out)
+		for _, arm := range node.Arms {
+			if arm != nil {
+				s.collectStatementWriteRanges(arm.Body, targetName, out)
+			}
+		}
 	case *mast.FunctionLiteral:
 		s.collectStatementWriteRanges(node.Body, targetName, out)
 	case *mast.MacroLiteral:
@@ -115,6 +133,10 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			s.collectExpressionWriteRanges(element, targetName, out)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			s.collectExpressionWriteRanges(element, targetName, out)
 		}
 	case *mast.IndexExpression:

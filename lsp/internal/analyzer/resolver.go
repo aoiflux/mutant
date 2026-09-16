@@ -150,6 +150,36 @@ func (s *Snapshot) resolveStatement(stmt mast.Statement, current *scope, pos lsp
 				return resolved, true
 			}
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if resolved, ok := s.resolveExpression(node.Condition, current, pos); ok {
+				return resolved, true
+			}
+		}
+		if node.Body != nil {
+			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
+				return resolved, true
+			}
+		}
+	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+				if localprotocol.ContainsPosition(rng, pos) {
+					return binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}, true
+				}
+			}
+		}
+		if node.Iterable != nil {
+			if resolved, ok := s.resolveExpression(node.Iterable, current, pos); ok {
+				return resolved, true
+			}
+		}
+		if node.Body != nil {
+			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
+				return resolved, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if resolved, ok := s.resolveStatement(node.Init, current, pos); ok {
@@ -239,6 +269,29 @@ func (s *Snapshot) resolveExpression(expr mast.Expression, current *scope, pos l
 		if node.Alternative != nil {
 			if resolved, ok := s.resolveStatement(node.Alternative, current, pos); ok {
 				return resolved, true
+			}
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if resolved, ok := s.resolveExpression(node.Subject, current, pos); ok {
+				return resolved, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are resolved so that goto-definition on the `Status` of
+			// a `Status.Ok` arm reaches the enum declaration.
+			for _, pattern := range arm.Patterns {
+				if resolved, ok := s.resolveExpression(pattern, current, pos); ok {
+					return resolved, true
+				}
+			}
+			if arm.Body != nil {
+				if resolved, ok := s.resolveStatement(arm.Body, current, pos); ok {
+					return resolved, true
+				}
 			}
 		}
 	case *mast.CallExpression:
@@ -334,6 +387,12 @@ func (s *Snapshot) resolveExpression(expr mast.Expression, current *scope, pos l
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			if resolved, ok := s.resolveExpression(element, current, pos); ok {
+				return resolved, true
+			}
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			if resolved, ok := s.resolveExpression(element, current, pos); ok {
 				return resolved, true
 			}
@@ -474,6 +533,28 @@ func (s *Snapshot) structTypeNameInStatement(stmt mast.Statement, target *mast.I
 				return typeName, true
 			}
 		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Iterable, target); ok {
+				return typeName, true
+			}
+		}
+		if node.Body != nil {
+			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Condition, target); ok {
+				return typeName, true
+			}
+		}
+		if node.Body != nil {
+			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
+				return typeName, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if typeName, ok := s.structTypeNameInStatement(node.Init, target); ok {
@@ -516,6 +597,20 @@ func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast
 		}
 		if node.Alternative != nil {
 			if typeName, ok := s.structTypeNameInStatement(node.Alternative, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if typeName, ok := s.structTypeNameInExpression(node.Subject, target); ok {
+				return typeName, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if typeName, ok := s.structTypeNameInStatement(arm.Body, target); ok {
 				return typeName, true
 			}
 		}
@@ -586,6 +681,12 @@ func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
+				return typeName, true
+			}
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
 				return typeName, true
 			}
@@ -723,6 +824,35 @@ func (s *Snapshot) scopeAtStatement(stmt mast.Statement, current *scope, pos lsp
 			s.advanceStatement(inner, current)
 		}
 		return current
+	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+			}
+		}
+		if node.Iterable != nil {
+			if child, ok := s.scopeAtExpression(node.Iterable, current, pos); ok {
+				return child
+			}
+		}
+		if node.Body != nil {
+			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
+				return s.scopeAtStatement(node.Body, current, pos)
+			}
+		}
+		return current
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if child, ok := s.scopeAtExpression(node.Condition, current, pos); ok {
+				return child
+			}
+		}
+		if node.Body != nil {
+			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
+				return s.scopeAtStatement(node.Body, current, pos)
+			}
+		}
+		return current
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if rng, ok := s.Program.RangeOf(node.Init); ok && localprotocol.ContainsPosition(rng, pos) {
@@ -799,6 +929,25 @@ func (s *Snapshot) scopeAtExpression(expr mast.Expression, current *scope, pos l
 		}
 		if node.Alternative != nil {
 			return s.scopeAtStatement(node.Alternative, current, pos), true
+		}
+		return current, true
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			if child, ok := s.scopeAtExpression(node.Subject, current, pos); ok {
+				return child, true
+			}
+		}
+		// Unlike an `if`, a match has many bodies, so the first one cannot
+		// simply be returned: scopeAtStatement is asked for each in turn and
+		// the one that actually contains pos is the answer. A body that does
+		// not contain pos gives back the scope it was handed.
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if child := s.scopeAtStatement(arm.Body, current, pos); child != current {
+				return child, true
+			}
 		}
 		return current, true
 	case *mast.CallExpression:
@@ -878,6 +1027,12 @@ func (s *Snapshot) scopeAtExpression(expr mast.Expression, current *scope, pos l
 				return child, true
 			}
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			if child, ok := s.scopeAtExpression(element, current, pos); ok {
+				return child, true
+			}
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			if child, ok := s.scopeAtExpression(key, current, pos); ok {
@@ -929,6 +1084,29 @@ func (s *Snapshot) advanceStatement(stmt mast.Statement, current *scope) {
 		for _, inner := range node.Statements {
 			s.advanceStatement(inner, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			s.advanceExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			s.advanceStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		// Defined in the enclosing scope rather than a child, which is what
+		// `for (let i = 0; ...)` already does here and what the VM actually
+		// does with either loop -- see the L-8 phase 1 note on the two engines
+		// disagreeing about loop-body scope.
+		for _, name := range loopBindings(node) {
+			if rng, ok := s.identifierRange(name); ok {
+				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
+			}
+		}
+		if node.Iterable != nil {
+			s.advanceExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			s.advanceStatement(node.Body, current)
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			s.advanceStatement(node.Init, current)
@@ -966,6 +1144,15 @@ func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
 		}
 		if node.Alternative != nil {
 			s.advanceStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			s.advanceExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && arm.Body != nil {
+				s.advanceStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if node.Function != nil {
@@ -1016,12 +1203,37 @@ func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
 		for _, element := range node.Elements {
 			s.advanceExpression(element, current)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			s.advanceExpression(element, current)
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			s.advanceExpression(key, current)
 			s.advanceExpression(value, current)
 		}
 	}
+}
+
+// loopBindings is the names a `for (k, v in xs)` declares, in the order they
+// are written. Key is nil in the one-binding form.
+//
+// They are declarations like any other, and every walk that tracks what is in
+// scope has to say so: without it, the name a loop body is written around is
+// undefined to the analyzer, which reports an error on correct code, offers no
+// completion for it, and finds no definition to go to.
+func loopBindings(node *mast.ForInStatement) []*mast.Identifier {
+	if node == nil {
+		return nil
+	}
+	names := make([]*mast.Identifier, 0, 2)
+	if node.Key != nil {
+		names = append(names, node.Key)
+	}
+	if node.Value != nil {
+		names = append(names, node.Value)
+	}
+	return names
 }
 
 func kindForLetValue(value mast.Expression) lsp.CompletionItemKind {
@@ -1092,6 +1304,27 @@ func (c *referenceCollector) collectStatement(stmt mast.Statement, current *scop
 	case *mast.BlockStatement:
 		for _, inner := range node.Statements {
 			c.collectStatement(inner, current)
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		for _, name := range loopBindings(node) {
+			if rng, ok := c.snapshot.identifierRange(name); ok {
+				defined := binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}
+				current.define(name.Value, name, rng, defined.kind)
+				c.addOccurrenceIfTarget(defined, rng, true)
+			}
+		}
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
 		}
 	case *mast.ForStatement:
 		if node.Init != nil {
@@ -1173,6 +1406,24 @@ func (c *referenceCollector) collectExpression(expr mast.Expression, current *sc
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
 		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns count as references. The unused-declaration rule asks
+			// this collector whether a name is used anywhere, so an enum
+			// mentioned only in match arms would otherwise be reported unused.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
+		}
 	case *mast.CallExpression:
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
@@ -1242,6 +1493,10 @@ func (c *referenceCollector) collectExpression(expr mast.Expression, current *sc
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:

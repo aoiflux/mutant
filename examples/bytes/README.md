@@ -4,8 +4,8 @@ Run from repository root (compile, then run the bytecode it writes
 beside the source):
 
 ```bash
-mutant gen --src examples/bytes/bytes_cursor_elf_sample_demo.mut --password <password>
-mutant examples/bytes/bytes_cursor_elf_sample_demo.mu --dev --password <password>
+mutant gen --src examples/bytes/bytes_cursor_elf_sample_demo.mut --dev
+mutant examples/bytes/bytes_cursor_elf_sample_demo.mu --dev
 ```
 
 Scripts:

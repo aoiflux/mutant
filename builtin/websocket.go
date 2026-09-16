@@ -47,7 +47,7 @@ func WSAcceptKey(args ...object.Object) object.Object {
 // WSReadFrame reads exactly one WebSocket frame from a connection handle and
 // returns it fully unmasked. Honours the read timeout like http_conn_read_*.
 func WSReadFrame(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout("ws_read_frame", args)
+	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameWsReadFrame, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

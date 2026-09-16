@@ -138,14 +138,23 @@ func (pe *PolymorphicEngine) spliceFillers(bytecode *ByteCode, config MutationCo
 	// the slot above the stack pointer once the program has finished, so it is
 	// the main stream's final pop that decides it. A function body's pops all
 	// happen earlier, inside a frame that has since been unwound.
-	bytecode.Instructions = pe.padInstructions(bytecode.Instructions, rate, true, gens)
+	var mainRemap map[int]int
+	bytecode.Instructions, mainRemap = pe.padInstructions(bytecode.Instructions, rate, true, gens)
+	bytecode.LineTable = bytecode.LineTable.Remap(mainRemap)
+	bytecode.MacroTable = bytecode.MacroTable.Remap(mainRemap)
+	bytecode.EndTable = bytecode.EndTable.Remap(mainRemap)
 
 	for _, constant := range bytecode.Constants {
 		fn, ok := constant.(*object.CompiledFunction)
 		if !ok {
 			continue
 		}
-		fn.Instructions = pe.padInstructions(fn.Instructions, rate, false, gens)
+
+		var remap map[int]int
+		fn.Instructions, remap = pe.padInstructions(fn.Instructions, rate, false, gens)
+		fn.LineTable = fn.LineTable.Remap(remap)
+		fn.MacroTable = fn.MacroTable.Remap(remap)
+		fn.EndTable = fn.EndTable.Remap(remap)
 	}
 
 	return bytecode
@@ -180,10 +189,10 @@ func (pe *PolymorphicEngine) fillerGenerators(config MutationConfig) []padGenera
 // that is not an instruction boundary, an offset a uint16 operand cannot hold.
 // Declining to mutate is always available; a half-rewritten stream is not
 // recoverable, and obfuscation is never worth a corrupted program.
-func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64, protectFinalPop bool, gens []padGenerator) code.Instructions {
+func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64, protectFinalPop bool, gens []padGenerator) (code.Instructions, map[int]int) {
 	starts, widths, ok := decodeBoundaries(ins)
 	if !ok || len(starts) == 0 || len(gens) == 0 {
-		return ins
+		return ins, nil
 	}
 
 	// Nothing is spliced in at or after cutoff.
@@ -219,10 +228,10 @@ func (pe *PolymorphicEngine) padInstructions(ins code.Instructions, rate float64
 	remap[len(ins)] = len(padded)
 
 	if !rewriteJumpTargets(padded, remap, ownJumps) {
-		return ins
+		return ins, nil
 	}
 
-	return padded
+	return padded, remap
 }
 
 // lastPopOffset returns the offset of the final OpPop in ins, which is the
@@ -355,6 +364,8 @@ var deadCodeFillers = []code.Opcode{
 	code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod,
 	code.OpBang, code.OpMinus, code.OpPop, code.OpDup,
 	code.OpEqual, code.OpUnEqual, code.OpGreater, code.OpGreaterEqual,
+	code.OpBitAnd, code.OpBitOr, code.OpBitXor, code.OpBitNot,
+	code.OpShiftLeft, code.OpShiftRight,
 }
 
 // generateDeadBlock returns instructions that are branched over rather than

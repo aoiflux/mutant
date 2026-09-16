@@ -63,6 +63,24 @@ var arityProbeSkip = map[string]string{
 	"pmap":    "arity is enforced by the executor, not the registered stub",
 	"peach":   "arity is enforced by the executor, not the registered stub",
 	"spawn":   "arity is enforced by the executor, not the registered stub",
+
+	"with_resource": "arity is enforced by the executor, not the registered stub",
+
+	// The testing builtins register a stub too (testing.go): each of them needs
+	// the executing run -- to call a function, or to record what it saw and
+	// where -- so the executor intercepts them before the stub is reached.
+	// vm/higher_order_arity_conformance_test.go probes them the way a program
+	// calls them.
+	"test":            "arity is enforced by the executor, not the registered stub",
+	"before_each":     "arity is enforced by the executor, not the registered stub",
+	"after_each":      "arity is enforced by the executor, not the registered stub",
+	"assert":          "arity is enforced by the executor, not the registered stub",
+	"assert_eq":       "arity is enforced by the executor, not the registered stub",
+	"assert_ne":       "arity is enforced by the executor, not the registered stub",
+	"assert_contains": "arity is enforced by the executor, not the registered stub",
+	"assert_err":      "arity is enforced by the executor, not the registered stub",
+	"assert_ok":       "arity is enforced by the executor, not the registered stub",
+	"fail":            "arity is enforced by the executor, not the registered stub",
 }
 
 // handCheckedArities pins the argument counts of the builtins the probe must

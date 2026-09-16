@@ -7,6 +7,43 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
+# SHA256SUMS is written in the format `sha256sum -c` reads, so whoever downloads
+# a binary can verify it with a tool they already have and nothing from this
+# project: lowercase hex, two spaces, the file's bare name, LF line endings and
+# no BOM -- the reader is as likely to be Linux as Windows. Names are bare and
+# the file sits beside what it covers, so checking is
+# `cd <dir>; sha256sum -c SHA256SUMS`.
+function Write-Sha256Sums {
+    Param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    # Ordinal sort, to match `LC_ALL=C sort` in the shell scripts: the same
+    # build has to write the same file whichever script cut it.
+    $ordered = $Names | Sort-Object -CaseSensitive
+    $lines = foreach ($name in $ordered) {
+        $path = Join-Path $Directory $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Cannot checksum a file the build did not produce: $path"
+        }
+
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower()
+        "$hash  $name"
+    }
+
+    $sumsPath = Join-Path $Directory "SHA256SUMS"
+    [System.IO.File]::WriteAllText(
+        $sumsPath,
+        (($lines -join "`n") + "`n"),
+        (New-Object System.Text.UTF8Encoding $false))
+
+    # No return value: every caller wants the file, not the path, and a bare
+    # `return` in PowerShell puts the string on the pipeline where it surfaces as
+    # a stray line of build output.
+    Write-Host "    checksums: $sumsPath" -ForegroundColor DarkGray
+}
+
 function Invoke-Checked {
     Param(
         [string]$What,
@@ -47,7 +84,14 @@ try {
         }
     }
 
-    Write-Host "[2/3] Run extension prepublish (stages binaries and compiles)" -ForegroundColor Cyan
+    # Staging is a separate step: vscode:prepublish compiles only, so that
+    # package-targets.mjs can stage a single per-target binary without vsce
+    # re-staging all six behind it. This wrapper builds the universal VSIX, so
+    # it stages every binary.
+    Write-Host "[2/3] Stage LSP binaries and compile the extension" -ForegroundColor Cyan
+    Invoke-Checked -What "Stage LSP binaries" -Command {
+        npm run prepare:lsp-bins
+    }
     Invoke-Checked -What "Extension prepublish" -Command {
         npm run vscode:prepublish
     }
@@ -68,6 +112,7 @@ try {
                 vsce package --allow-missing-repository --out $vsixPath
             }
             Write-Host "VSIX created: $vsixPath" -ForegroundColor Green
+            Write-Sha256Sums -Directory $vsixOutPath -Names @($VsixFileName)
         }
     }
     else {
@@ -88,6 +133,7 @@ try {
                 npx --yes @vscode/vsce package --allow-missing-repository --out $vsixPath
             }
             Write-Host "VSIX created: $vsixPath" -ForegroundColor Green
+            Write-Sha256Sums -Directory $vsixOutPath -Names @($VsixFileName)
         }
     }
 }

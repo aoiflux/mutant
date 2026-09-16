@@ -162,7 +162,19 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := keywordHoverText("if"); ok {
 			return text, rng, true
 		}
+	case *mast.MatchExpression:
+		if text, ok := keywordHoverText("match"); ok {
+			return text, rng, true
+		}
 	case *mast.ForStatement:
+		if text, ok := keywordHoverText("for"); ok {
+			return text, rng, true
+		}
+	case *mast.WhileStatement:
+		if text, ok := keywordHoverText("while"); ok {
+			return text, rng, true
+		}
+	case *mast.ForInStatement:
 		if text, ok := keywordHoverText("for"); ok {
 			return text, rng, true
 		}
@@ -182,6 +194,8 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := keywordHoverText("macro"); ok {
 			return text, rng, true
 		}
+	case *mast.ImportStatement:
+		return importHoverText(n), rng, true
 	}
 
 	return fmt.Sprintf("%T", node), rng, true
@@ -523,7 +537,7 @@ func nodeSpecificity(node mast.Node) int {
 	switch node.(type) {
 	case *mast.Identifier, *mast.IntegerLiteral, *mast.FloatLiteral, *mast.StringLiteral, *mast.Boolean:
 		return 100
-	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.ForStatement, *mast.StructStatement, *mast.EnumStatement:
+	case *mast.CallExpression, *mast.FunctionLiteral, *mast.IfExpression, *mast.MatchExpression, *mast.ForStatement, *mast.WhileStatement, *mast.ForInStatement, *mast.StructStatement, *mast.EnumStatement:
 		return 90
 	case *mast.ExpressionStatement:
 		return 20
@@ -532,21 +546,11 @@ func nodeSpecificity(node mast.Node) int {
 	}
 }
 
-var keywords = []string{
-	"fn",
-	"let",
-	"true",
-	"false",
-	"if",
-	"else",
-	"return",
-	"macro",
-	"for",
-	"break",
-	"continue",
-	"struct",
-	"enum",
-}
+// keywords is the completion list, taken from the lexer rather than written
+// out again here. The hand-maintained copy had drifted -- it was missing
+// `import` the day the keyword was added -- and a list that has to be updated
+// in two places is a list that will be wrong in one of them.
+var keywords = token.KeywordLiterals()
 
 var semanticTokenTypes = []string{"keyword", "string", "number", "function", "variable", "type", "enum", "enumMember", "parameter", "property", "operator", "punctuation"}
 
@@ -728,7 +732,7 @@ func semanticTokenTypeForNode(node mast.Node, overrides map[mast.Node]semanticTo
 		switch token.LookupIdent(n.Value) {
 		case token.IDENT:
 			return semanticTokenTypeIndex["variable"], 0, true
-		case token.TRUE, token.FALSE, token.FUNCTION, token.LET, token.IF, token.ELSE, token.RETURN, token.MACRO, token.FOR, token.BREAK, token.CONTINUE, token.STRUCT, token.ENUM:
+		case token.TRUE, token.FALSE, token.FUNCTION, token.LET, token.IF, token.ELSE, token.RETURN, token.MACRO, token.FOR, token.BREAK, token.CONTINUE, token.STRUCT, token.ENUM, token.IMPORT:
 			return semanticTokenTypeIndex["keyword"], 0, true
 		default:
 			return semanticTokenTypeIndex["variable"], 0, true
@@ -779,7 +783,11 @@ func lexicalSemanticTokens(src string) []semanticToken {
 
 func semanticTokenTypeForLexToken(tokenType token.TokenType) (uint32, bool) {
 	switch tokenType {
-	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.LTE, token.GTE, token.BANG, token.EQUALITY, token.INEQUALITY, token.AND, token.OR:
+	case token.ASSIGN, token.PLUS, token.MINUS, token.ASTERISK, token.FSLASH, token.MODULO, token.LT, token.GT, token.LTE, token.GTE, token.BANG, token.EQUALITY, token.INEQUALITY, token.AND, token.OR,
+		token.AMPERSAND, token.PIPE, token.CARET, token.TILDE, token.SHL, token.SHR,
+		token.PLUS_ASSIGN, token.MINUS_ASSIGN, token.ASTERISK_ASSIGN, token.SLASH_ASSIGN, token.MODULO_ASSIGN,
+		token.AND_ASSIGN, token.OR_ASSIGN, token.XOR_ASSIGN, token.SHL_ASSIGN, token.SHR_ASSIGN,
+		token.INCREMENT, token.DECREMENT:
 		return semanticTokenTypeIndex["operator"], true
 	case token.LPAREN, token.RPAREN, token.LBRACE, token.RBRACE, token.LSQUARE, token.RSQUARE, token.COMMA, token.SEMICOLON, token.COLON, token.DOT:
 		return semanticTokenTypeIndex["punctuation"], true
@@ -831,6 +839,12 @@ func collectStatementTokenOverrides(stmt mast.Statement, overrides map[mast.Node
 		collectExpressionTokenOverrides(s.Condition, overrides)
 		collectExpressionTokenOverrides(s.Post, overrides)
 		collectStatementTokenOverrides(s.Body, overrides)
+	case *mast.WhileStatement:
+		collectExpressionTokenOverrides(s.Condition, overrides)
+		collectStatementTokenOverrides(s.Body, overrides)
+	case *mast.ForInStatement:
+		collectExpressionTokenOverrides(s.Iterable, overrides)
+		collectStatementTokenOverrides(s.Body, overrides)
 	case *mast.StructStatement:
 		for _, field := range s.Fields {
 			if field != nil {
@@ -861,6 +875,17 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		collectExpressionTokenOverrides(e.Condition, overrides)
 		collectStatementTokenOverrides(e.Consequence, overrides)
 		collectStatementTokenOverrides(e.Alternative, overrides)
+	case *mast.MatchExpression:
+		collectExpressionTokenOverrides(e.Subject, overrides)
+		for _, arm := range e.Arms {
+			if arm == nil {
+				continue
+			}
+			for _, pattern := range arm.Patterns {
+				collectExpressionTokenOverrides(pattern, overrides)
+			}
+			collectStatementTokenOverrides(arm.Body, overrides)
+		}
 	case *mast.FunctionLiteral:
 		for _, parameter := range e.Parameters {
 			if parameter != nil {
@@ -890,6 +915,10 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range e.Elements {
+			collectExpressionTokenOverrides(element, overrides)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range e.Parts {
 			collectExpressionTokenOverrides(element, overrides)
 		}
 	case *mast.IndexExpression:
@@ -960,6 +989,14 @@ func tokenLength(node mast.Node, rng mast.Range) uint32 {
 	case *mast.FloatLiteral:
 		return uint32(len([]rune(n.TokenLiteral())))
 	case *mast.StringLiteral:
+		// A semantic token cannot span lines, and a triple-quoted literal --
+		// or one text piece of an interpolated one -- can. Leaving it out
+		// hands the whole literal to the grammar, which colours it correctly
+		// across lines; claiming a length longer than the line would have the
+		// client colour past the end of it.
+		if rng.End.Line != rng.Start.Line {
+			return 0
+		}
 		return uint32(len([]rune(n.TokenLiteral())))
 	default:
 		if rng.End.Line != rng.Start.Line || rng.End.Column <= rng.Start.Column {

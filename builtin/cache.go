@@ -82,7 +82,7 @@ func CachePut(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3 or 4", len(args)))
 	}
 
-	cacheName, key, errObj := cacheNameAndKey("cache_put", args[0], args[1])
+	cacheName, key, errObj := cacheNameAndKey(BuiltinNameCachePut, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -123,7 +123,7 @@ func CacheGet(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	cacheName, key, errObj := cacheNameAndKey("cache_get", args[0], args[1])
+	cacheName, key, errObj := cacheNameAndKey(BuiltinNameCacheGet, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -182,7 +182,7 @@ func CacheDelete(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	cacheName, key, errObj := cacheNameAndKey("cache_delete", args[0], args[1])
+	cacheName, key, errObj := cacheNameAndKey(BuiltinNameCacheDelete, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

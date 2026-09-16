@@ -4,8 +4,8 @@ Run from repository root (compile, then run the bytecode it writes
 beside the source):
 
 ```bash
-mutant gen --src examples/registry/persistence_triage_commands.mut --password <password>
-mutant examples/registry/persistence_triage_commands.mu --dev --password <password>
+mutant gen --src examples/registry/persistence_triage_commands.mut --dev
+mutant examples/registry/persistence_triage_commands.mu --dev
 ```
 
 Scripts:

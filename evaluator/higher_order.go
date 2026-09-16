@@ -1,6 +1,7 @@
 package evaluator
 
 import (
+	"bytes"
 	"errors"
 	"sort"
 
@@ -33,11 +34,13 @@ func applyExecutorNative(kind string, args []object.Object) object.Object {
 		return evalParallel("peach", args)
 	case "spawn":
 		return evalSpawn(args)
+	case "with_resource":
+		return evalWithResource(args)
 	case "serve_conn", "serve_arg":
 		// Macro expansion has no connection and no net_serve arg, which is the
 		// same answer a program gets when it runs outside a handler.
 		if len(args) != 0 {
-			return evalPair(nil, newError("wrong number of arguments. got=%d, want=0", len(args)))
+			return evalPair(nil, errorValue("wrong number of arguments. got=%d, want=0", len(args)))
 		}
 		return evalPair(nil, nil)
 	default:
@@ -207,6 +210,10 @@ func sortKeyLess(a, b object.Object) (bool, object.Object) {
 		if bv, ok := b.(*object.String); ok {
 			return av.Value < bv.Value, nil
 		}
+	case *object.Bytes:
+		if bv, ok := b.(*object.Bytes); ok {
+			return bytes.Compare(av.Value, bv.Value) < 0, nil
+		}
 	}
 	return false, newError("sort_by: cannot compare keys of type %s and %s", a.Type(), b.Type())
 }
@@ -261,10 +268,10 @@ func evalParallel(op string, args []object.Object) object.Object {
 // and returns at once.
 func evalSpawn(args []object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
-		return evalPair(nil, newError("spawn: want 1 or 2 arguments (function[, arg]), got %d", len(args)))
+		return evalPair(nil, errorValue("spawn: want 1 or 2 arguments (function[, arg]), got %d", len(args)))
 	}
 	if !isCallable(args[0]) {
-		return evalPair(nil, newError("spawn: first argument must be a function, got %s", args[0].Type()))
+		return evalPair(nil, errorValue("spawn: first argument must be a function, got %s", args[0].Type()))
 	}
 
 	var callArgs []object.Object
@@ -276,7 +283,7 @@ func evalSpawn(args []object.Object) object.Object {
 		if len(callArgs) == 1 {
 			wanted = "spawn: spawn(fn, arg) needs a function that takes one parameter"
 		}
-		return evalPair(nil, newError("%s, but this one takes %d", wanted, len(fn.Parameters)))
+		return evalPair(nil, errorValue("%s, but this one takes %d", wanted, len(fn.Parameters)))
 	}
 
 	handle, regErr := builtin.RegisterTask()

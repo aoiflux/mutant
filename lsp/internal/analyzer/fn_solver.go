@@ -32,6 +32,7 @@ type kindSet uint16
 
 const (
 	ksString kindSet = 1 << iota
+	ksBytes
 	ksInt
 	ksFloat
 	ksBool
@@ -41,30 +42,42 @@ const (
 	ksNull
 	ksStruct
 	ksEnum
+	ksError
 )
 
 // ksAny is the top of the lattice: a parameter nothing has constrained.
-const ksAny = ksString | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum
+const ksAny = ksString | ksBytes | ksInt | ksFloat | ksBool | ksArray | ksHash | ksFn | ksNull | ksStruct | ksEnum | ksError
 
 // The operand domains below are read off the VM, not assumed.
 //
 //   - execBinaryOperation (vm.go) accepts INTEGER×INTEGER, STRING×STRING, or
 //     numeric×numeric, and execBinaryStringOperation rejects every operator but
 //     OpAdd — so `+` admits strings and the rest do not.
+//   - execBinaryBytesOperation likewise rejects every operator but OpAdd, so
+//     buffers concatenate and do nothing else.
 //   - execComparison accepts INTEGER×INTEGER or numeric×numeric.
+//     execBytesComparison handles a bytes on either side, but only for equality,
+//     so bytes are deliberately absent from ksComparable. execErrorComparison
+//     does the same for errors, and for the same reason: `<` on two errors has
+//     no meaning, so errors are absent from ksComparable too.
 //   - execMinusOperation asserts INTEGER or FLOAT.
+//   - execBinaryOperation rejects a bitwise operator whose operands are not both
+//     INTEGER before it dispatches on type at all, and execBitNotOperation does
+//     the same for `~` -- so `& | ^ << >>` and the complement admit ksInt and
+//     nothing else. There is no float promotion to widen that with.
 //
 // `!`, `==` and `!=` accept anything, and so appear nowhere here: truthiness and
 // equality are defined for every value, and a constraint that excludes nothing
 // is worth no code.
 const (
 	ksNumeric    = ksInt | ksFloat
-	ksAddable    = ksInt | ksFloat | ksString
+	ksAddable    = ksInt | ksFloat | ksString | ksBytes
 	ksComparable = ksInt | ksFloat
 )
 
 var kindBits = map[builtin.ParamKind]kindSet{
 	builtin.ParamString: ksString,
+	builtin.ParamBytes:  ksBytes,
 	builtin.ParamInt:    ksInt,
 	builtin.ParamFloat:  ksFloat,
 	builtin.ParamBool:   ksBool,
@@ -74,6 +87,7 @@ var kindBits = map[builtin.ParamKind]kindSet{
 	builtin.ParamNull:   ksNull,
 	builtin.ParamStruct: ksStruct,
 	builtin.ParamEnum:   ksEnum,
+	builtin.ParamError:  ksError,
 }
 
 // kindSetFor converts a declared kind list into a set. An empty list, or one
@@ -283,6 +297,14 @@ func functionBindings(program *mast.Program) []functionBinding {
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}
+		case *mast.WhileStatement:
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
 		case *mast.ReturnStatement:
 			for _, value := range n.ReturnValues {
 				walkExpression(value)
@@ -322,6 +344,9 @@ func constrainBody(fn *solvedFunction, body *mast.BlockStatement, byName map[str
 			case "+":
 				narrow(n.Left, ksAddable)
 				narrow(n.Right, ksAddable)
+			case "&", "|", "^", "<<", ">>":
+				narrow(n.Left, ksInt)
+				narrow(n.Right, ksInt)
 			case "-", "*", "/", "%":
 				narrow(n.Left, ksNumeric)
 				narrow(n.Right, ksNumeric)
@@ -330,8 +355,11 @@ func constrainBody(fn *solvedFunction, body *mast.BlockStatement, byName map[str
 				narrow(n.Right, ksComparable)
 			}
 		case *mast.PrefixExpression:
-			if n.Operator == "-" {
+			switch n.Operator {
+			case "-":
 				narrow(n.Right, ksNumeric)
+			case "~":
+				narrow(n.Right, ksInt)
 			}
 		}
 	}
@@ -383,6 +411,10 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			for _, el := range n.Elements {
 				walkExpression(el)
 			}
+		case *mast.TemplateLiteral:
+			for _, el := range n.Parts {
+				walkExpression(el)
+			}
 		case *mast.HashLiteral:
 			for key, value := range n.Pairs {
 				walkExpression(key)
@@ -395,6 +427,13 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			}
 			if n.Alternative != nil {
 				walkStatement(n.Alternative)
+			}
+		case *mast.MatchExpression:
+			walkExpression(n.Subject)
+			for _, arm := range n.Arms {
+				if arm != nil && arm.Body != nil {
+					walkStatement(arm.Body)
+				}
 			}
 		}
 	}
@@ -420,6 +459,16 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 			}
 			walkExpression(n.Condition)
 			walkExpression(n.Post)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.WhileStatement:
+			walkExpression(n.Condition)
+			if n.Body != nil {
+				walkStatement(n.Body)
+			}
+		case *mast.ForInStatement:
+			walkExpression(n.Iterable)
 			if n.Body != nil {
 				walkStatement(n.Body)
 			}
@@ -519,6 +568,8 @@ func literalKindSet(e mast.Expression) (kindSet, bool) {
 		return ksBool, true
 	case *mast.ArrayLiteral:
 		return ksArray, true
+	case *mast.TemplateLiteral:
+		return ksString, true
 	case *mast.HashLiteral:
 		return ksHash, true
 	case *mast.FunctionLiteral:

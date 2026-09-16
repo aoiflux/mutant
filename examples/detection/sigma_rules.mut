@@ -1,0 +1,130 @@
+// Sigma rules, evaluated here rather than compiled for somewhere else.
+//
+// A Sigma rule is YAML: the fields to look at, and the condition that has to
+// hold. `sigma_parse` compiles one, `sigma_parse_all` compiles a ruleset,
+// `sigma_match` asks one rule about one event, and `sigma_scan` runs a ruleset
+// over a timeline. See docs/DETECTION_RULES.md.
+
+putln("=== Sigma Rules ===");
+
+// ------------------------------------------------------------- one rule --
+let rule_text = r"""
+title: Encoded PowerShell Command Line
+id: 5b1c0a0f-2a8e-4a7f-9a1f-0c7d2c9a0b01
+status: experimental
+description: A PowerShell process started with an encoded command.
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\powershell.exe'
+    CommandLine|contains:
+      - ' -enc '
+      - ' -EncodedCommand '
+  filter:
+    User: 'NT AUTHORITY\SYSTEM'
+  condition: selection and not filter
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.001
+""";
+
+let rule, err = sigma_parse(rule_text);
+if (err) { putln("[error] sigma_parse:", err); };
+
+putln("title:     ", rule["title"]);
+putln("level:     ", rule["level"]);
+putln("condition: ", rule["condition"]);
+putln("searches:  ", rule["searches"]);
+putln("fields:    ", rule["fields"]);
+
+// ------------------------------------------------------- one rule, one event --
+// The rule fires on an encoded command line...
+let suspicious = {
+    "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "CommandLine": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4A",
+    "User": "CORP\\jdoe"
+};
+let hit, err = sigma_match(rule, suspicious);
+putln("");
+putln("encoded command line  -> matched:", hit["matched"], "searches:", hit["searches"]);
+
+// ...and the rule's own filter takes it back when SYSTEM ran it.
+let by_system = {
+    "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "CommandLine": "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4A",
+    "User": "NT AUTHORITY\\SYSTEM"
+};
+let filtered, err = sigma_match(rule, by_system);
+putln("same, run by SYSTEM   -> matched:", filtered["matched"]);
+
+// The question a Sigma backend does not answer: a rule that did not match
+// because the evidence never carried the field it reads is not a clean host.
+let thin = {"Image": "C:\\Windows\\System32\\cmd.exe"};
+let blind, err = sigma_match(rule, thin);
+putln("an event missing fields -> matched:", blind["matched"],
+      "fields_missing:", blind["fields_missing"]);
+
+// -------------------------------------------------- a ruleset over a timeline --
+// Rules written against a source's own field names reach into `extra`, where
+// events_from() keeps the parser's entry verbatim -- so no mapping file.
+let ruleset = r"""
+title: Encoded PowerShell Command Line
+id: 5b1c0a0f-2a8e-4a7f-9a1f-0c7d2c9a0b01
+detection:
+  selection:
+    CommandLine|contains: ' -enc '
+  condition: selection
+level: high
+---
+title: Service Installed
+id: 9f2b1c33-0d41-4a67-9e02-1f4c7b5a2d10
+detection:
+  selection:
+    EventID: 7045
+  condition: selection
+level: medium
+""";
+
+let rules, err = sigma_parse_all(ruleset);
+if (err) { putln("[error] sigma_parse_all:", err); };
+
+let timeline = [
+    {"kind": "evtx", "iso": "2026-03-01T09:14:02Z",
+     "extra": {"EventID": 4688, "CommandLine": "powershell -enc SQBFAFgA"}},
+    {"kind": "evtx", "iso": "2026-03-01T09:14:40Z",
+     "extra": {"EventID": 7045, "ServiceName": "UpdaterSvc"}},
+    {"kind": "mft", "iso": "2026-03-01T09:15:00Z",
+     "extra": {"path": "C:\\Windows\\Temp\\u.exe"}}
+];
+
+let report, err = sigma_scan(rules, timeline);
+if (err) { putln("[error] sigma_scan:", err); };
+
+putln("");
+putln("scanned", report["events"], "events against", report["rules"], "rules");
+putln("hits:", report["matched"], "by level:", report["by_level"]);
+for (hit in report["hits"]) {
+    putln("  ", hit["level"], "|", hit["title"], "| event", hit["event_index"],
+          "|", hit["event"]["iso"]);
+}
+
+// A field no event in the whole scan carried. Zero hits from a ruleset whose
+// fields are absent is not a finding -- the ruleset never ran.
+putln("fields no event carried:", report["unmatched_fields"]);
+
+// --------------------------------------------- what this engine will not do --
+// A rule it cannot evaluate fails here, where you can see it, rather than
+// sitting in the ruleset looking like coverage and never firing.
+let aggregating = r"""
+title: Brute Force
+detection:
+  selection:
+    EventID: 4625
+  condition: selection | count() by TargetUserName > 10
+""";
+let refused, err = sigma_parse(aggregating);
+putln("");
+putln("aggregation rule -> err:", err);

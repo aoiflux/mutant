@@ -40,6 +40,21 @@ func Modify(node Node, modifier ModifierFunc) Node {
 			}
 			node.Arguments[i], _ = Modify(node.Arguments[i], modifier).(Expression)
 		}
+	case *MatchExpression:
+		// The subject and every arm body are ordinary expressions a macro may
+		// rewrite. The patterns are not walked: a pattern is a literal or an
+		// enum variant by grammar, and a modifier that replaced one with a
+		// call would leave the arm with nothing to compare against.
+		if node.Subject != nil {
+			node.Subject, _ = Modify(node.Subject, modifier).(Expression)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			arm.Body, _ = Modify(arm.Body, modifier).(*BlockStatement)
+		}
+
 	case *IfExpression:
 		node.Condition, _ = Modify(node.Condition, modifier).(Expression)
 		node.Consequence, _ = Modify(node.Consequence, modifier).(*BlockStatement)
@@ -50,6 +65,27 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Statements {
 			node.Statements[i], _ = Modify(node.Statements[i], modifier).(Statement)
 		}
+	case *ForInStatement:
+		// The bindings are declarations, not expressions to rewrite: a macro
+		// that replaced one with a call would leave the loop with nothing to
+		// bind. Only the iterable and the body are walked.
+		if node.Iterable != nil {
+			node.Iterable, _ = Modify(node.Iterable, modifier).(Expression)
+		}
+		if node.Body != nil {
+			node.Body, _ = Modify(node.Body, modifier).(*BlockStatement)
+		}
+
+	case *WhileStatement:
+		// The condition is not optional the way a for-header's is: `while ()`
+		// does not parse. A nil one only reaches here from a hand-built node.
+		if node.Condition != nil {
+			node.Condition, _ = Modify(node.Condition, modifier).(Expression)
+		}
+		if node.Body != nil {
+			node.Body, _ = Modify(node.Body, modifier).(*BlockStatement)
+		}
+
 	case *ForStatement:
 		// Every part of the header is optional -- `for (;;)` has none of them.
 		if node.Init != nil {
@@ -104,6 +140,13 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Elements {
 			node.Elements[i], _ = Modify(node.Elements[i], modifier).(Expression)
 		}
+	case *TemplateLiteral:
+		// The text pieces are string literals and modify to themselves; the
+		// holes are ordinary expressions, so unquote() inside one behaves the
+		// way it behaves anywhere else.
+		for i := range node.Parts {
+			node.Parts[i], _ = Modify(node.Parts[i], modifier).(Expression)
+		}
 	case *HashLiteral:
 		newPairs := make(map[Expression]Expression)
 		for key, val := range node.Pairs {
@@ -141,6 +184,11 @@ func Modify(node Node, modifier ModifierFunc) Node {
 		for i := range node.Variants {
 			node.Variants[i], _ = Modify(node.Variants[i], modifier).(*Identifier)
 		}
+	case *ImportStatement:
+		// Deliberately not descended into. An import path is resolved before
+		// macros are defined, so rewriting it here could name a file that was
+		// never read -- and the alias is a binding, not a reference a macro
+		// template should be able to capture.
 	}
 
 	// Deliberately no *MacroLiteral case. A macro body is a template, expanded

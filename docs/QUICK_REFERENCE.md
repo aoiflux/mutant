@@ -10,8 +10,9 @@ artifact, runtime, and risky builtins.
 1. Signed artifact verification
 
 - Signer pinning is enforced in secure mode when `--signer-auth` is enabled.
-- Trusted signer key source is `MUTANT_TRUSTED_PUBLIC_KEY_HEX` (or local
-  bootstrap fallback if unset).
+- Trusted signer key comes from `--trusted-key <path>`, a file holding the
+  hex-encoded public key. Without the flag, Mutant bootstraps and trusts a local
+  keypair under `<home>/.mutant/keys`.
 - Compatibility mode verifies embedded signature validity only.
 
 2. Payload confidentiality
@@ -29,10 +30,9 @@ artifact, runtime, and risky builtins.
 - Pre-decode and pre-execution debugger checks run in the launcher path.
 - Platform-specific heuristics are used under `security/antidebug_*`.
 
-5. Builtin capability gating
+5. Builtin capability configuration
 
-- Risky builtin groups are default-denied unless explicitly allowed.
-- Groups: `command_exec`, `filesystem`, `network`.
+- Under design. No interface is specified.
 
 6. Release attestation
 
@@ -42,45 +42,51 @@ artifact, runtime, and risky builtins.
 
 7. Remote process scan policy gate
 
-- Optional remote scan manager can run in `off|observe|enforce` mode.
-- Enforce mode blocks only on critical verdicts.
+- Off in every shipped binary; reachable only from tests. The manager supports
+  `off|observe|enforce` mode, and enforce mode blocks only on critical
+  verdicts, but nothing turns it on.
 
-## Protection profiles
+## Protection profile
 
-Set `MUTANT_PROTECTION_PROFILE` to control default posture.
+**Fixed at `standard`.** `ResolveProtectionProfile()` returns it
+unconditionally, so posture is not selectable:
 
-- `minimal`
-- Defaults tamper response to `warn`.
-- Defaults risky builtin groups to allow-all unless explicitly constrained.
+- Secure mode is fail-closed; `--compat` and `--dev` are warn-by-default.
 
-- `standard`
-- Default when unset or invalid.
-- Keeps secure mode fail-closed and compat mode warn-by-default.
-- Risky builtins default to deny unless explicitly allowed.
+`minimal` and `paranoid` still exist as trailer codes so
+`ProtectionProfileFromCode` can read back a V3 release trailer written by an
+older build. They are unreachable at runtime.
 
-- `paranoid`
-- Defaults tamper response to `terminate`.
-- Risky builtins default to deny unless explicitly allowed.
+## Configuration
 
-Explicit environment variables still win:
+Mutant takes no configuration from environment variables. Everything that shapes
+a run is a flag, so the command line is a complete record of it. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-- `MUTANT_TAMPER_RESPONSE`
-- `MUTANT_BUILTIN_CAPABILITIES`
+| Flag | Effect |
+| --- | --- |
+| `--secure` | Secure mode. The default. A probe hit ends the run. |
+| `--compat` | A probe hit warns and the run continues. Password and signature verification unchanged. |
+| `--dev` | Compatibility posture, plus a fallback to a development key that is a compile-time constant shared by every Mutant binary. |
+| `--signer-auth` / `--no-signer-auth` | Upgrade signature verification to a trusted public key, or decline to. Self-verification runs in every mode regardless. |
+| `--trusted-key <path>` | Verify against the hex-encoded public key in this file. |
+| _(no password flag)_ | Prompt for the password with terminal echo off. The default. |
+| `--password-file <path>` | Read the password from a file. Refused if other users can read it. |
+| `--password-stdin` | Read the password from stdin, for CI and pipelines. |
+| `--password <pw>` | **Deprecated:** password on argv, visible in the process table. Warns on use. |
+| `--security-log-level <level>` | Security logging verbosity in dev mode. |
+| `--timing` | Per-stage run timing on stderr. |
 
-## Useful environment variables
+Naming two modes at once is an error: `--secure --compat`, `--secure --dev` and
+`--signer-auth --no-signer-auth` each exit non-zero naming both flags rather
+than resolving to whichever came last.
 
-- `MUTANT_TRUSTED_PUBLIC_KEY_HEX`
-- `MUTANT_SIGNING_PRIVATE_KEY_HEX`
-- `MUTANT_TAMPER_RESPONSE`
-- `MUTANT_TAMPER_DELAY_MS`
-- `MUTANT_PROTECTION_PROFILE`
-- `MUTANT_BUILTIN_CAPABILITIES`
-- `MUTANT_SECURITY_AUDIT`
-- `MUTANT_SECURITY_TELEMETRY_FILE`
-- `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`
-- `MUTANT_REMOTE_SCAN_MODE`
-- `MUTANT_REMOTE_SCAN_MAX_PROCESSES`
-- `MUTANT_REMOTE_SCAN_ALLOWLIST`
+> **`--compat` weakens the response. `--dev` weakens the key.** Compat still
+> requires your password and still verifies the artifact; it only declines to
+> stop the run when a probe fires. An artifact built or run under `--dev` has no
+> confidentiality. Full table: [EXECUTION_MODES.md](EXECUTION_MODES.md).
+
+Run `mutant --help` for the current list.
 
 ## Artifact format
 
@@ -94,21 +100,28 @@ Standalone release trailer V3:
 
 ## Operational defaults
 
-- Secure mode: terminate on tamper unless explicitly overridden.
-- Compatibility mode: warn on tamper unless explicitly overridden.
-- Dev mode: compatibility posture with local password fallback.
+- Secure mode: terminate on tamper, printing the detector that fired, the
+  reason, and the remedy. Not overridable except by choosing a different mode on
+  the command line.
+- Compatibility mode: warn on tamper.
+- Dev mode: compatibility posture with local password fallback, announced on
+  every use.
+- Signature self-verification runs in every mode; `--signer-auth` upgrades it to
+  trusted-key verification.
 - New release builds emit V3 trailers.
 
 ## Quick checks
 
-- Unexpected builtins blocked? Check `MUTANT_PROTECTION_PROFILE` and
-  `MUTANT_BUILTIN_CAPABILITIES`.
-- Signature failure? Check trusted key pinning and release signer chain.
+- Unexpected builtin behaviour? There is no capability gate to check: builtin
+  capability configuration is under design.
+- Signature failure? Check the `--trusted-key` file and the release signer
+  chain; without the flag, verification is against the local bootstrap keypair,
+  which trusts whatever signed the artifact on this machine.
 - Integrity failure? Treat as active tamper.
 - Release artifact mismatch? Check trailer profile code and provenance hash.
 
 ## Relevant docs
 
-- [docs/SECURITY_LLD.md](docs/SECURITY_LLD.md)
-- [docs/SECURITY_RUNBOOK.md](docs/SECURITY_RUNBOOK.md)
-- [docs/SECURITY_LLD_TRACEABILITY.md](docs/SECURITY_LLD_TRACEABILITY.md)
+- [docs/SECURITY_LLD.md](SECURITY_LLD.md)
+- [docs/SECURITY_RUNBOOK.md](SECURITY_RUNBOOK.md)
+- [docs/SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md)

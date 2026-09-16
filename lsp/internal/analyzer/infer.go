@@ -141,6 +141,44 @@ func (inf *typeInferer) stmt(stmt mast.Statement, env *typeEnv) {
 		if n.Body != nil {
 			inf.stmt(n.Body, child)
 		}
+	case *mast.WhileStatement:
+		// Its own scope, matching the loop's own scoping in both engines: a
+		// `let` in the body is not visible after the loop.
+		child := newTypeEnv(env)
+		if n.Condition != nil {
+			inf.expr(n.Condition, child)
+		}
+		if n.Body != nil {
+			inf.stmt(n.Body, child)
+		}
+	case *mast.ForInStatement:
+		child := newTypeEnv(env)
+		iterated := AnyType
+		if n.Iterable != nil {
+			iterated = inf.expr(n.Iterable, child)
+		}
+		// What a binding holds follows from what is being iterated, and only
+		// two of the cases are knowable without running the program: an index
+		// is always an integer, and a string yields one-character strings.
+		// Everything else stays Any rather than guessing -- this lattice is
+		// best-effort and feeds hover and completion, so a confident wrong
+		// answer is worse than no answer.
+		keyType, valueType := iterationBindingTypes(iterated)
+		if n.Key != nil {
+			inf.bindLoopName(n.Key, keyType, child)
+			inf.bindLoopName(n.Value, valueType, child)
+		} else if n.Value != nil {
+			// A single binding yields the key for a hash and the element
+			// otherwise -- the same rule object.NewIterator applies at run time.
+			single := valueType
+			if iterated.Kind == TypeHash {
+				single = keyType
+			}
+			inf.bindLoopName(n.Value, single, child)
+		}
+		if n.Body != nil {
+			inf.stmt(n.Body, child)
+		}
 	}
 }
 
@@ -183,6 +221,15 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 	case *mast.FloatLiteral:
 		return tFloat
 	case *mast.StringLiteral:
+		return tString
+	case *mast.TemplateLiteral:
+		// The result is a string whatever the holes hold, but the holes are
+		// ordinary expressions and have to be walked: a rule that asks what
+		// type an argument inside one has gets an answer only if this pass
+		// recorded it.
+		for _, part := range n.Parts {
+			inf.expr(part, env)
+		}
 		return tString
 	case *mast.Boolean:
 		return tBool
@@ -240,6 +287,9 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		if n.Operator == "!" {
 			return tBool
 		}
+		if n.Operator == "~" && couldBeInt(rt) {
+			return tInt
+		}
 		if n.Operator == "-" && isNumericType(rt) {
 			return rt
 		}
@@ -254,6 +304,16 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		if lt.Kind == TypeArray && lt.Elem != nil {
 			return *lt.Elem
 		}
+		// err["message"] is the same table as err.message, so it gets the same
+		// type -- but only for a literal key, because a computed one could name
+		// any field and claiming one of them would be a guess.
+		if lt.Kind == TypeError {
+			if key, ok := n.Index.(*mast.StringLiteral); ok {
+				if ft, ok := errorFieldType(key.Value); ok {
+					return ft
+				}
+			}
+		}
 		return AnyType
 	case *mast.FieldExpression:
 		lt := inf.expr(n.Left, env)
@@ -266,6 +326,14 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 			if ft, ok := inf.structFieldType(lt.Name, n.Field.Value); ok {
 				// Record on the accessor identifier too, so hovering the field name
 				// (the node under the cursor) shows its type.
+				inf.record(n.Field, ft)
+				return ft
+			}
+		}
+		// An error's fields are fixed rather than inferred from initializers, so
+		// unlike a struct's they are known without having seen the value built.
+		if lt.Kind == TypeError && n.Field != nil {
+			if ft, ok := errorFieldType(n.Field.Value); ok {
 				inf.record(n.Field, ft)
 				return ft
 			}
@@ -314,6 +382,8 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 			inf.stmt(n.Alternative, env)
 		}
 		return AnyType
+	case *mast.MatchExpression:
+		return inf.matchType(n, env)
 	case *mast.FunctionLiteral:
 		child := newTypeEnv(env)
 		solvedParams := inf.solved[n]
@@ -362,6 +432,9 @@ func (inf *typeInferer) functionReturnType(body *mast.BlockStatement) Type {
 	// itself types as Any, so appending it would only poison the join.
 	if n := len(body.Statements); n > 0 {
 		if es, ok := body.Statements[n-1].(*mast.ExpressionStatement); ok && es.Expression != nil {
+			// A match is not excluded the way an `if` is: it types as the join
+			// of what its arms produce, which is a real answer, so a function
+			// whose last statement is a match gets that type rather than Any.
 			if _, isIf := es.Expression.(*mast.IfExpression); !isIf {
 				results = append(results, es.Expression)
 			}
@@ -405,19 +478,115 @@ func (inf *typeInferer) collectReturnExprs(stmt mast.Statement, out *[]mast.Expr
 			inf.collectReturnExprs(s, out)
 		}
 	case *mast.ExpressionStatement:
-		if ie, ok := n.Expression.(*mast.IfExpression); ok {
-			if ie.Consequence != nil {
-				inf.collectReturnExprs(ie.Consequence, out)
+		switch e := n.Expression.(type) {
+		case *mast.IfExpression:
+			if e.Consequence != nil {
+				inf.collectReturnExprs(e.Consequence, out)
 			}
-			if ie.Alternative != nil {
-				inf.collectReturnExprs(ie.Alternative, out)
+			if e.Alternative != nil {
+				inf.collectReturnExprs(e.Alternative, out)
+			}
+		case *mast.MatchExpression:
+			for _, arm := range e.Arms {
+				if arm != nil && arm.Body != nil {
+					inf.collectReturnExprs(arm.Body, out)
+				}
 			}
 		}
 	case *mast.ForStatement:
 		if n.Body != nil {
 			inf.collectReturnExprs(n.Body, out)
 		}
+	case *mast.WhileStatement:
+		if n.Body != nil {
+			inf.collectReturnExprs(n.Body, out)
+		}
+	case *mast.ForInStatement:
+		if n.Body != nil {
+			inf.collectReturnExprs(n.Body, out)
+		}
 	}
+}
+
+// matchType infers what a match expression produces: the join of what its arms
+// produce. This is where match differs from `if`, which settles for Any -- an
+// arm body is a block whose value is its trailing expression statement, which
+// is exactly what the compiler's leaveOneValue keeps, so the arms can be joined
+// the same way a function's returns are.
+//
+// An arm ending in anything else (a `let`, a `for`, nothing at all) produces
+// null at run time, and joining that in collapses the answer to Any, which is
+// the honest result rather than the type of the arms that happen to be alike.
+func (inf *typeInferer) matchType(n *mast.MatchExpression, env *typeEnv) Type {
+	inf.expr(n.Subject, env)
+
+	joined := AnyType
+	for i, arm := range n.Arms {
+		if arm == nil {
+			return AnyType
+		}
+		// Patterns are recorded so hovering one says what it is; a pattern is
+		// a literal or an enum path, so this never binds anything.
+		for _, pattern := range arm.Patterns {
+			inf.expr(pattern, env)
+		}
+		if arm.Body != nil {
+			inf.stmt(arm.Body, env)
+		}
+
+		armType := inf.matchArmType(arm)
+		if i == 0 {
+			joined = armType
+			continue
+		}
+		joined = joinTypes(joined, armType)
+	}
+	return joined
+}
+
+// matchArmType is the type of the value one arm leaves behind: its body's
+// trailing expression statement, or Any when the body leaves no value.
+func (inf *typeInferer) matchArmType(arm *mast.MatchArm) Type {
+	if arm.Body == nil || len(arm.Body.Statements) == 0 {
+		return AnyType
+	}
+	last := arm.Body.Statements[len(arm.Body.Statements)-1]
+	es, ok := last.(*mast.ExpressionStatement)
+	if !ok || es.Expression == nil {
+		return AnyType
+	}
+	return inf.recordedType(es.Expression)
+}
+
+// bindLoopName records a for-in binding's type and puts it in the loop's scope.
+func (inf *typeInferer) bindLoopName(ident *mast.Identifier, t Type, env *typeEnv) {
+	if ident == nil {
+		return
+	}
+	inf.record(ident, t)
+	env.set(ident.Value, t)
+}
+
+// iterationBindingTypes says what `for (k, v in xs)` binds, given what xs is.
+//
+// Only what follows from the collection's own type is claimed. An array's
+// element type is not tracked by this lattice, so the element stays Any rather
+// than being guessed; a hash's keys are likewise unconstrained. What is known:
+// an index is an integer, a string yields one-character strings, and a buffer
+// yields byte values. This pass feeds hover, completion and inlay hints only,
+// so a confident wrong answer costs more than no answer.
+func iterationBindingTypes(iterated Type) (key Type, value Type) {
+	switch iterated.Kind {
+	case TypeArray:
+		return tInt, AnyType
+	case TypeString:
+		return tInt, tString
+	case TypeBytes:
+		return tInt, tInt
+	case TypeHash:
+		return AnyType, AnyType
+	}
+	return AnyType, AnyType
 }
 
 // recordedType returns the type recorded for an expression during the inference
@@ -481,15 +650,43 @@ func infixType(operator string, lt, rt Type) Type {
 	case "<", ">", "<=", ">=", "==", "!=", "&&", "||":
 		return tBool
 	case "+":
+		// Two buffers concatenate to a buffer. A buffer and a string do not add
+		// at all -- execBinaryOperation has no mixed arm -- so that case falls
+		// through to numericResultType and lands on Any, which is the honest
+		// answer for an expression the VM will refuse.
+		if lt.Kind == TypeBytes || rt.Kind == TypeBytes {
+			if lt.Kind == TypeBytes && rt.Kind == TypeBytes {
+				return tBytes
+			}
+			return AnyType
+		}
 		if lt.Kind == TypeString || rt.Kind == TypeString {
 			return tString
 		}
 		return numericResultType(lt, rt)
+	case "&", "|", "^", "<<", ">>":
+		// Bitwise operators are integer-only, so any expression that produces a
+		// value at all produces an int -- there is no float promotion to widen
+		// the result the way `numericResultType` has to model. A known non-int
+		// operand means the expression errors instead, and Any is the honest
+		// type for something that will not yield a value.
+		if couldBeInt(lt) && couldBeInt(rt) {
+			return tInt
+		}
+		return AnyType
 	case "-", "*", "/", "%":
 		return numericResultType(lt, rt)
 	default:
 		return AnyType
 	}
+}
+
+// couldBeInt reports whether t is consistent with the integer a bitwise
+// operator requires. An unknown type could be one, so it counts: this feeds
+// hover and inlay hints, never a diagnostic, and guessing `int` for an operand
+// nothing has pinned down is a better hint than giving up.
+func couldBeInt(t Type) bool {
+	return !t.IsKnown() || t.Kind == TypeInt
 }
 
 func numericResultType(lt, rt Type) Type {

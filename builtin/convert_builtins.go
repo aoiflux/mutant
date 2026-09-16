@@ -100,11 +100,11 @@ func ParseInt(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	s, errObj := requireStringArg("parse_int", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameParseInt, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	base, errObj := requireIntArg("parse_int", args[1], 2)
+	base, errObj := requireIntArg(BuiltinNameParseInt, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -122,7 +122,7 @@ func ParseFloat(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("parse_float", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameParseFloat, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

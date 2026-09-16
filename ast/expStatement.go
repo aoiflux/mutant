@@ -11,18 +11,25 @@ type ExpressionStatement struct {
 
 func (es *ExpressionStatement) statementNode() {}
 
-// RequiresSemicolon is true for every expression statement except one
-// wrapping an `if`. `if` is an expression in Mutant, but when it stands
-// alone as a statement its canonical form ends with the closing brace of a
-// consequence or alternative block, so no terminator is written.
+// RequiresSemicolon is true for every expression statement except the two
+// that end in a closing brace. `if` and `match` are expressions in Mutant, but
+// when one stands alone as a statement its canonical form ends with the brace
+// of a block or of the arm list, so no terminator is written.
+//
+// The formatter emits terminators from this answer rather than copying them
+// from the source, so getting it wrong rewrites the user's file rather than
+// reporting anything.
 func (es *ExpressionStatement) RequiresSemicolon() bool {
 	// A statement with no expression is the residue of a parse error; it is
 	// never printed, so demanding a terminator would only add noise.
 	if es == nil || es.Expression == nil {
 		return false
 	}
-	_, isIf := es.Expression.(*IfExpression)
-	return !isIf
+	switch es.Expression.(type) {
+	case *IfExpression, *MatchExpression:
+		return false
+	}
+	return true
 }
 func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
 func (es *ExpressionStatement) String() string {

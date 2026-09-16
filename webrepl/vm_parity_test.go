@@ -70,6 +70,34 @@ func TestBrowserRunsRealVMSemantics(t *testing.T) {
 			input: `let unless = macro(cond, body) { quote(if (!unquote(cond)) { unquote(body) }); }; unless(false, 42)`,
 			want:  "42",
 		},
+		// The three L-8 constructs. The browser claims them in
+		// SupportedSyntaxSummary and the README's REPL matrix, and a claim in a
+		// support matrix is worth exactly what backs it.
+		{
+			name:  "while loops",
+			input: `let n = 0; let seen = 0; while (n < 5) { n = n + 1; if (n == 2) { continue; } seen = seen + n; } seen`,
+			want:  "13",
+		},
+		{
+			name:  "for-in over an array",
+			input: `let total = 0; for (v in [1, 2, 3]) { total = total + v; } total`,
+			want:  "6",
+		},
+		{
+			name:  "for-in over a hash binds both halves",
+			input: `let total = 0; for (k, v in {"a": 1, "b": 2}) { total = total + v; } total`,
+			want:  "3",
+		},
+		{
+			name:  "match picks the arm that equals the subject",
+			input: `match (3) { 1 | 2 => "few", 3 => "three", _ => "many" }`,
+			want:  "three",
+		},
+		{
+			name:  "match over enum variants",
+			input: `enum Status { Ok, Failed }; match (Status.Failed) { Status.Ok => "fine", Status.Failed => "bad" }`,
+			want:  "bad",
+		},
 	}
 
 	for _, tt := range tests {
@@ -106,6 +134,11 @@ func TestBrowserReportsRealVMErrors(t *testing.T) {
 			name:     "unknown names are caught while compiling",
 			input:    `unknown_fn(1)`,
 			wantPart: "undefined variable: unknown_fn",
+		},
+		{
+			name:     "a match no arm matches raises rather than answering null",
+			input:    `match (9) { 1 => "one", 2 => "two" }`,
+			wantPart: "no match arm",
 		},
 	}
 

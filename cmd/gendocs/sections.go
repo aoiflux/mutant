@@ -21,7 +21,7 @@ This is the canonical, category-grouped catalog of every Mutant builtin. There a
 ## How to read this reference
 
 - **Fallible builtins return a ` + "`(value, err)`" + ` pair**, matching the language idiom ` + "`let value, err = some_call(...);`" + `. Check ` + "`err`" + ` before using ` + "`value`" + `. Infallible helpers return a bare value.
-- **Parameter types are shown inline** in each signature, e.g. ` + "`str_repeat(s: STRING, n: INTEGER)`" + `. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the ` + "`builtinArgType`" + ` diagnostic), and the same words the runtime uses when a call fails. Note that a "bytes" value is a ` + "`STRING`" + `: Mutant carries byte buffers in strings and has no separate bytes type.
+- **Parameter types are shown inline** in each signature, e.g. ` + "`str_repeat(s: STRING, n: INTEGER)`" + `. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the ` + "`builtinArgType`" + ` diagnostic), and the same words the runtime uses when a call fails. A parameter shown as ` + "`BYTES|STRING`" + ` accepts either representation and the builtin hands back the one it was given; ` + "`string_to_bytes(s, \"raw\")`" + ` converts losslessly from a builtin that still returns text.
 - **The Platforms column** lists the operating systems a builtin actually works on. ` + "`all`" + ` means it is pure-Go and cross-platform (it operates on captured artifacts, so it runs on any host). A restricted set (e.g. ` + "`windows/linux`" + `) means the builtin fails honestly elsewhere — and the language server will flag such a call when you are editing on an unsupported OS (the ` + "`platformSupport`" + ` diagnostic).
 - **Pure-Go, no cgo.** The entire standard library builds and runs with ` + "`CGO_ENABLED=0`" + ` on Windows, Linux, and macOS.
 
@@ -50,6 +50,11 @@ var categorySections = []categorySection{
 		blurb:    "Core language primitives: collection and hash operations, first-class higher-order functions (`map`/`filter`/`reduce`/`each`/`sort_by`), math helpers, I/O, and runtime/security introspection.",
 	},
 	{
+		category: "testing",
+		heading:  "Testing",
+		blurb:    "What `mutant test` reads. `test(name, fn)` names a test and runs it where it is written, so a test file reads top to bottom and a test declared inside another is a subtest of it; `before_each`/`after_each` register fixtures for the tests declared after them. The assertions record what they saw against the test that is running AND return it, so a failure is both something the report can name with a file and line and an ordinary value the program can look at. A test that dies is caught at its own boundary and costs the file no other test. See [TESTING.md](TESTING.md).",
+	},
+	{
 		category: "concurrency",
 		heading:  "Concurrency",
 		blurb:    "Run work alongside the rest of the program and pass values between the pieces. `spawn` starts a closure on its own VM and hands back a handle for `task_wait`/`task_done`; `chan_*` moves values between them. Each task gets a snapshot of globals, so a channel or a return value is the way back, not a shared variable. For applying one callback across an array, reach for `pmap`/`peach` in the standard library instead.",
@@ -67,7 +72,7 @@ var categorySections = []categorySection{
 	{
 		category: "structured data",
 		heading:  "Structured Data",
-		blurb:    "JSON parse/serialize for nested objects, base64/base32/hex/URL encoding, gzip/zlib compression, base conversion, and type conversion. See [STRUCTURED_DATA.md](STRUCTURED_DATA.md).",
+		blurb:    "The formats evidence actually arrives in. JSON and NDJSON/JSONL (Zeek, Elastic bulk, OCSF), CSV/TSV (every SIEM export and hash set), XML (Scheduled Tasks, OOXML, Nessus, plist), YAML including multi-document streams (Sigma rulesets), TOML, and the binary serializations -- CBOR for COSE/WebAuthn, MessagePack for agent traffic, plus schemaless walkers for protobuf and DER/ASN.1 that report structure when no `.proto` or ASN.1 module is at hand. Then base64/base32/hex/URL encoding, gzip/zlib compression, base conversion, and type conversion. Every decoder shares one bridge, so a byte string is a BYTES buffer and a timestamp is RFC 3339 no matter which format it came from. See [STRUCTURED_DATA.md](STRUCTURED_DATA.md).",
 	},
 	{
 		category: "math",
@@ -88,6 +93,11 @@ var categorySections = []categorySection{
 		category: "bytes",
 		heading:  "Bytes",
 		blurb:    "Binary buffer inspection and construction: fixed-width integer reads/writes (LE/BE), a streaming cursor, slicing, and byte/char conversions.",
+	},
+	{
+		category: "archives",
+		heading:  "Archives",
+		blurb:    "Read evidence containers in place: `zip_*` for the .zip a KAPE, CyLR or Velociraptor collection arrives as, `tar_*` for the .tar and .tar.gz a Linux triage script produces (bzip2 and zstd too, detected by magic rather than by extension). Nothing is extracted to disk -- an entry goes straight into a BYTES buffer for whatever parses it next -- so the classic extraction escape cannot be exploited through these builtins. It is still reported: every entry carries `unsafe_path`, because an archive containing such a name is a finding in its own right. Every decompression is bounded, here and in `gunzip`/`zlib_decompress`, at 1000x its input and 1 GiB, which a caller can override per call with `max_bytes`.",
 	},
 	{
 		category: "filesystem",
@@ -147,7 +157,7 @@ var categorySections = []categorySection{
 	{
 		category: "detection",
 		heading:  "Detection",
-		blurb:    "Heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation, and suspicious files, driven by supplied evidence.",
+		blurb:    "Two ways to decide that something is worth looking at. The `detect_*` builtins are heuristic detectors for code injection, C2 beaconing, persistence, privilege escalation and suspicious files, driven by supplied evidence. The `sigma_*` builtins run real [Sigma](https://sigmahq.io) rules -- the portable YAML detection format -- over `events_from()` timelines: `sigma_parse` and `sigma_parse_all` compile a rule or a whole ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a ruleset over a timeline. A rule this engine cannot evaluate is a compile error rather than a silent non-match, and both `sigma_match` and `sigma_scan` report the fields a rule read that the evidence never carried -- a rule that could not have fired is not a host that came back clean. See [DETECTION_RULES.md](DETECTION_RULES.md).",
 	},
 	{
 		category: "process forensics",
@@ -163,6 +173,16 @@ var categorySections = []categorySection{
 		category: "binary analysis",
 		heading:  "Binary Analysis",
 		blurb:    "PE/ELF/Mach-O/DWARF parsing, imports, sections, strings, entropy, literal signature scanning, and Go-binary metadata recovery (GoReSym).",
+	},
+	{
+		category: "reporting",
+		heading:  "Reporting",
+		blurb:    "An investigation ends in a report, not a stdout dump. `report_new` starts one and `report_section`/`report_text`/`report_list`/`report_table` fill it in; the report itself is a plain hash, so it can be JSON-encoded, diffed against the last one, or written by hand, and every builder returns a new document rather than changing the one it was given. `report_render` writes it as HTML, Markdown or CSV. Nearly every string in a report came from the evidence, which is to say it was written by the subject of the investigation, so the model holds values and each format is escaped for the thing that actually goes wrong in it: HTML is the boundary, and never turns evidence text into a link; Markdown is escaped for structure, so a pipe in a filename cannot shift a table column; CSV guards the cells a spreadsheet would execute when the file is opened.",
+	},
+	{
+		category: "chain of custody",
+		heading:  "Chain of Custody",
+		blurb:    "A case session that records who opened what, when, with which build of the tool. `case_open(id, examiner)` starts it; from there every evidence opener records its source into the manifest and every builtin that reads through an evidence handle is counted against that source. `case_verify` re-measures the sources and reports drift; `case_write` seals the manifest with a SHA-256 over its own contents and an Ed25519 signature, and `case_manifest_verify` checks both from the file alone. Nothing is recorded until a case is opened, so a program that does not use this is unaffected by it. The read-only guarantee the manifest asserts is machine-checked: see [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md).",
 	},
 	{
 		category: "registry forensics",
@@ -198,6 +218,11 @@ var categorySections = []categorySection{
 		category: "forensic timeline",
 		heading:  "Forensic Timeline",
 		blurb:    "Normalize timestamps across epochs and merge/sort artifact events into a single supertimeline; Sleuth Kit bodyfile/mactime interop.",
+	},
+	{
+		category: "schema interchange",
+		heading:  "Schema Interchange",
+		blurb:    "Normalize any parsed artifact into one event vocabulary, then write that vocabulary out in whichever schema the next tool reads. `events_from` maps an artifact's entries onto a fixed set of event fields -- one event per timestamp the artifact recorded, with the source entry carried verbatim in `extra` so nothing is lost -- and `event_kinds()` reports what each supported artifact maps. `ecs_event`, `ocsf_event` and `timesketch_event` render those events as Elastic Common Schema documents, OCSF events, or the plaso records Timesketch ingests, one event or a whole timeline at a time. Thirteen artifacts and three schemas cost sixteen mappings here rather than thirty-nine, so a new parser reaches every schema by describing itself once. `stix_bundle` and `stix_pattern` take the other road out of an investigation -- indicators rather than events -- rendering `extract_iocs` output as a STIX 2.1 bundle whose every id is derived from the indicator itself, so a re-run over the same evidence is the same bundle byte for byte. An artifact Mutant does not know is described with a mapping hash rather than waiting for support. See [INTERCHANGE_SCHEMAS.md](INTERCHANGE_SCHEMAS.md).",
 	},
 	{
 		category: "email forensics",

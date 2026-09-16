@@ -385,6 +385,11 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 
 	constants := []object.Object{}
 	globals := make([]object.Object, global.GlobalSize)
+	// The development key is deliberate and exempt from M-3's announcement: the
+	// REPL encrypts each line's bytecode in memory for the compile-run cycle and
+	// writes no artifact, so there is nothing here whose confidentiality a user
+	// could be misled about. The announcement exists for artifacts that outlive
+	// the process; a REPL session produces none.
 	replPassword := mutil.GetPwd()
 	symbolTable := compiler.NewSymbolTable()
 	for i, v := range builtin.Builtins {

@@ -33,12 +33,12 @@ func TestGenerateCompiledMacroProgramRuns(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 
-	if err, errType, parseErrors := Generate(src, dst, "", "", false, password, 0, 0, nil); err != nil {
+	if err, errType, parseErrors := Generate(src, dst, "", "", false, password, 0, 0, nil, nil); err != nil {
 		t.Fatalf("generate failed: type=%s err=%v parseErrors=%v", errType, err, parseErrors)
 	}
 
 	compiledPath := dst + global.MutantByteCodeCompiledFileExtension
-	if err, errType := runner.Run(compiledPath, password, false, false); err != nil {
+	if err, errType := runner.Run(compiledPath, runner.Options{Password: password}); err != nil {
 		t.Fatalf("compiled macro run failed: type=%s err=%v", errType, err)
 	}
 }

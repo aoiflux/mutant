@@ -9,8 +9,8 @@ compiling first, then running the `.mu` the compile writes beside the source.
 From the repository root:
 
 ```bash
-mutant gen --src examples/text/text_matching_example.mut --password <password>
-mutant examples/text/text_matching_example.mu --dev --password <password>
+mutant gen --src examples/text/text_matching_example.mut --dev
+mutant examples/text/text_matching_example.mu --dev
 ```
 
 Some examples use fixture files in:
@@ -85,6 +85,7 @@ sweep, not a category the file belongs to.
 ## Folder map
 
 - `examples/basics/` language syntax and control flow
+- `examples/modules/` one program built from several files with `import`, and the `*_test.mut` files that test them (`mutant test --cover examples/modules`)
 - `examples/macros/` quote/unquote and macro expansion patterns
 - `examples/text/` text, fuzzy matching, regex pipelines
 - `examples/policy/` OPA/Rego policy loading and decisions
@@ -95,6 +96,8 @@ sweep, not a category the file belongs to.
 - `examples/registry/` offline registry forensic examples
 - `examples/email/` email parsing and phishing triage
 - `examples/memory/` memory scanning and shellcode/PE hunting
+- `examples/forensics/` timeline normalization and the chain-of-custody cycle
+  (`case_open` -> evidence -> `case_verify` -> signed manifest)
 - `examples/graph/` graph modeling and timeline-style investigation
 - `examples/detection/` detection builtins and multi-signal scoring
 - `examples/security/` environment diagnostics and anti-analysis status
@@ -104,7 +107,8 @@ sweep, not a category the file belongs to.
 
 ## Suggested learning path
 
-1. Start with `examples/basics/`
+1. Start with `examples/basics/`, then `examples/modules/` once a program
+   outgrows one file
 2. Move to `examples/macros/`, `examples/text/`, and `examples/cache/`
 3. Explore `examples/policy/` for policy gates
 4. Use forensic folders (`memory`, `registry`, `email`, `network`, `binary`)

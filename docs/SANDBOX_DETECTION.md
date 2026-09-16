@@ -153,8 +153,18 @@ On sandbox detection:
 Default response behavior:
 
 - Secure mode: terminate
-- Compat mode: warn
-- Override via MUTANT_TAMPER_RESPONSE (warn|delay|terminate)
+- Compat mode (`--compat`): warn
+- Dev mode (`--dev`): warn
+
+The response is derived from the execution mode by `ResolveTamperResponse`
+(`security/response_policy.go`). It is not overridable: see
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
+
+A terminating hit prints the detector, its type and confidence, the signals that
+fired, and `--compat` as the remedy, before the run stops. The sandbox detail
+comes from the cached detection the gate already performed, so explaining a
+termination costs nothing. See
+[EXECUTION_MODES.md](EXECUTION_MODES.md).
 
 ## Telemetry
 
@@ -162,13 +172,11 @@ Sandbox detection contributes to security telemetry snapshot/export:
 
 - sandbox_detected
 
-Audit stream integration (when MUTANT_SECURITY_AUDIT=1):
-
-- event=sandbox_detected stage=<stage>
-
-Telemetry export file is controlled by:
-
-- MUTANT_SECURITY_TELEMETRY_FILE
+The counter is readable in-process through `SecurityTelemetrySnapshot()` and
+`SecurityTelemetryJSON()`, and writable to a file by a caller that passes a path
+to `ExportSecurityTelemetry(path)`. There is no audit stream and no automatic
+export: `auditEvent` is a no-op today, and nothing in the runner calls
+`ExportSecurityTelemetry`.
 
 ## Testing
 

@@ -80,6 +80,12 @@ func (vm *VM) hoSpawn(args []object.Object) (object.Object, error) {
 	// accept loop cannot afford.
 	globals := vm.snapshotGlobals()
 
+	// And its own captured variables, on this goroutine for the same reason: the
+	// caller carries straight on, and a task writing a cell the caller still
+	// holds is a data race rather than a shared accumulator. A spawned task
+	// answers with its return value.
+	task := detachCaptures(cl)
+
 	go func() {
 		var (
 			result  object.Object
@@ -102,7 +108,7 @@ func (vm *VM) hoSpawn(args []object.Object) (object.Object, error) {
 		// same reason pmap's workers skip it: its stack sweep would zero the
 		// constants the parent and any sibling task are still reading.
 		worker := vm.newWorkerVMWithGlobals(globals)
-		result, failure = worker.CallClosureSync(cl, callArgs)
+		result, failure = worker.CallClosureSync(task, callArgs)
 	}()
 
 	return vmPair(&object.Integer{Value: handle}, nil), nil

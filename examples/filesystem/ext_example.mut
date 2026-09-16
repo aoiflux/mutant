@@ -1,4 +1,4 @@
-let volume_path = "N:\dev\dataset\img6_ext4.dd";
+let volume_path = "./disk.ext4";
 let opened, open_err = ext_open(volume_path);
 if (open_err) {
     putln("ext_open failed:", open_err);

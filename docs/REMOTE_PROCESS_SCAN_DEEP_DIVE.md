@@ -23,34 +23,41 @@ Primary implementation anchors:
 
 ## 2. Control Surface
 
-Environment variables:
+**There is none.** Remote process scanning is off in every shipped binary and
+cannot be turned on from outside the process. The whole model lives in
+`remoteScanConfigState`, a package-level `RemoteScanConfig` in
+`security/processscan_config.go`, written only by
+`SetRemoteScanConfigForTesting`. Mutant takes no configuration from environment
+variables, and no flag has been added for this subsystem yet. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-1. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN`
+The fields, and what they hold in a shipped binary:
 
-- Master gate for manager execution.
+1. `Enabled` -- `false`. Master gate for manager execution.
+   `isRemoteProcessScanEnabled()` returns it, so `RunRemoteProcessScan` reports
+   `enabled=false` and the runner skips enforcement entirely.
 
-2. `MUTANT_REMOTE_SCAN_MODE`
+2. `Mode` -- `observe`.
 
 - `off`: disabled path.
 - `observe`: telemetry only.
 - `enforce`: policy block on critical verdict.
 
-3. `MUTANT_REMOTE_SCAN_MAX_PROCESSES`
+`ResolveRemoteScanConfig` coerces any unrecognised value back to `observe`.
 
-- Positive integer, default `32`.
+3. `MaxProcesses` -- `32`.
 
-4. `MUTANT_REMOTE_SCAN_INTERVAL_MS`
+4. `IntervalMs` -- `1000`.
 
-- Positive integer, default `1000`.
+5. `Allowlist` -- empty. Process names to skip;
+   `parseRemoteProcessAllowlist` has no source to read from and returns an empty
+   set. It remains as the seam a future `--scan-allowlist <file>` would fill.
 
-5. `MUTANT_REMOTE_SCAN_ALLOWLIST`
+6. `HighRiskScore` / `CriticalScore` -- `70` / `85`. `ResolveRemoteScanConfig`
+   raises `CriticalScore` to `HighRiskScore` if a caller sets them inverted.
 
-- Comma-separated process names that should be skipped.
-
-Defaults:
-
-1. Scan is disabled when enable env is unset.
-2. Invalid mode falls back to `observe`.
+The `Enabled: true` paths documented in the rest of this file are exercised by
+tests, which set the config directly. They are not reachable by an operator.
 
 ## 3. Data Model
 

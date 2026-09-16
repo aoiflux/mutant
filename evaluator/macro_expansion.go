@@ -88,6 +88,11 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 	var failure error
 	changed := false
 
+	// The root survives every pass: ast.Modify rewrites containers in place and
+	// hands back the same *ast.Program, so positions recorded on one pass are
+	// still there for the next.
+	root, _ := program.(*ast.Program)
+
 	expanded := ast.Modify(program, func(node ast.Node) ast.Node {
 		if failure != nil {
 			return node
@@ -111,10 +116,14 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 			return node
 		}
 
-		evaluated := Eval(macro.Body, extendMacroEnv(macro, args))
+		evaluated := eval(macro.Body, extendMacroEnv(macro, args))
 
-		if errObj, isErr := evaluated.(*object.Error); isErr {
-			failure = fmt.Errorf("macro %s: %s", name, errObj.Message)
+		// A fault is the macro body giving up; report why. A bare *object.Error
+		// is not a fault any more -- it is a value the body produced, which
+		// falls through to the "produced a value instead of source" arm below
+		// and is reported as such.
+		if raised, isErr := evaluated.(*fault); isErr {
+			failure = fmt.Errorf("macro %s: %s", name, raised.err.Message)
 			return node
 		}
 
@@ -132,6 +141,7 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 		}
 
 		changed = true
+		recordMacroOrigin(root, callExpression, macro, quote.Node)
 		return quote.Node
 	})
 
@@ -139,6 +149,40 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 		return nil, false, failure
 	}
 	return expanded, changed, nil
+}
+
+// recordMacroOrigin gives the code a macro produced the two positions it needs
+// to be debuggable.
+//
+// The call site goes into NodePositions, so the expanded node compiles as
+// though it sat where the user wrote the call -- that is the line they can act
+// on, and it is what the rest of the expanded subtree inherits. The definition
+// site goes into MacroExpansions, because when generated code is wrong the call
+// site is not where the bug is: it contains none of the logic that failed.
+//
+// The macro's body is a node from the original parse, so the parser already
+// recorded its range. Nothing has to be threaded through object.Macro to get it.
+func recordMacroOrigin(root *ast.Program, call *ast.CallExpression, macro *object.Macro, produced ast.Node) {
+	if root == nil || call == nil || macro == nil || produced == nil {
+		return
+	}
+
+	callRange, ok := root.RangeOf(call)
+	if !ok {
+		return
+	}
+
+	definition, _ := root.RangeOf(macro.Body)
+
+	if root.NodePositions == nil {
+		root.NodePositions = make(map[ast.Node]ast.Range)
+	}
+	root.NodePositions[produced] = callRange
+
+	if root.MacroExpansions == nil {
+		root.MacroExpansions = make(map[ast.Node]ast.MacroOrigin)
+	}
+	root.MacroExpansions[produced] = ast.MacroOrigin{Call: callRange, Definition: definition}
 }
 
 func isMacroCall(exp *ast.CallExpression, env *object.Environment) (*object.Macro, bool) {

@@ -56,6 +56,13 @@ func objectToJSONValue(obj object.Object) (any, error) {
 	switch v := obj.(type) {
 	case *object.String:
 		return v.Value, nil
+	// JSON has no binary type, so a buffer is encoded the way it prints: hex.
+	// The alternative was to keep erroring on any structure containing one,
+	// which would make a bytes unusable in exactly the reports this language
+	// exists to produce. Decoding is not symmetric -- json_parse yields the hex
+	// string, and string_to_bytes(s, "hex") turns it back.
+	case *object.Bytes:
+		return v.Inspect(), nil
 	case *object.Integer:
 		return v.Value, nil
 	case *object.Float:

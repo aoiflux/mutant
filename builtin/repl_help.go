@@ -48,6 +48,11 @@ var replKeywordDocs = map[string]string{
 	"struct":   "Declares a struct type with named fields.",
 	"enum":     "Declares a closed set of named variants.",
 	"macro":    "Declares macro literals for AST-level metaprogramming.",
+	// Listed because KeywordLiterals already puts `import` in the keyword help
+	// and in tab completion, where a bare entry reads as a REPL feature. It is
+	// not one: a REPL line is not a file, so there is nothing for a path to
+	// resolve relative to.
+	"import": "Loads another file as a module in a compiled program. Not available here -- the REPL has no file for a path to resolve against; use `mutant gen` on a source file.",
 	"true":     "Boolean truth literal.",
 	"false":    "Boolean false literal.",
 }

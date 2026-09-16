@@ -245,6 +245,7 @@ func TestCloneCoversEveryNodeType(t *testing.T) {
 		&ast.ContinueStatement{},
 		&ast.StructStatement{},
 		&ast.EnumStatement{},
+		&ast.ImportStatement{},
 		&ast.Identifier{},
 		&ast.IntegerLiteral{},
 		&ast.FloatLiteral{},

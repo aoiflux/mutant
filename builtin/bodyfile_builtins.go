@@ -19,7 +19,7 @@ func BodyfileParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("bodyfile_parse", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameBodyfileParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -79,7 +79,7 @@ func Mactime(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	entries, errObj := requireArrayArg("mactime", args[0], 1)
+	entries, errObj := requireArrayArg(BuiltinNameMactime, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}

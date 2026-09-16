@@ -27,6 +27,7 @@ import (
 // because they always finish — they never wait on something the script has to
 // arrange — which is the same line sleep_ms is already on.
 var hostCategories = map[string]bool{
+	"archives":             true,
 	"concurrency":          true,
 	"binary analysis":      true,
 	"browser artifacts":    true,
@@ -63,6 +64,15 @@ var explicitDeny = map[string]bool{
 	"debug_status":         true,
 	"sandbox_status":       true,
 	"security_diagnostics": true,
+	// The only builtin that resolves another builtin by NAME at run time, from
+	// a string argument. Everything else here is decided by what the browser
+	// REPL puts in its symbol table -- a host-bound name is simply not a
+	// symbol, so the call fails to compile. A name looked up at run time never
+	// passes through that table, so `with_resource(0, "gets", f)` would reach
+	// straight past it. It is denied rather than taught the allowlist: the
+	// allowlist belongs to this package, and a builtin that had to consult one
+	// would be a different kind of thing entirely.
+	"with_resource": true,
 }
 
 // takesHostPath reports whether a builtin declares a parameter that names a

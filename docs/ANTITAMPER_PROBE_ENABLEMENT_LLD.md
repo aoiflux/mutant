@@ -15,45 +15,66 @@ Users often confuse:
 
 This design separates these decisions clearly.
 
-## 3. Inputs
+## 3. Gates
 
-### 3.1 Master Probe Gate
+There are no configurable inputs. Every gate below is a compile-time constant or
+is derived from the execution mode on the command line; none is settable, and
+none was ever read from a file. The four environment variables this section used
+to document -- a master probe gate, a process-protection gate, a tamper-response
+override and a protection-profile selector -- were removed along with every
+other environment read. Mutant takes no configuration from the environment; see
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
-`MUTANT_ENABLE_ANTITAMPER_PROBE`
+### 3.1 Master probe gate — always on
 
-1. Value `1` means probes run.
-2. Any other value means probes are skipped.
+`antiTamperProbeEnabled` in `security/antitamper_probe.go` is a package-level
+`true`. `isAntiTamperProbeEnabled()` returns it, and `RunAntiTamperProbe`
+short-circuits to `(nil, false, nil)` when it is false.
 
-### 3.2 Process Protection Gate
+The only thing that flips it is `SetAntiTamperProbeEnabledForTesting`, which
+exists so a test can assert the disabled path. In a shipped binary it is never
+called, so probes always run.
 
-`MUTANT_ENABLE_PROCESS_PROTECTION`
+### 3.2 Process-protection gate — always on
 
-1. Evaluated by runner process-protection path.
-2. Default enabled when unset.
-3. Disabled by: `0`, `false`, `off`, `no`.
+`isProcessProtectionEnabled()` in `runner/runner.go` returns `true`. The runner
+reaches it through the `processProtectionOn` package variable, which tests
+replace to exercise the skip path.
 
-### 3.3 Policy Inputs
+### 3.3 What actually varies: the response
 
-1. `MUTANT_TAMPER_RESPONSE`
-2. `MUTANT_PROTECTION_PROFILE`
-3. secure/compat/dev mode context
+Probing is unconditional; what a detection *does* is not. Two things decide that:
+
+1. **The confidence threshold.** `processProtectionTerminateConfidence = 80` in
+   `runner/runner.go`. A signal below it is ignored by the runner, whatever it
+   detected.
+2. **The execution mode**, from argv. `ResolveTamperResponse(secureMode)`
+   returns `terminate` in secure mode (the default) and `warn` under `--compat`
+   or `--dev`. The protection profile feeds into this, but
+   `ResolveProtectionProfile()` returns the constant `standard`, so the
+   `minimal` and `paranoid` branches are unreachable at runtime; they survive
+   only so `ProtectionProfileFromCode` can read back a V3 release trailer.
 
 ## 4. Decision Model
 
 ```mermaid
 flowchart TD
-    A[RunAntiTamperProbe called] --> B{MUTANT_ENABLE_ANTITAMPER_PROBE == 1?}
-    B -->|No| C[Return signals=nil, enabled=false]
-    B -->|Yes| D[Run requested probes and return signals]
+    A[RunAntiTamperProbe called] --> B[Run requested probes and return signals, enabled=true]
 
-    D --> E{Caller is runner process-protection path?}
-    E -->|No| F[Diagnostics only]
-    E -->|Yes| G{MUTANT_ENABLE_PROCESS_PROTECTION enabled?}
-    G -->|No| H[Skip enforcement]
-    G -->|Yes| I{Any signal: detected=true and confidence>=80?}
-    I -->|No| J[Continue]
-    I -->|Yes| K[Record process_protection_detected and apply policy]
+    B --> C{Caller is runner process-protection path?}
+    C -->|No| D[Diagnostics only: signals returned to the script]
+    C -->|Yes| E{Any signal: detected=true and confidence >= 80?}
+    E -->|No| F[Continue execution]
+    E -->|Yes| G[Record process_protection_detected]
+    G --> H{Secure mode?}
+    H -->|Yes| I[terminate: return ErrProcessProtectionDetected]
+    H -->|No, --compat or --dev| J[warn on stderr, continue]
 ```
+
+The gate diamonds the previous version of this diagram carried are gone because
+the gates they tested are gone: both are constants, so the only branch left in
+the enablement path is the caller's own, and the only genuine decision points
+are the confidence threshold and the execution mode.
 
 ## 5. Caller Semantics
 
@@ -81,12 +102,13 @@ Telemetry events:
 
 Risk:
 
-1. False negatives if probe gate is left disabled.
+1. False negatives because probing was switched off in a deployment.
 
 Mitigation:
 
-1. Document production recommended env posture.
-2. Add deployment checks for required security env vars.
+1. Structurally removed. There is no switch: both gates are constants, and the
+   only setter is test-only. A deployment cannot be misconfigured into running
+   with probes off, and there is nothing to check for at deploy time.
 
 Risk:
 
@@ -96,13 +118,17 @@ Mitigation:
 
 1. Keep confidence thresholding and multi-probe context.
 2. Review `detail` field before escalation.
+3. `--compat` downgrades the response to a warning, so a noisy environment can
+   still run the program while the signal stays visible on stderr.
 
 ## 8. Student Takeaway
 
 There are three separate questions:
 
-1. Did probes run?
-2. Was enforcement enabled?
-3. What did policy decide?
+1. Did probes run? **Always yes.**
+2. Was enforcement enabled? **Always yes, on the runner path.**
+3. What did policy decide? **The only real variable** -- the confidence
+   threshold and the execution mode from argv.
 
-Keeping these separate prevents most operational confusion.
+Keeping these separate prevents most operational confusion. The first two used
+to be configurable and were the usual source of it.

@@ -39,6 +39,7 @@ func TestWideOperandsAreClassified(t *testing.T) {
 
 		"OpJump/0":      kindJump,
 		"OpJumpFalse/0": kindJump,
+		"OpIterNext/0":  kindJump, // where to go once the iterator is spent
 
 		"OpGetGlobal/0":   kindOther, // globals slot
 		"OpSetGlobal/0":   kindOther, // globals slot
@@ -47,6 +48,7 @@ func TestWideOperandsAreClassified(t *testing.T) {
 		"OpHash/0":        kindOther, // element count
 		"OpMultiValue/0":  kindOther, // value count
 		"OpDestructure/0": kindOther, // target count
+		"OpConcat/0":      kindOther, // count of pieces to join
 	}
 
 	for _, op := range AllOpcodes() {

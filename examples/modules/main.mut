@@ -1,0 +1,29 @@
+// Modules: one program built from several files.
+//
+// Run it from the repository root:
+//
+//	mutant gen --src examples/modules/main.mut --dev
+//	mutant examples/modules/main.mu --dev
+//
+// An import binds one namespace and nothing else. The imported file's names
+// are NOT visible unqualified -- `sum(...)` below would be an undefined
+// variable, because nothing in this file declares it.
+
+// No alias: the namespace is the file's base name without `.mut`, so this
+// binds `report`.
+import "lib/report.mut";
+
+// An alias, for when the file name is not the name you want to read at the
+// call site -- or when two imports would otherwise bind the same namespace.
+import numbers "lib/stats.mut";
+
+// The same name the report module declares. Each module has its own top level,
+// so this is a different binding and `label` here means this one.
+let label = "main.mut";
+
+let latencies = [12, 47, 31, 8, 92];
+
+putf("%s\n", label);
+putf("%s\n", report.label);
+putf("%s\n", report.line("latencies", latencies));
+putf("largest alone: %d\n", numbers.largest(latencies));

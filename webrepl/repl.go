@@ -56,8 +56,10 @@ func New() *REPL {
 	// Define only browser-safe builtins. A host-bound name is then simply not a
 	// symbol, so calling it fails at compile time with "undefined variable"
 	// rather than reaching a filesystem or socket that does not exist in a
-	// browser. Indexes stay the true builtin.Builtins indexes, which is what
-	// OpGetBuiltin resolves against.
+	// browser. The index passed here is the registry ordinal, which is no longer
+	// what OpGetBuiltin carries -- the compiler interns the symbol's name and
+	// emits a position in the program's own table -- so it only has to be
+	// unique, and the true ordinal remains the obvious choice.
 	for i, b := range builtin.Builtins {
 		if BrowserSafe(b.Name) {
 			symbolTable.DefineBuiltin(i, b.Name)
@@ -228,6 +230,7 @@ func trimCommandLine(line string) string {
 func SupportedSyntaxSummary() string {
 	return strings.Join([]string{
 		"integers, booleans, strings",
+		"string interpolation (${...}), raw strings (r\"...\") and triple-quoted blocks",
 		"float literals and numeric expressions",
 		"arrays, hashes, indexing",
 		"let bindings and identifiers",
@@ -236,6 +239,8 @@ func SupportedSyntaxSummary() string {
 		"closures and higher-order builtins (map/filter/reduce/each/sort_by)",
 		"struct/enum declarations, struct literals, and field access",
 		"for loops with init/condition/post",
+		"while loops",
+		"for (v in xs) and for (k, v in xs) over arrays, hashes, strings and bytes",
 		"assignment expressions",
 		"compound assignment (+= -= *= /= %=) and ++/--",
 		"index and field assignment (a[i] = v, s.f = v)",
@@ -243,6 +248,7 @@ func SupportedSyntaxSummary() string {
 		"macros with quote/unquote",
 		"function calls for browser-safe builtins",
 		"if/else expressions",
+		"match expressions with literal, enum-variant and `|` patterns",
 		"prefix ! and -",
 		"infix + - * / % < > <= >= == != && ||",
 		"builtins: len, first, last, rest, push, pop, putf, putln, bytes_* core (read/write + cursor), json_*, regex_*, text_* core set",

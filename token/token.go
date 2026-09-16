@@ -19,6 +19,27 @@ type Position struct {
 // IsValid reports whether p carries meaningful position information.
 func (p Position) IsValid() bool { return p.Line > 0 }
 
+// Shift moves p down by lines lines and forward by offset bytes.
+//
+// Linking concatenates the modules of a program into one source blob and
+// compiles that, so a position recorded against an individual file has to be
+// rebased onto the blob before the compiler ever sees it. Column is untouched:
+// concatenation happens at line boundaries, so a module's first column is
+// still column 1.
+//
+// An invalid position stays invalid. A node with no recorded position must not
+// acquire a plausible-looking one just because its file was linked after
+// another -- "unknown" is the honest answer, and a fabricated line is worse
+// than none.
+func (p Position) Shift(lines, offset int) Position {
+	if !p.IsValid() {
+		return p
+	}
+	p.Line += lines
+	p.Offset += offset
+	return p
+}
+
 // CommentKind distinguishes the comment syntaxes the lexer recognises.
 // Mutant currently only has line comments, but the kind is recorded
 // explicitly so the formatter does not have to re-inspect the text and so
@@ -70,6 +91,41 @@ type Token struct {
 	Literal string
 	Start   Position
 	End     Position
+
+	// Raw is the literal's source spelling, delimiters included. It is set
+	// only for the string forms whose spelling carries something the decoded
+	// value cannot: r"..." (where every backslash is itself), """...""" (its
+	// own line breaks and indentation) and any literal holding a ${...} hole.
+	// The formatter reprints those verbatim instead of re-quoting a decoded
+	// value, which would turn a raw path back into a doubled-backslash one.
+	// Empty for every other token, including an ordinary string literal.
+	Raw string
+
+	// Parts is set only on a TEMPLATE token: the literal's text and holes in
+	// source order, each carrying the position it occupies in the file so a
+	// diagnostic inside a hole underlines the code the author wrote rather
+	// than the string that contains it.
+	Parts []StringPart
+}
+
+// StringPart is one piece of an interpolated string literal.
+//
+// A part is either decoded literal text or the source of one ${...} hole; the
+// two alternate but neither is guaranteed to come first, and an empty leading
+// or trailing text part is omitted rather than kept as "".
+type StringPart struct {
+	// Text is decoded literal text when Expression is false, and the source
+	// between ${ and } -- braces excluded -- when it is true.
+	Text string
+
+	// Expression reports whether Text is code rather than text.
+	Expression bool
+
+	// Start is where Text begins in the file. For a text part after any
+	// rewriting a triple-quoted literal does to its indentation this is the
+	// start of the part as originally written, which is the only position
+	// that exists; holes, the ones a reader is ever pointed at, are exact.
+	Start Position
 }
 
 const (
@@ -82,6 +138,10 @@ const (
 	INT    = "INT"
 	FLOAT  = "FLOAT"
 	STRING = "STRING"
+	// TEMPLATE is a string literal holding at least one ${...} hole. A literal
+	// with no hole stays a STRING, so nothing downstream pays for a feature a
+	// program does not use.
+	TEMPLATE = "TEMPLATE"
 
 	// Operators
 	ASSIGN     = "="
@@ -103,6 +163,19 @@ const (
 	OR         = "||"
 	COLON      = ":"
 
+	// Bitwise operators over the signed 64-bit integers the VM has.
+	//
+	// `^` is binary xor only and `~` is the unary complement. Go overloads a
+	// single `^` for both, which reads badly in a language where the unary
+	// form is the rarer one; splitting them costs one token and removes the
+	// ambiguity from the grammar entirely.
+	AMPERSAND = "&"
+	PIPE      = "|"
+	CARET     = "^"
+	TILDE     = "~"
+	SHL       = "<<"
+	SHR       = ">>"
+
 	// Compound assignment and increment/decrement. These are pure syntactic
 	// sugar: the parser desugars each to a plain assignment over the matching
 	// binary operator (e.g. `x += 1` -> `x = x + 1`, `x++` -> `x = x + 1`).
@@ -113,6 +186,19 @@ const (
 	MODULO_ASSIGN   = "%="
 	INCREMENT       = "++"
 	DECREMENT       = "--"
+
+	// Compound bitwise assignment, desugared the same way as `+=`.
+	AND_ASSIGN = "&="
+	OR_ASSIGN  = "|="
+	XOR_ASSIGN = "^="
+	SHL_ASSIGN = "<<="
+	SHR_ASSIGN = ">>="
+
+	// `=>` separates a match arm's pattern from its body. It is one token, not
+	// `=` followed by `>`: every other two-character operator here is lexed
+	// whole, and a parser rejoining two tokens could not tell `x => y` from a
+	// mistyped `x = >y`.
+	FATARROW = "=>"
 
 	// Delimiters
 	COMMA     = ","
@@ -134,10 +220,14 @@ const (
 	RETURN   = "RETURN"
 	MACRO    = "MACRO"
 	FOR      = "FOR"
+	WHILE    = "WHILE"
+	IN       = "IN"
 	BREAK    = "BREAK"
 	CONTINUE = "CONTINUE"
 	STRUCT   = "STRUCT"
 	ENUM     = "ENUM"
+	MATCH    = "MATCH"
+	IMPORT   = "IMPORT"
 )
 
 var keywords = map[string]TokenType{
@@ -150,10 +240,14 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"macro":    MACRO,
 	"for":      FOR,
+	"while":    WHILE,
+	"in":       IN,
 	"break":    BREAK,
 	"continue": CONTINUE,
 	"struct":   STRUCT,
 	"enum":     ENUM,
+	"match":    MATCH,
+	"import":   IMPORT,
 }
 
 // LookupIdent function takes in an identifier(string)

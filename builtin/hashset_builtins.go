@@ -26,7 +26,7 @@ func HashsetLoad(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("hashset_load", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameHashsetLoad, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -66,11 +66,11 @@ func HashsetContains(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	handle, errObj := requireStringArg("hashset_contains", args[0], 1)
+	handle, errObj := requireStringArg(BuiltinNameHashsetContains, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	query, errObj := requireStringArg("hashset_contains", args[1], 2)
+	query, errObj := requireStringArg(BuiltinNameHashsetContains, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -91,7 +91,7 @@ func HashsetClose(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	handle, errObj := requireStringArg("hashset_close", args[0], 1)
+	handle, errObj := requireStringArg(BuiltinNameHashsetClose, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

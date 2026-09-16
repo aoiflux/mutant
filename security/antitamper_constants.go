@@ -1,8 +1,6 @@
 package security
 
 const (
-	AntiTamperProbeEnableEnv = "MUTANT_ENABLE_ANTITAMPER_PROBE"
-
 	ProbeHardwareBreakpoint = "hardware_breakpoint"
 	ProbeTiming             = "timing"
 	ProbeSyscall            = "syscall"

@@ -70,7 +70,7 @@ func PolicyRules(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	program, errObj := resolvePolicyProgram(args[0], "policy_rules")
+	program, errObj := resolvePolicyProgram(args[0], BuiltinNamePolicyRules)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -88,12 +88,12 @@ func PolicyEval(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	program, errObj := resolvePolicyProgram(args[0], "policy_eval")
+	program, errObj := resolvePolicyProgram(args[0], BuiltinNamePolicyEval)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	input, errObj := objectToGoInput(args[1], "policy_eval")
+	input, errObj := objectToGoInput(args[1], BuiltinNamePolicyEval)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -124,12 +124,12 @@ func PolicyAllow(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	program, errObj := resolvePolicyProgram(args[0], "policy_allow")
+	program, errObj := resolvePolicyProgram(args[0], BuiltinNamePolicyAllow)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	input, errObj := objectToGoInput(args[1], "policy_allow")
+	input, errObj := objectToGoInput(args[1], BuiltinNamePolicyAllow)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -151,12 +151,12 @@ func PolicyTrace(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	program, errObj := resolvePolicyProgram(args[0], "policy_trace")
+	program, errObj := resolvePolicyProgram(args[0], BuiltinNamePolicyTrace)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	input, errObj := objectToGoInput(args[1], "policy_trace")
+	input, errObj := objectToGoInput(args[1], BuiltinNamePolicyTrace)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

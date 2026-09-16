@@ -33,36 +33,45 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[Security event] --> B{MUTANT_TAMPER_RESPONSE set?}
-    B -->|Yes| C[Use explicit env action]
-    B -->|No| D[Use profile default]
-    D --> E{Profile}
-    E -->|minimal| F[warn]
-    E -->|standard| G[secure=terminate or compat=warn]
-    E -->|paranoid| H[terminate]
-    C --> I[Apply warn/delay/terminate]
-    F --> I
-    G --> I
-    H --> I
+    A[Security event] --> B{Dev mode?}
+    B -->|Yes| C[warn]
+    B -->|No| D{Secure mode?}
+    D -->|"No (--compat)"| C
+    D -->|Yes| E[Profile is always standard]
+    E --> F[terminate]
+    C --> G[Apply response]
+    F --> G
 ```
+
+The response is a pure function of the execution mode from argv:
+`ResolveTamperResponse(secureMode)` in `security/response_policy.go`. There is
+no override, and the profile diamond the earlier version of this diagram carried
+is gone -- `ResolveProtectionProfile()` returns the constant `standard`, so the
+`minimal` and `paranoid` branches are unreachable at runtime. They remain in
+`ProtectionProfileFromCode` only so a V3 release trailer can be read back. The
+`delay` response (`DefaultTamperDelayMs = 250`) is reachable through
+`ApplyTamperResponse` but no mode selects it. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 ## 3. Anti-Tamper Probe Gates
 
 ```mermaid
 flowchart TD
-    A[RunAntiTamperProbe called] --> B{MUTANT_ENABLE_ANTITAMPER_PROBE == 1?}
-    B -->|No| C[Return enabled=false, no signals]
-    B -->|Yes| D[Run requested probes]
-    D --> E[Return signals + enabled=true]
+    A[RunAntiTamperProbe called] --> B[Run requested probes]
+    B --> C[Return signals + enabled=true]
 
-    E --> F{Called from runner process-protection path?}
-    F -->|No| G[Diagnostic use only]
-    F -->|Yes| H{MUTANT_ENABLE_PROCESS_PROTECTION enabled?}
-    H -->|No| I[Skip enforcement]
-    H -->|Yes| J{Any detected && confidence >= 80?}
-    J -->|No| K[Continue]
-    J -->|Yes| L[process_protection_detected -> policy action]
+    C --> D{Called from runner process-protection path?}
+    D -->|No| E[Diagnostic use only]
+    D -->|Yes| F{Any detected && confidence >= 80?}
+    F -->|No| G[Continue]
+    F -->|Yes| H[process_protection_detected -> policy action]
 ```
+
+Both gates this diagram used to test are compile-time constants:
+`antiTamperProbeEnabled` is `true` and `isProcessProtectionEnabled()` returns
+`true`. Their `false` arms exist only for tests, which replace them directly.
+The confidence threshold is the sole remaining decision on the enforcement path.
+See [ANTITAMPER_PROBE_ENABLEMENT_LLD.md](ANTITAMPER_PROBE_ENABLEMENT_LLD.md).
 
 ## 4. Runner vs Builtin Probe Scope
 
@@ -120,15 +129,22 @@ Note:
 
 ```mermaid
 flowchart TD
-    A[RunRemoteProcessScan] --> B{MUTANT_ENABLE_REMOTE_PROCESS_SCAN == 1?}
-    B -->|No| C[Disabled, no scan]
-    B -->|Yes| D{MUTANT_REMOTE_SCAN_MODE}
+    A[RunRemoteProcessScan] --> B{remoteScanConfigState.Enabled?}
+    B -->|"No (the shipped default)"| C[Disabled, no scan]
+    B -->|"Yes (tests only)"| D{Mode}
     D -->|off| C
-    D -->|observe| E[Telemetry only]
-    D -->|enforce| F{Any verdict >= critical?}
+    D -->|"observe (the default mode)"| E[Telemetry only]
+    D -->|enforce| F{Any verdict >= CriticalScore, default 85?}
     F -->|No| G[Continue]
     F -->|Yes| H[Apply tamper policy]
 ```
+
+`remoteScanConfigState` (`security/processscan_config.go`) ships as
+`Enabled: false, Mode: observe`, and the only way to change it is
+`SetRemoteScanConfigForTesting`. Remote process scanning therefore never runs in
+a shipped binary. The `Enabled: true` arms are drawn because the code is
+exercised by tests, not because an operator can reach them; there is no flag for
+it yet. See [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 ## 8. Memory Hardening Snapshot
 

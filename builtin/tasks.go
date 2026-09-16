@@ -176,7 +176,7 @@ func TaskWait(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	task, errObj := lookupTask("task_wait", args[0])
+	task, errObj := lookupTask(BuiltinNameTaskWait, args[0])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -185,7 +185,7 @@ func TaskWait(args ...object.Object) object.Object {
 	timeoutMs := int64(-1)
 	if len(args) == 2 {
 		var terr *object.Error
-		if timeoutMs, terr = timeoutArg("task_wait", 2, args[1]); terr != nil {
+		if timeoutMs, terr = timeoutArg(BuiltinNameTaskWait, 2, args[1]); terr != nil {
 			return resultAndError(nil, terr)
 		}
 	}
@@ -216,7 +216,7 @@ func TaskDone(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	task, errObj := lookupTask("task_done", args[0])
+	task, errObj := lookupTask(BuiltinNameTaskDone, args[0])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

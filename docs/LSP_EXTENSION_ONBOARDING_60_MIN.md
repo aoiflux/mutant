@@ -59,7 +59,7 @@ go test ./...
 ### 4.2 VS Code extension tests
 
 ```bash
-cd vscode-extension
+cd mutant-vscode-extension
 npm install
 npm run compile
 npm test

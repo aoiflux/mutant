@@ -7,9 +7,12 @@ import "strings"
 // `type_of` (INTEGER, STRING, ARRAY, ...) so a diagnostic can say "expects
 // STRING, got INTEGER" in the same words the runtime does.
 //
-// Note there is no BYTES kind: Mutant represents byte buffers as STRING values
-// (see requireBytesStringArg in bytes.go), so a "bytes" parameter declares
-// ParamString and explains itself in prose.
+// ParamBytes names the byte-buffer type. Before it existed, a "bytes" parameter
+// had to declare ParamString and explain itself in prose, because a buffer and a
+// string were the same value to the language. Both kinds are still declared
+// together on every position that reads a buffer -- the whole family accepts
+// either representation, and a position that refused STRING would flag working
+// programs.
 type ParamKind string
 
 const (
@@ -20,6 +23,7 @@ const (
 	ParamInt    ParamKind = "INTEGER"
 	ParamFloat  ParamKind = "FLOAT"
 	ParamString ParamKind = "STRING"
+	ParamBytes  ParamKind = "BYTES"
 	ParamBool   ParamKind = "BOOLEAN"
 	ParamArray  ParamKind = "ARRAY"
 	ParamHash   ParamKind = "HASH"
@@ -40,6 +44,15 @@ const (
 	// the language's words, so they follow the language rather than tidiness.
 	ParamStruct ParamKind = "STRUCT"
 	ParamEnum   ParamKind = "ENUM_VALUE"
+	// ParamError names the error type. It arrived with error(), the first
+	// builtin whose *success* value is an error rather than whose failure is.
+	//
+	// Every other builtin that yields an error yields it in the second half of
+	// a pair, which BuiltinReturnDoc.Text renders as the literal "ERROR"
+	// without needing a kind for it. A bare ERROR return had no way to be
+	// spelled at all, and "ANY" would have been a lie in the one place the
+	// contract has an exact answer.
+	ParamError ParamKind = "ERROR"
 )
 
 // BuiltinParamDoc is the exported view of one builtin parameter.
@@ -240,6 +253,16 @@ type builtinDoc struct {
 	// availability gate) — e.g. a builtin that works everywhere but whose behavior
 	// differs per OS, or one path of which is platform-specific.
 	platformNote string
+	// stability is the promise the builtin's name and shape carry. Empty means
+	// StabilityStable, so the field is written only where the answer is not the
+	// default and 400-odd entries stay unchanged.
+	stability Stability
+	// replacement names what to use instead, and is meaningful only alongside
+	// StabilityDeprecated. It is the "<replacement>" half of the
+	// `deprecated:<replacement>` spelling, kept as its own field so a consumer
+	// need not parse the tier string. TestDeprecatedBuiltinsNameTheirReplacement
+	// requires it.
+	replacement string
 }
 
 // builtinParamDoc is the internal, hand-authored form of one parameter.
@@ -257,6 +280,56 @@ type builtinParamDoc struct {
 	// only for the builtins that actually check them. Like kinds, it is a union
 	// and an empty one means "never checked".
 	elem []ParamKind
+}
+
+// Stability is the promise a builtin's name and shape carry. It became
+// expressible only once bytecode stopped addressing builtins by registry
+// ordinal: while an ordinal was baked into every artifact, nothing could be
+// renamed or retired, so every builtin was permanent whether or not that was
+// intended.
+type Stability string
+
+const (
+	// StabilityStable is the default and the unwritten value: the name, the
+	// arguments and the shape of the result will not change under a program
+	// already written against them.
+	StabilityStable Stability = "stable"
+
+	// StabilityExperimental marks a builtin whose contract is still moving. It
+	// works, and it may be renamed or reshaped in a minor release. Editors show
+	// the tier; nothing refuses to compile it.
+	StabilityExperimental Stability = "experimental"
+
+	// StabilityDeprecated marks a builtin kept only so existing programs keep
+	// working. It names its replacement, and calling it earns a diagnostic
+	// rather than a failure -- the whole point of keeping it is that old code
+	// still runs.
+	StabilityDeprecated Stability = "deprecated"
+)
+
+// StabilityOf reports the tier a builtin declares, and whether the builtin has a
+// teaching doc to declare one at all. An undocumented builtin reports
+// StabilityStable: absent evidence of a promise being withdrawn, an editor
+// should say nothing.
+func StabilityOf(name string) (Stability, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return StabilityStable, false
+	}
+	if doc.stability == "" {
+		return StabilityStable, true
+	}
+	return doc.stability, true
+}
+
+// DeprecatedBy returns the builtin that replaces a deprecated one. The bool is
+// false for anything not deprecated, so a caller can use it as the whole test.
+func DeprecatedBy(name string) (string, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok || doc.stability != StabilityDeprecated {
+		return "", false
+	}
+	return doc.replacement, true
 }
 
 // hashableKinds is the set of kinds that implement object.Hashable, and so the
@@ -291,14 +364,14 @@ func arrayParam(name, doc string, elem ...ParamKind) builtinParamDoc {
 
 func bytesReadParams() []builtinParamDoc {
 	return []builtinParamDoc{
-		param("data", "Source byte string.", ParamString),
+		param("data", "Source buffer.", ParamString, ParamBytes),
 		param("offset", "Offset to read from.", ParamInt),
 	}
 }
 
 func bytesWriteParams() []builtinParamDoc {
 	return []builtinParamDoc{
-		param("data", "Byte string to write into; a modified copy is returned.", ParamString),
+		param("data", "Buffer to write into; a modified copy is returned, in the same representation.", ParamString, ParamBytes),
 		param("offset", "Offset to write at.", ParamInt),
 		param("value", "Unsigned integer to encode; must fit the field width.", ParamInt),
 	}
@@ -315,11 +388,10 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameLen: {
 		signature: "len(value)",
 		// Verified against builtin/len.go: the switch accepts Array, String,
-		// and Hash. "bytes" is not a separate kind — Mutant carries byte
-		// buffers in STRING values.
-		summary: "Returns the length of a string, array, hash, or bytes value.",
-		params:  []builtinParamDoc{param("value", "String, array, hash, or bytes value to measure.", ParamString, ParamArray, ParamHash)},
-		returns: ret("the length of a string, array, hash, or bytes value", ParamInt)},
+		// Bytes and Hash. A buffer's length is its byte count.
+		summary: "Returns the length of a string, buffer, array, or hash.",
+		params:  []builtinParamDoc{param("value", "String, buffer, array, or hash to measure.", ParamString, ParamBytes, ParamArray, ParamHash)},
+		returns: ret("the length of a string, buffer, array, or hash", ParamInt)},
 	BuiltinNameHelp: {signature: "help(topic?, mode?)", summary: "Returns help text: an overview, a topic (keywords/builtins/examples/docs), or details for a specific builtin name.", params: []builtinParamDoc{param("topic?", "Optional topic or builtin name.", ParamString), param("mode?", "Optional rendering mode.", ParamString)}, returns: ret("the rendered help text", ParamString)},
 	// putln takes no arity check at all and prints each argument separated by a
 	// space (builtin/putln.go) — the `putln(value)` spelling it carried before
@@ -341,24 +413,29 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameRest:  {signature: "rest(array)", summary: "Returns a new array without the first element.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}, returns: ret("a new array without the first element", ParamArray)},
 	BuiltinNamePush:  {signature: "push(array, value)", summary: "Returns a new array with value appended.", params: []builtinParamDoc{param("array", "Source array.", ParamArray), param("value", "Element to append; any type is accepted.", ParamAny)}, returns: ret("a new array with value appended", ParamArray)},
 	BuiltinNamePop:   {signature: "pop(array)", summary: "Returns a new array without the last element.", params: []builtinParamDoc{param("array", "Source array.", ParamArray)}, returns: ret("a new array without the last element", ParamArray)},
-	// Every fs_* argument is asserted to *object.String in builtin/fs.go —
-	// paths and payloads alike, since byte payloads travel as STRING values.
+	// Every fs_* path is asserted to *object.String in builtin/fs.go. Payloads
+	// go through requireBinaryArg and accept either representation, so a buffer
+	// can be written straight back out without a conversion in between.
 	BuiltinNameFsRead: {
 		signature: "fs_read(path)", summary: "Reads file contents from disk.",
 		params:  []builtinParamDoc{param("path", "Path to file.", ParamString)},
 		returns: pairRet("the file's bytes", ParamString)},
+	BuiltinNameFsReadBytes: {
+		signature: "fs_read_bytes(path)", summary: "Reads file contents from disk as a BYTES buffer. Use this rather than fs_read whenever the file is not known to be text.",
+		params:  []builtinParamDoc{param("path", "Path to file.", ParamString)},
+		returns: pairRet("the file's bytes", ParamBytes)},
 	BuiltinNameFsWrite: {
 		signature: "fs_write(path, data)", summary: "Writes data to a file, replacing existing contents.",
 		params: []builtinParamDoc{
 			param("path", "Path to file.", ParamString),
-			param("data", "String/bytes payload.", ParamString),
+			param("data", "Text or buffer payload.", ParamString, ParamBytes),
 		},
 		returns: pairRet("true once the file has been written", ParamBool)},
 	BuiltinNameFsAppend: {
 		signature: "fs_append(path, data)", summary: "Appends data to the end of a file.",
 		params: []builtinParamDoc{
 			param("path", "Path to file.", ParamString),
-			param("data", "String/bytes payload.", ParamString),
+			param("data", "Text or buffer payload.", ParamString, ParamBytes),
 		},
 		returns: pairRet("true once the data has been appended", ParamBool)},
 	BuiltinNameFsExists: {
@@ -377,9 +454,118 @@ var builtinDocs = map[string]builtinDoc{
 	// below is every kind it can serialize.
 	BuiltinNameJsonStringify: {
 		signature: "json_stringify(value)", summary: "Serializes Mutant values into JSON text.",
-		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, null, array, or hash with string keys.",
-			ParamString, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash)},
+		// A buffer serialises as its hex, matching Inspect. JSON has no binary
+		// type, and erroring on any structure containing one would make a
+		// buffer unusable in exactly the reports this language exists to write.
+		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, buffer, null, array, or hash with string keys.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash)},
 		returns: pairRet("the JSON text", ParamString)},
+	// The formats that are not JSON (B-1). Every one of these decodes through
+	// the shared bridge in builtin/format_native.go, so a buffer, a timestamp and
+	// a big integer render identically no matter which format they arrived in.
+	// The parse side accepts BYTES or STRING because evidence reaches a program
+	// either way -- fs_read_bytes and zip_read_bytes hand back buffers, fs_read
+	// hands back text -- and neither should need a conversion first.
+	BuiltinNameCsvParse: {
+		signature: "csv_parse(data, options?)",
+		summary:   "Parses CSV/TSV into an array of hashes keyed by the header row. options: delimiter (default \",\"), comment, header (default true), trim_space, lazy_quotes. A UTF-8 BOM is stripped, duplicate column names are refused rather than silently resolved, and fields beyond the header land in an _extra array. With header:false each row is an array of strings instead.",
+		params: []builtinParamDoc{
+			param("data", "CSV/TSV text or buffer.", ParamBytes, ParamString),
+			param("options?", "Parse options: delimiter, comment, header, trim_space, lazy_quotes. Unknown keys are refused by name.", ParamHash),
+		},
+		returns: pairRet("the rows: hashes keyed by header name, or arrays of strings when header is false", ParamArray).ofElem(ParamHash, ParamArray)},
+	BuiltinNameCsvStringify: {
+		signature: "csv_stringify(rows, options?)",
+		summary:   "Serializes an array of hashes (or arrays) as CSV/TSV. options: delimiter, header (default true), columns (explicit column order), crlf. Without an explicit columns list the header is the sorted union of every row's keys, so a row missing a key writes an empty field rather than shifting the others.",
+		params: []builtinParamDoc{
+			arrayParam("rows", "Rows to write: hashes keyed by column name, or arrays of values.", ParamHash, ParamArray),
+			param("options?", "Write options: delimiter, header, columns, crlf. Unknown keys are refused by name.", ParamHash),
+		},
+		returns: pairRet("the CSV text", ParamString)},
+	BuiltinNameXmlParse: {
+		signature: "xml_parse(data)",
+		summary:   "Parses XML into a node tree: {name, namespace, attrs, text, children}. Comments, processing instructions and directives are skipped, undeclared entities fail rather than expand (closing billion-laughs and XXE), and windows-1252/iso-8859-1/-15/windows-1251 documents are decoded by their declared charset -- an unrecognised charset fails by name rather than being misdecoded.",
+		params:    []builtinParamDoc{param("data", "XML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the root element", ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
+	BuiltinNameXmlFind: {
+		signature: "xml_find(node, selector)",
+		summary:   "Selects descendants of a parsed element by a slash-separated path. Three rules, not XPath: a name matches an element, * matches any single level, ** matches any number of levels including none (so \"**/Task\" also finds a direct child).",
+		params: []builtinParamDoc{
+			param("node", "A node from xml_parse or a previous xml_find.", ParamHash),
+			// Named "selector", not "path": webrepl's browser-safe filter reads a
+			// parameter called "path" as a filesystem path and would exclude this
+			// builtin from the browser REPL, which reads no files at all.
+			param("selector", "Slash-separated selector, e.g. \"Triggers/*\" or \"**/Command\".", ParamString),
+		},
+		returns: pairRet("the matching nodes, in document order", ParamArray).ofElem(ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
+	BuiltinNameNdjsonParse: {
+		signature: "ndjson_parse(data)",
+		summary:   "Parses newline-delimited JSON (NDJSON/JSONL) -- the wire format of Zeek, Elastic bulk and OCSF streams. Blank lines are skipped; a malformed line fails with its line number rather than silently truncating the stream.",
+		params:    []builtinParamDoc{param("data", "NDJSON text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("one decoded value per line", ParamArray).ofElem(ParamAny)},
+	BuiltinNameNdjsonStringify: {
+		signature: "ndjson_stringify(values)",
+		summary:   "Serializes an array as newline-delimited JSON, one value per line, with a trailing newline so the output concatenates with another stream.",
+		params:    []builtinParamDoc{arrayParam("values", "Values to write, one per line.", ParamAny)},
+		returns:   pairRet("the NDJSON text", ParamString)},
+	BuiltinNameYamlParse: {
+		signature: "yaml_parse(data)",
+		summary:   "Parses the first YAML document -- Sigma rules, CI config, cloud manifests. A file of ----separated documents needs yaml_parse_all, which is why this one exists as a pair.",
+		params:    []builtinParamDoc{param("data", "YAML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded document", ParamAny)},
+	BuiltinNameYamlParseAll: {
+		signature: "yaml_parse_all(data)",
+		summary:   "Parses every document in a multi-document YAML stream. A Sigma ruleset is one file of ----separated documents, and yaml_parse would return only the first, silently.",
+		params:    []builtinParamDoc{param("data", "YAML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("one decoded value per document, in file order", ParamArray).ofElem(ParamAny)},
+	BuiltinNameYamlStringify: {
+		signature: "yaml_stringify(value)",
+		summary:   "Serializes a Mutant value as YAML. A buffer is written as hex, matching Inspect and json_stringify; string_to_bytes(s, \"hex\") converts it back.",
+		params: []builtinParamDoc{param("value", "Value to serialize: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the YAML text", ParamString)},
+	BuiltinNameTomlParse: {
+		signature: "toml_parse(data)",
+		summary:   "Parses TOML into a hash. TOML datetimes become RFC 3339 strings, so they sort against every other timestamp the language produces.",
+		params:    []builtinParamDoc{param("data", "TOML text or buffer.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded table", ParamHash)},
+	BuiltinNameTomlStringify: {
+		signature: "toml_stringify(value)",
+		summary:   "Serializes a hash or struct as TOML. The top level must be a table -- TOML has no other document shape -- and a buffer is written as hex, matching yaml_stringify.",
+		params:    []builtinParamDoc{param("value", "Table to serialize.", ParamHash, ParamStruct)},
+		returns:   pairRet("the TOML text", ParamString)},
+	BuiltinNameCborParse: {
+		signature: "cbor_parse(data)",
+		summary:   "Parses CBOR -- COSE, WebAuthn, IoT telemetry. Byte strings decode to buffers, not text; tagged items are preserved as {_cbor_tag, value} rather than dropped; integer map keys are supported (COSE labels them that way); duplicate keys are refused. Nesting is capped at 64 levels.",
+		params:    []builtinParamDoc{param("data", "CBOR bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded value", ParamAny)},
+	BuiltinNameCborEncode: {
+		signature: "cbor_encode(value)",
+		summary:   "Serializes a Mutant value as canonical CBOR: map keys are sorted and integers use their shortest form, so hash_sha256(cbor_encode(v)) is a stable identifier for v. A buffer encodes as a CBOR byte string.",
+		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the encoded bytes", ParamBytes)},
+	BuiltinNameMsgpackParse: {
+		signature: "msgpack_parse(data)",
+		summary:   "Parses MessagePack -- agent check-ins, queue payloads, Fluentd forward traffic. Binary values decode to buffers, not text. Input carrying more than one value is reported rather than ignored: a blob that decodes and keeps going is either a stream or not what it was thought to be.",
+		params:    []builtinParamDoc{param("data", "MessagePack bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the decoded value", ParamAny)},
+	BuiltinNameMsgpackEncode: {
+		signature: "msgpack_encode(value)",
+		summary:   "Serializes a Mutant value as MessagePack with sorted map keys and compact integers, so the output is deterministic for a given value.",
+		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
+			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
+		returns: pairRet("the encoded bytes", ParamBytes)},
+	BuiltinNameProtobufParse: {
+		signature: "protobuf_parse(data)",
+		summary:   "Walks protobuf wire format without a .proto -- the situation an analyst holding a gRPC capture is actually in. Each field reports {field, wire_type, offset} plus every reading its bytes admit: a varint as itself, as zigzag and as bool; a length-delimited field as bytes, plus text and message when those parse. Naming the ambiguity is the honest thing a schemaless reader can do.",
+		params:    []builtinParamDoc{param("data", "Protobuf-encoded bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("one hash per field, in wire order", ParamArray).ofElem(ParamHash).withFields("field", "offset", "wire_type")},
+	BuiltinNameDerParse: {
+		signature: "der_parse(data)",
+		summary:   "Walks DER/ASN.1 structurally, without a schema -- what x509_parse and pem_decode already need internally, and what a certificate extension or a Kerberos ticket needs when no ASN.1 module is at hand. Each node reports {offset, header_len, length, class, tag, constructed, tag_name}, constructed nodes carry children, and primitives carry raw value bytes plus a decoded rendering for universal types (OIDs dotted, big INTEGERs as decimal text rather than truncated, times as RFC 3339). BER indefinite length is refused by name.",
+		params:    []builtinParamDoc{param("data", "DER-encoded bytes.", ParamBytes, ParamString)},
+		returns:   pairRet("the top-level nodes, each a tree", ParamArray).ofElem(ParamHash).withFields("class", "constructed", "header_len", "length", "offset", "tag", "tag_name")},
 	BuiltinNameLuaRunString: {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string.", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("code", "Lua source to run.", ParamString)}},
 	BuiltinNameLuaRunFile:   {signature: "lua_run_file(path)", summary: "Runs a Lua script from a file.", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("path", "Path to the Lua script.", ParamString)}},
 	BuiltinNameLuaRunHttp:   {signature: "lua_run_http(url)", summary: "Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries).", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("url", "URL the script is fetched from.", ParamString)}},
@@ -411,33 +597,33 @@ var builtinDocs = map[string]builtinDoc{
 	// Mutant, so hashing bytes needs no separate kind.
 	BuiltinNameHashMD5: {
 		signature: "hash_md5(s)", summary: "Returns the lowercase hex MD5 digest of s.",
-		params:  []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to digest.", ParamString, ParamBytes)},
 		returns: ret("the lowercase hex MD5 digest of s", ParamString)},
 	BuiltinNameHashSHA1: {
 		signature: "hash_sha1(s)", summary: "Returns the lowercase hex SHA-1 digest of s.",
-		params:  []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to digest.", ParamString, ParamBytes)},
 		returns: ret("the lowercase hex SHA-1 digest of s", ParamString)},
 	BuiltinNameHashSHA256: {
 		signature: "hash_sha256(s)", summary: "Returns the lowercase hex SHA-256 digest of s.",
-		params:  []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to digest.", ParamString, ParamBytes)},
 		returns: ret("the lowercase hex SHA-256 digest of s", ParamString)},
 	BuiltinNameHashSHA512: {
 		signature: "hash_sha512(s)", summary: "Returns the lowercase hex SHA-512 digest of s.",
-		params:  []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to digest.", ParamString, ParamBytes)},
 		returns: ret("the lowercase hex SHA-512 digest of s", ParamString)},
 	BuiltinNameHashCRC32: {
 		signature: "hash_crc32(s)", summary: "Returns the CRC-32 (IEEE) checksum of s as 8 hex chars.",
-		params:  []builtinParamDoc{param("s", "String or bytes to checksum.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to checksum.", ParamString, ParamBytes)},
 		returns: ret("the CRC-32 (IEEE) checksum of s as 8 hex chars", ParamString)},
 	BuiltinNameHashBlake2: {
 		signature: "hash_blake2(s)", summary: "Returns the lowercase hex BLAKE2b-256 digest of s.",
-		params:  []builtinParamDoc{param("s", "String or bytes to digest.", ParamString)},
+		params:  []builtinParamDoc{param("s", "Text or buffer to digest.", ParamString, ParamBytes)},
 		returns: ret("the lowercase hex BLAKE2b-256 digest of s", ParamString)},
 	BuiltinNameHMAC: {
 		signature: "hmac(key, message, algo)", summary: "Returns the hex HMAC of message under key. algo is md5/sha1/sha256/sha512.",
 		params: []builtinParamDoc{
-			param("key", "Secret key.", ParamString),
-			param("message", "Message to authenticate.", ParamString),
+			param("key", "Secret key; text or buffer.", ParamString, ParamBytes),
+			param("message", "Message to authenticate; text or buffer.", ParamString, ParamBytes),
 			param("algo", "Hash algorithm: md5/sha1/sha256/sha512.", ParamString),
 		},
 		returns: ret("the hex HMAC of message under key", ParamString)},
@@ -543,20 +729,24 @@ var builtinDocs = map[string]builtinDoc{
 	// The codecs all take one STRING (encOneString / requireStringArg in
 	// builtin/encoding_builtins.go). Encoded bytes are STRING values too, so
 	// the decoders' inputs are STRING as well.
-	BuiltinNameBase64Encode:    {signature: "base64_encode(s)", summary: "Standard base64-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}, returns: ret("the standard base64 text", ParamString)},
-	BuiltinNameBase64Decode:    {signature: "base64_decode(s)", summary: "Decodes standard base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
-	BuiltinNameBase64URLEncode: {signature: "base64url_encode(s)", summary: "URL-safe base64-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}, returns: ret("the URL-safe base64 text", ParamString)},
-	BuiltinNameBase64URLDecode: {signature: "base64url_decode(s)", summary: "Decodes URL-safe base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "URL-safe base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
-	BuiltinNameBase32Encode:    {signature: "base32_encode(s)", summary: "Standard base32-encodes s.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}, returns: ret("the standard base32 text", ParamString)},
-	BuiltinNameBase32Decode:    {signature: "base32_decode(s)", summary: "Decodes standard base32; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base32 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
-	BuiltinNameHexEncode:       {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex.", params: []builtinParamDoc{param("s", "String or bytes to encode.", ParamString)}, returns: ret("the lowercase hex text", ParamString)},
-	BuiltinNameHexDecode:       {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
-	BuiltinNameURLEncode:       {signature: "url_encode(s)", summary: "URL query-escapes s.", params: []builtinParamDoc{param("s", "Text to escape.", ParamString)}, returns: ret("the query-escaped text", ParamString)},
-	BuiltinNameURLDecode:       {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err).", params: []builtinParamDoc{param("s", "Escaped text to unescape.", ParamString)}, returns: pairRet("the unescaped text", ParamString)},
-	BuiltinNameGzip:            {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "String or bytes to compress.", ParamString)}, returns: ret("the compressed bytes", ParamString)},
-	BuiltinNameGunzip:          {signature: "gunzip(s)", summary: "Gzip-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Gzip-compressed bytes.", ParamString)}, returns: pairRet("the decompressed bytes", ParamString)},
-	BuiltinNameZlibCompress:    {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "String or bytes to compress.", ParamString)}, returns: ret("the compressed bytes", ParamString)},
-	BuiltinNameZlibDecompress:  {signature: "zlib_decompress(s)", summary: "Zlib-decompresses s; returns (bytes, err).", params: []builtinParamDoc{param("s", "Zlib-compressed bytes.", ParamString)}, returns: pairRet("the decompressed bytes", ParamString)},
+	BuiltinNameBase64Encode:        {signature: "base64_encode(s)", summary: "Standard base64-encodes s.", params: []builtinParamDoc{param("s", "Text or buffer to encode.", ParamString, ParamBytes)}, returns: ret("the standard base64 text", ParamString)},
+	BuiltinNameBase64Decode:        {signature: "base64_decode(s)", summary: "Decodes standard base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
+	BuiltinNameBase64URLEncode:     {signature: "base64url_encode(s)", summary: "URL-safe base64-encodes s.", params: []builtinParamDoc{param("s", "Text or buffer to encode.", ParamString, ParamBytes)}, returns: ret("the URL-safe base64 text", ParamString)},
+	BuiltinNameBase64URLDecode:     {signature: "base64url_decode(s)", summary: "Decodes URL-safe base64; returns (bytes, err).", params: []builtinParamDoc{param("s", "URL-safe base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
+	BuiltinNameBase32Encode:        {signature: "base32_encode(s)", summary: "Standard base32-encodes s.", params: []builtinParamDoc{param("s", "Text or buffer to encode.", ParamString, ParamBytes)}, returns: ret("the standard base32 text", ParamString)},
+	BuiltinNameBase32Decode:        {signature: "base32_decode(s)", summary: "Decodes standard base32; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base32 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
+	BuiltinNameHexEncode:           {signature: "hex_encode(s)", summary: "Hex-encodes a byte string to lowercase hex.", params: []builtinParamDoc{param("s", "Text or buffer to encode.", ParamString, ParamBytes)}, returns: ret("the lowercase hex text", ParamString)},
+	BuiltinNameBase64DecodeBytes:   {signature: "base64_decode_bytes(s)", summary: "Decodes standard base64 into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Standard base64 text.", ParamString)}, returns: pairRet("the decoded bytes", ParamBytes)},
+	BuiltinNameHexDecodeBytes:      {signature: "hex_decode_bytes(s)", summary: "Decodes a hex string into a BYTES buffer; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}, returns: pairRet("the decoded bytes", ParamBytes)},
+	BuiltinNameGunzipBytes:         {signature: "gunzip_bytes(s, max_bytes?)", summary: "Gzip-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamBytes)},
+	BuiltinNameZlibDecompressBytes: {signature: "zlib_decompress_bytes(s, max_bytes?)", summary: "Zlib-decompresses s into a BYTES buffer; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamBytes)},
+	BuiltinNameHexDecode:           {signature: "hex_decode(s)", summary: "Decodes a hex string to bytes; returns (bytes, err).", params: []builtinParamDoc{param("s", "Hex text to decode.", ParamString)}, returns: pairRet("the decoded bytes", ParamString)},
+	BuiltinNameURLEncode:           {signature: "url_encode(s)", summary: "URL query-escapes s.", params: []builtinParamDoc{param("s", "Text to escape.", ParamString)}, returns: ret("the query-escaped text", ParamString)},
+	BuiltinNameURLDecode:           {signature: "url_decode(s)", summary: "URL query-unescapes s; returns (value, err).", params: []builtinParamDoc{param("s", "Escaped text to unescape.", ParamString)}, returns: pairRet("the unescaped text", ParamString)},
+	BuiltinNameGzip:                {signature: "gzip(s)", summary: "Gzip-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "Text or buffer to compress.", ParamString, ParamBytes)}, returns: ret("the compressed bytes", ParamString)},
+	BuiltinNameGunzip:              {signature: "gunzip(s, max_bytes?)", summary: "Gzip-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Gzip-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamString)},
+	BuiltinNameZlibCompress:        {signature: "zlib_compress(s)", summary: "Zlib-compresses s (returns a byte string).", params: []builtinParamDoc{param("s", "Text or buffer to compress.", ParamString, ParamBytes)}, returns: ret("the compressed bytes", ParamString)},
+	BuiltinNameZlibDecompress:      {signature: "zlib_decompress(s, max_bytes?)", summary: "Zlib-decompresses s; returns (bytes, err). Refuses to produce more than 1000x its input, capped at 1 GiB, unless max_bytes says otherwise.", params: []builtinParamDoc{param("s", "Zlib-compressed data.", ParamString, ParamBytes), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit.", ParamInt)}, returns: pairRet("the decompressed bytes", ParamString)},
 	BuiltinNameToBase: {
 		signature: "to_base(n, base)", summary: "Formats integer n in the given base (2–36).",
 		params: []builtinParamDoc{
@@ -612,6 +802,14 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "is_null(v)", summary: "Returns whether v is NULL.",
 		params:  []builtinParamDoc{param("v", "Value to test; any type is accepted.", ParamAny)},
 		returns: ret("whether v is NULL", ParamBool)},
+	BuiltinNameError: {
+		signature: "error(message, context?, related?)", summary: "Constructs an error value carrying a message, an origin, and any related facts. Single-return: it cannot fail.",
+		params: []builtinParamDoc{
+			param("message", "What went wrong.", ParamString),
+			param("context?", "Where it went wrong; defaults to \"user\".", ParamString),
+			param("related?", "Facts to carry along, keyed by STRING. Values keep their types.", ParamHash),
+		},
+		returns: ret("an error carrying message, context and related, stamped with the call position", ParamError)},
 	// generic: time & date (epoch seconds; Go reference layout, e.g. \"2006-01-02 15:04:05\")
 	BuiltinNameTimeNow:  {signature: "time_now()", summary: "Returns the current UTC time as a hash {unix, iso, year, month, day, hour, minute, second}.", returns: ret("the current UTC time, broken into fields", ParamHash).withFields("day", "hour", "iso", "minute", "month", "second", "unix", "year")},
 	BuiltinNameTimeUnix: {signature: "time_unix()", summary: "Returns the current Unix time in seconds.", returns: ret("the current Unix time in seconds", ParamInt)},
@@ -819,6 +1017,154 @@ var builtinDocs = map[string]builtinDoc{
 			param("fn", "Key function called per element: (element) or (element, index).", ParamFn),
 		},
 		returns: ret("a new array sorted by the callback's key", ParamArray)},
+	BuiltinNameWithResource: {
+		signature: "with_resource(resource, closer, fn)", summary: "Calls fn with a resource an open call returned and always closes it afterwards -- whether fn returns a value, returns an error, or fails outright. closer is the name of a closing builtin (\"ntfs_close\") or a function taking the resource. If the open itself failed, fn never runs and the open's error comes back unchanged, so wrapping an existing call in with_resource does not change what the program sees. Returns (value, err): value is what fn returned, and err is the first failure among the open, an error fn returned, and the close. When fn and the close both fail, fn's error is the one returned and the close's is attached to it as related[\"close_error\"].",
+		params: []builtinParamDoc{
+			param("resource", "What an open call returned: a (handle, err) pair, or the handle itself.", ParamAny),
+			param("closer", "Name of the builtin that closes the resource, or a function taking it.", ParamString, ParamFn),
+			param("fn", "Function called with the resource: (resource).", ParamFn),
+		},
+		returns: pairRet("what fn returned, and the first failure among the open, fn and the close", ParamAny)},
+
+	// Testing. Every one of these records what it saw in the run that is
+	// executing and is therefore only meaningful under `mutant test`; each also
+	// RETURNS its verdict, so a failure is a value the program can read the way
+	// it reads every other failure in this language.
+	BuiltinNameTest: {
+		signature: "test(name, fn)", summary: "Runs fn as a named test and records whether it passed. Tests run where they are written, in order; a test declared inside another is a subtest of it. A runtime error inside fn fails that test and the file keeps going.",
+		params: []builtinParamDoc{
+			param("name", "What this test is called, as it will be reported.", ParamString),
+			param("fn", "The test body, taking no parameters.", ParamFn),
+		},
+		returns: ret("true when the test and everything nested inside it passed", ParamBool)},
+	BuiltinNameBeforeEach: {
+		signature: "before_each(fn)", summary: "Registers fn to run before each test declared after this call, at this nesting level and inside it. A failure in fn fails the test it was preparing.",
+		params:  []builtinParamDoc{param("fn", "Setup function, taking no parameters.", ParamFn)},
+		returns: ret("null; the function is recorded for later tests", ParamNull)},
+	BuiltinNameAfterEach: {
+		signature: "after_each(fn)", summary: "Registers fn to run after each test declared after this call, at this nesting level and inside it. It runs whether the test passed, failed, or ended in an error.",
+		params:  []builtinParamDoc{param("fn", "Teardown function, taking no parameters.", ParamFn)},
+		returns: ret("null; the function is recorded for later tests", ParamNull)},
+	BuiltinNameAssert: {
+		signature: "assert(condition, message?)", summary: "Fails the current test unless condition is truthy.",
+		params: []builtinParamDoc{
+			param("condition", "Value that must be truthy; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the assertion held; an error naming what was seen when it did not", ParamBool)},
+	BuiltinNameAssertEq: {
+		signature: "assert_eq(got, want, message?)", summary: "Fails the current test unless got equals want. Scalars compare by value; arrays, hashes and structs compare by their rendered form, so key order does not matter.",
+		params: []builtinParamDoc{
+			param("got", "The value produced; any type is accepted.", ParamAny),
+			param("want", "The value expected; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the two are equal; an error showing both when they are not", ParamBool)},
+	BuiltinNameAssertNe: {
+		signature: "assert_ne(got, unwanted, message?)", summary: "Fails the current test when got equals unwanted, compared the way assert_eq compares.",
+		params: []builtinParamDoc{
+			param("got", "The value produced; any type is accepted.", ParamAny),
+			param("unwanted", "The value it must not be; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the two differ; an error showing the value when they do not", ParamBool)},
+	BuiltinNameAssertContains: {
+		signature: "assert_contains(container, value, message?)", summary: "Fails the current test unless container holds value: a substring of a string, an element of an array, or a key of a hash.",
+		params: []builtinParamDoc{
+			param("container", "String, array or hash to look in.", ParamString, ParamArray, ParamHash),
+			param("value", "Substring, element or key to look for.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the value was found; an error naming both when it was not", ParamBool)},
+	BuiltinNameAssertErr: {
+		signature: "assert_err(value, substring?)", summary: "Fails the current test unless value is an error, optionally requiring its message to contain substring. This is what the second binding of a (value, err) call is checked with.",
+		params: []builtinParamDoc{
+			param("value", "The value expected to be an error; any type is accepted.", ParamAny),
+			param("substring?", "Text the error message must contain.", ParamString),
+		},
+		returns: ret("true when the value was the expected error; an error describing the mismatch when it was not", ParamBool)},
+	BuiltinNameAssertOk: {
+		signature: "assert_ok(value, message?)", summary: "Fails the current test when value is an error, quoting the error's own message. This is the check to put on the second binding of a (value, err) call that is expected to succeed.",
+		params: []builtinParamDoc{
+			param("value", "The value expected not to be an error; any type is accepted.", ParamAny),
+			param("message?", "What the check was for, shown with the failure.", ParamString),
+		},
+		returns: ret("true when the value was not an error; an error quoting it when it was", ParamBool)},
+	BuiltinNameFail: {
+		signature: "fail(message)", summary: "Fails the current test unconditionally with the given message. For the branch a test should never reach.",
+		params:  []builtinParamDoc{param("message", "Why the test failed.", ParamString)},
+		returns: ret("an error carrying the message; the failure is recorded either way", ParamError)},
+
+	// Chain of custody (F-1). Nothing in this family records anything until
+	// `case_open` is called, so the hooks these rely on -- in every evidence
+	// opener and every handle resolver -- cost a program that does not open a
+	// case exactly one atomic load.
+	BuiltinNameCaseOpen: {
+		signature: "case_open(id, examiner, options?)",
+		summary:   "Opens a chain-of-custody session. From here until `case_close`, every evidence opener records its source into the case manifest and every builtin that reads through an evidence handle is counted against that source. Only one case may be open at a time.",
+		params: []builtinParamDoc{
+			param("id", "The case identifier this investigation is filed under.", ParamString),
+			param("examiner", "Who is conducting it. A manifest nobody signed for is not a chain of custody, so this may not be empty.", ParamString),
+			param("options?", "`{\"hash\": \"sha256\"}` digests each source as it is opened. The default is `\"none\"`, because the alternative is `raw_open` silently reading half a terabyte before it returns a handle; a manifest then states which it was. Also accepts `\"md5\"` and `\"sha1\"`.", ParamHash),
+		},
+		returns: pairRet("the opened case", ParamHash).withFields("examiner", "hash_policy", "id", "opened_at", "status")},
+	BuiltinNameCaseNote: {
+		signature: "case_note(text, data?)",
+		summary:   "Records an examiner's note in the case timeline, with an optional value alongside it. The timeline holds what the analyst did -- opens, notes, verifications, the close -- and never grows with what the program read.",
+		params: []builtinParamDoc{
+			param("text", "What happened, in the examiner's words.", ParamString),
+			param("data?", "Any value to record with the note; it is stored as written.", ParamAny),
+		},
+		returns: pairRet("the recorded entry", ParamHash).withFields("at", "elapsed_ms", "event", "status", "text")},
+	BuiltinNameCaseEvidence: {
+		signature: "case_evidence(path, options?)",
+		summary:   "Brings a file under custody that no evidence opener will touch -- a carved file, an export, a hash list handed over with the drive. Registers its size, modification time and, under the case's hash policy, its digest.",
+		params: []builtinParamDoc{
+			param("path", "The file to place under custody.", ParamString),
+			param("options?", "`{\"hash\": \"sha256\"}` digests this one file even in a case opened without a hash policy, because an examiner who names a single file is willing to wait for it.", ParamHash),
+		},
+		returns: pairRet("the evidence record", ParamHash).withFields("elapsed_ms", "hash", "hash_algo", "hashed", "mod_time", "on_disk", "opens", "path", "registered_at", "size", "touches")},
+	BuiltinNameCaseVerify: {
+		signature: "case_verify()",
+		summary:   "Re-measures every source under custody and reports what moved. A case opened with a hash policy compares digests; one opened without compares size and modification time. Each source says which basis was used, so a weaker check is never mistaken for a stronger one.",
+		returns:   pairRet("the drift report", ParamHash).withFields("changed", "checked", "missing", "not_on_disk", "sources", "unchanged")},
+	BuiltinNameCaseManifest: {
+		signature: "case_manifest()",
+		summary:   "Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes.",
+		returns:   pairRet("the case manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+	BuiltinNameCaseWrite: {
+		signature: "case_write(path, options?)",
+		summary:   "Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file.",
+		params: []builtinParamDoc{
+			param("path", "Where to write the manifest.", ParamString),
+			param("options?", "`{\"sign\": false}` writes the hash but no signature, for a machine with no key store. The document then says `\"signed\": false` rather than looking signed.", ParamHash),
+		},
+		returns: pairRet("what was written", ParamHash).withFields("bytes", "manifest_hash", "path", "signed", "status")},
+	BuiltinNameCaseManifestVerify: {
+		signature: "case_manifest_verify(path)",
+		summary:   "Checks a written manifest: that its contents still hash to the value in its seal, and that the signature over them holds. A function of the file alone -- it needs neither the case that produced it nor any key the reader does not already hold.",
+		params:    []builtinParamDoc{param("path", "The manifest to check.", ParamString)},
+		returns: pairRet("the verification result", ParamHash).withFields(
+			"case_id", "computed_hash", "examiner", "hash_matches", "manifest_hash", "path",
+			"signature_detail", "signature_valid", "signed")},
+	BuiltinNameCaseReport: {
+		signature: "case_report(opts?)",
+		summary:   "Renders the open case as a report value, in the shape report_new builds: the case header, the evidence with its digests, what each builtin touched and how often, the timeline, the integrity statement and the security counters. It is read from the manifest rather than from the session, so the report and the manifest cannot disagree about what was examined; and it is a value, so an examiner's conclusions can be added with report_section and report_text before anything is rendered.",
+		params:    []builtinParamDoc{param("opts?", "Optional {title, subtitle, generated}. title defaults to \"Case <id>\"; generated is RFC 3339 and defaults to now, and pinning it makes two renders of one case the same bytes.", ParamHash)},
+		returns:   pairRet("the case as a report", ParamHash).withFields("case_id", "examiner", "generated", "sections", "title")},
+	BuiltinNameCaseBundle: {
+		signature: "case_bundle(dir, opts?)",
+		summary:   "Writes the handover: manifest.json, report.html, report.md and a SHA256SUMS any sha256sum can check. The reports are written first and the manifest records what they hashed to, so the seal over the manifest -- a SHA-256 over every other field, signed with the local key pair -- covers the reports too: edit a byte of report.html and it no longer matches the case it claims to be from. The binding runs one way on purpose; a report quoting the manifest's hash would be quoting a document that had not been written yet. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("dir", "The directory to write into; created if it does not exist.", ParamString),
+			param("opts?", "Optional {title, subtitle, generated, sign}. The first three are case_report's; sign:false writes the hash but no signature, for a machine with no key store.", ParamHash),
+		},
+		returns: pairRet("what the bundle contains", ParamHash).withFields("checksums", "dir", "files", "manifest", "manifest_hash", "signed", "status")},
+	BuiltinNameCaseClose: {
+		signature: "case_close()",
+		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
+		returns:   pairRet("the final manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+
 	BuiltinNameKeys: {
 		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
 		params:  []builtinParamDoc{param("hash", "Hash to read keys from.", ParamHash)},
@@ -901,33 +1247,104 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameHiveClose:          {signature: "hive_close(handle)", summary: "Closes a hive handle. Returns (bool, err).", returns: pairRet("true once the handle has been released", ParamBool), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString)}},
 	BuiltinNameHiveKeyInfo:        {signature: "hive_key_info(handle, keypath?)", summary: "Returns {name, last_write, last_write_iso, subkey_count, value_count} for a key (keypath is backslash-separated under the root; default root). Returns (result, err).", returns: pairRet("the key's metadata, including its last-write time and child counts", ParamHash).withFields("last_write", "last_write_iso", "name", "subkey_count", "value_count"), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath?", "Key path under the opened root, backslash-separated; defaults to the root.", ParamString)}},
 	BuiltinNameHiveListKeys:       {signature: "hive_list_keys(handle, keypath?)", summary: "Returns the subkey names under a key (default root) as an array. Returns (array, err).", returns: pairRet("the subkey names under a key (default root) as an array", ParamArray).ofElem(ParamString), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath?", "Key path under the opened root, backslash-separated; defaults to the root.", ParamString)}},
-	BuiltinNameHiveListValues:     {signature: "hive_list_values(handle, keypath?)", summary: "Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Returns (array, err).", returns: pairRet("one hash per value, with its type and decoded data (REG_SZ/DWORD/QWORD/MULTI_SZ decoded, binary as hex)", ParamArray).ofElem(ParamHash).withFields("data", "name", "type"), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath?", "Key path under the opened root, backslash-separated; defaults to the root.", ParamString)}},
-	BuiltinNameHiveGetValue:       {signature: "hive_get_value(handle, keypath, name)", summary: "Returns {name, type, data} for a single value under keypath. Returns (result, err).", returns: pairRet("the value stored under name, with its registry type", ParamHash).withFields("data", "name", "type"), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath", "Key path holding the value, backslash-separated under the opened root.", ParamString), param("name", "Value name to read; \"\" reads the key's default value.", ParamString)}},
+	BuiltinNameHiveListValues:     {signature: "hive_list_values(handle, keypath?)", summary: "Returns a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Binary values (REG_BINARY, and types the reader does not recognise) also carry data_bytes, the stored bytes as a BYTES buffer; other types omit it, since data already holds the value faithfully. Returns (array, err).", returns: pairRet("one hash per value, with its type and decoded data (REG_SZ/DWORD/QWORD/MULTI_SZ decoded, binary as hex plus a data_bytes buffer)", ParamArray).ofElem(ParamHash).withFields("data", "data_bytes", "name", "type"), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath?", "Key path under the opened root, backslash-separated; defaults to the root.", ParamString)}},
+	BuiltinNameHiveGetValue:       {signature: "hive_get_value(handle, keypath, name)", summary: "Returns {name, type, data} for a single value under keypath. Binary values (REG_BINARY, and types the reader does not recognise) also carry data_bytes, the stored bytes as a BYTES buffer; other types omit it, since data already holds the value faithfully. Returns (result, err).", returns: pairRet("the value stored under name, with its registry type, and data_bytes when that value is binary", ParamHash).withFields("data", "data_bytes", "name", "type"), params: []builtinParamDoc{param("handle", "Handle from hive_open.", ParamString), param("keypath", "Key path holding the value, backslash-separated under the opened root.", ParamString), param("name", "Value name to read; \"\" reads the key's default value.", ParamString)}},
 	BuiltinNameShimcacheParse:     {signature: "shimcache_parse(path)", summary: "Decodes the Windows AppCompatCache (shimcache) — program execution/presence evidence. Accepts a SYSTEM hive file (locates the value) or a raw AppCompatCache blob. Supports Win8/Win8.1/Win10 (10ts/00ts). Returns {version, count, entries:[{position, path, last_modified, last_modified_iso}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "SYSTEM hive file or raw AppCompatCache blob.", ParamString)}, returns: pairRet("the parsed AppCompatCache entries", ParamHash)},
 	BuiltinNameAmcacheParse:       {signature: "amcache_parse(path)", summary: "Parses an Amcache.hve hive (program execution/presence evidence) into {format, count, entries:[{key, path, name, sha1, publisher, version, product, size, last_write}]}. Supports the modern InventoryApplicationFile and legacy Root\\File layouts. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to an Amcache.hve hive file.", ParamString)}, returns: pairRet("the parsed Amcache entries", ParamHash)},
 	BuiltinNamePrefetchParse:      {signature: "prefetch_parse(path)", summary: "Decodes a Windows Prefetch (.pf) file — program execution evidence. Transparently decompresses the Win10/11 MAM (Xpress-Huffman) container and parses the SCCA format for XP (v17), Vista/7 (v23), Win8.1 (v26), and Win10/11 (v30/v31). Returns {version, executable, prefetch_hash, run_count, run_times[], files_loaded[], file_count, volumes:[{device_path, serial, created, created_iso}], compressed}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a .pf prefetch file (compressed or raw SCCA).", ParamString)}, returns: pairRet("the execution evidence the .pf file records", ParamHash).withFields("created", "created_iso", "device_path", "serial")},
 	BuiltinNameMftParse:           {signature: "mft_parse(path)", summary: "Parses an NTFS Master File Table into a per-record timeline. Auto-detects a standalone $MFT file (FILE-signature record stream, e.g. KAPE/FTK/icat) vs a full NTFS volume image. Each entry has $STANDARD_INFORMATION (si_*) and $FILE_NAME (fn_*) MAC times as unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns, 0-999999999, at NTFS 100 ns resolution — a whole-second/zero fraction is a timestomping tell), and an RFC3339Nano iso string; plus reconstructed path, size, sequence, and hard-link count. The record size is read from the first record header rather than assumed, and skipped counts records that would not parse. Returns {source_type, record_size, count, skipped, entries:[{record, parent_record, in_use, is_directory, name, path, size, allocated_size, sequence, hard_links, file_attributes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a standalone $MFT file or an NTFS volume image.", ParamString)}, returns: pairRet("the parsed $MFT records", ParamHash).withFields("count", "entries", "record_size", "skipped", "source_type")},
 	BuiltinNameEvtxParse:          {signature: "evtx_parse(path)", summary: "Parses a Windows Event Log (.evtx). Walks every chunk and decodes each record's BinXML (templates + substitutions) into the fully-expanded event tree, plus summary fields per record. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a .evtx Windows Event Log file.", ParamString)}, returns: pairRet("the decoded event records", ParamHash).withFields("chunk_count", "count", "records", "source")},
+	BuiltinNameEvtxParseBytes:     {signature: "evtx_parse_bytes(path)", summary: "Parses a Windows Event Log (.evtx) exactly as evtx_parse does, except that binary event values (EVTX BinaryType) come back as BYTES buffers instead of hex strings. Everything else -- the record tree, the summary fields, the return shape -- is identical. Use this when an event carries a binary payload you intend to read rather than print. Returns {source, chunk_count, count, records:[{record_id, timestamp, timestamp_iso, event_id, event_record_id, level, channel, computer, provider, event}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a .evtx Windows Event Log file.", ParamString)}, returns: pairRet("the decoded event records, with binary values as BYTES", ParamHash).withFields("chunk_count", "count", "records", "source")},
 	BuiltinNameJumplistParse:      {signature: "jumplist_parse(path)", summary: "Parses a Windows Jump List (recent/pinned destinations). Auto-detects *.automaticDestinations-ms (OLE compound file: numbered shell-link streams + a DestList MRU/metadata stream) and *.customDestinations-ms (concatenated shell links). Each entry merges DestList metadata (last_access, pinned, hostname) with the embedded shell-link target. Returns {type, format_version, entry_count, pinned_count, entries:[{stream_id, target, arguments, working_dir, name, last_access, last_access_iso, pinned, hostname}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a .automaticDestinations-ms or .customDestinations-ms jump list.", ParamString)}, returns: pairRet("the parsed Jump List destinations", ParamHash).withFields("entries", "entry_count", "format_version", "pinned_count", "type")},
 	BuiltinNameSyslogParse:        {signature: "syslog_parse(path)", summary: "Parses a Unix syslog file into structured entries, auto-detecting RFC 5424 (IETF, ISO-8601) and RFC 3164 (BSD) per line; unmatched lines are kept as raw messages. RFC 3164 lines omit the year, so the current year is assumed. Each entry has a `ts` unix field for timeline_merge/timeline_sort. Returns {count, entries:[{format, priority, facility, severity, timestamp, ts, host, app_name, pid, msgid, structured_data, message}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a syslog text file (RFC 3164 or RFC 5424).", ParamString)}, returns: pairRet("the parsed syslog entries", ParamHash).withFields("count", "entries")},
 	BuiltinNameSqliteQuery:        {signature: "sqlite_query(path, sql, params?)", summary: "Runs a read-only SQL query against a SQLite database, pure-Go (no cgo). The database (+ any -wal/-shm sidecars) is copied to a temp file first, so the original is never modified or lock-contended — safe for forensic DBs held open by a running app. Optional params is an ARRAY of bind values for a parameterized query. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a SQLite database file.", ParamString), param("sql", "SQL query to run.", ParamString), param("params?", "Optional ARRAY of bind parameters.", ParamArray)}, returns: pairRet("the query's columns and rows", ParamHash).withFields("columns", "row_count", "rows", "truncated")},
+	BuiltinNameSqliteQueryBytes:   {signature: "sqlite_query_bytes(path, sql, params?)", summary: "Runs a read-only SQL query exactly as sqlite_query does, except that BLOB columns come back as BYTES buffers. sqlite_query asks whether a BLOB happens to be valid UTF-8 and returns a string if so and hex if not, so one column's type varies row by row with its content; here a BLOB is a buffer whatever it holds. Other column types are unchanged: INTEGER is an INT, TEXT a STRING, NULL a NULL. Returns {columns, row_count, truncated, rows:[{col: value}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a SQLite database file.", ParamString), param("sql", "SQL query to run.", ParamString), param("params?", "Optional ARRAY of bind parameters.", ParamArray)}, returns: pairRet("the query's columns and rows, with BLOBs as BYTES", ParamHash).withFields("columns", "row_count", "rows", "truncated")},
 	BuiltinNameBrowserHistory:     {signature: "browser_history(path)", summary: "Parses a Chromium (History) or Firefox (places.sqlite) history database into normalized visit entries, auto-detecting the schema and converting timestamps to unix. Returns {browser, count, entries:[{url, title, visit_count, last_visit, last_visit_iso, browser}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a Chromium History or Firefox places.sqlite database.", ParamString)}, returns: pairRet("the normalized visit entries", ParamHash)},
 	BuiltinNameBrowserCookies:     {signature: "browser_cookies(path)", summary: "Parses a Chromium (Cookies) or Firefox (cookies.sqlite) cookie database. Chromium cookie values are OS-encrypted; such rows are reported with encrypted=true and an empty value (decryption needs OS keys). Returns {browser, count, entries:[{host, name, value, path, expires, expires_iso, secure, http_only, encrypted, browser}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a Chromium Cookies or Firefox cookies.sqlite database.", ParamString)}, returns: pairRet("the parsed cookie records", ParamHash)},
 	BuiltinNameBrowserDownloads:   {signature: "browser_downloads(path)", summary: "Parses download records from a Chromium (History downloads table) or Firefox (places.sqlite moz_annos) database; Firefox support is best-effort (destination file URI). Returns {browser, count, entries:[{url, target_path, bytes_total, bytes_received, start_time, end_time, state, mime_type, browser}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a Chromium History or Firefox places.sqlite database.", ParamString)}, returns: pairRet("the parsed download records", ParamHash)},
-	BuiltinNameFsDeleted:          {signature: "fs_deleted(path)", summary: "Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered (resident_data, hex-encoded); larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a standalone $MFT file or an NTFS volume image.", ParamString)}, returns: pairRet("the recovered deleted entries and how many were skipped", ParamHash).withFields("deleted_count", "entries", "skipped", "source_type")},
+	BuiltinNameFsDeleted:          {signature: "fs_deleted(path)", summary: "Enumerates deleted files from an NTFS $MFT (a standalone $MFT file or a full volume image, auto-detected). A record is deleted when its in-use flag is clear but its metadata still parses. Small files with a resident $DATA attribute are fully recovered, as hex (resident_data) and as a buffer (resident_data_bytes) carrying the same bytes; larger non-resident files report metadata only. SI/FN times include unix seconds, a sub-second nanosecond fraction (si_*_ns/fn_*_ns), and an RFC3339Nano iso string. Returns {source_type, deleted_count, skipped, entries:[{record, name, path, size, is_directory, has_data, resident, recoverable, resident_data, resident_data_bytes, si_*, si_*_ns, fn_*, fn_*_ns}]}. Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a standalone $MFT file or an NTFS volume image.", ParamString)}, returns: pairRet("the recovered deleted entries and how many were skipped", ParamHash).withFields("deleted_count", "entries", "skipped", "source_type")},
 	BuiltinNameLnkParse:           {signature: "lnk_parse(path)", summary: "Parses a Windows shell link (.lnk): header (attributes, creation/access/write FILETIME->unix), decoded LinkFlags, LinkInfo local_base_path (target), and StringData (name, relative_path, working_dir, arguments, icon_location). Returns (result, err).", params: []builtinParamDoc{param("path", "Path to a .lnk shell link file.", ParamString)}, returns: pairRet("the shell link's header, target, and tracker fields", ParamHash)},
-	BuiltinNameMactime:            {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge).", returns: ret("one row per distinct timestamp, in chronological order", ParamArray).ofElem(ParamHash).withFields("gid", "inode", "iso", "macb", "md5", "mode", "name", "size", "ts", "uid"), params: []builtinParamDoc{param("entries", "Entries from bodyfile_parse.", ParamArray)}},
+	BuiltinNameEventsFrom:         {signature: "events_from(artifact, kind_or_mapping)", summary: "Normalizes a parsed artifact into interchange events: one event per timestamp the artifact records, in a fixed vocabulary the ECS/OCSF/Timesketch emitters are written against. The second argument names a built-in source kind (event_kinds() lists them) or is a mapping hash {kind, category, action, entries, message, times:[{field, desc, format?, ns_field?, array?}], fields:{envelope: source}} describing an artifact this tree does not know. Unknown fields are omitted rather than emitted empty, a zero timestamp yields no event, and `extra` carries the source entry verbatim so normalizing loses nothing. Accepts a parser's (result, err) pair directly. Returns (events, err).", params: []builtinParamDoc{param("artifact", "A parser's result hash (its entries/records array is found for you) or an array of entries.", ParamHash, ParamArray), param("kind_or_mapping", "A source kind from event_kinds(), or a mapping hash describing the artifact.", ParamString, ParamHash)}, returns: pairRet("one event per timestamp the artifact records", ParamArray).ofElem(ParamHash).withFields("category", "extra", "iso", "kind", "ts", "ts_desc", "ts_ms")},
+	BuiltinNameEventKinds:         {signature: "event_kinds()", summary: "Lists the artifact kinds events_from understands, each with the envelope category and action it maps to, the key its entries live under, the timestamps it reads and what each one means, and the envelope fields it fills.", returns: ret("one descriptor per supported source kind, ordered by kind", ParamArray).ofElem(ParamHash).withFields("action", "category", "entries_key", "fields", "kind", "times")},
+	BuiltinNameEcsEvent:           {signature: "ecs_event(event, opts?)", summary: "Renders events_from() events as Elastic Common Schema documents: one ECS document, or one per event when given a whole timeline. Maps the envelope onto @timestamp, event.*, host/user, file.*, process.*, source/destination.*, url.full and registry.path; keeps the severity word in log.level beside a syslog-scale event.severity; and carries what ECS does not define under a `mutant` namespace -- including ts_desc, without which the four documents an $MFT record produces are the same document four times, and the verbatim source entry in mutant.extra. A field the artifact did not record is omitted rather than emitted empty. A category ECS has no honest home for, log among them, leaves event.category out rather than filing the document under the wrong one. Returns (document(s), err).", params: []builtinParamDoc{param("event", "An events_from() event, or an array of them.", ParamHash, ParamArray), param("opts?", "Optional {host, user, tags, extra, version}. host and user fill in what an artifact structurally cannot record; extra:false leaves the verbatim source entry out; version sets ecs.version (default 8.11.0).", ParamHash)}, returns: pairRet("an ECS document, or one per event when given an array", ParamHash, ParamArray)},
+	BuiltinNameOcsfEvent:          {signature: "ocsf_event(event, opts?)", summary: "Renders events_from() events as OCSF 1.1 events: one event, or one per event when given a whole timeline. The class comes from the envelope category -- file to 1001 File System Activity, web to 6001, network to 4001, authentication to 3002 -- and anything with no honest fit, execution and registry included, stays on the Base Event 0/0 rather than borrowing a class someone else's detection rule fires on. activity_id is read from what the timestamp records, so a creation time becomes Create and an access time becomes Read; the severity word maps straight onto severity_id, which is why the envelope carries a word. What OCSF has no home for -- the kind, the timestamp description, the verbatim source entry -- goes in `unmapped`, the field OCSF keeps for exactly that. Returns (event(s), err).", params: []builtinParamDoc{param("event", "An events_from() event, or an array of them.", ParamHash, ParamArray), param("opts?", "Optional {host, user, tags, extra, version}. host and user fill in what an artifact structurally cannot record; extra:false leaves the verbatim source entry out; version sets metadata.version (default 1.1.0).", ParamHash)}, returns: pairRet("an OCSF event, or one per event when given an array", ParamHash, ParamArray)},
+	BuiltinNameTimesketchEvent:    {signature: "timesketch_event(event, opts?)", summary: "Renders events_from() events as Timesketch/plaso records, ready for ndjson_stringify: one record, or one per event when given a whole timeline. Fills all three fields Timesketch requires -- message, datetime, timestamp_desc -- and never leaves one empty, because a record missing any of them is dropped on ingest rather than flagged. `timestamp` counts plaso microseconds. `data_type` is the plaso string its analyzers key off (mft to fs:stat:ntfs, prefetch to windows:prefetch:execution, the browser kinds by which browser the entry came out of); a kind with no plaso equivalent gets mutant:<kind>:event rather than borrowing one an analyzer would then run over and report on. Returns (record(s), err).", params: []builtinParamDoc{param("event", "An events_from() event, or an array of them.", ParamHash, ParamArray), param("opts?", "Optional {host, user, tags, extra, data_type}. host and user fill in what an artifact structurally cannot record; tags becomes Timesketch's tag list; extra:false leaves the verbatim source entry out; data_type overrides the plaso type.", ParamHash)}, returns: pairRet("a Timesketch record, or one per event when given an array", ParamHash, ParamArray)},
+	BuiltinNameStixBundle:         {signature: "stix_bundle(iocs, opts?)", summary: "Renders indicators as a STIX 2.1 bundle, taking extract_iocs() output directly. ipv4 and ipv6 become ipv4-addr and ipv6-addr observables, domains become domain-name, urls url, emails email-addr, and each md5/sha1/sha256 digest becomes a file observable carrying that one algorithm -- three digests of one file are three observables, because nothing in a list of digests says they describe the same file. Every id is a UUIDv5 over the object's ID contributing properties under the namespace STIX fixes for the purpose, so the same indicator is the same object wherever it is seen and a re-run over the same evidence is the same bundle byte for byte. `indicators: true` adds an Indicator beside each observable, typed `unknown` rather than `malicious-activity`: extraction found the value, it did not conclude anything about it. A key no indicator type claims is an error, and so is a value that is not what its key says -- a 40-character digest under sha256 would become an observable nothing else can match. A bundle with no indicators in it has no `objects` key, because an empty STIX list property must be left out. Returns (bundle, err).", params: []builtinParamDoc{param("iocs", "Indicators grouped by type, as extract_iocs returns: {ipv4, ipv6, domains, urls, emails, md5, sha1, sha256}. Each value is a STRING or an ARRAY of STRING.", ParamHash), param("opts?", "Optional {indicators, created, tags}. indicators:true adds Indicator objects; created stamps them (RFC 3339, default now) and pinning it makes even those byte-identical between runs; tags becomes each Indicator's labels, and needs indicators:true, since a STIX observable has no labels property.", ParamHash)}, returns: pairRet("a STIX 2.1 bundle", ParamHash).withFields("id", "objects", "type")},
+	BuiltinNameStixPattern:        {signature: "stix_pattern(type, value)", summary: "Renders the STIX pattern that matches one indicator: stix_pattern(\"sha256\", digest) gives [file:hashes.'SHA-256' = '...']. Takes the same type names stix_bundle accepts (ipv4, ipv6, domains, urls, emails, md5, sha1, sha256, and their singular spellings), normalizes and checks the value the same way, and escapes it for the pattern. Returns (pattern, err).", params: []builtinParamDoc{param("type", "Indicator type: ipv4, ipv6, domains, urls, emails, md5, sha1 or sha256.", ParamString), param("value", "The indicator itself.", ParamString)}, returns: pairRet("a STIX pattern string", ParamString)},
+	BuiltinNameReportNew: {
+		signature: "report_new(title, opts?)",
+		summary:   "Starts a report. The report is a plain hash -- title, generated, and a sections array -- so it can be JSON-encoded, diffed against yesterday's, or written by hand; every builder here returns a new document rather than changing the one it was given. `generated` defaults to now and is the only field that cannot be derived from the document, so pinning it makes two renders of one investigation the same bytes. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("title", "What was examined. A report without one is refused.", ParamString),
+			param("opts?", "Optional {subtitle, examiner, case_id, generated}. generated is RFC 3339 and defaults to now; pin it for byte-identical output.", ParamHash),
+		},
+		returns: pairRet("a new report", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportSection: {
+		signature: "report_section(report, heading, opts?)",
+		summary:   "Opens a section. Everything added afterwards lands in it, until the next one. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("heading", "The section heading.", ParamString),
+			param("opts?", "Optional {level}: the heading depth, 1 to 6, default 2. The title is always the level above.", ParamHash),
+		},
+		returns: pairRet("the report with the section opened", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportText: {
+		signature: "report_text(report, text)",
+		summary:   "Adds a paragraph. Line breaks inside it survive every format. A paragraph written before the first report_section lands in a lead section that renders without a heading, because a report usually opens with a summary. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("text", "The paragraph. Rendered as text in every format -- nothing in it is ever interpreted as markup.", ParamString),
+		},
+		returns: pairRet("the report with the paragraph added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportList: {
+		signature: "report_list(report, items, opts?)",
+		summary:   "Adds a bulleted list, or a numbered one with {\"ordered\": true}. Items are scalars, rendered the way a CSV cell is, so a count that arrived as an INTEGER needs no conversion. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("items", "The list items: STRING, INTEGER, FLOAT, BOOLEAN or NULL. A nested hash is refused here rather than appearing mid-sentence in the output.", ParamArray),
+			param("opts?", "Optional {ordered}: true numbers the list. Default false.", ParamHash),
+		},
+		returns: pairRet("the report with the list added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportTable: {
+		signature: "report_table(report, rows, opts?)",
+		summary:   "Adds a table. Rows arrive in either shape csv_stringify takes -- an array of arrays written positionally, or an array of hashes written against a column list -- and go through the same normalization, so a table in a report and the same table written straight to CSV cannot disagree about what a cell contains. A table with no rows and no columns is refused: pass `columns` to record that a search found nothing. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("report", "The report so far.", ParamHash),
+			param("rows", "An ARRAY of ARRAYs, or an ARRAY of HASHes. Cells are scalars.", ParamArray),
+			param("opts?", "Optional {columns, caption, header}. columns names and orders the fields, and for hash rows selects them; header:false drops the header row.", ParamHash),
+		},
+		returns: pairRet("the report with the table added", ParamHash).withFields("generated", "sections", "title")},
+	BuiltinNameReportRender: {
+		signature: "report_render(report, format, opts?)",
+		summary:   "Renders a report as \"html\", \"markdown\" or \"csv\". The whole document is validated first and a block nothing renders is an error naming its section and index, because a renderer that steps over what it does not understand produces a report that looks complete and is missing a finding. HTML is the format to hand to a person: every string is escaped, the stylesheet is inlined, there is no script, font or image, and evidence text is never turned into a link -- a report that makes the attacker's URL clickable is a report that can be clicked. Markdown is escaped for structure, so a pipe in a filename cannot shift a table column. CSV carries one table, and guards the cells a spreadsheet would execute. Returns (text, err).",
+		params: []builtinParamDoc{
+			param("report", "The report to render.", ParamHash),
+			param("format", "\"html\", \"markdown\" (or \"md\"), or \"csv\".", ParamString),
+			param("opts?", "html: {fragment} omits the document wrapper. csv: {table} names which table by index or caption -- required when there is more than one, since a CSV file holds one; {delimiter}; {formula_guard} false writes cells beginning = + - @ unaltered, for output that will be parsed rather than opened in a spreadsheet.", ParamHash),
+		},
+		returns: pairRet("the rendered report", ParamString)},
+	BuiltinNameReportWrite: {
+		signature: "report_write(report, path, opts?)",
+		summary:   "Renders a report and writes it to disk, returning what the file turned out to be: {path, bytes, format, sha256}. The format comes from the path's extension -- .html, .htm, .md, .markdown, .csv -- or from {\"format\": ...} for a path whose name says nothing. The digest is read back off the disk and checked against the document that was meant to be there, so a short write or a full disk is a refusal rather than a hash of something nobody can reproduce. When a case is open the write becomes a timeline entry carrying the path and the digest, which is the whole of the link between an investigation and the documents it produced. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("report", "The report to write.", ParamHash),
+			param("path", "Where to write it. The file is created 0600.", ParamString),
+			param("opts?", "Optional {format} plus every report_render option: {fragment} for html, {table}, {delimiter} and {formula_guard} for csv.", ParamHash),
+		},
+		returns: pairRet("what was written", ParamHash).withFields("bytes", "format", "path", "sha256")},
+	BuiltinNameMactime: {signature: "mactime(entries)", summary: "Builds a chronological MAC-time timeline from bodyfile_parse entries: one row per distinct time with a MACB flag string (m/a/c/b, \".\" where absent), sorted by ts then name (ts field composes with timeline_merge).", returns: ret("one row per distinct timestamp, in chronological order", ParamArray).ofElem(ParamHash).withFields("gid", "inode", "iso", "macb", "md5", "mode", "name", "size", "ts", "uid"), params: []builtinParamDoc{param("entries", "Entries from bodyfile_parse.", ParamArray)}},
 	// security: fingerprinting
 	BuiltinNameImphash: {signature: "imphash(pe_path)", summary: "Computes the PE import hash (pefile/Mandiant algorithm) for malware clustering. Returns {imphash, import_count, dll_count}. Note: ordinal-only imports are rendered as ord<N>, so results may differ from VT for ws2_32/oleaut32 ordinal imports. Returns (result, err).", params: []builtinParamDoc{param("pe_path", "Path to a PE (Windows) binary.", ParamString)}, returns: pairRet("the PE import hash and the counts it was computed over", ParamHash).withFields("dll_count", "imphash", "import_count")},
 	BuiltinNameNTHash:  {signature: "nt_hash(password)", summary: "Returns the NTLM NT hash (MD4 of the UTF-16LE password) as hex. For authorized credential testing/CTF use.", returns: ret("the NTLM NT hash (MD4 of the UTF-16LE password) as hex", ParamString), params: []builtinParamDoc{param("password", "Password to hash.", ParamString)}},
 	BuiltinNameLMHash:  {signature: "lm_hash(password)", summary: "Returns the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex. Empty password -> aad3b435b51404eeaad3b435b51404ee.", returns: ret("the legacy LM hash (DES-based; case-insensitive, max 14 chars) as hex", ParamString), params: []builtinParamDoc{param("password", "Password to hash.", ParamString)}},
 	BuiltinNameJA3:     {signature: "ja3(client_hello)", summary: "Computes the JA3 TLS-client fingerprint from a ClientHello (raw bytes, with or without the TLS record layer). Hashes version,ciphers,extensions,curves,point_formats with GREASE (RFC 8701) removed. Returns {ja3, ja3_hash (md5), tls_version, ciphers[], extensions[], curves[], point_formats[]}. Returns (result, err).", params: []builtinParamDoc{param("client_hello", "Raw bytes of a TLS ClientHello (optionally wrapped in its record layer).", ParamString)}, returns: pairRet("the JA3 string and its MD5 hash, plus the fields they were built from", ParamHash).withFields("ciphers", "curves", "extensions", "ja3", "ja3_hash", "point_formats", "tls_version")},
 	// security: crypto
-	BuiltinNameX509Parse:  {signature: "x509_parse(pem_or_der)", summary: "Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err).", params: []builtinParamDoc{param("pem_or_der", "Certificate bytes in PEM or DER form.", ParamString)}, returns: pairRet("the certificate's subject, issuer, validity window, and fingerprints", ParamHash).withFields("dns_names", "email_addresses", "ip_addresses", "is_ca", "issuer", "key_algorithm", "not_after", "not_before", "serial", "sha1", "sha256", "signature_algorithm", "subject", "version")},
-	BuiltinNameJWTDecode:  {signature: "jwt_decode(token)", summary: "Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err).", params: []builtinParamDoc{param("token", "Compact JWT string (header.payload.signature).", ParamString)}, returns: pairRet("the token's header and claims; the signature is never verified", ParamHash).withFields("algorithm", "claims", "header", "signature_present", "verified")},
-	BuiltinNameAESEncrypt: {signature: "aes_encrypt(key, plaintext)", summary: "AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err).", params: []builtinParamDoc{param("key", "16/24/32-byte key (AES-128/192/256).", ParamString), param("plaintext", "Data to encrypt.", ParamString)}, returns: pairRet("the ciphertext, with the random nonce prepended", ParamString)},
-	BuiltinNameAESDecrypt: {signature: "aes_decrypt(key, ciphertext)", summary: "AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering.", params: []builtinParamDoc{param("key", "16/24/32-byte key.", ParamString), param("ciphertext", "Nonce-prefixed AES-GCM ciphertext.", ParamString)}, returns: pairRet("the recovered plaintext", ParamString)},
-	BuiltinNamePEMDecode:  {signature: "pem_decode(s)", summary: "Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err).", returns: pairRet("the first PEM block, with its DER body hex-encoded", ParamHash).withFields("der_hex", "headers", "remaining_bytes", "size", "type"), params: []builtinParamDoc{param("s", "PEM text to decode.", ParamString)}},
+	BuiltinNameX509Parse:       {signature: "x509_parse(pem_or_der)", summary: "Parses an X.509 certificate (PEM or DER). Returns {subject, issuer, serial, not_before, not_after, is_ca, version, dns_names, ip_addresses, email_addresses, key_algorithm, signature_algorithm, sha1, sha256}. Returns (cert, err).", params: []builtinParamDoc{param("pem_or_der", "Certificate bytes in PEM or DER form.", ParamString)}, returns: pairRet("the certificate's subject, issuer, validity window, and fingerprints", ParamHash).withFields("dns_names", "email_addresses", "ip_addresses", "is_ca", "issuer", "key_algorithm", "not_after", "not_before", "serial", "sha1", "sha256", "signature_algorithm", "subject", "version")},
+	BuiltinNameJWTDecode:       {signature: "jwt_decode(token)", summary: "Decodes a JWT's header and claims WITHOUT verifying the signature (verified is always false). Returns {header, claims, algorithm, signature_present, verified}. Returns (result, err).", params: []builtinParamDoc{param("token", "Compact JWT string (header.payload.signature).", ParamString)}, returns: pairRet("the token's header and claims; the signature is never verified", ParamHash).withFields("algorithm", "claims", "header", "signature_present", "verified")},
+	BuiltinNameAESEncrypt:      {signature: "aes_encrypt(key, plaintext)", summary: "AES-GCM encrypts plaintext. key must be 16/24/32 bytes. A random nonce is prepended to the output. Returns (ciphertext, err).", params: []builtinParamDoc{param("key", "16/24/32-byte key (AES-128/192/256).", ParamString), param("plaintext", "Text or buffer to encrypt.", ParamString, ParamBytes)}, returns: pairRet("the ciphertext, with the random nonce prepended", ParamString)},
+	BuiltinNameAESDecryptBytes: {signature: "aes_decrypt_bytes(key, ciphertext)", summary: "AES-GCM decrypts into a BYTES buffer. Recovered plaintext is binary until something proves otherwise, and a buffer is also the form the VM can wipe. Returns (plaintext, err).", params: []builtinParamDoc{param("key", "16/24/32-byte key.", ParamString), param("ciphertext", "Nonce-prefixed AES-GCM ciphertext.", ParamString, ParamBytes)}, returns: pairRet("the recovered plaintext", ParamBytes)},
+	BuiltinNameAESDecrypt:      {signature: "aes_decrypt(key, ciphertext)", summary: "AES-GCM decrypts ciphertext produced by aes_encrypt (nonce-prefixed). Returns (plaintext, err); errors on wrong key or tampering.", params: []builtinParamDoc{param("key", "16/24/32-byte key.", ParamString), param("ciphertext", "Nonce-prefixed AES-GCM ciphertext.", ParamString)}, returns: pairRet("the recovered plaintext", ParamString)},
+	BuiltinNamePEMDecode:       {signature: "pem_decode(s)", summary: "Decodes the first PEM block. Returns {type, headers, der_hex, size, remaining_bytes}. Returns (result, err).", returns: pairRet("the first PEM block, with its DER body hex-encoded", ParamHash).withFields("der_hex", "headers", "remaining_bytes", "size", "type"), params: []builtinParamDoc{param("s", "PEM text to decode.", ParamString)}},
 	BuiltinNameTextContains: {
 		signature: "text_contains(haystack, needle)", summary: "Returns whether a string contains a substring.",
 		params: []builtinParamDoc{
@@ -1314,7 +1731,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "bin_sections(path)",
 		summary:   "Returns binary section table information.",
 		returns:   pairRet("one hash per section", ParamHash), params: []builtinParamDoc{param("path", "Path to the binary.", ParamString)}},
-	BuiltinNameNetSynScan:     {signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
+	BuiltinNameNetSynScan:     {stability: StabilityDeprecated, replacement: BuiltinNameNetConnectScan, signature: "net_syn_scan(host, startPort, endPort, timeoutMs)", summary: "DEPRECATED alias of net_connect_scan. This is a full TCP connect scan, not a half-open SYN scan; use net_connect_scan.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
 	BuiltinNameNetConnectScan: {signature: "net_connect_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a TCP port range on a host using full connect() probes (net.Dial). Pure-Go and unprivileged; not a half-open SYN scan (which needs raw sockets/privileges).", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port connect timeout in ms.", ParamInt)}, returns: pairRet("which ports answered, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "open_ports", "scanned", "start_port")},
 	BuiltinNameNetUdpScan:     {signature: "net_udp_scan(host, startPort, endPort, timeoutMs)", summary: "Scans a UDP port range on a host.", params: []builtinParamDoc{param("host", "Target host.", ParamString), param("startPort", "First port (inclusive).", ParamInt), param("endPort", "Last port (inclusive).", ParamInt), param("timeoutMs", "Per-port timeout in ms.", ParamInt)}, returns: pairRet("which ports responded, and how long the scan took", ParamHash).withFields("duration_ms", "end_port", "host", "responsive_ports", "scanned", "start_port")},
 	BuiltinNameNetBanner:      {signature: "net_banner(address, timeoutMs)", summary: "Collects service banner text from a network endpoint.", params: []builtinParamDoc{param("address", "host:port endpoint.", ParamString), param("timeoutMs", "Read timeout in ms.", ParamInt)}, returns: pairRet("the banner text the service sent", ParamHash).withFields("banner", "error", "ok")},
@@ -1371,21 +1788,21 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the subkey names under the key", ParamArray).ofElem(ParamString)},
 	BuiltinNameRegEnumValues: {
 		signature: "reg_enum_values(handle, keyPath?)",
-		summary:   "Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Works across JSON/hive-file/live sources. Returns (array, err).",
+		summary:   "Enumerates a key's values as [{name, type, data}] (REG_SZ/DWORD/QWORD/MULTI_SZ decoded; binary as hex). Binary values (REG_BINARY, and types the reader does not recognise) also carry data_bytes, the stored bytes as a BYTES buffer; other types omit it, since data already holds the value faithfully. A JSON source never reports one, having no binary type to transcribe. Works across JSON/hive-file/live sources. Returns (array, err).",
 		params: []builtinParamDoc{
 			param("handle", "Handle returned by reg_open.", ParamString),
 			param("keyPath?", "Key path (default: the opened key/root).", ParamString),
 		},
-		returns: pairRet("one hash per value, with its type and decoded data", ParamArray).ofElem(ParamHash).withFields("data", "name", "type")},
+		returns: pairRet("one hash per value, with its type and decoded data, plus data_bytes on binary values", ParamArray).ofElem(ParamHash).withFields("data", "data_bytes", "name", "type")},
 	BuiltinNameRegGetValue: {
 		signature: "reg_get_value(handle, keyPath, valueName)",
-		summary:   "Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Returns (result, err).",
+		summary:   "Reads a specific registry value with type metadata, across JSON/hive-file/live sources. Binary values (REG_BINARY, and types the reader does not recognise) also carry data_bytes, the stored bytes as a BYTES buffer; other types omit it, since data already holds the value faithfully. A JSON source never reports one, having no binary type to transcribe. Returns (result, err).",
 		params: []builtinParamDoc{
 			param("handle", "Handle returned by reg_open.", ParamString),
 			param("keyPath", "Key path that contains the value.", ParamString),
 			param("valueName", "Registry value name to fetch.", ParamString),
 		},
-		returns: pairRet("the value, with its registry type", ParamHash).withFields("data", "name", "type")},
+		returns: pairRet("the value, with its registry type, and data_bytes when that value is binary", ParamHash).withFields("data", "data_bytes", "name", "type")},
 	BuiltinNameRegDeletedKeys: {
 		signature: "reg_deleted_keys(handle)",
 		summary:   "Lists deleted-key entries. Populated only for the JSON source (its deleted_keys field); empty for real hive files and live registry (no unallocated-cell carving).",
@@ -1419,7 +1836,7 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "email_urls(raw)",
 		summary:   "Extracts and normalizes URLs from email headers and body.",
 		params:    []builtinParamDoc{param("raw", "RFC822-style raw email text.", ParamString)},
-		returns:   pairRet("the normalized URLs found in the message", ParamArray).ofElem(ParamString)},
+		returns:   pairRet("one hash per URL found in the message", ParamArray).ofElem(ParamHash).withFields("host", "scheme", "url")},
 	BuiltinNameMemMap: {
 		signature: "mem_map(path)",
 		summary:   "Splits a memory dump into fixed-size (4 KiB) segments, each with measured entropy and printable-byte ratio. A raw dump carries no page-protection metadata, so no readable/writable/executable flags are reported.",
@@ -1433,6 +1850,15 @@ var builtinDocs = map[string]builtinDoc{
 			param("size", "Number of bytes to read.", ParamInt),
 		},
 		returns: pairRet("the bytes at the requested range, hex-encoded", ParamHash).withFields("hex", "offset", "size")},
+	BuiltinNameMemReadBytes: {
+		signature: "mem_read_bytes(path, offset, size)",
+		summary:   "Reads a byte range from a memory image as a BYTES buffer. Unlike mem_read it returns the buffer itself rather than a hash: the offset is the one you asked for, and a short read at end-of-image is simply a shorter length. Prefer this whenever the range is going to be parsed rather than printed.",
+		params: []builtinParamDoc{
+			param("path", "Path to memory image or dump file.", ParamString),
+			param("offset", "Starting offset in bytes.", ParamInt),
+			param("size", "Number of bytes to read.", ParamInt),
+		},
+		returns: pairRet("the bytes at the requested range", ParamBytes)},
 	BuiltinNameMemScan: {
 		signature: "mem_scan(path, pattern)",
 		summary:   "Scans a memory image for a string/byte pattern.",
@@ -1483,6 +1909,26 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
 		params:    []builtinParamDoc{param("paths", "Array of filesystem paths to inspect.", ParamArray)},
 		returns:   pairRet("the files flagged, and why each was flagged", ParamHash)},
+	BuiltinNameSigmaParse: {
+		signature: "sigma_parse(rule)",
+		summary:   "Compiles one Sigma detection rule from YAML. The rule is validated rather than accepted: a condition naming a search identifier the detection block does not define, an `all of filter*` that matches no identifier, a modifier this engine does not implement, a rule collection, `timeframe`, `near` and aggregation pipes are all errors. That is deliberate -- a rule this engine cannot evaluate has to fail where you can see it, because a detection that silently never fires reads as coverage on a report and is a blind spot in the evidence. Supported value modifiers: contains, startswith, endswith, all, cased, re (with i/m/s), base64, base64offset, utf16/utf16le/utf16be/wide, windash, cidr, lt/lte/gt/gte, exists, fieldref. The returned hash carries the detection block verbatim, so it is a rule and not a description of one: sigma_match and sigma_scan take it straight back. Returns (rule, err).",
+		params:    []builtinParamDoc{param("rule", "One Sigma rule as YAML text.", ParamString, ParamBytes)},
+		returns:   pairRet("the compiled rule, with the fields it reads and the search identifiers it defines", ParamHash).withFields("author", "condition", "description", "detection", "falsepositives", "fields", "id", "level", "logsource", "references", "searches", "status", "tags", "title")},
+	BuiltinNameSigmaParseAll: {
+		signature: "sigma_parse_all(ruleset)",
+		summary:   "Compiles every rule in a multi-document YAML ruleset, which is the shape a Sigma ruleset ships in. One rule that does not compile fails the call rather than being dropped quietly: a ruleset that loads 43 of its 44 rules is a ruleset you believe covers something it does not. Returns (rules, err).",
+		params:    []builtinParamDoc{param("ruleset", "A multi-document YAML ruleset.", ParamString, ParamBytes)},
+		returns:   pairRet("one compiled rule per document, in file order", ParamArray).ofElem(ParamHash).withFields("author", "condition", "description", "detection", "falsepositives", "fields", "id", "level", "logsource", "references", "searches", "status", "tags", "title")},
+	BuiltinNameSigmaMatch: {
+		signature: "sigma_match(rule, event)",
+		summary:   "Asks one rule about one event. A field named in the rule is looked up on the event and then inside `extra`, where events_from() keeps the source entry verbatim, so a rule written in a source's own taxonomy -- Image, CommandLine, EventID -- runs against a normalized Mutant event with no field-mapping file in between. String comparison is case-insensitive unless |cased, values carry Sigma's * and ? wildcards, and a field holding a list matches when any element does. `fields_missing` names the fields the rule read and this event did not carry: a rule that did not match because the field was never there is a different answer from a rule that looked and disagreed, and only one of them means clean. Accepts the rule as YAML text or as a sigma_parse hash; the hash is recompiled on every call, which is the cost sigma_scan exists to avoid. Returns (result, err).",
+		params:    []builtinParamDoc{param("rule", "A Sigma rule as YAML text, or the hash sigma_parse returned.", ParamString, ParamHash), param("event", "One event -- an events_from() event, or any hash.", ParamHash)},
+		returns:   pairRet("whether the rule matched, which searches held, and what it could not find", ParamHash).withFields("condition", "fields_missing", "fields_read", "id", "level", "matched", "searches", "tags", "title")},
+	BuiltinNameSigmaScan: {
+		signature: "sigma_scan(rules, events)",
+		summary:   "Runs a ruleset over a timeline, compiling each rule once and then walking the events. Every hit records which rule fired, which of its searches held, and the event itself, so a hit is reviewable without a second lookup. `unmatched_fields` names the fields no event in the whole scan carried, which is the honest answer to whether the ruleset had anything to look at: a rule reading Image against a timeline that has no Image field did not clear the host, it never ran. Returns (report, err).",
+		params:    []builtinParamDoc{param("rules", "A ruleset as YAML text, a sigma_parse hash, or an array of either.", ParamString, ParamHash, ParamArray), param("events", "An events_from() timeline, or a single event.", ParamArray, ParamHash)},
+		returns:   pairRet("what matched, counted per level and per rule", ParamHash).withFields("by_level", "by_rule", "events", "hits", "matched", "rules", "unmatched_fields")},
 	BuiltinNameNetResolve:    {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses.", returns: pairRet("the addresses the host resolves to", ParamArray).ofElem(ParamString), params: []builtinParamDoc{param("host", "Host name to resolve.", ParamString)}},
 	BuiltinNameNetDial:       {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{param("address", "host:port endpoint.", ParamString), param("timeoutMs", "Dial timeout in ms.", ParamInt)}, returns: pairRet("whether the address answered, and how long it took", ParamHash).withFields("error", "latency_ms", "ok")},
 	BuiltinNameDbOpen:        {signature: "db_open()", summary: "Creates an in-memory graph database handle.", returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
@@ -1501,30 +1947,52 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameDbShortestPath: {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt)}, returns: pairRet("the node IDs along the shortest path, empty when none exists", ParamArray).ofElem(ParamInt)},
 	BuiltinNameDbTimeline:     {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("chronological timeline events recorded in the graph", ParamArray)},
 	BuiltinNameDbStats:        {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("graph database statistics: {nodes, edges, has_storage}", ParamHash)},
-	// A "bytes value" is a STRING: requireBytesStringArg (builtin/bytes.go)
-	// asserts *object.String and there is no separate byte-buffer object type.
+	// A "bytes value" is a BYTES or a STRING: requireBytesStringArg
+	// (builtin/bytes.go) accepts both, and the family is shape-preserving --
+	// bytes_slice of a BYTES is a BYTES, of a STRING a STRING. Both kinds are
+	// declared on every buffer position because refusing STRING would flag every
+	// program written before the BYTES type existed.
+	//
 	// Offsets and widths go through requireNonNegativeOffset /
 	// requireIntegerWithinRange, both of which require INTEGER. A cursor is a
 	// HASH with `data` and `offset` fields (requireBytesCursor).
+	// The two conversions are the seam between text and binary, and they are
+	// explicit on purpose: an implicit coercion would put the corruption back
+	// exactly where it was. "raw" is byte-for-byte and is the lossless bridge
+	// from every producer that predates the BYTES type.
+	BuiltinNameStringToBytes: {
+		signature: "string_to_bytes(s, encoding)", summary: "Converts text to a BYTES buffer under a named encoding: \"raw\", \"utf8\" (validated), \"latin1\", \"hex\" or \"base64\". Returns (bytes, err).",
+		params: []builtinParamDoc{
+			param("s", "Text to convert.", ParamString),
+			param("encoding", "One of \"raw\", \"utf8\", \"latin1\", \"hex\", \"base64\".", ParamString),
+		},
+		returns: pairRet("the decoded buffer", ParamBytes)},
+	BuiltinNameBytesToString: {
+		signature: "bytes_to_string(b, encoding)", summary: "Converts a buffer to text under a named encoding: \"raw\", \"utf8\" (validated), \"latin1\", \"hex\" or \"base64\". Returns (string, err).",
+		params: []builtinParamDoc{
+			param("b", "Buffer to convert.", ParamString, ParamBytes),
+			param("encoding", "One of \"raw\", \"utf8\", \"latin1\", \"hex\", \"base64\".", ParamString),
+		},
+		returns: pairRet("the encoded text", ParamString)},
 	BuiltinNameBytesLen: {
 		signature: "bytes_len(data)", summary: "Returns length of a bytes value.",
-		params:  []builtinParamDoc{param("data", "Byte string to measure.", ParamString)},
+		params:  []builtinParamDoc{param("data", "Buffer to measure.", ParamString, ParamBytes)},
 		returns: pairRet("length of a bytes value", ParamInt)},
 	BuiltinNameBytesGet: {
 		signature: "bytes_get(data, index)", summary: "Reads one byte at index as integer.",
 		params: []builtinParamDoc{
-			param("data", "Source byte string.", ParamString),
+			param("data", "Source buffer.", ParamString, ParamBytes),
 			param("index", "Zero-based byte offset.", ParamInt),
 		},
 		returns: pairRet("the byte at index, as an integer from 0 to 255", ParamInt)},
 	BuiltinNameBytesSlice: {
 		signature: "bytes_slice(data, start, length)", summary: "Returns a byte sub-slice of the given length starting at start (i.e. data[start:start+length]).",
 		params: []builtinParamDoc{
-			param("data", "Source byte string.", ParamString),
+			param("data", "Source buffer.", ParamString, ParamBytes),
 			param("start", "Start offset.", ParamInt),
 			param("length", "Number of bytes to take.", ParamInt),
 		},
-		returns: pairRet("a byte sub-slice of the given length starting at start (i", ParamString)},
+		returns: pairRet("a byte sub-slice of the given length starting at start (i", ParamString, ParamBytes)},
 	BuiltinNameBytesHex: {
 		signature: "bytes_hex(value, width)", summary: "Formats an integer as a zero-padded uppercase hex string with a 0x prefix (e.g. bytes_hex(4660, 8) -> \"0x00001234\"). This formats a number; it does not hex-encode a byte string.",
 		params: []builtinParamDoc{
@@ -1538,7 +2006,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameBytesCstrAt: {
 		signature: "bytes_cstr_at(data, offset, maxLength)", summary: "Reads null-terminated string from bytes at offset.",
 		params: []builtinParamDoc{
-			param("data", "Source byte string.", ParamString),
+			param("data", "Source buffer.", ParamString, ParamBytes),
 			param("offset", "Offset the string starts at.", ParamInt),
 			param("maxLength", "Maximum number of bytes to scan for the terminator.", ParamInt),
 		},
@@ -1578,30 +2046,30 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameBytesWriteU16Le: {
 		signature: "bytes_write_u16_le(data, offset, value)", summary: "Writes unsigned 16-bit little-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the little-endian unsigned 16-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the little-endian unsigned 16-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesWriteU16Be: {
 		signature: "bytes_write_u16_be(data, offset, value)", summary: "Writes unsigned 16-bit big-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the big-endian unsigned 16-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the big-endian unsigned 16-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesWriteU32Le: {
 		signature: "bytes_write_u32_le(data, offset, value)", summary: "Writes unsigned 32-bit little-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the little-endian unsigned 32-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the little-endian unsigned 32-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesWriteU32Be: {
 		signature: "bytes_write_u32_be(data, offset, value)", summary: "Writes unsigned 32-bit big-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the big-endian unsigned 32-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the big-endian unsigned 32-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesWriteU64Le: {
 		signature: "bytes_write_u64_le(data, offset, value)", summary: "Writes unsigned 64-bit little-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the little-endian unsigned 64-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the little-endian unsigned 64-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesWriteU64Be: {
 		signature: "bytes_write_u64_be(data, offset, value)", summary: "Writes unsigned 64-bit big-endian integer into bytes at offset.",
 		params:  bytesWriteParams(),
-		returns: pairRet("a copy of data with the big-endian unsigned 64-bit integer written at offset", ParamString)},
+		returns: pairRet("a copy of data with the big-endian unsigned 64-bit integer written at offset", ParamString, ParamBytes)},
 	BuiltinNameBytesCursorNew: {
 		signature: "bytes_cursor_new(data)", summary: "Creates a cursor for structured byte parsing.",
-		params:  []builtinParamDoc{param("data", "Byte string to read through.", ParamString)},
+		params:  []builtinParamDoc{param("data", "Buffer to read through; the cursor keeps its representation.", ParamString, ParamBytes)},
 		returns: pairRet("a cursor positioned at the start of data", ParamHash).withFields("data", "offset")},
 	BuiltinNameBytesCursorTell: {
 		signature: "bytes_cursor_tell(cursor)", summary: "Returns current cursor position.",
@@ -1680,6 +2148,11 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Reads up to maxBytes from a connection; returns {data, bytes, eof, error} with I/O failures in the error field.",
 		params:    []builtinParamDoc{param("handle", "Connection handle.", ParamInt), param("maxBytes", "Maximum bytes to read (1..32 MiB).", ParamInt), param("timeoutMs", "Read timeout in ms (0 = block).", ParamInt)},
 		returns:   pairRet("the bytes read, with eof and error reported as fields rather than as an error", ParamHash).withFields("bytes", "data", "eof", "error")},
+	BuiltinNameNetConnReadBytes: {
+		signature: "net_conn_read_bytes(handle, maxBytes, timeoutMs)",
+		summary:   "Reads up to maxBytes from a connection with `data` as a BYTES buffer; otherwise identical to net_conn_read.",
+		params:    []builtinParamDoc{param("handle", "Connection handle.", ParamInt), param("maxBytes", "Maximum bytes to read (1..32 MiB).", ParamInt), param("timeoutMs", "Read timeout in ms (0 = block).", ParamInt)},
+		returns:   pairRet("the bytes read, with eof and error reported as fields rather than as an error", ParamHash).withFields("bytes", "data", "eof", "error")},
 	BuiltinNameNetConnClose: {signature: "net_conn_close(handle)", summary: "Closes a connection and releases its handle.", returns: pairRet("true once the connection has been released", ParamBool), params: []builtinParamDoc{param("handle", "Connection handle to close.", ParamInt)}},
 	BuiltinNameNetConnInfo:  {signature: "net_conn_info(handle)", summary: "Returns addressing and negotiated TLS session details for a connection.", returns: pairRet("the connection's local and remote addresses", ParamHash), params: []builtinParamDoc{param("handle", "Connection handle to describe.", ParamInt)}},
 	BuiltinNameNetListen:    {signature: "net_listen(address)", summary: "Opens a plain TCP listener and returns a listener handle.", returns: pairRet("a listener handle; close it with net_listen_close", ParamInt), params: []builtinParamDoc{param("address", "Address to bind, e.g. \"127.0.0.1:8080\".", ParamString)}},
@@ -1751,43 +2224,50 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameHttpConnReadResponseHead: {signature: "http_conn_read_response_head(handle, timeoutMs)", summary: "Reads a response's status line+headers without the body (stream it via net_conn_read); adds content_length, chunked.", returns: pairRet("the status line and headers, with the body left on the connection", ParamHash).withFields("chunked", "content_length", "headers", "proto", "status", "status_text"), params: []builtinParamDoc{param("handle", "Connection handle from net_connect, net_accept, or a TLS upgrade.", ParamInt), param("timeoutMs", "Read deadline in milliseconds.", ParamInt)}},
 
 	// filesystem parsers — each *_open(image) returns a handle used by the rest.
-	BuiltinNameNtfsOpen:      {signature: "ntfs_open(image)", summary: "Opens an NTFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an NTFS image/partition.", ParamString)}, returns: pairRet("a handle for the other ntfs_ builtins; release it with ntfs_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameNtfsListFiles: {signature: "ntfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened NTFS image.", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("dir", "Directory path within the image.", ParamString)}, returns: pairRet("one hash per directory entry, including deleted ones", ParamArray).ofElem(ParamHash).withFields("allocated_size", "deleted", "entry_num", "is_dir", "name", "path", "sequence_num", "size")},
-	BuiltinNameNtfsReadFile:  {signature: "ntfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened NTFS image.", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("path", "File path within the image.", ParamString)}, returns: pairRet("the file's bytes", ParamString)},
-	BuiltinNameNtfsMetadata:  {signature: "ntfs_metadata(handle, path)", summary: "Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error).", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("path", "Path within the image.", ParamString)}, returns: pairRet("metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error)", ParamHash).withFields("accessed_at", "blocking_error", "changed_at", "compressed", "created_at", "encrypted", "entry_num", "has_data", "is_dir", "modified_at", "name", "non_resident", "path", "readable", "resident", "size", "sparse")},
-	BuiltinNameNtfsClose:     {signature: "ntfs_close(handle)", summary: "Closes an NTFS handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString)}},
-	BuiltinNameFatOpen:       {signature: "fat_open(image)", summary: "Opens a FAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a FAT image/partition.", ParamString)}, returns: pairRet("a handle for the other fat_ builtins; release it with fat_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameFatListFiles:  {signature: "fat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened FAT image.", returns: pairRet("one hash per directory entry, including deleted and recovered ones", ParamArray).ofElem(ParamHash).withFields("accessed_at", "attributes", "cluster_allocated", "created_at", "deleted", "first_cluster", "is_dir", "modified_at", "name", "path", "recovered", "short_name", "size", "virtual"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
-	BuiltinNameFatReadFile:   {signature: "fat_read_file(handle, path)", summary: "Reads a file's bytes from an opened FAT image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("path", "Path inside the FAT image.", ParamString)}},
-	BuiltinNameFatMetadata:   {signature: "fat_metadata(handle, path)", summary: "Returns metadata for a path in an opened FAT image.", returns: pairRet("metadata for a path in an opened FAT image", ParamHash).withFields("accessed_at", "attributes", "bytes_per_sector", "cluster_count", "cluster_size", "created_at", "deleted", "filesystem", "first_cluster", "is_dir", "modified_at", "name", "path", "recovered", "short_name", "size", "virtual", "volume_label"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("path", "Path inside the FAT image.", ParamString)}},
-	BuiltinNameFatClose:      {signature: "fat_close(handle)", summary: "Closes a FAT handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString)}},
-	BuiltinNameXfatOpen:      {signature: "xfat_open(image)", summary: "Opens an exFAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an exFAT image/partition.", ParamString)}, returns: pairRet("a handle for the other xfat_ builtins; release it with xfat_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameXfatListFiles: {signature: "xfat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened exFAT image, with created_at/modified_at/accessed_at, per-timestamp *_utc_offset_valid flags, attributes and valid_data_size. A nameless entry is reported as \"(unnamed)\".", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
-	BuiltinNameXfatReadFile:  {signature: "xfat_read_file(handle, path)", summary: "Reads a file's bytes from an opened exFAT image. Content is staged through a temporary file because libxfat extracts to a path, so reads are capped at 32 MiB.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("path", "Path inside the exFAT image.", ParamString)}},
-	BuiltinNameXfatMetadata:  {signature: "xfat_metadata(handle, path)", summary: "Returns metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack).", returns: pairRet("metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack)", ParamHash), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("path", "Path inside the exFAT image.", ParamString)}},
-	BuiltinNameXfatClose:     {signature: "xfat_close(handle)", summary: "Closes an exFAT handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString)}},
-	BuiltinNameExtOpen:       {signature: "ext_open(image)", summary: "Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an ext image/partition.", ParamString)}, returns: pairRet("a handle for the other ext_ builtins; release it with ext_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameExtListFiles:  {signature: "ext_list_files(handle, dir)", summary: "Lists entries under a directory in an opened ext image, with created_at/modified_at/accessed_at/changed_at and deleted.", returns: pairRet("one hash per directory entry, including deleted ones", ParamArray).ofElem(ParamHash).withFields("accessed_at", "changed_at", "created_at", "deleted", "inode", "is_dir", "modified_at", "name", "path", "size"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
-	BuiltinNameExtReadFile:   {signature: "ext_read_file(handle, path)", summary: "Reads a file's bytes from an opened ext image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("path", "Path inside the ext2/3/4 image.", ParamString)}},
-	BuiltinNameExtMetadata:   {signature: "ext_metadata(handle, path)", summary: "Returns metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete).", returns: pairRet("metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete)", ParamHash).withFields("accessed_at", "block_size", "changed_at", "created_at", "deleted", "inode", "inodes_count", "is_dir", "kind", "modified_at", "name", "path", "size", "warnings"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("path", "Path inside the ext2/3/4 image.", ParamString)}},
-	BuiltinNameExtClose:      {signature: "ext_close(handle)", summary: "Closes an ext handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString)}},
-	BuiltinNameHfsOpen:       {signature: "hfs_open(image)", summary: "Opens an HFS+ filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an HFS+ image/partition.", ParamString)}, returns: pairRet("a handle for the other hfs_ builtins; release it with hfs_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameHfsListFiles:  {signature: "hfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened HFS+ image.", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash).withFields("cnid", "is_dir", "is_system", "name", "path"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
-	BuiltinNameHfsReadFile:   {signature: "hfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened HFS+ image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("path", "Path inside the HFS+ image.", ParamString)}},
-	BuiltinNameHfsMetadata:   {signature: "hfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size.", returns: pairRet("metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size", ParamHash).withFields("accessed_at", "backup_at", "block_size", "changed_at", "cnid", "compressed", "compression_type", "created_at", "file_count", "folder_count", "free_blocks", "is_dir", "kind", "modified_at", "name", "path", "resource_fork_size", "size", "time_source", "total_blocks"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("path", "Path inside the HFS+ image.", ParamString)}},
-	BuiltinNameHfsClose:      {signature: "hfs_close(handle)", summary: "Closes an HFS+ handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString)}},
-	BuiltinNameXfsOpen:       {signature: "xfs_open(image)", summary: "Opens an XFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an XFS image/partition.", ParamString)}, returns: pairRet("a handle for the other xfs_ builtins; release it with xfs_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameXfsListFiles:  {signature: "xfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened XFS image, with file_type from the directory record. A damaged inode no longer aborts the listing: that entry is reported with inode_error set and size 0.", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash).withFields("file_type", "inode", "inode_error", "is_dir", "name", "path", "size"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
-	BuiltinNameXfsReadFile:   {signature: "xfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened XFS image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("path", "Path inside the XFS image.", ParamString)}},
-	BuiltinNameXfsMetadata:   {signature: "xfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion).", returns: pairRet("metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion)", ParamHash).withFields("accessed_at", "block_size", "changed_at", "created_at", "format_version", "inode", "inode_size", "is_dir", "modified_at", "name", "needs_repair", "path", "root_inode", "size", "volume_blocks"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("path", "Path inside the XFS image.", ParamString)}},
-	BuiltinNameXfsClose:      {signature: "xfs_close(handle)", summary: "Closes an XFS handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString)}},
+	BuiltinNameNtfsOpen:          {signature: "ntfs_open(image)", summary: "Opens an NTFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an NTFS image/partition.", ParamString)}, returns: pairRet("a handle for the other ntfs_ builtins; release it with ntfs_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameNtfsListFiles:     {signature: "ntfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened NTFS image.", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("dir", "Directory path within the image.", ParamString)}, returns: pairRet("one hash per directory entry, including deleted ones", ParamArray).ofElem(ParamHash).withFields("allocated_size", "deleted", "entry_num", "is_dir", "name", "path", "sequence_num", "size")},
+	BuiltinNameNtfsReadFileBytes: {signature: "ntfs_read_file_bytes(handle, path)", summary: "Reads a file from an opened NTFS image as a BYTES buffer.", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("path", "File path within the image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameNtfsReadFile:      {signature: "ntfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened NTFS image.", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("path", "File path within the image.", ParamString)}, returns: pairRet("the file's bytes", ParamString)},
+	BuiltinNameNtfsMetadata:      {signature: "ntfs_metadata(handle, path)", summary: "Returns metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error).", params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString), param("path", "Path within the image.", ParamString)}, returns: pairRet("metadata for a file/directory in an opened NTFS image, including the $STANDARD_INFORMATION created_at/modified_at/accessed_at/changed_at times and the readability flags (resident, sparse, compressed, encrypted, blocking_error)", ParamHash).withFields("accessed_at", "blocking_error", "changed_at", "compressed", "created_at", "encrypted", "entry_num", "has_data", "is_dir", "modified_at", "name", "non_resident", "path", "readable", "resident", "size", "sparse")},
+	BuiltinNameNtfsClose:         {signature: "ntfs_close(handle)", summary: "Closes an NTFS handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ntfs_open.", ParamString)}},
+	BuiltinNameFatOpen:           {signature: "fat_open(image)", summary: "Opens a FAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a FAT image/partition.", ParamString)}, returns: pairRet("a handle for the other fat_ builtins; release it with fat_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameFatListFiles:      {signature: "fat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened FAT image.", returns: pairRet("one hash per directory entry, including deleted and recovered ones", ParamArray).ofElem(ParamHash).withFields("accessed_at", "attributes", "cluster_allocated", "created_at", "deleted", "first_cluster", "is_dir", "modified_at", "name", "path", "recovered", "short_name", "size", "virtual"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
+	BuiltinNameFatReadFileBytes:  {signature: "fat_read_file_bytes(handle, path)", summary: "Reads a file from an opened FAT image as a BYTES buffer.", params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("path", "Path inside the FAT image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameFatReadFile:       {signature: "fat_read_file(handle, path)", summary: "Reads a file's bytes from an opened FAT image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("path", "Path inside the FAT image.", ParamString)}},
+	BuiltinNameFatMetadata:       {signature: "fat_metadata(handle, path)", summary: "Returns metadata for a path in an opened FAT image.", returns: pairRet("metadata for a path in an opened FAT image", ParamHash).withFields("accessed_at", "attributes", "bytes_per_sector", "cluster_count", "cluster_size", "created_at", "deleted", "filesystem", "first_cluster", "is_dir", "modified_at", "name", "path", "recovered", "short_name", "size", "virtual", "volume_label"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString), param("path", "Path inside the FAT image.", ParamString)}},
+	BuiltinNameFatClose:          {signature: "fat_close(handle)", summary: "Closes a FAT handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from fat_open.", ParamString)}},
+	BuiltinNameXfatOpen:          {signature: "xfat_open(image)", summary: "Opens an exFAT filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an exFAT image/partition.", ParamString)}, returns: pairRet("a handle for the other xfat_ builtins; release it with xfat_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameXfatListFiles:     {signature: "xfat_list_files(handle, dir)", summary: "Lists entries under a directory in an opened exFAT image, with created_at/modified_at/accessed_at, per-timestamp *_utc_offset_valid flags, attributes and valid_data_size. A nameless entry is reported as \"(unnamed)\".", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
+	BuiltinNameXfatReadFileBytes: {signature: "xfat_read_file_bytes(handle, path)", summary: "Reads a file from an opened exFAT image as a BYTES buffer. Content is staged through a temporary file, so reads are capped at 32 MiB.", params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("path", "Path inside the exFAT image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameXfatReadFile:      {signature: "xfat_read_file(handle, path)", summary: "Reads a file's bytes from an opened exFAT image. Content is staged through a temporary file because libxfat extracts to a path, so reads are capped at 32 MiB.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("path", "Path inside the exFAT image.", ParamString)}},
+	BuiltinNameXfatMetadata:      {signature: "xfat_metadata(handle, path)", summary: "Returns metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack).", returns: pairRet("metadata for a path in an opened exFAT image, including created_at/modified_at/accessed_at with *_utc_offset_valid flags, attributes and valid_data_size (the written portion of size; the remainder is slack)", ParamHash), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString), param("path", "Path inside the exFAT image.", ParamString)}},
+	BuiltinNameXfatClose:         {signature: "xfat_close(handle)", summary: "Closes an exFAT handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from xfat_open.", ParamString)}},
+	BuiltinNameExtOpen:           {signature: "ext_open(image)", summary: "Opens an ext2/3/4 filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an ext image/partition.", ParamString)}, returns: pairRet("a handle for the other ext_ builtins; release it with ext_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameExtListFiles:      {signature: "ext_list_files(handle, dir)", summary: "Lists entries under a directory in an opened ext image, with created_at/modified_at/accessed_at/changed_at and deleted.", returns: pairRet("one hash per directory entry, including deleted ones", ParamArray).ofElem(ParamHash).withFields("accessed_at", "changed_at", "created_at", "deleted", "inode", "is_dir", "modified_at", "name", "path", "size"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
+	BuiltinNameExtReadFileBytes:  {signature: "ext_read_file_bytes(handle, path)", summary: "Reads a file from an opened ext image as a BYTES buffer.", params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("path", "Path inside the ext2/3/4 image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameExtReadFile:       {signature: "ext_read_file(handle, path)", summary: "Reads a file's bytes from an opened ext image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("path", "Path inside the ext2/3/4 image.", ParamString)}},
+	BuiltinNameExtMetadata:       {signature: "ext_metadata(handle, path)", summary: "Returns metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete).", returns: pairRet("metadata for a path in an opened ext image, including created_at/modified_at/accessed_at/changed_at, deleted, and warnings (where the parser judged the answer may be incomplete)", ParamHash).withFields("accessed_at", "block_size", "changed_at", "created_at", "deleted", "inode", "inodes_count", "is_dir", "kind", "modified_at", "name", "path", "size", "warnings"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString), param("path", "Path inside the ext2/3/4 image.", ParamString)}},
+	BuiltinNameExtClose:          {signature: "ext_close(handle)", summary: "Closes an ext handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ext_open.", ParamString)}},
+	BuiltinNameHfsOpen:           {signature: "hfs_open(image)", summary: "Opens an HFS+ filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an HFS+ image/partition.", ParamString)}, returns: pairRet("a handle for the other hfs_ builtins; release it with hfs_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameHfsListFiles:      {signature: "hfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened HFS+ image.", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash).withFields("cnid", "is_dir", "is_system", "name", "path"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
+	BuiltinNameHfsReadFileBytes:  {signature: "hfs_read_file_bytes(handle, path)", summary: "Reads a file from an opened HFS+ image as a BYTES buffer.", params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("path", "Path inside the HFS+ image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameHfsReadFile:       {signature: "hfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened HFS+ image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("path", "Path inside the HFS+ image.", ParamString)}},
+	BuiltinNameHfsMetadata:       {signature: "hfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size.", returns: pairRet("metadata for a path in an opened HFS+ image, including created_at/modified_at/accessed_at/changed_at/backup_at, time_source (HFS+ GMT vs classic-HFS local wall clock), compressed, compression_type and resource_fork_size", ParamHash).withFields("accessed_at", "backup_at", "block_size", "changed_at", "cnid", "compressed", "compression_type", "created_at", "file_count", "folder_count", "free_blocks", "is_dir", "kind", "modified_at", "name", "path", "resource_fork_size", "size", "time_source", "total_blocks"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString), param("path", "Path inside the HFS+ image.", ParamString)}},
+	BuiltinNameHfsClose:          {signature: "hfs_close(handle)", summary: "Closes an HFS+ handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from hfs_open.", ParamString)}},
+	BuiltinNameXfsOpen:           {signature: "xfs_open(image)", summary: "Opens an XFS filesystem image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to an XFS image/partition.", ParamString)}, returns: pairRet("a handle for the other xfs_ builtins; release it with xfs_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameXfsListFiles:      {signature: "xfs_list_files(handle, dir)", summary: "Lists entries under a directory in an opened XFS image, with file_type from the directory record. A damaged inode no longer aborts the listing: that entry is reported with inode_error set and size 0.", returns: pairRet("one hash per directory entry", ParamArray).ofElem(ParamHash).withFields("file_type", "inode", "inode_error", "is_dir", "name", "path", "size"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("dir", "Directory to list, relative to the image root.", ParamString)}},
+	BuiltinNameXfsReadFileBytes:  {signature: "xfs_read_file_bytes(handle, path)", summary: "Reads a file from an opened XFS image as a BYTES buffer.", params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("path", "Path inside the XFS image.", ParamString)}, returns: pairRet("the file's bytes", ParamBytes)},
+	BuiltinNameXfsReadFile:       {signature: "xfs_read_file(handle, path)", summary: "Reads a file's bytes from an opened XFS image.", returns: pairRet("the file's bytes", ParamString), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("path", "Path inside the XFS image.", ParamString)}},
+	BuiltinNameXfsMetadata:       {signature: "xfs_metadata(handle, path)", summary: "Returns metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion).", returns: pairRet("metadata for a path in an opened XFS image, including created_at/modified_at/accessed_at/changed_at and needs_repair (the filesystem was left inconsistent and its metadata should be treated with suspicion)", ParamHash).withFields("accessed_at", "block_size", "changed_at", "created_at", "format_version", "inode", "inode_size", "is_dir", "modified_at", "name", "needs_repair", "path", "root_inode", "size", "volume_blocks"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString), param("path", "Path inside the XFS image.", ParamString)}},
+	BuiltinNameXfsClose:          {signature: "xfs_close(handle)", summary: "Closes an XFS handle and releases its file.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from xfs_open.", ParamString)}},
 
 	// disk-image parsers — *_read_at caps length at 32 MiB.
-	BuiltinNameVhdiOpen:      {signature: "vhdi_open(image)", summary: "Opens a VHD/VHDX disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a VHD/VHDX image.", ParamString)}, returns: pairRet("a handle for the other vhdi_ builtins; release it with vhdi_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameVhdiMetadata:  {signature: "vhdi_metadata(handle)", summary: "Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed).", returns: pairRet("vHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed)", ParamHash).withFields("block_size", "chain_complete", "chain_depth", "disk_type", "format", "has_log", "identifier", "is_differencing", "is_dirty", "log_replayed", "needs_parent", "parent_filename", "parent_identifier", "parent_resolve_error", "sector_size", "virtual_size"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString)}},
-	BuiltinNameVhdiReadAt:    {signature: "vhdi_read_at(handle, offset, length)", summary: "Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
-	BuiltinNameVhdiMapOffset: {signature: "vhdi_map_offset(handle, offset)", summary: "Maps a virtual offset to a backing file offset. Returns {virtual_offset, mapped, file_offset}.", returns: pairRet("where the virtual offset lands in the backing file", ParamHash).withFields("file_offset", "mapped", "virtual_offset"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString), param("offset", "Virtual byte offset to map into the backing file.", ParamInt)}},
-	BuiltinNameVhdiClose:     {signature: "vhdi_close(handle)", summary: "Closes a VHD/VHDX handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString)}},
+	BuiltinNameVhdiOpen:        {signature: "vhdi_open(image)", summary: "Opens a VHD/VHDX disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a VHD/VHDX image.", ParamString)}, returns: pairRet("a handle for the other vhdi_ builtins; release it with vhdi_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameVhdiMetadata:    {signature: "vhdi_metadata(handle)", summary: "Returns VHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed).", returns: pairRet("vHD/VHDX metadata (format, disk_type, virtual_size, block/sector size, identifiers), the differencing-chain state (needs_parent, chain_complete, chain_depth, parent_resolve_error) and the VHDX log state (is_dirty, has_log, log_replayed)", ParamHash).withFields("block_size", "chain_complete", "chain_depth", "disk_type", "format", "has_log", "identifier", "is_differencing", "is_dirty", "log_replayed", "needs_parent", "parent_filename", "parent_identifier", "parent_resolve_error", "sector_size", "virtual_size"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString)}},
+	BuiltinNameVhdiReadAtBytes: {signature: "vhdi_read_at_bytes(handle, offset, length)", summary: "Reads length bytes at a virtual offset from a VHD/VHDX image as a BYTES buffer (length capped at 32 MiB).", params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}, returns: pairRet("the bytes read, up to the 32 MiB cap", ParamBytes)},
+	BuiltinNameVhdiReadAt:      {signature: "vhdi_read_at(handle, offset, length)", summary: "Reads length bytes at a virtual offset from a VHD/VHDX image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
+	BuiltinNameVhdiMapOffset:   {signature: "vhdi_map_offset(handle, offset)", summary: "Maps a virtual offset to a backing file offset. Returns {virtual_offset, mapped, file_offset}.", returns: pairRet("where the virtual offset lands in the backing file", ParamHash).withFields("file_offset", "mapped", "virtual_offset"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString), param("offset", "Virtual byte offset to map into the backing file.", ParamInt)}},
+	BuiltinNameVhdiClose:       {signature: "vhdi_close(handle)", summary: "Closes a VHD/VHDX handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from vhdi_open.", ParamString)}},
 	// parseEWFSegmentPaths (disk_image_parsers.go) takes either a single path
 	// or an array of them, and requires every array element to be a STRING.
 	BuiltinNameEwfOpen: {
@@ -1800,19 +2280,73 @@ var builtinDocs = map[string]builtinDoc{
 			elem:  []ParamKind{ParamString},
 		}},
 		returns: pairRet("a handle for the other ewf_ builtins, and the segment count", ParamHash).withFields("handle", "segment_count", "status")},
-	BuiltinNameEwfMetadata: {signature: "ewf_metadata(handle)", summary: "Returns EWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method). chunk_tables_invalid counts chunk-table groups that failed both their primary and backup checksum — their data decoded unverified and should be treated as suspect; chunk_tables_recovered, observed_chunk_count and acquisition_error_count report the rest of the integrity picture.", returns: pairRet("eWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method)", ParamHash).withFields("acquisition_error_count", "bytes_per_sector", "chunk_tables_invalid", "chunk_tables_recovered", "compression_method", "has_done_section", "has_integrity_hash", "has_md5_digest", "has_media", "has_next_section", "has_sha1_digest", "is_encrypted", "major_version", "md5_digest", "minor_version", "number_of_chunks", "number_of_sectors", "observed_chunk_count", "section_count", "sector_size", "sectors_per_chunk", "segment_number", "sha1_digest", "total_logical_bytes"), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString)}},
-	BuiltinNameEwfReadAt:   {signature: "ewf_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from an EWF image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
-	BuiltinNameEwfClose:    {signature: "ewf_close(handle)", summary: "Closes an EWF handle and its segment files.", returns: pairRet("confirmation that the handle and its segment files have been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString)}},
-	BuiltinNameRawOpen:     {signature: "raw_open(image)", summary: "Opens a raw disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a raw (dd) image.", ParamString)}, returns: pairRet("a handle for the other raw_ builtins; release it with raw_close", ParamHash).withFields("handle", "path", "status")},
-	BuiltinNameRawMetadata: {signature: "raw_metadata(handle)", summary: "Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata).", returns: pairRet("the image's size and sector size, which a raw image does not record and so is assumed", ParamHash).withFields("assumed_sector_size", "file_size", "sector_size_assumed"), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString)}},
-	BuiltinNameRawReadAt:   {signature: "raw_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from a raw image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
-	BuiltinNameRawClose:    {signature: "raw_close(handle)", summary: "Closes a raw image handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString)}},
+	BuiltinNameEwfMetadata:    {signature: "ewf_metadata(handle)", summary: "Returns EWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method). chunk_tables_invalid counts chunk-table groups that failed both their primary and backup checksum — their data decoded unverified and should be treated as suspect; chunk_tables_recovered, observed_chunk_count and acquisition_error_count report the rest of the integrity picture.", returns: pairRet("eWF metadata (version, sectors/chunks, digests, media info, sector_size, compression_method)", ParamHash).withFields("acquisition_error_count", "bytes_per_sector", "chunk_tables_invalid", "chunk_tables_recovered", "compression_method", "has_done_section", "has_integrity_hash", "has_md5_digest", "has_media", "has_next_section", "has_sha1_digest", "is_encrypted", "major_version", "md5_digest", "minor_version", "number_of_chunks", "number_of_sectors", "observed_chunk_count", "section_count", "sector_size", "sectors_per_chunk", "segment_number", "sha1_digest", "total_logical_bytes"), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString)}},
+	BuiltinNameEwfReadAtBytes: {signature: "ewf_read_at_bytes(handle, offset, length)", summary: "Reads length bytes at an offset from an EWF image as a BYTES buffer (length capped at 32 MiB).", params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}, returns: pairRet("the bytes read, up to the 32 MiB cap", ParamBytes)},
+	BuiltinNameEwfReadAt:      {signature: "ewf_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from an EWF image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
+	BuiltinNameEwfClose:       {signature: "ewf_close(handle)", summary: "Closes an EWF handle and its segment files.", returns: pairRet("confirmation that the handle and its segment files have been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from ewf_open.", ParamString)}},
+	BuiltinNameRawOpen:        {signature: "raw_open(image)", summary: "Opens a raw disk image and returns a handle. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a raw (dd) image.", ParamString)}, returns: pairRet("a handle for the other raw_ builtins; release it with raw_close", ParamHash).withFields("handle", "path", "status")},
+	BuiltinNameRawMetadata:    {signature: "raw_metadata(handle)", summary: "Returns {file_size, assumed_sector_size, sector_size_assumed} (raw images carry no real sector-size metadata).", returns: pairRet("the image's size and sector size, which a raw image does not record and so is assumed", ParamHash).withFields("assumed_sector_size", "file_size", "sector_size_assumed"), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString)}},
+	BuiltinNameRawReadAtBytes: {signature: "raw_read_at_bytes(handle, offset, length)", summary: "Reads length bytes at an offset from a raw image as a BYTES buffer (length capped at 32 MiB).", params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}, returns: pairRet("the bytes read, up to the 32 MiB cap", ParamBytes)},
+	BuiltinNameRawReadAt:      {signature: "raw_read_at(handle, offset, length)", summary: "Reads length bytes at an offset from a raw image (length capped at 32 MiB).", returns: pairRet("the bytes read, up to the 32 MiB cap", ParamString), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString), param("offset", "Byte offset to read from.", ParamInt), param("length", "How many bytes to read; capped at 32 MiB.", ParamInt)}},
+	BuiltinNameRawClose:       {signature: "raw_close(handle)", summary: "Closes a raw image handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString)}},
 
 	// partition table parser
 	BuiltinNameTableOpen:           {signature: "table_open(image)", summary: "Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a disk image.", ParamString)}, returns: pairRet("a handle for the other table_ builtins, plus what the parser found", ParamHash).withFields("block_size", "candidates", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warnings")},
 	BuiltinNameTableListPartitions: {signature: "table_list_partitions(handle)", summary: "Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset.", returns: pairRet("one hash per partition", ParamArray).ofElem(ParamHash).withFields("attributes", "end_lba", "flags", "guid_type", "guid_unique", "index", "length_byte", "length_lba", "name", "slot_number", "start_byte", "start_lba", "table_number", "type_code", "type_name"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)}},
 	BuiltinNameTablePartitionInfo:  {signature: "table_partition_info(handle, index)", summary: "Returns details for a single partition by index, including absolute start_byte/length_byte.", returns: pairRet("details for a single partition by index, including absolute start_byte/length_byte", ParamHash).withFields("attributes", "end_lba", "flags", "guid_type", "guid_unique", "index", "length_byte", "length_lba", "name", "slot_number", "start_byte", "start_lba", "table_number", "type_code", "type_name"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString), param("index", "Zero-based partition index.", ParamInt)}},
 	BuiltinNameTableClose:          {signature: "table_close(handle)", summary: "Closes a partition-table handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)}},
+
+	// archives -- evidence containers, read in place
+	BuiltinNameZipOpen: {
+		signature: "zip_open(path)",
+		summary:   "Opens a zip archive (store/deflate/bzip2/zstd) and returns a handle for the other zip_ builtins. Reads the central directory only, so opening a large collection is cheap. unsafe_path_count reports entries whose names would escape a destination directory on extraction -- an archive that contains one is itself a finding. Release the handle with zip_close.",
+		params:    []builtinParamDoc{param("path", "Path to a .zip archive.", ParamString)},
+		returns:   pairRet("a handle for the other zip_ builtins, plus what the central directory declares", ParamHash).withFields("comment", "entry_count", "handle", "path", "status", "total_uncompressed", "unsafe_path_count")},
+	BuiltinNameZipEntries: {
+		signature: "zip_entries(handle)",
+		summary:   "Lists an archive's entries without decompressing any of them: name, sizes, compression method, CRC-32, mode, mtime, encryption flag, and unsafe_path.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString)},
+		returns:   pairRet("one hash per entry", ParamArray).ofElem(ParamHash).withFields("comment", "compressed_size", "crc32", "encrypted", "is_dir", "method", "mode", "modified", "name", "size", "unsafe_path")},
+	BuiltinNameZipRead: {
+		signature: "zip_read(handle, name, max_bytes?)",
+		summary:   "Reads one entry by name and returns its contents as text. Refuses to produce more than 1000x the entry's compressed size, capped at 1 GiB, unless max_bytes says otherwise -- the declared uncompressed size is checked first and the limit is enforced again against what actually decompresses, because a decompression bomb lies about its size. Nothing is written to disk.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString), param("name", "Entry name, as reported by zip_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the entry's contents", ParamString)},
+	BuiltinNameZipReadBytes: {
+		signature: "zip_read_bytes(handle, name, max_bytes?)",
+		summary:   "Reads one entry by name into a BYTES buffer. Same limits as zip_read; this is the form to use, since an archive member is binary unless proven otherwise.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString), param("name", "Entry name, as reported by zip_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the entry's contents", ParamBytes)},
+	BuiltinNameZipClose: {
+		signature: "zip_close(handle)",
+		summary:   "Closes a zip handle and the archive file behind it.",
+		params:    []builtinParamDoc{param("handle", "Handle from zip_open.", ParamString)},
+		returns:   pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status")},
+	BuiltinNameTarOpen: {
+		signature: "tar_open(path)",
+		summary:   "Opens a tar archive -- plain, or wrapped in gzip, bzip2 or zstd, detected by magic rather than by extension -- and returns a handle. Tar has no central directory, so the whole archive is walked once here to learn what it contains; bodies are skipped rather than held. compression names what was detected. Release the handle with tar_close.",
+		params:    []builtinParamDoc{param("path", "Path to a .tar, .tar.gz/.tgz, .tar.bz2 or .tar.zst archive.", ParamString)},
+		returns:   pairRet("a handle for the other tar_ builtins, plus what the walk found", ParamHash).withFields("compression", "entry_count", "handle", "path", "status", "total_uncompressed", "unsafe_path_count")},
+	BuiltinNameTarEntries: {
+		signature: "tar_entries(handle)",
+		summary:   "Lists an archive's members from the walk tar_open already did: name, size, entry type, link target, POSIX mode/uid/gid/uname/gname, the three timestamps, and unsafe_path -- which covers a link target that escapes as well as a name that does.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString)},
+		returns:   pairRet("one hash per member", ParamArray).ofElem(ParamHash).withFields("accessed", "changed", "gid", "gname", "is_dir", "linkname", "mode", "modified", "name", "size", "type", "uid", "uname", "unsafe_path")},
+	BuiltinNameTarRead: {
+		signature: "tar_read(handle, name, max_bytes?)",
+		summary:   "Reads one member by name and returns its contents as text. Tar has no index, so this walks from the start of the archive: cheap on a plain .tar, but on a compressed one it decompresses everything before the member, which makes reading many members quadratic. Limited to 1 GiB unless max_bytes says otherwise. Nothing is written to disk.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString), param("name", "Member name, as reported by tar_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the member's contents", ParamString)},
+	BuiltinNameTarReadBytes: {
+		signature: "tar_read_bytes(handle, name, max_bytes?)",
+		summary:   "Reads one member by name into a BYTES buffer. Same walk and same limits as tar_read; this is the form to use, since an archive member is binary unless proven otherwise.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString), param("name", "Member name, as reported by tar_entries.", ParamString), param("max_bytes?", "Maximum bytes to decompress; replaces the default limit of 1000x the compressed size, capped at 1 GiB.", ParamInt)},
+		returns:   pairRet("the member's contents", ParamBytes)},
+	BuiltinNameTarClose: {
+		signature: "tar_close(handle)",
+		summary:   "Closes a tar handle and the archive file behind it.",
+		params:    []builtinParamDoc{param("handle", "Handle from tar_open.", ParamString)},
+		returns:   pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status")},
 
 	// close helpers that lacked docs
 	BuiltinNameCacheClose: {signature: "cache_close(name)", summary: "Closes a named cache and frees its entries and backend.", returns: pairRet("confirmation that the cache has been closed", ParamHash).withFields("closed", "name"), params: []builtinParamDoc{param("name", "Cache namespace to close.", ParamString)}},
@@ -1985,6 +2519,14 @@ type capabilityCategory struct {
 }
 
 var capabilityCategories = []capabilityCategory{
+	// testing. First, because these are short, common words and a later family
+	// that wanted one of them would be the one to rename: `assert` claims every
+	// assert_* spelling, and none of the five collide with an existing prefix.
+	{"assert", "testing"},
+	{"test", "testing"},
+	{"fail", "testing"},
+	{"before_each", "testing"},
+	{"after_each", "testing"},
 	// networking / http
 	{"http_", "http"},
 	{"ws_", "network"},
@@ -2012,6 +2554,18 @@ var capabilityCategories = []capabilityCategory{
 	{"to_", "structured data"},
 	{"parse_", "structured data"},
 	{"plist_", "structured data"},
+	// The formats that are not JSON. None of these collide with an earlier
+	// prefix: "to_" needs a literal underscore third, so it does not claim
+	// "toml_".
+	{"csv_", "structured data"},
+	{"xml_", "structured data"},
+	{"ndjson_", "structured data"},
+	{"yaml_", "structured data"},
+	{"toml_", "structured data"},
+	{"cbor_", "structured data"},
+	{"msgpack_", "structured data"},
+	{"protobuf_", "structured data"},
+	{"der_", "structured data"},
 	// concurrency
 	{"chan_", "concurrency"},
 	{"task_", "concurrency"},
@@ -2044,6 +2598,13 @@ var capabilityCategories = []capabilityCategory{
 	{"timeline_", "forensic timeline"},
 	{"bodyfile", "forensic timeline"},
 	{"mactime", "forensic timeline"},
+	// interchange schemas. "event" claims both event_kinds and events_from, and
+	// nothing else in the tree begins with it.
+	{"event", "schema interchange"},
+	{"ecs_", "schema interchange"},
+	{"ocsf_", "schema interchange"},
+	{"timesketch_", "schema interchange"},
+	{"stix_", "schema interchange"},
 	// cryptography / fingerprinting
 	{"x509_", "cryptography"},
 	{"jwt_", "cryptography"},
@@ -2053,8 +2614,11 @@ var capabilityCategories = []capabilityCategory{
 	{"nt_hash", "fingerprinting"},
 	{"lm_hash", "fingerprinting"},
 	{"ja3", "fingerprinting"},
-	// policy / cache
+	// policy / cache / custody. "case_" is listed before "cache_" only for
+	// readability -- neither is a prefix of the other, so the order is free.
 	{"policy_", "policy"},
+	{"report_", "reporting"},
+	{"case_", "chain of custody"},
 	{"cache_", "cache"},
 	// system / process / memory forensics
 	{"process_", "process forensics"},
@@ -2071,6 +2635,7 @@ var capabilityCategories = []capabilityCategory{
 	{"email_", "email forensics"},
 	// detection
 	{"detect_", "detection"},
+	{"sigma_", "detection"},
 	// windows execution artifacts
 	{"prefetch_", "windows artifacts"},
 	{"evtx_", "windows artifacts"},
@@ -2093,6 +2658,9 @@ var capabilityCategories = []capabilityCategory{
 	{"ewf_", "disk image forensics"},
 	{"raw_", "disk image forensics"},
 	{"table_", "disk image forensics"},
+	// archives
+	{"zip_", "archives"},
+	{"tar_", "archives"},
 	// bytes
 	{"bytes_", "bytes"},
 }

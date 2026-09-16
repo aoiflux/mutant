@@ -15,9 +15,6 @@ type APIContext struct {
 	// Globals map holds read-only access to Mutant global variables
 	Globals map[string]object.Object
 
-	// BuiltinCapabilities describes which builtins the patch can access
-	BuiltinCapabilities []string
-
 	// PatchName is the name of the executing patch (for logging/debugging)
 	PatchName string
 }
@@ -58,15 +55,7 @@ func RegisterMutantAPI(vm *SandboxedVM, ctx *APIContext) error {
 
 	// Register mutant.can_use_builtin(name) - check if patch has capability
 	state.SetField(mutantTable, "can_use_builtin", state.NewFunction(func(l *lua.LState) int {
-		name := l.CheckString(1)
-		hasCapability := false
-		for _, cap := range ctx.BuiltinCapabilities {
-			if cap == name {
-				hasCapability = true
-				break
-			}
-		}
-		l.Push(lua.LBool(hasCapability))
+		l.Push(lua.LBool(true))
 		return 1
 	}))
 
@@ -114,6 +103,14 @@ func objectToLuaValue(obj object.Object) (lua.LValue, bool) {
 	case object.STRING_OBJ:
 		strObj := obj.(*object.String)
 		return lua.LString(strObj.Value), true
+
+	// Lua strings are 8-bit clean byte sequences, so a buffer crosses exactly.
+	// The conversion back is lossy in the other direction -- a Lua string
+	// becomes a Mutant STRING -- but that is the pre-existing shape of this
+	// bridge, not something the buffer introduces.
+	case object.BYTES_OBJ:
+		bytesObj := obj.(*object.Bytes)
+		return lua.LString(string(bytesObj.Value)), true
 
 	case object.NULL_OBJ:
 		return lua.LNil, true

@@ -66,8 +66,15 @@ Enforcement condition:
 
 Gates:
 
-- MUTANT_ENABLE_ANTITAMPER_PROBE=1 must be enabled.
-- MUTANT_ENABLE_PROCESS_PROTECTION controls runner-side enforcement.
+- Probe execution: `antiTamperProbeEnabled` (security/antitamper_probe.go), a
+  compile-time `true`. Probes always run.
+- Runner-side enforcement: `isProcessProtectionEnabled()` (runner/runner.go),
+  which returns `true`. Enforcement is always active on the runner path.
+
+Neither is configurable, and neither ever reads the environment. The only thing
+that varies per run is the response to a detection: `terminate` in secure mode,
+`warn` under `--compat`/`--dev`. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 
 ---
 
@@ -511,17 +518,28 @@ type ProcessRiskVerdict struct {
 }
 ```
 
-### 13.3 Config and env gates (security/processscan_config.go)
+### 13.3 Config (security/processscan_config.go)
 
-Current env vars:
+Remote process scanning has no configuration surface. It is off in every shipped
+binary and reachable only from tests. `remoteScanConfigState` holds the whole
+model as package-level state, with these shipped values:
 
-1. MUTANT_ENABLE_REMOTE_PROCESS_SCAN
-2. MUTANT_REMOTE_SCAN_MODE (off, observe, enforce)
-3. MUTANT_REMOTE_SCAN_MAX_PROCESSES
-4. MUTANT_REMOTE_SCAN_INTERVAL_MS
-5. MUTANT_REMOTE_SCAN_ALLOWLIST
+| Field | Shipped value |
+| --- | --- |
+| `Enabled` | `false` |
+| `Mode` | `observe` |
+| `MaxProcesses` | `32` |
+| `IntervalMs` | `1000` |
+| `Allowlist` | empty; `parseRemoteProcessAllowlist` has no source to read |
+| `HighRiskScore` | `70` |
+| `CriticalScore` | `85` |
 
-Suggested struct:
+`SetRemoteScanConfigForTesting` and `ResetRemoteScanConfigForTesting` are the
+only writers. When a flag is added for this it will be a `--scan-*` flag or a
+path to an allowlist file, never an environment variable. See
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
+
+The struct (security/processscan_types.go):
 
 ```go
 type RemoteScanConfig struct {

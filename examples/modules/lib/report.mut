@@ -1,0 +1,19 @@
+// A module that imports another module.
+//
+// The path is resolved relative to THIS file's directory, so `stats.mut` finds
+// the sibling -- not relative to whatever file imports this one.
+
+import "stats.mut";
+
+// `label` is declared here and again in main.mut. Both are fine: a module's
+// top level is its own, so the two names are two different bindings rather
+// than one overwriting the other.
+let label = "report.mut";
+
+let line = fn(name, values) {
+	// str.upper is the builtin str_upper. Any builtin family works this way,
+	// with no import and no declaration: the namespace is derived from the
+	// name, so `str.upper` and `str_upper` are one function.
+	return str.format("%s: sum=%d mean=%d max=%d",
+		str.upper(name), stats.sum(values), stats.mean(values), stats.largest(values));
+};

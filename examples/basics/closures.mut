@@ -1,0 +1,106 @@
+// Closures over mutable state.
+//
+// A closure captures its free variables by reference: there is one storage
+// location per variable per call, shared by the enclosing frame and every
+// closure over it. So a callback can accumulate into a variable the caller
+// still reads, and a function returned from a call keeps its variables alive.
+
+// ---------------------------------------------------------------------------
+// Accumulating over a callback
+// ---------------------------------------------------------------------------
+
+let sum_of = fn(xs) {
+    let acc = 0;
+    each(xs, fn(x) { acc = acc + x; });
+    return acc;
+};
+
+let count_matching = fn(xs, keep) {
+    let n = 0;
+    each(xs, fn(x) { if (keep(x)) { n++; } });
+    return n;
+};
+
+putf("sum_of([1,2,3,4])     = %d\n", sum_of([1, 2, 3, 4]));
+putf("even count           = %d\n", count_matching([1, 2, 3, 4, 5, 6], fn(x) { return x % 2 == 0; }));
+
+// ---------------------------------------------------------------------------
+// State that outlives the call that created it
+// ---------------------------------------------------------------------------
+
+let make_counter = fn(start) {
+    let n = start;
+    return fn() { n++; return n; };
+};
+
+let ticket = make_counter(100);
+putf("ticket()             = %d\n", ticket());
+putf("ticket()             = %d\n", ticket());
+
+// Each call to the maker gets its own variable, so the two do not interfere.
+let other = make_counter(100);
+putf("a fresh counter      = %d\n", other());
+
+// ---------------------------------------------------------------------------
+// Two closures over one variable
+// ---------------------------------------------------------------------------
+//
+// One location, so `get` sees what `add` wrote. This is the pattern a small
+// object is built from: several functions closed over shared state.
+
+let make_tally = fn() {
+    let total = 0;
+    let seen = 0;
+    return {
+        "add": fn(n) { total = total + n; seen++; },
+        "mean": fn() { if (seen == 0) { return 0; } return total / seen; },
+    };
+};
+
+let tally = make_tally();
+tally["add"](10);
+tally["add"](20);
+tally["add"](60);
+putf("mean of 10,20,60     = %d\n", tally["mean"]());
+
+// ---------------------------------------------------------------------------
+// Captures are scoped to the call, not to the iteration
+// ---------------------------------------------------------------------------
+//
+// A closure made inside a `for` loop shares the loop's variable rather than
+// getting a snapshot of it, so all three of these see the final value. Take a
+// parameter if you want the value frozen -- `freeze` below is the whole trick.
+
+let freeze = fn(v) { return fn() { return v; }; };
+
+let shared = [];
+let frozen = [];
+for (let i = 0; i < 3; i++) {
+    shared = push(shared, fn() { return i; });
+    frozen = push(frozen, freeze(i));
+}
+
+putf("shared               = [%d, %d, %d]\n", shared[0](), shared[1](), shared[2]());
+putf("frozen               = [%d, %d, %d]\n", frozen[0](), frozen[1](), frozen[2]());
+
+// ---------------------------------------------------------------------------
+// A worker does not share
+// ---------------------------------------------------------------------------
+//
+// pmap, peach and spawn run the callback on another VM. Each gets its own copy
+// of the captured variables, so its writes stay local and are lost when it
+// finishes -- the same rule those builtins follow for globals. Return the
+// result instead.
+
+let doubled_wrong = fn(xs) {
+    let acc = 0;
+    pmap(xs, fn(x) { acc = acc + x; return x * 2; });
+    return acc;                       // always 0: the workers wrote their own
+};
+
+let doubled_right = fn(xs) {
+    return reduce(pmap(xs, fn(x) { return x * 2; }), fn(a, b) { return a + b; }, 0);
+};
+
+putf("accumulated in pmap  = %d\n", doubled_wrong([1, 2, 3, 4]));
+putf("returned from pmap   = %d\n", doubled_right([1, 2, 3, 4]));

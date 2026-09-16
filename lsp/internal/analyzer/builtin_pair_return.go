@@ -64,26 +64,25 @@ func (c *builtinCallCollector) checkSingleNameBinding(name *mast.Identifier, val
 	if !ok || call.Function == nil {
 		return
 	}
-	ident, ok := call.Function.(*mast.Identifier)
-	if !ok || ident.Value == "" {
+	calleeName, _, ok := builtinCallee(call.Function, c.boundIn(current))
+	if !ok {
 		return
 	}
-	// A user/local binding of this name shadows the builtin.
-	if _, shadowed := current.find(ident.Value); shadowed {
-		return
-	}
-	if _, live := c.builtins[ident.Value]; !live {
+	if _, live := c.builtins[calleeName]; !live {
 		return
 	}
 
-	spec, declared := builtin.ReturnSpec(ident.Value)
+	spec, declared := builtin.ReturnSpec(calleeName)
 	if !declared || !spec.Pair {
 		return
 	}
 
 	c.pairCandidates = append(c.pairCandidates, pairBindingCandidate{
-		name:        name,
-		builtinName: ident.Value,
+		name: name,
+		// The flat name, because the fix-it text quotes a contract that is
+		// recorded against it. The author who wrote fs.read reads `fs_read` in
+		// the message and it is still the same function.
+		builtinName: calleeName,
 		kinds:       spec.KindsText(),
 	})
 }
@@ -231,6 +230,13 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			for _, element := range node.Elements {
 				walkExpression(element)
 			}
+		case *mast.TemplateLiteral:
+			if node == nil {
+				return
+			}
+			for _, part := range node.Parts {
+				walkExpression(part)
+			}
 		case *mast.HashLiteral:
 			if node == nil {
 				return
@@ -255,6 +261,16 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			walkExpression(node.Condition)
 			walkStatement(node.Consequence)
 			walkStatement(node.Alternative)
+		case *mast.MatchExpression:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Subject)
+			for _, arm := range node.Arms {
+				if arm != nil {
+					walkStatement(arm.Body)
+				}
+			}
 		}
 	}
 
@@ -305,6 +321,18 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			walkStatement(node.Init)
 			walkExpression(node.Condition)
 			walkExpression(node.Post)
+			walkStatement(node.Body)
+		case *mast.WhileStatement:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Condition)
+			walkStatement(node.Body)
+		case *mast.ForInStatement:
+			if node == nil {
+				return
+			}
+			walkExpression(node.Iterable)
 			walkStatement(node.Body)
 		}
 	}

@@ -16,3 +16,8 @@ const (
 	LINUX   = "linux"
 	WINDOWS = "windows"
 )
+
+// Version is the release this build claims to be. It lives here rather than in
+// package main because a case manifest has to name the tool that produced it
+// (F-1), and `builtin` cannot import the command.
+const Version = "2.5.0"

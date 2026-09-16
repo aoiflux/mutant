@@ -19,7 +19,9 @@ low-level design, treat the following as authoritative and update this file:
 Alignment rules:
 
 1. Keep mode and policy semantics identical to LLD definitions.
-2. Keep environment variable names and defaults identical to implementation.
+2. Mutant reads no environment variable for configuration. Every control in this
+   runbook is a command-line flag or a fixed default; never document a variable
+   as a control. See [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
 3. Avoid introducing undocumented flags or implied capabilities.
 
 ## 2. Primary Runtime Events
@@ -38,37 +40,51 @@ Alignment rules:
 
 ## 3. Key Controls
 
+The whole control surface is the command line. There is nothing to set before
+a run and nothing to unset after one.
+
 ### 3.1 Policy Controls
 
-1. `MUTANT_TAMPER_RESPONSE` = `warn|delay|terminate`
-2. `MUTANT_TAMPER_DELAY_MS` = delay duration (0..5000)
-3. `MUTANT_PROTECTION_PROFILE` = `minimal|standard|paranoid`
-4. `--signer-auth` enables trusted signer verification in secure mode.
+1. `--secure` (the default) resolves the tamper response to `terminate`.
+2. `--compat` resolves it to `warn`.
+3. `--dev` implies `--compat`, plus local password fallback.
+4. `--signer-auth` / `--no-signer-auth` upgrade signature verification to a
+   trusted public key, or decline to. Self-verification runs in every mode
+   regardless, so this raises the floor rather than setting it.
+5. `--trusted-key <path>` pins verification to the hex-encoded public key in
+   that file. Without it, verification uses a locally bootstrapped keypair,
+   which trusts whatever signed the artifact on this host.
+
+The tamper response is a pure function of items 1--3. There is no separate
+response selector, no delay tuning (the `delay` response exists but no mode
+selects it), and no protection-profile selector: the profile is fixed at
+`standard`.
 
 ### 3.2 Probe Controls
 
-1. `MUTANT_ENABLE_ANTITAMPER_PROBE=1` enables anti-tamper probe execution.
-2. `MUTANT_ENABLE_PROCESS_PROTECTION` controls runner process-protection
-   enforcement when probes are enabled.
-3. `MUTANT_ENABLE_REMOTE_PROCESS_SCAN=1` enables remote scan manager execution.
-4. `MUTANT_REMOTE_SCAN_MODE=off|observe|enforce` controls block vs observe
-   behavior.
-5. `MUTANT_REMOTE_SCAN_MAX_PROCESSES` and `MUTANT_REMOTE_SCAN_ALLOWLIST` tune
-   scan scope.
+**None.** Anti-tamper probing and runner process-protection enforcement are both
+compile-time `true` and always active. Remote process scanning is off in every
+shipped binary and reachable only from tests.
+
+What still varies is the response: a process-protection signal at confidence
+`>= 80` terminates in secure mode and warns under `--compat`/`--dev`.
 
 ### 3.3 Telemetry Controls
 
-1. `MUTANT_SECURITY_AUDIT=1` emits audit lines to stderr.
-2. `MUTANT_SECURITY_TELEMETRY_FILE=<path>` exports JSON telemetry snapshot on
-   exit.
+**None.** The audit stream is a no-op (`auditEvent` discards its arguments) and
+nothing calls `ExportSecurityTelemetry`, so a run emits no audit lines and
+writes no telemetry file. Counters are readable in-process only, through
+`SecurityTelemetrySnapshot()` / `SecurityTelemetryJSON()`.
 
 ## 4. First 10 Minutes Checklist
 
-1. Capture stderr output including `[security]` and `[security-audit]` lines.
-2. Save telemetry JSON if enabled.
-3. Record mode/profile/env values (`MUTANT_*`).
-4. Record artifact hash and executable hash.
-5. Identify whether event is isolated or fleet-wide.
+1. Capture stderr output including `[security]` lines.
+2. **Record the exact command line that was run.** It is the complete record of
+   how the run was configured -- nothing is read from the environment or from a
+   config file, so the invocation and the artifact together fully determine the
+   behaviour.
+3. Record artifact hash and executable hash.
+4. Identify whether event is isolated or fleet-wide.
 
 ## 5. Event-by-Event Triage
 
@@ -126,9 +142,10 @@ Production guidance:
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
 $dir = "./incident-$ts"
 New-Item -ItemType Directory -Path $dir | Out-Null
-Get-ChildItem Env:MUTANT_* | Out-File "$dir/env.txt"
-Get-FileHash .\mutant.exe -Algorithm SHA256 | Out-File "$dir/hashes.txt"
-if (Test-Path .\telemetry.json) { Copy-Item .\telemetry.json "$dir/telemetry.json" }
+# The command line is the configuration. Capture it, not the environment.
+(Get-CimInstance Win32_Process -Filter "Name='mutant.exe'").CommandLine |
+    Out-File "$dir/commandline.txt"
+Get-FileHash ./mutant.exe -Algorithm SHA256 | Out-File "$dir/hashes.txt"
 ```
 
 ### 7.2 Linux
@@ -137,9 +154,9 @@ if (Test-Path .\telemetry.json) { Copy-Item .\telemetry.json "$dir/telemetry.jso
 ts=$(date +%Y%m%d-%H%M%S)
 dir=incident-$ts
 mkdir -p "$dir"
-env | grep '^MUTANT_' > "$dir/env.txt"
+# The command line is the configuration. Capture it, not the environment.
+ps -ww -o args= -C mutant > "$dir/commandline.txt"
 sha256sum ./mutant > "$dir/hashes.txt"
-[ -f ./telemetry.json ] && cp ./telemetry.json "$dir/telemetry.json"
 ```
 
 ## 8. Recovery Rules
@@ -149,91 +166,32 @@ sha256sum ./mutant > "$dir/hashes.txt"
 3. Prefer scoped allowlists and short-lived exceptions.
 4. Track post-incident hardening actions in backlog.
 
-## 9. Common Policy and Environment Combinations
+## 9. Choosing a Posture
 
-Use these presets as starting points. Prefer short-lived overrides and document
-every change in incident notes.
+There are no policy presets to copy, because there is nothing to preset. A
+posture is a command line:
 
-### 9.1 Production Strict (Fail Closed)
+| Situation | Command |
+| --- | --- |
+| Production, trusted release artifact | `mutant prog.mu --secure --signer-auth --trusted-key <path>` |
+| Production, no pinned signer yet | `mutant prog.mu --secure --signer-auth` |
+| A probe fires on a container, VM or CI runner | `mutant prog.mu --compat` |
+| Local development | `mutant prog.mu --dev` |
 
-Use when running trusted release artifacts in production.
+Notes:
 
-```powershell
-$env:MUTANT_TAMPER_RESPONSE = "terminate"
-$env:MUTANT_PROTECTION_PROFILE = "paranoid"
-$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
-$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
-$env:MUTANT_SECURITY_AUDIT = "1"
-$env:MUTANT_SECURITY_TELEMETRY_FILE = ".\telemetry.json"
-```
-
-### 9.2 Production Standard (Balanced)
-
-Use for broad production rollout with strong defaults and lower friction.
-
-```powershell
-$env:MUTANT_TAMPER_RESPONSE = "terminate"
-$env:MUTANT_PROTECTION_PROFILE = "standard"
-$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
-$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
-$env:MUTANT_SECURITY_AUDIT = "1"
-```
-
-### 9.3 Investigation Mode (Delay + Observe)
-
-Use during controlled triage when you need more evidence before termination.
-
-```powershell
-$env:MUTANT_TAMPER_RESPONSE = "delay"
-$env:MUTANT_TAMPER_DELAY_MS = "1500"
-$env:MUTANT_PROTECTION_PROFILE = "standard"
-$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
-$env:MUTANT_ENABLE_PROCESS_PROTECTION = "1"
-$env:MUTANT_SECURITY_AUDIT = "1"
-$env:MUTANT_SECURITY_TELEMETRY_FILE = ".\telemetry.json"
-```
-
-### 9.4 Compatibility Triage (Temporary)
-
-Use only for short-lived false-positive isolation and root-cause analysis.
-
-```powershell
-$env:MUTANT_TAMPER_RESPONSE = "warn"
-$env:MUTANT_PROTECTION_PROFILE = "minimal"
-$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "1"
-$env:MUTANT_ENABLE_PROCESS_PROTECTION = "0"
-$env:MUTANT_SECURITY_AUDIT = "1"
-```
-
-### 9.5 Probe Off (Debug Baseline)
-
-Use to separate probe-related signals from other runtime controls.
-
-```powershell
-$env:MUTANT_ENABLE_ANTITAMPER_PROBE = "0"
-$env:MUTANT_ENABLE_PROCESS_PROTECTION = "0"
-$env:MUTANT_TAMPER_RESPONSE = "warn"
-```
-
-### 9.6 Linux Example (Strict)
-
-```bash
-export MUTANT_TAMPER_RESPONSE=terminate
-export MUTANT_PROTECTION_PROFILE=paranoid
-export MUTANT_ENABLE_ANTITAMPER_PROBE=1
-export MUTANT_ENABLE_PROCESS_PROTECTION=1
-export MUTANT_SECURITY_AUDIT=1
-export MUTANT_SECURITY_TELEMETRY_FILE=./telemetry.json
-```
-
-### 9.7 Reset to Defaults
-
-```powershell
-Remove-Item Env:MUTANT_TAMPER_RESPONSE -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_TAMPER_DELAY_MS -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_PROTECTION_PROFILE -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_ENABLE_ANTITAMPER_PROBE -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_ENABLE_PROCESS_PROTECTION -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_SECURITY_AUDIT -ErrorAction SilentlyContinue
-Remove-Item Env:MUTANT_SECURITY_TELEMETRY_FILE -ErrorAction SilentlyContinue
-```
+1. `--secure` is the default; naming it explicitly makes the incident note
+   unambiguous.
+2. `--compat` and `--dev` are the only things that downgrade a tamper response
+   from `terminate` to `warn`. Both are visible in the command line, so a
+   downgrade can never happen behind an operator's back -- which is why the
+   presets this section used to carry no longer exist. Naming a mode twice over
+   (`--secure --compat`) is an error rather than last-flag-wins, so a downgrade
+   also cannot happen by a wrapper script appending a flag.
+3. There is nothing to reset afterwards. A previous run cannot leave state that
+   changes the next one.
+4. `--timing` adds per-stage timings on stderr when a run is unexpectedly slow.
+5. A termination prints the detector that fired, the reason, and the remedy
+   before the run stops. `--compat` is named as the remedy for a host-probe hit
+   and deliberately not for a signature or integrity failure, which are facts
+   about the artifact. See [EXECUTION_MODES.md](EXECUTION_MODES.md).

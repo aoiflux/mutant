@@ -26,8 +26,7 @@ func TestExecutePatchesRunsEncryptedPatch(t *testing.T) {
 	}
 
 	ctx := &APIContext{
-		Globals:             map[string]object.Object{},
-		BuiltinCapabilities: []string{"network"},
+		Globals: map[string]object.Object{},
 	}
 
 	if err := ExecutePatches(patches, password, inslen, ctx); err != nil {

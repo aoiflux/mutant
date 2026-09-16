@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"mutant/errrs"
 	"mutant/generator"
 	"mutant/global"
 	"mutant/repl"
 	"mutant/runner"
+	"mutant/vm"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +22,7 @@ func RunRepl(version string, enableMacros bool, theme string) {
 // CompileCode returns the process exit code: 0 on a successful compile, 1 when
 // the source could not be compiled. A parse error and a compiler error both
 // used to be printed and then reported as success.
-func CompileCode(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64) int {
+func CompileCode(src, goos, goarch string, release bool, password string, mutationLevel int, mutationSeed int64, modulePaths []string) int {
 	start := time.Now()
 	srcpath, err := filepath.Abs(src)
 	if err != nil {
@@ -31,7 +33,7 @@ func CompileCode(src, goos, goarch string, release bool, password string, mutati
 
 	// Pass nil for privateKey - Generate() will create a new one
 	// In production, you'd load a persistent key from a secure location
-	if err, errtype, errors := generator.Generate(srcpath, dstpath, goos, goarch, release, password, mutationLevel, mutationSeed, nil); err != nil {
+	if err, errtype, errors := generator.Generate(srcpath, dstpath, goos, goarch, release, password, mutationLevel, mutationSeed, nil, modulePaths); err != nil {
 		switch errtype {
 		case errrs.ERROR:
 			fmt.Println(err)
@@ -70,19 +72,27 @@ func GenerateReleaseAssets(outputPath string) int {
 // 0 whatever happened -- a runtime error, a missing file, or a wrong password.
 // Nothing calling it could tell a successful run from a failed one, and a
 // released standalone binary reported success after refusing to decrypt.
-func RunCode(src string, password string, secureMode bool, enforceSignerAuth bool) int {
+func RunCode(src string, opts runner.Options) int {
 	srcpath, err := filepath.Abs(src)
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
 
-	if err, errtype := runner.Run(srcpath, password, secureMode, enforceSignerAuth); err != nil {
+	if err, errtype := runner.Run(srcpath, opts); err != nil {
 		switch errtype {
 		case errrs.ERROR:
 			fmt.Println(err)
 		case errrs.VM_ERROR:
-			errrs.PrintMachineError(os.Stdout, err.Error())
+			// A VM failure carries the frame stack it happened on when the
+			// program was compiled with positions. Without them this is the
+			// same one-line report as before.
+			var runtimeErr *vm.RuntimeError
+			if errors.As(err, &runtimeErr) {
+				errrs.PrintMachineTraceback(os.Stdout, err.Error(), runtimeErr.Traceback())
+			} else {
+				errrs.PrintMachineError(os.Stdout, err.Error())
+			}
 		default:
 			fmt.Println(err)
 		}

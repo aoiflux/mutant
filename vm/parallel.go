@@ -56,6 +56,42 @@ func (vm *VM) newWorkerVM() *VM {
 	return vm.newWorkerVMWithGlobals(vm.snapshotGlobals())
 }
 
+// detachCaptures gives a worker its own copy of a closure's captured cells.
+//
+// A captured variable is one storage location shared by the enclosing frame and
+// every closure over it -- that sharing is the whole point of boxing, and it is
+// what lets `each(xs, fn(x) { acc = acc + x; })` accumulate. Across goroutines it
+// is a data race: `cell.Value = ...` on a worker is an unsynchronised write to
+// an interface the parent may be reading, and `go test -race` says so.
+//
+// So a worker gets fresh cells holding the same values, which makes captured
+// variables follow the rule the parallel builtins already document for globals:
+// its own VM, its own stack, its own bindings, and writes that stay local. The
+// way a result comes back is the return value.
+//
+// One level deep, exactly like snapshotGlobals: the worker gets its own binding,
+// not a deep copy of what the binding points at, so a captured array is still
+// the same array in both. Deeper would also have to answer what to do about a
+// closure that captures itself, which is an ordinary thing to write.
+func detachCaptures(cl *object.Closure) *object.Closure {
+	var detached []object.Object
+	for i, captured := range cl.Free {
+		cell, ok := captured.(*object.Cell)
+		if !ok {
+			continue
+		}
+		if detached == nil {
+			detached = make([]object.Object, len(cl.Free))
+			copy(detached, cl.Free)
+		}
+		detached[i] = &object.Cell{Value: cell.Value}
+	}
+	if detached == nil {
+		return cl
+	}
+	return &object.Closure{Fn: cl.Fn, Free: detached}
+}
+
 // newWorkerVMWithGlobals is the expensive half. prepareForExecution walks every
 // compiled function in the constants pool to map its instruction boundaries,
 // decrypting a byte at a time, so this is far from free on a large program --
@@ -190,6 +226,10 @@ func (vm *VM) runParallel(op string, arr *object.Array, cl *object.Closure, requ
 			// reading. The worker's own stack and globals are garbage-collected
 			// when this goroutine returns.
 
+			// Its own captured variables too, for the same reason it gets its own
+			// globals: workers here share nothing they can write.
+			workerClosure := detachCaptures(cl)
+
 			for {
 				if failed() {
 					return
@@ -199,7 +239,7 @@ func (vm *VM) runParallel(op string, arr *object.Array, cl *object.Closure, requ
 					return
 				}
 
-				result, err := worker.callElement(cl, elements[index], index)
+				result, err := worker.callElement(workerClosure, elements[index], index)
 				if err != nil {
 					recordErr(err)
 					return

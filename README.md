@@ -86,24 +86,58 @@ generation, release packaging, and help.
 
 ```bash
 mutant
-mutant hello.mut --password "My$tr0ngPass!"
-mutant hello.mu --dev --password "My$tr0ngPass!"
+mutant hello.mut
+mutant hello.mu
+mutant test ./lib
+mutant debug hello.mut
 mutant help
 mutant help gen
 mutant help release
+mutant help test
+mutant help debug
 ```
 
 - `mutant` starts the REPL
-- `mutant hello.mut --password ...` compiles source into encrypted bytecode,
-  writing `hello.mu` beside it. A password is required.
-- `mutant hello.mu --password ...` runs compiled bytecode in the Mutant VM
+- `mutant hello.mut` compiles source into encrypted bytecode, writing `hello.mu`
+  beside it. It prompts for a password (twice, since a typo here produces an
+  artifact nobody can open).
+- `mutant hello.mu` runs compiled bytecode in the Mutant VM, prompting for the
+  password it was encrypted with.
+- `mutant test` runs every `*_test.mut` file: named tests and subtests,
+  assertions that report the line they failed on, fixtures, filtering, a
+  `--json` reporter for CI and `--cover` for line coverage. A test file is an
+  ordinary program compiled the same way, so it can `import` the module it is
+  testing; see [docs/TESTING.md](docs/TESTING.md).
+- `mutant debug` serves the Debug Adapter Protocol so an editor can set
+  breakpoints, step and inspect a running program. It is started by the editor
+  rather than by hand; see
+  [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
+#### Supplying the password
+
+A password is required, and by default it is never typed on the command line.
+
+| Option                    | Use it for                                                            |
+| ------------------------- | --------------------------------------------------------------------- |
+| _(nothing)_               | Interactive use. Prompts with terminal echo disabled.                 |
+| `--password-file <path>`  | Unattended runs. Refused if the file is readable by other users.      |
+| `--password-stdin`        | CI and pipelines: `mutant hello.mu --password-stdin < secret`.        |
+| `--dev`                   | Local development only. Uses a built-in key that is **not secret**.   |
+| `--password <value>`      | **Deprecated.** Visible in `ps` and shell history; warns on use.      |
+
+`--password` still works this release, but it puts the credential in argv where
+every local user can read it out of the process table. It will require an
+explicit `--password-insecure` in the next minor release.
+
+There is deliberately no environment-variable form. See
+[docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).
 
 ### Bytecode generation
 
 ```bash
-mutant gen --src hello.mut --password "My$tr0ngPass!"
-mutant gen hello.mut --password "My$tr0ngPass!"
-mutant gen hello.mut --password "My$tr0ngPass!" --mutation 5 --seed 42
+mutant gen --src hello.mut
+mutant gen hello.mut --password-file ~/.mutant/case-42.key
+mutant gen hello.mut --password-stdin --mutation 5 --seed 42 < ./secret
 ```
 
 ### Release asset generation
@@ -124,7 +158,7 @@ mutant gen --release-assets --out ./releaseassets
 ```bash
 mutant release --src hello.mut
 mutant release hello.mut --os windows --arch amd64
-mutant release hello.mut --password "My$tr0ngPass!" --mutation 5
+mutant release hello.mut --password-file ~/.mutant/release.key --mutation 5
 ```
 
 Supported release targets:
@@ -137,12 +171,21 @@ Supported release targets:
 When running `.mu` files or embedded standalone payloads, these flags are
 available:
 
-- `--secure` to enforce secure mode
-- `--compat` to allow weaker compatibility-mode checks
-- `--dev` for developer mode and local password fallback
-- `--signer-auth` to require trusted signer verification
+- `--secure` — secure mode, the default: a security probe hit ends the run
+- `--compat` — a probe hit warns and the run continues
+- `--dev` — compatibility posture, plus a fallback to a development key that is
+  a compile-time constant shared by every Mutant binary
+- `--signer-auth` to upgrade signature verification to a trusted public key
 - `--security-log-level <none|error|info|debug|trace>`
 - `--log-level <none|error|info|debug|trace>` as an alias
+
+Naming two modes at once is an error rather than last-flag-wins.
+
+> **`--compat` weakens the response. `--dev` weakens the key.** Compat still
+> requires your password and still verifies the artifact. An artifact built or
+> run under `--dev` has no confidentiality.
+
+Full table: [docs/EXECUTION_MODES.md](docs/EXECUTION_MODES.md).
 
 ## Browser REPL (WASM, experimental)
 
@@ -269,9 +312,12 @@ Current wasm REPL support intentionally focuses on a lightweight subset:
   `db_stats`
 - assignment expressions (for example `i = i + 1`)
 - `for` loops with init/condition/post
+- `while` loops
+- `for (v in xs)` and `for (k, v in xs)` over arrays, hashes, strings and bytes
 - `break` and `continue` inside loops
 - `return` statements with function short-circuit behavior
 - `if/else`
+- `match` expressions with literal, enum-variant and `|` patterns
 - prefix `!` and unary `-`
 - infix `+ - * / < > == !=`
 
@@ -297,17 +343,17 @@ Suggested run sequence:
 
 ```bash
 # Compile, then run the bytecode each compile writes beside its source.
-mutant gen --src examples/security/security_environment_report.mut --password <password>
-mutant examples/security/security_environment_report.mu --dev --password <password>
+mutant gen --src examples/security/security_environment_report.mut --dev
+mutant examples/security/security_environment_report.mu --dev
 
-mutant gen --src examples/network/network_service_recon_graph.mut --password <password>
-mutant examples/network/network_service_recon_graph.mu --dev --password <password>
+mutant gen --src examples/network/network_service_recon_graph.mut --dev
+mutant examples/network/network_service_recon_graph.mu --dev
 
-mutant gen --src examples/binary/ioc_event_triage.mut --password <password>
-mutant examples/binary/ioc_event_triage.mu --dev --password <password>
+mutant gen --src examples/binary/ioc_event_triage.mut --dev
+mutant examples/binary/ioc_event_triage.mu --dev
 
-mutant gen --src examples/registry/persistence_triage_commands.mut --password <password>
-mutant examples/registry/persistence_triage_commands.mu --dev --password <password>
+mutant gen --src examples/registry/persistence_triage_commands.mut --dev
+mutant examples/registry/persistence_triage_commands.mu --dev
 ```
 
 Artifacts are written under `example_output/`.
@@ -315,12 +361,11 @@ Artifacts are written under `example_output/`.
 ### Command execution requirements
 
 `persistence_triage_commands.mut` uses `cmd_builder`, `cmd_add`, and `cmd_run`.
-Those are policy controlled.
-
-Optional policy tuning:
-
-- `MUTANT_COMMAND_EXEC_TIMEOUT_MS`
-- `MUTANT_COMMAND_EXEC_MAX_OUTPUT_BYTES`
+Those are policy controlled, with fixed limits: a 3000 ms per-command timeout
+and 8192 bytes of captured output, after which the output is truncated. Neither
+is tunable -- Mutant takes no configuration from environment variables, and
+these are not per-run decisions. See
+[docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).
 
 ## Featured In
 
@@ -338,6 +383,12 @@ For all things mutant, please visit the
 For VS Code language tooling specifics (teaching hovers, signature help, and
 snippet completions), see:
 
+- [docs/TUTORIAL_30_MIN.md](docs/TUTORIAL_30_MIN.md) — Mutant in 30 minutes,
+  the guided path from install to a standalone binary
+- [docs/COOKBOOK.md](docs/COOKBOOK.md) — recipes organised by investigation:
+  file triage, IOC extraction, beacon detection, timelines, reporting
+- [docs/COMPARISON.md](docs/COMPARISON.md) — Mutant next to Python+plaso,
+  Velociraptor, osquery and YARA+Sigma, including where it is the wrong tool
 - [docs/WHAT_IS_MUTANT.md](docs/WHAT_IS_MUTANT.md)
 - [docs/MUTANT_LANGUAGE_REFERENCE.md](docs/MUTANT_LANGUAGE_REFERENCE.md)
 - [docs/CAPABILITY_REFERENCE.md](docs/CAPABILITY_REFERENCE.md) — full builtin catalog
@@ -345,9 +396,24 @@ snippet completions), see:
 - [docs/GRAPH_DATABASE.md](docs/GRAPH_DATABASE.md)
 - [docs/RUNTIME_INTEGRATION.md](docs/RUNTIME_INTEGRATION.md)
 - [docs/STRUCTURED_DATA.md](docs/STRUCTURED_DATA.md)
+- [docs/INTERCHANGE_SCHEMAS.md](docs/INTERCHANGE_SCHEMAS.md) — one event
+  vocabulary across every parser, so a timeline can be handed to Timesketch,
+  plaso or a SIEM
+- [docs/TESTING.md](docs/TESTING.md) — `mutant test`: assertions, subtests,
+  fixtures, filtering, `--json` and coverage
+- [docs/DEBUGGING.md](docs/DEBUGGING.md) — breakpoints, stepping and variables
+  from an editor, and what the debugger deliberately will not do
 - [docs/LSP_EXTENSION_LLD.md](docs/LSP_EXTENSION_LLD.md)
 - [docs/LSP_EXTENSION_ONBOARDING_60_MIN.md](docs/LSP_EXTENSION_ONBOARDING_60_MIN.md)
-- [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)
+
+## Contributing
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — build, the pure-Go/cross-platform
+  constraints, the no-environment-variables policy, and the compatibility rules
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability, and what is in
+  scope for a security project
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

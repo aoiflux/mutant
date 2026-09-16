@@ -7,7 +7,6 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
-	"io"
 	"net/url"
 	"strconv"
 
@@ -21,8 +20,26 @@ func encOneString(op string, args []object.Object) (string, *object.Error) {
 	return requireStringArg(op, args[0], 1)
 }
 
+// encOneBinary is encOneString for the encoders that consume arbitrary data
+// rather than text -- base64, base32, hex, gzip, zlib. They accept a buffer as
+// readily as a string, because encoding bytes is the entire job.
+//
+// url_encode deliberately keeps the text-only helper: percent-encoding is
+// defined over a URL component, and accepting a buffer there would widen the
+// argument-type diagnostic for no gain.
+func encOneBinary(op string, args []object.Object) (string, *object.Error) {
+	if len(args) != 1 {
+		return "", newError("wrong number of arguments. got=%d, want=1", len(args))
+	}
+	data, errObj := requireBinaryArg(op, args[0], 1)
+	if errObj != nil {
+		return "", errObj
+	}
+	return string(data), nil
+}
+
 func Base64Encode(args ...object.Object) object.Object {
-	s, errObj := encOneString("base64_encode", args)
+	s, errObj := encOneBinary(BuiltinNameBase64Encode, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -30,22 +47,31 @@ func Base64Encode(args ...object.Object) object.Object {
 }
 
 func Base64Decode(args ...object.Object) object.Object {
+	return base64Decode(args, BuiltinNameBase64Decode, false)
+}
+
+// Base64DecodeBytes decodes standard base64 into a buffer.
+func Base64DecodeBytes(args ...object.Object) object.Object {
+	return base64Decode(args, BuiltinNameBase64DecodeBytes, true)
+}
+
+func base64Decode(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("base64_decode", args[0], 1)
+	s, errObj := requireStringArg(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
-		return resultAndError(nil, newError("base64_decode: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(decoded)), nil)
+	return resultAndError(binaryResult(binary, decoded), nil)
 }
 
 func Base64URLEncode(args ...object.Object) object.Object {
-	s, errObj := encOneString("base64url_encode", args)
+	s, errObj := encOneBinary(BuiltinNameBase64URLEncode, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -56,7 +82,7 @@ func Base64URLDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("base64url_decode", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameBase64URLDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -68,7 +94,7 @@ func Base64URLDecode(args ...object.Object) object.Object {
 }
 
 func Base32Encode(args ...object.Object) object.Object {
-	s, errObj := encOneString("base32_encode", args)
+	s, errObj := encOneBinary(BuiltinNameBase32Encode, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -79,7 +105,7 @@ func Base32Decode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("base32_decode", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameBase32Decode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -91,30 +117,39 @@ func Base32Decode(args ...object.Object) object.Object {
 }
 
 func HexEncode(args ...object.Object) object.Object {
-	s, errObj := encOneString("hex_encode", args)
+	s, errObj := encOneBinary(BuiltinNameHexEncode, args)
 	if errObj != nil {
 		return errObj
 	}
 	return stringObj(hex.EncodeToString([]byte(s)))
 }
 
-func HexDecode(args ...object.Object) object.Object {
+func HexDecode(args ...object.Object) object.Object { return hexDecode(args, BuiltinNameHexDecode, false) }
+
+// HexDecodeBytes decodes hex into a buffer. Decoded hex is binary by
+// definition -- that is what hex is for -- so this is the variant most callers
+// want once they have somewhere binary to put it.
+func HexDecodeBytes(args ...object.Object) object.Object {
+	return hexDecode(args, BuiltinNameHexDecodeBytes, true)
+}
+
+func hexDecode(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("hex_decode", args[0], 1)
+	s, errObj := requireStringArg(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	decoded, err := hex.DecodeString(s)
 	if err != nil {
-		return resultAndError(nil, newError("hex_decode: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(decoded)), nil)
+	return resultAndError(binaryResult(binary, decoded), nil)
 }
 
 func URLEncode(args ...object.Object) object.Object {
-	s, errObj := encOneString("url_encode", args)
+	s, errObj := encOneString(BuiltinNameURLEncode, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -125,7 +160,7 @@ func URLDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("url_decode", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameURLDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -137,7 +172,7 @@ func URLDecode(args ...object.Object) object.Object {
 }
 
 func Gzip(args ...object.Object) object.Object {
-	s, errObj := encOneString("gzip", args)
+	s, errObj := encOneBinary(BuiltinNameGzip, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -152,28 +187,48 @@ func Gzip(args ...object.Object) object.Object {
 	return stringObj(buf.String())
 }
 
-func Gunzip(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+func Gunzip(args ...object.Object) object.Object { return gunzip(args, BuiltinNameGunzip, false) }
+
+// GunzipBytes decompresses gzip data into a buffer.
+func GunzipBytes(args ...object.Object) object.Object { return gunzip(args, BuiltinNameGunzipBytes, true) }
+
+// gunzip and zlibDecompress both bound what they will materialise.
+//
+// They did not, and the omission was not theoretical: io.ReadAll on a
+// decompressing reader holds whatever the stream produces, so a kilobyte of
+// hostile input was enough to take the process out. A forensics language is
+// handed hostile input by definition -- that is what evidence is -- and these
+// two are how a program reaches the compressed member of an artifact it has
+// just parsed out of a container.
+//
+// The limit is the shared one: 1000x the input, capped at 1 GiB, or whatever
+// the caller names in max_bytes. See decompressionLimit.
+func gunzip(args []object.Object, opName string, binary bool) object.Object {
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	s, errObj := requireStringArg("gunzip", args[0], 1)
+	s, errObj := requireBinaryArg(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	r, err := gzip.NewReader(bytes.NewReader([]byte(s)))
+	limit, errObj := resolveDecompressionLimit(opName, args, 2, int64(len(s)))
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(s))
 	if err != nil {
-		return resultAndError(nil, newError("gunzip: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 	defer r.Close()
-	out, err := io.ReadAll(r)
+	out, err := readLimited(r, limit)
 	if err != nil {
-		return resultAndError(nil, newError("gunzip: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(out)), nil)
+	return resultAndError(binaryResult(binary, out), nil)
 }
 
 func ZlibCompress(args ...object.Object) object.Object {
-	s, errObj := encOneString("zlib_compress", args)
+	s, errObj := encOneBinary(BuiltinNameZlibCompress, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -189,34 +244,47 @@ func ZlibCompress(args ...object.Object) object.Object {
 }
 
 func ZlibDecompress(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	return zlibDecompress(args, BuiltinNameZlibDecompress, false)
+}
+
+// ZlibDecompressBytes decompresses zlib data into a buffer.
+func ZlibDecompressBytes(args ...object.Object) object.Object {
+	return zlibDecompress(args, BuiltinNameZlibDecompressBytes, true)
+}
+
+func zlibDecompress(args []object.Object, opName string, binary bool) object.Object {
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	s, errObj := requireStringArg("zlib_decompress", args[0], 1)
+	s, errObj := requireBinaryArg(opName, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	r, err := zlib.NewReader(bytes.NewReader([]byte(s)))
+	limit, errObj := resolveDecompressionLimit(opName, args, 2, int64(len(s)))
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	r, err := zlib.NewReader(bytes.NewReader(s))
 	if err != nil {
-		return resultAndError(nil, newError("zlib_decompress: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
 	defer r.Close()
-	out, err := io.ReadAll(r)
+	out, err := readLimited(r, limit)
 	if err != nil {
-		return resultAndError(nil, newError("zlib_decompress: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
-	return resultAndError(stringObj(string(out)), nil)
+	return resultAndError(binaryResult(binary, out), nil)
 }
 
 func ToBase(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	n, errObj := requireIntArg("to_base", args[0], 1)
+	n, errObj := requireIntArg(BuiltinNameToBase, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	base, errObj := requireIntArg("to_base", args[1], 2)
+	base, errObj := requireIntArg(BuiltinNameToBase, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -230,11 +298,11 @@ func FromBase(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	s, errObj := requireStringArg("from_base", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameFromBase, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	base, errObj := requireIntArg("from_base", args[1], 2)
+	base, errObj := requireIntArg(BuiltinNameFromBase, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

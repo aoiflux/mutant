@@ -5,9 +5,6 @@ import (
 )
 
 const (
-	// Deprecated compatibility constant: env-driven profile selection removed.
-	ProtectionProfileEnv = "MUTANT_PROTECTION_PROFILE"
-
 	ProtectionProfileMinimal  = "minimal"
 	ProtectionProfileStandard = "standard"
 	ProtectionProfileParanoid = "paranoid"
@@ -64,14 +61,6 @@ func defaultTamperResponseForProfile(secureMode bool) string {
 		}
 		return TamperResponseWarn
 	}
-}
-
-func DefaultBuiltinCapabilityPolicy() map[string]struct{} {
-	if ResolveProtectionProfile() == ProtectionProfileMinimal {
-		return map[string]struct{}{"all": {}}
-	}
-
-	return map[string]struct{}{}
 }
 
 func DeriveStandaloneProvenance(payload []byte, checksum []byte, profileCode byte) [32]byte {

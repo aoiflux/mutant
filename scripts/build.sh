@@ -6,7 +6,10 @@ ASSETS_OUT="releaseassets"
 FINAL_NAME="mutant"
 HOST_ONLY=0
 WASM_REPL=1
-WASM_OUT_DIR="$OUTPUT_DIR/wasm-repl"
+# Left empty so it can default off the *parsed* --output-dir below, not off the
+# value this line can see. --output-dir foo used to leave the wasm artifacts,
+# and now their SHA256SUMS, sitting under dist/ next to nothing.
+WASM_OUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,6 +53,9 @@ Options:
   --wasm-repl         Build browser REPL wasm artifact and copy wasm_exec.js (default: enabled)
   --no-wasm-repl      Skip browser REPL wasm build
   --wasm-out-dir <d>  Output directory for wasm artifacts (default: dist/wasm-repl)
+
+Writes a SHA256SUMS beside the binaries, and another beside the wasm
+artifacts, each checkable with `cd <dir> && sha256sum -c SHA256SUMS`.
 EOF
       exit 0
       ;;
@@ -59,6 +65,10 @@ EOF
       ;;
   esac
 done
+
+if [[ -z "$WASM_OUT_DIR" ]]; then
+  WASM_OUT_DIR="$OUTPUT_DIR/wasm-repl"
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_PATH="$REPO_ROOT/$OUTPUT_DIR"
@@ -189,9 +199,9 @@ CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 RESET='\033[0m'
 
-TOTAL_STEPS=3
+TOTAL_STEPS=4
 if [[ "$WASM_REPL" -eq 1 ]]; then
-  TOTAL_STEPS=4
+  TOTAL_STEPS=5
 fi
 CURRENT_STEP=0
 
@@ -212,6 +222,67 @@ run_step() {
   local msg="$1"
   echo -e "${CYAN}[$CURRENT_STEP/$TOTAL_STEPS] $msg${RESET}"
   draw_progress "$CURRENT_STEP" "$TOTAL_STEPS"
+}
+
+# SHA256SUMS is written in the format `sha256sum -c` reads, so whoever downloads
+# a binary can verify it with a tool they already have and nothing from this
+# project: lowercase hex, two spaces, the file's bare name. Names are bare and
+# the file sits beside what it covers, so checking is `cd <dir> && sha256sum -c
+# SHA256SUMS` -- which also means a directory the build writes elsewhere gets its
+# own SHA256SUMS rather than a path reaching out of this one.
+sha256_of() {
+  local file="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$file" | cut -d' ' -f1
+    return
+  fi
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -- "$file" | cut -d' ' -f1
+    return
+  fi
+
+  # Windows without the coreutils that ship with Git for Windows.
+  if command -v powershell.exe >/dev/null 2>&1; then
+    local win="$file"
+    if command -v cygpath >/dev/null 2>&1; then
+      win="$(cygpath -w -- "$file")"
+    fi
+    win="${win//\'/\'\'}"
+    powershell.exe -NoProfile -Command \
+      "(Get-FileHash -Algorithm SHA256 -LiteralPath '$win').Hash.ToLower()" | tr -d '\r'
+    return
+  fi
+
+  echo "No SHA-256 tool found. Install coreutils (sha256sum), or run this on a host with shasum or PowerShell." >&2
+  return 1
+}
+
+# write_checksums <dir> <name>... -- sorted under LC_ALL=C so the same build
+# writes the same file, and refusing rather than recording a hash of nothing if
+# a name is missing.
+write_checksums() {
+  local dir="$1"
+  shift
+
+  local sums="$dir/SHA256SUMS"
+  local tmp="$sums.tmp"
+  : >"$tmp"
+
+  local name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    if [[ ! -f "$dir/$name" ]]; then
+      rm -f -- "$tmp"
+      echo "Cannot checksum a file the build did not produce: $dir/$name" >&2
+      return 1
+    fi
+    printf '%s  %s\n' "$(sha256_of "$dir/$name")" "$name" >>"$tmp"
+  done < <(printf '%s\n' "$@" | LC_ALL=C sort)
+
+  mv -f -- "$tmp" "$sums"
+  echo "    checksums: $sums"
 }
 
 assert_releaseassets_data_clean() {
@@ -260,6 +331,7 @@ run_tool "$BOOTSTRAP_BIN" gen --release-assets -out "$ASSETS_OUT"
 echo "    Assets directory: $REPO_ROOT/$ASSETS_OUT"
 
 run_step "Recompile final Go binaries with release assets"
+BINARY_NAMES=()
 OLD_CGO_ENABLED="${CGO_ENABLED-}"
 OLD_GOOS="${GOOS-}"
 OLD_GOARCH="${GOARCH-}"
@@ -272,9 +344,11 @@ for target in "${TARGETS[@]}"; do
   export GOOS="$T_GOOS"
   export GOARCH="$T_GOARCH"
 
-  FINAL_BIN="$OUTPUT_PATH/$FINAL_NAME-$T_GOOS-$T_GOARCH$T_EXE_SUFFIX"
+  BINARY_NAME="$FINAL_NAME-$T_GOOS-$T_GOARCH$T_EXE_SUFFIX"
+  FINAL_BIN="$OUTPUT_PATH/$BINARY_NAME"
   echo "    Go => $T_GOOS/$T_GOARCH"
   run_tool "$GO_BIN" build "${GO_BUILD_FLAGS[@]}" -o "$FINAL_BIN" .
+  BINARY_NAMES+=("$BINARY_NAME")
   echo "      binary: $FINAL_BIN"
 done
 
@@ -314,8 +388,18 @@ if [[ "$WASM_REPL" -eq 1 ]]; then
   echo "    wasm_exec.js: $REPO_ROOT/$WASM_OUT_DIR/wasm_exec.js"
 fi
 
+# The bootstrap binary goes before the checksums are taken: it is scaffolding,
+# it is not shipped, and leaving it in the output directory while SHA256SUMS is
+# written invites the question of why it is not listed.
+rm "$BOOTSTRAP_BIN"
+echo -e "${CYAN}  Cleaned Bootstrap Bin${RESET}"
+
+run_step "Write SHA256SUMS for the release artifacts"
+write_checksums "$OUTPUT_PATH" "${BINARY_NAMES[@]}"
+if [[ "$WASM_REPL" -eq 1 ]]; then
+  write_checksums "$REPO_ROOT/$WASM_OUT_DIR" "mutant_repl.wasm" "wasm_exec.js"
+fi
+
 echo -e "${GREEN}Build complete.${RESET}"
 echo -e "${GREEN}  Final binaries in: $OUTPUT_PATH${RESET}"
-
-rm "$BOOTSTRAP_BIN"
-echo -e "${CYAN}  Cleaned Bootstrap Bin"
+echo -e "${GREEN}  Verify with: cd \"$OUTPUT_PATH\" && sha256sum -c SHA256SUMS${RESET}"

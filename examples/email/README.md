@@ -4,8 +4,8 @@ Run from repository root (compile, then run the bytecode it writes
 beside the source):
 
 ```bash
-mutant gen --src examples/email/email_attachment_triage.mut --password <password>
-mutant examples/email/email_attachment_triage.mu --dev --password <password>
+mutant gen --src examples/email/email_attachment_triage.mut --dev
+mutant examples/email/email_attachment_triage.mu --dev
 ```
 
 Scripts:

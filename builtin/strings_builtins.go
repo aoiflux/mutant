@@ -9,7 +9,7 @@ import (
 )
 
 func StrUpper(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("str_upper", args)
+	s, errObj := strOneStringArg(BuiltinNameStrUpper, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -17,7 +17,7 @@ func StrUpper(args ...object.Object) object.Object {
 }
 
 func StrLower(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("str_lower", args)
+	s, errObj := strOneStringArg(BuiltinNameStrLower, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -25,7 +25,7 @@ func StrLower(args ...object.Object) object.Object {
 }
 
 func StrTrim(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("str_trim", args)
+	s, errObj := strOneStringArg(BuiltinNameStrTrim, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -33,7 +33,7 @@ func StrTrim(args ...object.Object) object.Object {
 }
 
 func StrTrimLeft(args ...object.Object) object.Object {
-	s, cutset, errObj := strTwoStringArgs("str_trim_left", args)
+	s, cutset, errObj := strTwoStringArgs(BuiltinNameStrTrimLeft, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -41,7 +41,7 @@ func StrTrimLeft(args ...object.Object) object.Object {
 }
 
 func StrTrimRight(args ...object.Object) object.Object {
-	s, cutset, errObj := strTwoStringArgs("str_trim_right", args)
+	s, cutset, errObj := strTwoStringArgs(BuiltinNameStrTrimRight, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -49,7 +49,7 @@ func StrTrimRight(args ...object.Object) object.Object {
 }
 
 func StrTrimPrefix(args ...object.Object) object.Object {
-	s, prefix, errObj := strTwoStringArgs("str_trim_prefix", args)
+	s, prefix, errObj := strTwoStringArgs(BuiltinNameStrTrimPrefix, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -57,7 +57,7 @@ func StrTrimPrefix(args ...object.Object) object.Object {
 }
 
 func StrTrimSuffix(args ...object.Object) object.Object {
-	s, suffix, errObj := strTwoStringArgs("str_trim_suffix", args)
+	s, suffix, errObj := strTwoStringArgs(BuiltinNameStrTrimSuffix, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -65,7 +65,7 @@ func StrTrimSuffix(args ...object.Object) object.Object {
 }
 
 func StrStartsWith(args ...object.Object) object.Object {
-	s, prefix, errObj := strTwoStringArgs("str_starts_with", args)
+	s, prefix, errObj := strTwoStringArgs(BuiltinNameStrStartsWith, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -73,7 +73,7 @@ func StrStartsWith(args ...object.Object) object.Object {
 }
 
 func StrEndsWith(args ...object.Object) object.Object {
-	s, suffix, errObj := strTwoStringArgs("str_ends_with", args)
+	s, suffix, errObj := strTwoStringArgs(BuiltinNameStrEndsWith, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -88,7 +88,7 @@ func StrJoin(args ...object.Object) object.Object {
 	if !ok {
 		return newError("argument 1 to `str_join` must be ARRAY, got %s", args[0].Type())
 	}
-	sep, errObj := requireStringArg("str_join", args[1], 2)
+	sep, errObj := requireStringArg(BuiltinNameStrJoin, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -107,11 +107,11 @@ func StrRepeat(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	s, errObj := requireStringArg("str_repeat", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameStrRepeat, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	n, errObj := requireIntArg("str_repeat", args[1], 2)
+	n, errObj := requireIntArg(BuiltinNameStrRepeat, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -122,15 +122,15 @@ func StrRepeat(args ...object.Object) object.Object {
 }
 
 func StrPadLeft(args ...object.Object) object.Object {
-	return strPad("str_pad_left", args, true)
+	return strPad(BuiltinNameStrPadLeft, args, true)
 }
 
 func StrPadRight(args ...object.Object) object.Object {
-	return strPad("str_pad_right", args, false)
+	return strPad(BuiltinNameStrPadRight, args, false)
 }
 
 func StrReverse(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("str_reverse", args)
+	s, errObj := strOneStringArg(BuiltinNameStrReverse, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -145,15 +145,15 @@ func StrSubstr(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3", len(args))
 	}
-	s, errObj := requireStringArg("str_substr", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameStrSubstr, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	start, errObj := requireIntArg("str_substr", args[1], 2)
+	start, errObj := requireIntArg(BuiltinNameStrSubstr, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
-	length, errObj := requireIntArg("str_substr", args[2], 3)
+	length, errObj := requireIntArg(BuiltinNameStrSubstr, args[2], 3)
 	if errObj != nil {
 		return errObj
 	}
@@ -176,11 +176,11 @@ func StrCharAt(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	s, errObj := requireStringArg("str_char_at", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNameStrCharAt, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	idx, errObj := requireIntArg("str_char_at", args[1], 2)
+	idx, errObj := requireIntArg(BuiltinNameStrCharAt, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -195,7 +195,7 @@ func StrFormat(args ...object.Object) object.Object {
 	if len(args) == 0 {
 		return newError("wrong number of arguments. got=0, want=1 or more")
 	}
-	format, errObj := requireStringArg("str_format", args[0], 1)
+	format, errObj := requireStringArg(BuiltinNameStrFormat, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -218,7 +218,7 @@ func StrFormat(args ...object.Object) object.Object {
 }
 
 func StrTitle(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("str_title", args)
+	s, errObj := strOneStringArg(BuiltinNameStrTitle, args)
 	if errObj != nil {
 		return errObj
 	}

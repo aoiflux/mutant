@@ -27,8 +27,8 @@ func quote(node ast.Node, env *object.Environment) object.Object {
 // evaluates to. A value with no source form is an error rather than a silent
 // nil: a nil in the tree compiles to a call with a missing argument, and the VM
 // then dies with "index out of range [-1]" a whole phase away from the cause.
-func evalUnquoteCalls(quoted ast.Node, env *object.Environment) (ast.Node, *object.Error) {
-	var failure *object.Error
+func evalUnquoteCalls(quoted ast.Node, env *object.Environment) (ast.Node, *fault) {
+	var failure *fault
 
 	modified := ast.Modify(quoted, func(node ast.Node) ast.Node {
 		if failure != nil || !isUnquoteCall(node) {
@@ -45,9 +45,9 @@ func evalUnquoteCalls(quoted ast.Node, env *object.Environment) (ast.Node, *obje
 			return node
 		}
 
-		unquoted := Eval(call.Arguments[0], env)
+		unquoted := eval(call.Arguments[0], env)
 		if isError(unquoted) {
-			failure, _ = unquoted.(*object.Error)
+			failure, _ = unquoted.(*fault)
 			return node
 		}
 
@@ -78,7 +78,7 @@ func isUnquoteCall(node ast.Node) bool {
 // produce it. Only values with a literal spelling can make that trip -- an
 // array, a hash, a function or a null has no literal the compiler could read
 // back, so it is reported instead of being dropped.
-func convertObjectToASTNode(obj object.Object) (ast.Node, *object.Error) {
+func convertObjectToASTNode(obj object.Object) (ast.Node, *fault) {
 	switch obj := obj.(type) {
 	case *object.Integer:
 		t := token.Token{

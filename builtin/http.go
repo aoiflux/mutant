@@ -22,7 +22,7 @@ func HttpGet(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument to `http_get` must be STRING, got %s", args[0].Type()))
 	}
 	resp, err := httpClient.Get(url.Value)
-	return httpResponseOrError2(resp, err, "http_get")
+	return httpResponseOrError2(resp, err, BuiltinNameHttpGet)
 }
 
 func HttpPost(args ...object.Object) object.Object {
@@ -46,7 +46,7 @@ func HttpPost(args ...object.Object) object.Object {
 		contentType = ctObj.Value
 	}
 	resp, err := httpClient.Post(url.Value, contentType, strings.NewReader(body))
-	return httpResponseOrError2(resp, err, "http_post")
+	return httpResponseOrError2(resp, err, BuiltinNameHttpPost)
 }
 
 func HttpRequest(args ...object.Object) object.Object {
@@ -80,7 +80,7 @@ func HttpRequest(args ...object.Object) object.Object {
 	}
 
 	resp, err := httpClient.Do(req)
-	return httpResponseOrError2(resp, err, "http_request")
+	return httpResponseOrError2(resp, err, BuiltinNameHttpRequest)
 }
 
 func httpHeaderMap(obj object.Object) (map[string]string, *object.Error) {

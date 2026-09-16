@@ -58,6 +58,34 @@ type Program struct {
 	Statements    []Statement
 	NodePositions map[Node]Range
 	Comments      []token.Comment
+
+	// MacroExpansions records, for a node a macro produced, both ends of the
+	// story: where the macro was called and where it was defined. It is a
+	// third side-table for the same reason as the two above.
+	//
+	// The call site is also written into NodePositions, so an expanded node
+	// reports the line the user actually wrote. That alone is not enough to
+	// debug macro-heavy code -- when the generated code is wrong, the line the
+	// user wrote is not where the bug is -- so the definition site is kept
+	// here alongside it.
+	MacroExpansions map[Node]MacroOrigin
+}
+
+// MacroOrigin locates a macro expansion at both of its sources: Call is the
+// range of the call the user wrote, Definition the range of the macro body
+// that produced the code.
+type MacroOrigin struct {
+	Call       Range
+	Definition Range
+}
+
+// MacroOriginOf returns the expansion recorded for n, if n came from a macro.
+func (p *Program) MacroOriginOf(n Node) (MacroOrigin, bool) {
+	if p == nil || p.MacroExpansions == nil || n == nil {
+		return MacroOrigin{}, false
+	}
+	origin, ok := p.MacroExpansions[n]
+	return origin, ok
 }
 
 // RangeOf returns the source range recorded for n during parsing.

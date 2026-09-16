@@ -18,6 +18,12 @@ VS Code language support for Mutant.
   category, and any platform constraint.
 - **Semantic highlighting**, go-to-definition, references, rename, document and
   workspace symbols, and signature help.
+- **Debugging** (press F5 on a `.mut`): breakpoints with hit counts, step
+  over/into/out, the call stack, and Arguments / Locals / Globals with arrays,
+  hashes and structs expandable. The CLI is the debug adapter -- the extension
+  runs `mutant debug` and speaks the Debug Adapter Protocol to it. Conditional
+  breakpoints and watch expressions beyond a plain variable name are
+  deliberately not supported; see `docs/DEBUGGING.md` for why.
 - Syntax highlighting via a TextMate grammar.
 
 ## Configuration
@@ -38,7 +44,8 @@ VS Code language support for Mutant.
 - `mutant.lint.rules.semicolon.severity`: severity for missing/redundant
   semicolon diagnostics (each with a quick fix)
 - `mutant.lint.rules.unreachableCode.severity`: severity for unreachable-code
-  diagnostics (statements after an unconditional `return`/`break`/`continue`)
+  diagnostics (statements after an unconditional `return`/`break`/`continue`, and
+  a `match` arm written after `_`)
 - `mutant.lint.rules.platformSupport.severity`: severity for OS-aware
   platform-support warnings (a builtin unsupported on the host OS)
 - `mutant.lint.rules.builtinArity.severity`: severity for wrong-argument-count
@@ -47,12 +54,56 @@ VS Code language support for Mutant.
   a builtin parameter cannot accept
 - `mutant.lint.rules.builtinSingleReturn.severity`: severity for binding several
   names from a builtin that returns one value
+- `mutant.lint.rules.builtinDeprecated.severity`: severity for calling a builtin
+  that is kept only for compatibility; names its replacement. Defaults to `hint`,
+  because the call still works.
 - `mutant.lint.rules.builtinPairReturn.severity`: severity for binding one name
   from a builtin that returns a `(value, err)` pair, which leaves the name
   holding the pair rather than the value
 - `mutant.lint.rules.spawnGlobalWrite.severity`: severity for a `spawn`/`pmap`/
   `peach` callback writing a global, which lands in that worker's copy and is
   lost when the callback finishes
+- `mutant.lint.rules.unclosedResource.severity`: severity for opening a handle
+  (`ntfs_open`, `zip_open`, `chan_new`, `net_connect`, ...) that nothing in the
+  same scope closes. Quiet whenever the handle escapes the scope, the closer is
+  named in it, or the resource is deliberately held for the program's life
+- `mutant.lint.rules.uncheckedError.severity`: severity for binding the error
+  half of a `(value, err)` builtin and never reading it before the name is
+  rebound or the scope ends. Quiet when the error is read in any way, when the
+  failure is caught through the value instead, or when `_` is bound to say the
+  failure is deliberately ignored
+- `mutant.lint.rules.matchExhaustiveness.severity`: severity for a `match` whose
+  arms are variants of one enum declared in the same file, with no `_` arm and a
+  variant left out. An unmatched subject raises at run time rather than yielding
+  null, so a variant added to an enum leaves every existing match over it one arm
+  short. Quiet unless it is certain: a literal pattern, two different enums, an
+  imported enum, a `_` arm, or a name that is both an enum and a binding all
+  suppress it
+- `mutant.lint.rules.assignmentTarget.severity`: severity for an assignment
+  target the compiler refuses -- one with no variable under it (`[1, 2][0] = 9`),
+  or an index before the last one that is not a name or a literal and would
+  therefore be evaluated more than once. Both are build failures, so this reports
+  them where they are written. Defaults to `error`, matching the build
+
+The security family. These report a program that compiles and runs, which is
+what makes them worth having: nothing else in the toolchain objects.
+
+- `mutant.lint.rules.tlsVerificationDisabled.severity`: severity for turning off
+  certificate verification, or accepting a TLS version that is no longer safe
+- `mutant.lint.rules.weakCrypto.severity`: severity for reaching for a broken or
+  obsolete algorithm where a current one takes the same call
+- `mutant.lint.rules.hardcodedSecret.severity`: severity for a credential written
+  into the source, where it outlives the program and travels with the file
+- `mutant.lint.rules.commandInjection.severity`: severity for building a shell
+  command out of a value the program did not choose
+- `mutant.lint.rules.pathTraversal.severity`: severity for building a filesystem
+  path out of a value the program did not choose
+- `mutant.lint.rules.unboundedResource.severity`: severity for reading something
+  whose size the program does not control into memory with no ceiling on it
+- `mutant.lint.rules.evidenceMutation.severity`: severity for writing to evidence
+  a case opened read-only -- the one rule here about the report rather than the
+  machine, because an altered artifact is an artifact that proves nothing
+
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

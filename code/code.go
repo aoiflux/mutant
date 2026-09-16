@@ -56,6 +56,57 @@ const (
 	// dev-sec-platform-upgrades — appended to keep existing opcode values stable.
 	OpGreaterEqual // >= (and <= via operand swap)
 	OpSetIndex     // a[i] = v / h[k] = v
+	// L-5 bitwise operators — appended for the same reason: an opcode's numeric
+	// value is part of the on-disk format, so new ones go on the end.
+	OpBitAnd     // &
+	OpBitOr      // |
+	OpBitXor     // ^ (binary xor; the complement is OpBitNot)
+	OpBitNot     // ~ (unary complement)
+	OpShiftLeft  // <<
+	OpShiftRight // >> (arithmetic — the operands are signed)
+	// L-10 boxed cells — appended for the same reason. A captured local lives in
+	// an object.Cell that the frame slot and every capturing closure point at,
+	// so a write through any of them is a write all of them see.
+	//
+	// The two Capture* loads push the cell itself and are emitted only in the
+	// prelude OpClosure consumes; the four Get/Set forms read and write through
+	// it and are the only thing a function body ever emits. Keeping them
+	// separate rather than making cells transparent inside OpGetLocal is what
+	// lets the disassembler still say which storage an instruction touches.
+	OpGetLocalCell // read through a boxed local slot
+	OpSetLocalCell // write through a boxed local slot
+	OpCaptureLocal // push a boxed local's cell, for OpClosure's capture list
+	OpCaptureFree  // push a captured cell again, for a nested capture
+	OpSetFree      // write through a captured cell
+	// L-7 string interpolation — appended for the same reason. The operand is
+	// how many values to join, not a constant index: the pieces of "a${b}c"
+	// are pushed in source order and OpConcat replaces all of them with the
+	// one string they spell. A piece that is not already a string contributes
+	// the text it would print.
+	OpConcat
+	// L-8 `for (x in xs)` — appended for the same reason. OpIterInit pops the
+	// iterable and pushes an iterator over it; OpIterNext either pushes the
+	// next key and value on top of that iterator, or jumps to its first operand
+	// when the iterator is spent. Operand 0 is an absolute instruction offset;
+	// operand 1 is how many names the loop binds -- 1 or 2 -- which decides
+	// whether the pair or only the primary half is pushed.
+	//
+	// Two opcodes rather than a desugar to len() plus indexing: a program that
+	// declared its own `len` would otherwise silently change what every
+	// `for…in` in the file means, and a hash has no ordered index to desugar
+	// to in the first place.
+	OpIterInit
+	OpIterNext
+	// L-8 `match` -- appended for the same reason. Every arm is a compare and a
+	// jump built from opcodes that already exist, so the only thing match adds
+	// is what to do when no arm matched: OpMatchFail pops the subject and
+	// fails, naming the value that fell through.
+	//
+	// It is an opcode rather than compiled-in code because there is nothing
+	// else in this instruction set that raises. The alternative -- pushing an
+	// error value -- would make the match evaluate *to* that error, which is
+	// the silent wrong answer a fall-through was supposed to stop being.
+	OpMatchFail
 )
 
 type Definition struct {
@@ -108,6 +159,21 @@ var definitions = map[Opcode]*Definition{
 	OpMod:            {"OpMod", []int{}},
 	OpGreaterEqual:   {"OpGreaterEqual", []int{}},
 	OpSetIndex:       {"OpSetIndex", []int{}},
+	OpBitAnd:         {"OpBitAnd", []int{}},
+	OpBitOr:          {"OpBitOr", []int{}},
+	OpBitXor:         {"OpBitXor", []int{}},
+	OpBitNot:         {"OpBitNot", []int{}},
+	OpShiftLeft:      {"OpShiftLeft", []int{}},
+	OpShiftRight:     {"OpShiftRight", []int{}},
+	OpGetLocalCell:   {"OpGetLocalCell", []int{1}},
+	OpSetLocalCell:   {"OpSetLocalCell", []int{1}},
+	OpCaptureLocal:   {"OpCaptureLocal", []int{1}},
+	OpCaptureFree:    {"OpCaptureFree", []int{1}},
+	OpSetFree:        {"OpSetFree", []int{1}},
+	OpConcat:         {"OpConcat", []int{2}},
+	OpIterInit:       {"OpIterInit", []int{}},
+	OpIterNext:       {"OpIterNext", []int{2, 1}},
+	OpMatchFail:      {"OpMatchFail", []int{}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index
@@ -153,6 +219,9 @@ var ConstantOperands = map[Opcode][]int{
 var JumpOperands = map[Opcode][]int{
 	OpJump:      {0},
 	OpJumpFalse: {0},
+	// Operand 0 is where to go when the iterator is spent. Operand 1 is the
+	// binding count and is one byte, so it is not a wide operand at all.
+	OpIterNext: {0},
 }
 
 // AllOpcodes returns every defined opcode in ascending numeric order.
@@ -178,6 +247,39 @@ func Lookup(op byte) (*Definition, error) {
 	return def, nil
 }
 
+// checkOperandFits stops an operand too large for its encoding from being
+// silently truncated into a different, valid-looking instruction.
+//
+// The widths are fixed, so an index past a width's range does not fail to
+// encode -- it wraps. `OpConstant 65536` becomes `OpConstant 0`, which loads
+// the wrong constant in a program that compiles, links and runs. That is the
+// worst failure a compiler can have, and until modules arrived the limits were
+// remote enough that nothing checked them. Linking several files into one
+// constant pool and one global slot space brings them within reach, so the
+// limit is enforced here, at the single point every instruction passes through.
+//
+// This is an internal invariant rather than a user error -- the compiler chose
+// the index -- so it panics. The message names the opcode and the value, which
+// is what a report needs to be actionable.
+func checkOperandFits(def *Definition, i, operand, width int) {
+	var max int
+	switch width {
+	case 1:
+		max = 0xFF
+	case 2:
+		max = 0xFFFF
+	default:
+		return
+	}
+
+	if operand < 0 || operand > max {
+		panic(fmt.Sprintf(
+			"code: operand %d of %s is %d, which does not fit in %d byte(s) (limit %d); the program exceeds what the bytecode format can address",
+			i, def.Name, operand, width, max,
+		))
+	}
+}
+
 func Make(op Opcode, operands ...int) []byte {
 	def, ok := definitions[op]
 	if !ok {
@@ -197,6 +299,7 @@ func Make(op Opcode, operands ...int) []byte {
 
 	for i, o := range operands {
 		width := def.OperandWidths[i]
+		checkOperandFits(def, i, o, width)
 		switch width {
 		case 1:
 			inst[offset] = byte(o)
@@ -250,12 +353,20 @@ func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
 	var offset int
 	operands := make([]int, len(def.OperandWidths))
 
+	// Each operand is read at the running offset, not at zero. Reading every
+	// operand from ins[0] happens to give the right answer for a single-operand
+	// opcode and for the one two-operand case the tests used (OpClosure with
+	// 0xFFFF and 255, where operand 0's high byte is operand 1's value), which
+	// is why it stood -- but it is wrong for any other {2, 1} instruction.
 	for i, width := range def.OperandWidths {
+		if offset+width > len(ins) {
+			break
+		}
 		switch width {
 		case 1:
-			operands[i] = int(uint8(ins[0]))
+			operands[i] = int(uint8(ins[offset]))
 		case 2:
-			operands[i] = int(binary.BigEndian.Uint16(ins))
+			operands[i] = int(binary.BigEndian.Uint16(ins[offset:]))
 		}
 		offset += width
 	}
@@ -288,3 +399,22 @@ func ReadUint8(ins Instructions, length int64, password string, offset int64) (u
 
 	return uint8(dec), nil
 }
+
+// BuiltinNameTableFlag is set on every OpGetBuiltin operand a program compiled
+// for BytecodeVersionNamedBuiltins emits, and cleared before the low bits are
+// used as an index into that program's builtin-name table.
+//
+// It exists for one case the version field cannot cover: a mutant built before
+// versioning existed does not know to look for ByteCode.Version, so gob hands it
+// a name-table index and it reads it as a position in the global builtin
+// registry. Nothing about that is detectable from the operand's value -- a small
+// index is a perfectly valid ordinal -- and the program goes on to call whatever
+// builtin happens to sit there. Most such calls die on argument count, but two
+// builtins with the same shape produce a wrong answer in silence, which for a
+// forensic tool is the worse outcome by a distance.
+//
+// Setting the high bit puts every new operand far above the registry's length,
+// so an old runtime trips its own bounds check and stops with
+// "OpGetBuiltin: invalid builtin index=32768" instead. The tag is permanent: it
+// cannot be retired without breaking the artifacts it protects.
+const BuiltinNameTableFlag = 0x8000

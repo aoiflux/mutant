@@ -28,21 +28,43 @@ const sqliteMaxRows = 1_000_000
 // forensic databases that a running application may hold open. Pure-Go via
 // modernc.org/sqlite (no cgo). An optional third argument binds query parameters.
 // Returns {columns, row_count, truncated, rows:[{col: value}]} paired with an error.
-func SqliteQuery(args ...object.Object) (result object.Object) {
+func SqliteQuery(args ...object.Object) object.Object {
+	return sqliteQueryBuiltin(BuiltinNameSqliteQuery, sqlValueToObject, args...)
+}
+
+// SqliteQueryBytes is sqlite_query with BLOB columns returned as BYTES buffers
+// rather than hex strings.
+//
+// It exists as a second builtin rather than an extra field on sqlite_query's rows
+// because those rows are keyed by column names taken from the database being
+// examined: a `data_bytes` sibling could collide with a column that is really
+// called that. The name is the only place left to put the choice.
+//
+// The two differ in one arm of one function, and the difference is not merely hex
+// versus raw. sqlite_query asks whether a BLOB happens to be valid UTF-8 and
+// returns a string if it is, hex if it is not -- so a single column's type varies
+// row by row with its content, and a caller cannot tell a BLOB that decoded from
+// a TEXT column that did not. Here a BLOB is a BYTES buffer whatever bytes it
+// holds, because the column's type is what decides, not the value inside it.
+func SqliteQueryBytes(args ...object.Object) object.Object {
+	return sqliteQueryBuiltin(BuiltinNameSqliteQueryBytes, sqlRawValueToObject, args...)
+}
+
+func sqliteQueryBuiltin(name string, cell sqlCellConverter, args ...object.Object) (result object.Object) {
 	defer func() {
 		if r := recover(); r != nil {
-			result = resultAndError(nil, newError("sqlite_query: panic during query: %v", r))
+			result = resultAndError(nil, newError("%s: panic during query: %v", name, r))
 		}
 	}()
 
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	path, errObj := requireStringArg("sqlite_query", args[0], 1)
+	path, errObj := requireStringArg(name, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	query, errObj := requireStringArg("sqlite_query", args[1], 2)
+	query, errObj := requireStringArg(name, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -50,16 +72,16 @@ func SqliteQuery(args ...object.Object) (result object.Object) {
 	if len(args) == 3 {
 		arr, ok := args[2].(*object.Array)
 		if !ok {
-			return resultAndError(nil, newError("argument 3 to `sqlite_query` must be ARRAY, got %s", args[2].Type()))
+			return resultAndError(nil, newError("argument 3 to `%s` must be ARRAY, got %s", name, args[2].Type()))
 		}
 		for _, el := range arr.Elements {
 			params = append(params, objToSQLParam(el))
 		}
 	}
 
-	columns, rows, truncated, err := sqliteQuery(path, query, params)
+	columns, rows, truncated, err := sqliteQuery(path, cell, query, params)
 	if err != nil {
-		return resultAndError(nil, newError("sqlite_query: %s", err.Error()))
+		return resultAndError(nil, newError("%s: %s", name, err.Error()))
 	}
 
 	colObjs := make([]object.Object, len(columns))
@@ -114,20 +136,26 @@ func withSQLiteCopy(path string, fn func(*sql.DB) error) error {
 
 // sqliteQuery copies the database and runs one query against the copy, returning
 // the column names and rows (each a column→value map).
-func sqliteQuery(path, query string, params []any) ([]string, []map[string]object.Object, bool, error) {
+func sqliteQuery(path string, cell sqlCellConverter, query string, params []any) ([]string, []map[string]object.Object, bool, error) {
 	var columns []string
 	var out []map[string]object.Object
 	var truncated bool
 	err := withSQLiteCopy(path, func(db *sql.DB) error {
-		c, r, t, e := queryDB(db, query, params...)
+		c, r, t, e := queryDBWith(db, cell, query, params...)
 		columns, out, truncated = c, r, t
 		return e
 	})
 	return columns, out, truncated, err
 }
 
-// queryDB runs a query on an open connection and scans the rows.
+// queryDB runs a query on an open connection and scans the rows, rendering a
+// BLOB the way sqlite_query does. The browser-artifact readers all come through
+// here and read their columns back with rowStr, so their values stay strings.
 func queryDB(db *sql.DB, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
+	return queryDBWith(db, sqlValueToObject, query, params...)
+}
+
+func queryDBWith(db *sql.DB, cell sqlCellConverter, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
 	rows, err := db.Query(query, params...)
 	if err != nil {
 		return nil, nil, false, err
@@ -156,7 +184,7 @@ func queryDB(db *sql.DB, query string, params ...any) ([]string, []map[string]ob
 		}
 		row := make(map[string]object.Object, len(columns))
 		for i, c := range columns {
-			row[c] = sqlValueToObject(cells[i])
+			row[c] = cell(cells[i])
 		}
 		out = append(out, row)
 	}
@@ -186,6 +214,27 @@ func rowInt(row map[string]object.Object, key string) int64 {
 		return int64(v.Value)
 	}
 	return 0
+}
+
+// sqlCellConverter turns one scanned column value into a Mutant object. The two
+// implementations differ only in how they treat a BLOB.
+type sqlCellConverter func(any) object.Object
+
+// sqlRawValueToObject returns a BLOB as the bytes it is, and defers to
+// sqlValueToObject for every other column type -- an INTEGER is still an Integer,
+// a TEXT still a String. Only the one arm that had to guess is replaced.
+//
+// The bytes need no copy of their own. Rows are scanned into []any, and
+// database/sql's convertAssignRows passes a []byte source into an *any
+// destination through bytes.Clone, so every cell already owns its buffer and no
+// two rows share one. That is worth stating rather than assuming, because an
+// *object.Bytes is mutable from a script: were the buffer shared, writing to one
+// row's blob would reach into the next row's.
+func sqlRawValueToObject(v any) object.Object {
+	if b, ok := v.([]byte); ok {
+		return &object.Bytes{Value: b}
+	}
+	return sqlValueToObject(v)
 }
 
 func sqlValueToObject(v any) object.Object {

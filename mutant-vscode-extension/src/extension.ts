@@ -121,6 +121,66 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.tasks.registerTaskProvider(MUTANT_TASK_TYPE, new MutantTaskProvider())
   );
+
+  context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory(
+      MUTANT_DEBUG_TYPE,
+      new MutantDebugAdapterFactory()
+    ),
+    vscode.debug.registerDebugConfigurationProvider(
+      MUTANT_DEBUG_TYPE,
+      new MutantDebugConfigurationProvider()
+    )
+  );
+}
+
+// Debugging. `mutant debug` is itself a Debug Adapter Protocol server, so the
+// editor talks to the CLI directly and this extension only has to say where the
+// CLI is and what a launch configuration means.
+const MUTANT_DEBUG_TYPE = "mutant";
+
+// MutantDebugAdapterFactory points VS Code at the CLI. The same binary that
+// runs a program debugs it, which is what keeps the two from drifting -- and
+// the debugger runs the program in its own process rather than attaching to
+// another, so it never trips the anti-debugging probes a Mutant program
+// carries.
+class MutantDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
+  createDebugAdapterDescriptor(): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
+    return new vscode.DebugAdapterExecutable(mutantCliPath(), ["debug"]);
+  }
+}
+
+// MutantDebugConfigurationProvider makes F5 work with no launch.json, which is
+// how most people first try a debugger. An empty configuration is VS Code's way
+// of saying "the user pressed F5 and there is nothing configured".
+class MutantDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
+  resolveDebugConfiguration(
+    _folder: vscode.WorkspaceFolder | undefined,
+    config: vscode.DebugConfiguration
+  ): vscode.ProviderResult<vscode.DebugConfiguration> {
+    if (!config.type && !config.request && !config.name) {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.languageId !== "mutant") {
+        void vscode.window.showInformationMessage(
+          "Mutant: open a .mut file to debug it."
+        );
+        return undefined;
+      }
+      config.type = MUTANT_DEBUG_TYPE;
+      config.request = "launch";
+      config.name = "Debug the current Mutant file";
+      config.program = "${file}";
+    }
+
+    if (!config.program) {
+      void vscode.window.showErrorMessage(
+        "Mutant: this launch configuration names no program. Set \"program\" to the .mut file to debug."
+      );
+      return undefined;
+    }
+
+    return config;
+  }
 }
 
 // formatActiveDocument backs the "Mutant: Format Document" command. It

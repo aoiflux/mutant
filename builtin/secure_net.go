@@ -187,7 +187,7 @@ func NetTLSConnect(args ...object.Object) object.Object {
 
 	var options object.Object
 	if len(args) == 3 {
-		if errObj := requireOptionsArg("net_tls_connect", args[2], 3); errObj != nil {
+		if errObj := requireOptionsArg(BuiltinNameNetTlsConnect, args[2], 3); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 		options = args[2]
@@ -256,27 +256,37 @@ func NetConnWrite(args ...object.Object) object.Object {
 // max_bytes is capped at maxConnReadBytes so a script cannot ask for an
 // arbitrarily large buffer.
 func NetConnRead(args ...object.Object) object.Object {
+	return netConnRead(args, BuiltinNameNetConnRead, false)
+}
+
+// NetConnReadBytes reads from a connection with the `data` field as a buffer.
+// Everything else about the returned hash is identical.
+func NetConnReadBytes(args ...object.Object) object.Object {
+	return netConnRead(args, BuiltinNameNetConnReadBytes, true)
+}
+
+func netConnRead(args []object.Object, opName string, binary bool) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 	handle, ok := args[0].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 1 to `net_conn_read` must be INTEGER, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `%s` must be INTEGER, got %s", opName, args[0].Type()))
 	}
 	maxBytes, ok := args[1].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 2 to `net_conn_read` must be INTEGER, got %s", args[1].Type()))
+		return resultAndError(nil, newError("argument 2 to `%s` must be INTEGER, got %s", opName, args[1].Type()))
 	}
 	timeoutMs, ok := args[2].(*object.Integer)
 	if !ok {
-		return resultAndError(nil, newError("argument 3 to `net_conn_read` must be INTEGER, got %s", args[2].Type()))
+		return resultAndError(nil, newError("argument 3 to `%s` must be INTEGER, got %s", opName, args[2].Type()))
 	}
 	if maxBytes.Value <= 0 || maxBytes.Value > maxConnReadBytes {
-		return resultAndError(nil, newError("argument 2 to `net_conn_read` must be between 1 and %d, got %d", maxConnReadBytes, maxBytes.Value))
+		return resultAndError(nil, newError("argument 2 to `%s` must be between 1 and %d, got %d", opName, maxConnReadBytes, maxBytes.Value))
 	}
 	mc, ok := lookupConn(handle.Value)
 	if !ok {
-		return resultAndError(nil, newError("net_conn_read: unknown connection handle %d", handle.Value))
+		return resultAndError(nil, newError("%s: unknown connection handle %d", opName, handle.Value))
 	}
 
 	if timeoutMs.Value > 0 {
@@ -295,7 +305,7 @@ func NetConnRead(args ...object.Object) object.Object {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"data":  stringObj(string(buf[:n])),
+		"data":  binaryResult(binary, buf[:n]),
 		"bytes": intObj(int64(n)),
 		"eof":   boolObj(eof),
 		"error": stringObj(errMsg),
@@ -374,7 +384,7 @@ func NetListen(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `net_listen` must be STRING, got %s", args[0].Type()))
 	}
-	raw, errObj := listenTCP("net_listen", addr.Value)
+	raw, errObj := listenTCP(BuiltinNameNetListen, addr.Value)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -404,7 +414,7 @@ func NetTLSListen(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 4 {
-		if errObj := requireOptionsArg("net_tls_listen", args[3], 4); errObj != nil {
+		if errObj := requireOptionsArg(BuiltinNameNetTlsListen, args[3], 4); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 		options = args[3]
@@ -420,7 +430,7 @@ func NetTLSListen(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	raw, errObj := listenTCP("net_tls_listen", addr.Value)
+	raw, errObj := listenTCP(BuiltinNameNetTlsListen, addr.Value)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -541,7 +551,7 @@ func NetTLSUpgradeServer(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 4 {
-		if errObj := requireOptionsArg("net_tls_upgrade_server", args[3], 4); errObj != nil {
+		if errObj := requireOptionsArg(BuiltinNameNetTlsUpgradeServer, args[3], 4); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 		options = args[3]
@@ -565,7 +575,7 @@ func NetTLSUpgradeServer(args ...object.Object) object.Object {
 	}
 
 	tlsConn := tls.Server(&prefixedConn{Conn: mc.conn, prefix: mc.reader}, cfg)
-	if errObj := performHandshake("net_tls_upgrade_server", mc.conn, tlsConn, options); errObj != nil {
+	if errObj := performHandshake(BuiltinNameNetTlsUpgradeServer, mc.conn, tlsConn, options); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	upgradeManagedConn(mc, tlsConn)
@@ -585,7 +595,7 @@ func NetTLSUpgradeClient(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 2 {
-		if errObj := requireOptionsArg("net_tls_upgrade_client", args[1], 2); errObj != nil {
+		if errObj := requireOptionsArg(BuiltinNameNetTlsUpgradeClient, args[1], 2); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 		options = args[1]
@@ -610,7 +620,7 @@ func NetTLSUpgradeClient(args ...object.Object) object.Object {
 	}
 
 	tlsConn := tls.Client(&prefixedConn{Conn: mc.conn, prefix: mc.reader}, cfg)
-	if errObj := performHandshake("net_tls_upgrade_client", mc.conn, tlsConn, options); errObj != nil {
+	if errObj := performHandshake(BuiltinNameNetTlsUpgradeClient, mc.conn, tlsConn, options); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	upgradeManagedConn(mc, tlsConn)
@@ -668,7 +678,7 @@ func TLSGenerateCA(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 	options := optionsArg(args)
-	if errObj := requireOptionsArg("tls_generate_ca", options, 1); errObj != nil {
+	if errObj := requireOptionsArg(BuiltinNameTlsGenerateCa, options, 1); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	commonName := optString(options, "common_name", "Mutant Dev CA")
@@ -700,7 +710,7 @@ func TLSGenerateCA(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tls_generate_ca: certificate creation failed: %s", err.Error()))
 	}
 
-	certPEM, keyPEM, errObj := encodeCertAndKey("tls_generate_ca", der, key)
+	certPEM, keyPEM, errObj := encodeCertAndKey(BuiltinNameTlsGenerateCa, der, key)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -722,10 +732,10 @@ func TLSGenerateCert(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 	options := optionsArg(args)
-	if errObj := requireOptionsArg("tls_generate_cert", options, 1); errObj != nil {
+	if errObj := requireOptionsArg(BuiltinNameTlsGenerateCert, options, 1); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	template, errObj := leafTemplate("tls_generate_cert", options)
+	template, errObj := leafTemplate(BuiltinNameTlsGenerateCert, options)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -740,7 +750,7 @@ func TLSGenerateCert(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tls_generate_cert: certificate creation failed: %s", err.Error()))
 	}
 
-	certPEM, keyPEM, errObj := encodeCertAndKey("tls_generate_cert", der, key)
+	certPEM, keyPEM, errObj := encodeCertAndKey(BuiltinNameTlsGenerateCert, der, key)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -770,7 +780,7 @@ func TLSSignCert(args ...object.Object) object.Object {
 	}
 	var options object.Object
 	if len(args) == 3 {
-		if errObj := requireOptionsArg("tls_sign_cert", args[2], 3); errObj != nil {
+		if errObj := requireOptionsArg(BuiltinNameTlsSignCert, args[2], 3); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 		options = args[2]
@@ -785,7 +795,7 @@ func TLSSignCert(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tls_sign_cert: invalid CA key: %s", err.Error()))
 	}
 
-	template, errObj := leafTemplate("tls_sign_cert", options)
+	template, errObj := leafTemplate(BuiltinNameTlsSignCert, options)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -800,7 +810,7 @@ func TLSSignCert(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tls_sign_cert: certificate signing failed: %s", err.Error()))
 	}
 
-	certPEM, keyPEM, errObj := encodeCertAndKey("tls_sign_cert", der, leafKey)
+	certPEM, keyPEM, errObj := encodeCertAndKey(BuiltinNameTlsSignCert, der, leafKey)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

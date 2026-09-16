@@ -27,6 +27,11 @@ var (
 	peachBuiltin  = &BuiltIn{Fn: higherOrderStub("peach")}
 	spawnBuiltin  = &BuiltIn{Fn: higherOrderStub("spawn")}
 
+	// with_resource calls a user function too, and for the same reason: the
+	// guarantee it makes is that the closer runs after the body, which means
+	// it has to be the one running the body.
+	withResourceBuiltin = &BuiltIn{Fn: higherOrderStub(BuiltinNameWithResource)}
+
 	// These two answer for themselves outside an executor -- "no serve context"
 	// is a real answer, not a failure -- so they are registered with their real
 	// implementations rather than a stub.
@@ -44,8 +49,24 @@ var executorNativeKinds = map[*BuiltIn]string{
 	peachBuiltin:  "peach",
 	spawnBuiltin:  "spawn",
 
+	withResourceBuiltin: BuiltinNameWithResource,
+
 	serveConnBuiltin: "serve_conn",
 	serveArgBuiltin:  "serve_arg",
+
+	// The test framework: `test` calls a function, and the assertions record
+	// what they saw into the executing run. See testing.go.
+	testBuiltin:       BuiltinNameTest,
+	beforeEachBuiltin: BuiltinNameBeforeEach,
+	afterEachBuiltin:  BuiltinNameAfterEach,
+
+	assertBuiltin:         BuiltinNameAssert,
+	assertEqBuiltin:       BuiltinNameAssertEq,
+	assertNeBuiltin:       BuiltinNameAssertNe,
+	assertContainsBuiltin: BuiltinNameAssertContains,
+	assertErrBuiltin:      BuiltinNameAssertErr,
+	assertOkBuiltin:       BuiltinNameAssertOk,
+	failBuiltin:           BuiltinNameFail,
 }
 
 // ExecutorNativeKind returns the operation name an executor must run natively

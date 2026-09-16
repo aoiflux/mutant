@@ -11,6 +11,8 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	start := p.startMark()
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
 	p.nextToken()
 	for !p.curTokenIs(token.RBRACE) && !p.curTokenIs(token.EOF) {
 		beforeErrCount := len(p.errors)
@@ -67,7 +69,9 @@ func (p *Parser) parseStatement() ast.Statement {
 	case token.RETURN:
 		return p.parseReturnStatement()
 	case token.FOR:
-		return p.parseForStatement()
+		return p.parseForOrForIn()
+	case token.WHILE:
+		return p.parseWhileStatement()
 	case token.BREAK:
 		return p.parseBreakStatement()
 	case token.CONTINUE:
@@ -76,6 +80,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseStructStatement()
 	case token.ENUM:
 		return p.parseEnumStatement()
+	case token.IMPORT:
+		return p.parseImportStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -97,15 +103,158 @@ func (p *Parser) parseContinueStatement() *ast.ContinueStatement {
 	return stmt
 }
 
-func (p *Parser) parseForStatement() *ast.ForStatement {
+// parseImportStatement parses `import "path.mut";` and `import ns "path.mut";`.
+//
+// The path is required to be a string literal rather than an expression. An
+// import is resolved and compiled before the program runs, so there is no point
+// at which a computed path could be evaluated -- accepting one would mean
+// accepting source that can never work.
+//
+// For the same reason an import is only legal at the top level of a file. The
+// module graph is walked and linked before a single instruction executes, so
+// an import nested in a function body or loop would be loaded regardless of
+// whether control ever reached it -- a statement whose position implies a
+// conditionality the language cannot honour.
+func (p *Parser) parseImportStatement() *ast.ImportStatement {
+	if p.blockDepth > 0 {
+		p.appendError(p.curToken, "import is only allowed at the top level of a file, not inside a block")
+		return nil
+	}
+
 	start := p.startMark()
-	stmt := &ast.ForStatement{Token: p.curToken}
+	stmt := &ast.ImportStatement{Token: p.curToken}
+
+	if p.peekTokenIs(token.IDENT) {
+		p.nextToken()
+		aliasStart := p.startMark()
+		stmt.Alias = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.recordRange(stmt.Alias, aliasStart)
+	}
+
+	if !p.peekTokenIs(token.STRING) {
+		msg := fmt.Sprintf("expected an import path as a quoted string, got %s", p.peekToken.Type)
+		p.appendError(p.peekToken, msg)
+		return nil
+	}
+	p.nextToken()
+
+	pathStart := p.startMark()
+	stmt.Path = &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+	p.recordRange(stmt.Path, pathStart)
+
+	p.consumeStatementTerminator(stmt)
+	p.recordRange(stmt, start)
+	return stmt
+}
+
+// parseWhileStatement parses `while (cond) { ... }`.
+//
+// The parentheses are required, matching `for` and `if`, so that the condition
+// has an unambiguous end and a body brace cannot be mistaken for a hash
+// literal in the condition.
+func (p *Parser) parseWhileStatement() *ast.WhileStatement {
+	start := p.startMark()
+	stmt := &ast.WhileStatement{Token: p.curToken}
 
 	if !p.expectPeek(token.LPAREN) {
 		return nil
 	}
 
 	p.nextToken()
+	if p.curTokenIs(token.RPAREN) {
+		// `while ()` is refused rather than treated as `while (true)`. An
+		// endless loop should have to say so.
+		p.appendError(p.curToken, "while needs a condition; write while (true) for an endless loop")
+		return nil
+	}
+
+	stmt.Condition = p.parseExpression(LOWEST)
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	stmt.Body = p.parseBlockStatement()
+	p.recordRange(stmt, start)
+	return stmt
+}
+
+// parseForOrForIn decides which of the two loops spelled `for (` this is.
+//
+// The header forms are distinguishable at the first token after the paren:
+// `for (v in`, `for (k, v in` and nothing else begins with an identifier
+// followed by `in` or `,`. A C-style header's init section is a let statement
+// or an expression, and neither can be a bare identifier followed by a comma --
+// there is no comma operator -- so committing to the for-in path on that lookahead
+// cannot mis-parse a valid classic header.
+func (p *Parser) parseForOrForIn() ast.Statement {
+	start := p.startMark()
+	forToken := p.curToken
+
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	p.nextToken()
+
+	if p.curTokenIs(token.IDENT) && (p.peekTokenIs(token.IN) || p.peekTokenIs(token.COMMA)) {
+		return p.parseForInStatement(start, forToken)
+	}
+	return p.parseForStatement(start, forToken)
+}
+
+// parseForInStatement parses the header from its first binding name onward;
+// `for (` has already been consumed.
+func (p *Parser) parseForInStatement(start token.Position, forToken token.Token) *ast.ForInStatement {
+	stmt := &ast.ForInStatement{Token: forToken}
+
+	firstStart := p.startMark()
+	first := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	p.recordRange(first, firstStart)
+
+	if p.peekTokenIs(token.COMMA) {
+		p.nextToken()
+		if !p.expectPeek(token.IDENT) {
+			return nil
+		}
+		secondStart := p.startMark()
+		second := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		p.recordRange(second, secondStart)
+		stmt.Key, stmt.Value = first, second
+	} else {
+		stmt.Value = first
+	}
+
+	if !p.expectPeek(token.IN) {
+		return nil
+	}
+
+	p.nextToken()
+	if p.curTokenIs(token.RPAREN) {
+		p.appendError(p.curToken, "for ... in needs something to iterate over")
+		return nil
+	}
+
+	stmt.Iterable = p.parseExpression(LOWEST)
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	stmt.Body = p.parseBlockStatement()
+	p.recordRange(stmt, start)
+	return stmt
+}
+
+// parseForStatement parses the C-style header from its init section onward;
+// `for (` has already been consumed.
+func (p *Parser) parseForStatement(start token.Position, forToken token.Token) *ast.ForStatement {
+	stmt := &ast.ForStatement{Token: forToken}
+
 	if !p.curTokenIs(token.SEMICOLON) {
 		switch p.curToken.Type {
 		case token.LET:
@@ -114,6 +263,7 @@ func (p *Parser) parseForStatement() *ast.ForStatement {
 			stmt.Init = p.parseExpressionStatement()
 		}
 	}
+
 
 	if !p.curTokenIs(token.SEMICOLON) {
 		msg := fmt.Sprintf("expected token %s in for init section, got %s", token.SEMICOLON, p.curToken.Type)

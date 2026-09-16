@@ -13,6 +13,7 @@ import (
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/object"
+	"strings"
 )
 
 var (
@@ -21,7 +22,22 @@ var (
 	FALSE = &object.Boolean{Value: false}
 )
 
+// Eval evaluates a node and is the package boundary.
+//
+// The tree-walker signals "this expression cannot produce a value" with a
+// fault, an unexported type that must not escape: outside this package an error
+// is a value, and a caller that received a fault would have to know the
+// difference to do anything with it. So the fault is unwrapped here and every
+// caller sees the plain *object.Error it always did.
 func Eval(n ast.Node, env *object.Environment) object.Object {
+	result := eval(n, env)
+	if f, raised := result.(*fault); raised {
+		return f.err
+	}
+	return result
+}
+
+func eval(n ast.Node, env *object.Environment) object.Object {
 	switch node := n.(type) {
 
 	/// ---------- expressions ---------- ///
@@ -35,7 +51,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return nativeBoolToBoolObject(node.Value)
 
 	case *ast.PrefixExpression:
-		right := Eval(node.Right, env)
+		right := eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
@@ -47,11 +63,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		if node.Operator == "&&" || node.Operator == "||" {
 			return evalLogicalExpression(node, env)
 		}
-		left := Eval(node.Left, env)
+		left := eval(node.Left, env)
 		if isError(left) {
 			return left
 		}
-		right := Eval(node.Right, env)
+		right := eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
@@ -59,6 +75,9 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 
 	case *ast.IfExpression:
 		return evalIfExpression(node, env)
+
+	case *ast.MatchExpression:
+		return evalMatchExpression(node, env)
 
 	case *ast.Identifier:
 		return evalIdentifier(node, env)
@@ -69,6 +88,8 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return &object.Function{Parameters: params, Env: env, Body: body}
 	case *ast.StringLiteral:
 		return &object.String{Value: node.Value}
+	case *ast.TemplateLiteral:
+		return evalTemplateLiteral(node, env)
 	case *ast.CallExpression:
 		if node.Function.TokenLiteral() == "quote" {
 			// Arity is checked here rather than assumed: a bare `quote()` in
@@ -78,7 +99,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 			}
 			return quote(node.Arguments[0], env)
 		}
-		function := Eval(node.Function, env)
+		function := eval(node.Function, env)
 		if isError(function) {
 			return function
 		}
@@ -94,11 +115,11 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		}
 		return &object.Array{Elements: elements}
 	case *ast.IndexExpression:
-		left := Eval(node.Left, env)
+		left := eval(node.Left, env)
 		if isError(left) {
 			return left
 		}
-		index := Eval(node.Index, env)
+		index := eval(node.Index, env)
 		if isError(index) {
 			return index
 		}
@@ -114,7 +135,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		return evalBlockStatement(node, env)
 
 	case *ast.ExpressionStatement:
-		return Eval(node.Expression, env)
+		return eval(node.Expression, env)
 
 	case *ast.ReturnStatement:
 		values, errObj := evalReturnValues(node, env)
@@ -132,7 +153,7 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 		}
 
 	case *ast.LetStatement:
-		val := Eval(node.Value, env)
+		val := eval(node.Value, env)
 		if isError(val) {
 			return val
 		}
@@ -156,6 +177,12 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 	case *ast.ForStatement:
 		return evalForStatement(node, env)
 
+	case *ast.WhileStatement:
+		return evalWhileStatement(node, env)
+
+	case *ast.ForInStatement:
+		return evalForInStatement(node, env)
+
 	case *ast.BreakStatement:
 		return &object.Break{}
 
@@ -176,19 +203,55 @@ func Eval(n ast.Node, env *object.Environment) object.Object {
 
 	case *ast.StructLiteral:
 		return evalStructLiteral(node, env)
+
+	case *ast.ImportStatement:
+		// Imports are resolved and linked before evaluation begins: by the
+		// time a tree reaches here, every imported module's statements are
+		// already part of the program. The node survives only as a marker,
+		// so evaluating it is a no-op rather than an error.
+		return nil
 	}
 	return nil
+}
+
+// evalTemplateLiteral joins the pieces of an interpolated string, matching the
+// VM's OpConcat: a string piece contributes its own text, anything else
+// contributes what it would print.
+//
+// The tree-walking evaluator only runs macro bodies now, but a macro that
+// builds a message out of its arguments is exactly the kind anybody writes, so
+// the two engines have to agree on what a hole produces.
+func evalTemplateLiteral(node *ast.TemplateLiteral, env *object.Environment) object.Object {
+	var out strings.Builder
+	for i, text := range node.Texts {
+		out.WriteString(text)
+		if i >= len(node.Parts) {
+			continue
+		}
+		piece := Eval(node.Parts[i], env)
+		if isError(piece) {
+			return piece
+		}
+		if str, isString := piece.(*object.String); isString {
+			out.WriteString(str.Value)
+			continue
+		}
+		if piece != nil {
+			out.WriteString(piece.Inspect())
+		}
+	}
+	return &object.String{Value: out.String()}
 }
 
 func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 	var res object.Object
 	for _, s := range stmts {
-		res = Eval(s, env)
+		res = eval(s, env)
 
 		switch res := res.(type) {
 		case *object.ReturnValue:
 			return res.Value
-		case *object.Error:
+		case *fault:
 			return res
 		}
 	}
@@ -198,11 +261,17 @@ func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 func evalBlockStatement(block *ast.BlockStatement, env *object.Environment) object.Object {
 	var res object.Object
 	for _, stmt := range block.Statements {
-		res = Eval(stmt, env)
+		res = eval(stmt, env)
 		if res != nil {
+			// A fault ends the block; an error *value* does not. The two used to
+			// be one test on ERROR_OBJ, which meant a statement that merely
+			// evaluated to an error -- error("x") on its own line -- would end
+			// the block as though it had failed.
+			if isError(res) {
+				return res
+			}
 			rt := res.Type()
-			if rt == object.RETURN_VALUE_OBJ || rt == object.ERROR_OBJ ||
-				rt == object.BREAK_OBJ || rt == object.CONTINUE_OBJ {
+			if rt == object.RETURN_VALUE_OBJ || rt == object.BREAK_OBJ || rt == object.CONTINUE_OBJ {
 				return res
 			}
 		}
@@ -238,7 +307,7 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 			return newError("wrong number of arguments. want=%d, got=%d", len(fun.Parameters), len(args))
 		}
 		extendedEnv := extendFunctionEnv(fun, args)
-		evaluated := Eval(fun.Body, extendedEnv)
+		evaluated := eval(fun.Body, extendedEnv)
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
 		// Some builtins need something the builtin itself does not have: the
@@ -250,6 +319,18 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		result := fun.Fn(args...)
 		if result == nil {
 			return NULL
+		}
+		// A bare error coming back from a builtin means the call failed, and
+		// failure stops the tree-walker -- unless the builtin's contract says an
+		// error is what it returns, which is what error() declares. Asking the
+		// contract rather than the name means a second such builtin needs no
+		// change here.
+		//
+		// The VM needs none of this: it keeps fatal errors in a separate Go
+		// error channel, so an *object.Error reaching its stack is a value by
+		// construction. This arm is what makes the two engines agree.
+		if errObj, failed := result.(*object.Error); failed && !builtin.ReturnsErrorValue(fun) {
+			return &fault{err: errObj}
 		}
 		return result
 	default:
@@ -284,7 +365,7 @@ func evalReturnValues(node *ast.ReturnStatement, env *object.Environment) ([]obj
 			continue
 		}
 
-		value := Eval(expr, env)
+		value := eval(expr, env)
 		if isError(value) {
 			return nil, value
 		}
@@ -326,7 +407,7 @@ func destructureValues(source object.Object, arity int) []object.Object {
 // strict BOOLEAN result. For &&, the right operand is skipped when the left is
 // falsy; for ||, it is skipped when the left is truthy.
 func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) object.Object {
-	left := Eval(node.Left, env)
+	left := eval(node.Left, env)
 	if isError(left) {
 		return left
 	}
@@ -342,7 +423,7 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 		}
 	}
 
-	right := Eval(node.Right, env)
+	right := eval(node.Right, env)
 	if isError(right) {
 		return right
 	}
@@ -362,6 +443,8 @@ func isTruthy(obj object.Object) bool {
 		return false
 	case *object.String:
 		return len(o.Value) != 0
+	case *object.Bytes:
+		return len(o.Value) != 0
 	case *object.Integer:
 		return o.Value != 0
 	case *object.Float:
@@ -374,7 +457,7 @@ func isTruthy(obj object.Object) bool {
 func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Object {
 	pairs := make(map[object.HashKey]object.HashPair)
 	for keyNode, valueNode := range node.Pairs {
-		key := Eval(keyNode, env)
+		key := eval(keyNode, env)
 		if isError(key) {
 			return key
 		}
@@ -382,7 +465,7 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 		if !ok {
 			return newError("unusable as hash key: %s", key.Type())
 		}
-		value := Eval(valueNode, env)
+		value := eval(valueNode, env)
 		if isError(value) {
 			return value
 		}
@@ -392,13 +475,96 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 	return &object.Hash{Pairs: pairs}
 }
 
+func evalForInStatement(node *ast.ForInStatement, env *object.Environment) object.Object {
+	if node.Value == nil {
+		return newError("for ... in has no name to bind")
+	}
+
+	iterable := eval(node.Iterable, env)
+	if isError(iterable) {
+		return iterable
+	}
+
+	// The same object.NewIterator the VM uses, so the two engines cannot drift
+	// on what is iterable, on what a single binding yields, or on the order a
+	// hash comes out in.
+	iterator, ok := object.NewIterator(iterable)
+	if !ok {
+		return newError("cannot iterate over %s", iterable.Type())
+	}
+
+	loopEnv := object.NewEnclosedEnvironement(env)
+
+	for {
+		key, value, more := iterator.Next()
+		if !more {
+			break
+		}
+
+		if node.Key != nil {
+			loopEnv.Set(node.Key.Value, key)
+			loopEnv.Set(node.Value.Value, value)
+		} else {
+			loopEnv.Set(node.Value.Value, iterator.Primary(key, value))
+		}
+
+		result := eval(node.Body, loopEnv)
+		if result == nil {
+			continue
+		}
+
+		switch result.Type() {
+		case object.BREAK_OBJ:
+			return NULL
+		case object.CONTINUE_OBJ:
+			continue
+		case object.RETURN_VALUE_OBJ, object.ERROR_OBJ:
+			return result
+		}
+	}
+
+	return NULL
+}
+
+func evalWhileStatement(node *ast.WhileStatement, env *object.Environment) object.Object {
+	// A scope of its own, matching the for loop: a `let` in the body does not
+	// leak out, and re-entering the body does not redeclare into the caller.
+	loopEnv := object.NewEnclosedEnvironement(env)
+
+	for {
+		condition := eval(node.Condition, loopEnv)
+		if isError(condition) {
+			return condition
+		}
+		if !isTruthy(condition) {
+			break
+		}
+
+		result := eval(node.Body, loopEnv)
+		if result == nil {
+			continue
+		}
+
+		switch result.Type() {
+		case object.BREAK_OBJ:
+			return NULL
+		case object.CONTINUE_OBJ:
+			continue
+		case object.RETURN_VALUE_OBJ, object.ERROR_OBJ:
+			return result
+		}
+	}
+
+	return NULL
+}
+
 func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Object {
 	// Create a new scope for the loop to isolate init variable
 	loopEnv := object.NewEnclosedEnvironement(env)
 
 	// Execute init statement once
 	if node.Init != nil {
-		Eval(node.Init, loopEnv)
+		eval(node.Init, loopEnv)
 	}
 
 	var result object.Object
@@ -406,7 +572,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 	// Loop: check condition, execute body, execute post
 	for {
 		if node.Condition != nil {
-			condition := Eval(node.Condition, loopEnv)
+			condition := eval(node.Condition, loopEnv)
 			if isError(condition) {
 				return condition
 			}
@@ -415,7 +581,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 			}
 		}
 
-		result = Eval(node.Body, loopEnv)
+		result = eval(node.Body, loopEnv)
 
 		// Handle break: unwrap and return NULL
 		if result != nil && result.Type() == object.BREAK_OBJ {
@@ -434,7 +600,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 
 		// Execute post expression
 		if node.Post != nil {
-			postResult := Eval(node.Post, loopEnv)
+			postResult := eval(node.Post, loopEnv)
 			if isError(postResult) {
 				return postResult
 			}
@@ -489,27 +655,22 @@ func evalEnumStatement(node *ast.EnumStatement, env *object.Environment) object.
 	return NULL
 }
 
+// evalAssignExpression evaluates the target's parts before the value, because
+// that is the order they are written in and the order the compiler emits.
+//
+// It used to evaluate the value first, which nothing reveals until both sides
+// have side effects -- `a[note("index")] = note("value")` recorded them in
+// opposite orders in the two engines. That matters beyond tidiness: this
+// evaluator is what computes `unquote(...)` during macro expansion, so the same
+// line meant two different things depending on whether it was written inside a
+// macro or inline.
 func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) object.Object {
-	value := Eval(node.Value, env)
-	if isError(value) {
-		return value
-	}
-
-	// Compound assignment (x += v, x++): fold the current value of the target
-	// with the right-hand side using the base operator before storing.
-	if node.Operator != "" {
-		current := Eval(node.Left, env)
-		if isError(current) {
-			return current
-		}
-		value = evalInfixExpression(node.Operator, current, value)
+	// Handle simple identifier assignment: x = value
+	if ident, ok := node.Left.(*ast.Identifier); ok {
+		value := evalAssignedValue(node, env)
 		if isError(value) {
 			return value
 		}
-	}
-
-	// Handle simple identifier assignment: x = value
-	if ident, ok := node.Left.(*ast.Identifier); ok {
 		if _, updated := env.Update(ident.Value, value); !updated {
 			env.Set(ident.Value, value)
 		}
@@ -519,7 +680,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	// Handle field assignment: struct.field = value
 	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
 		// Evaluate the left side (should be a struct)
-		obj := Eval(fieldExpr.Left, env)
+		obj := eval(fieldExpr.Left, env)
 		if isError(obj) {
 			return obj
 		}
@@ -530,12 +691,118 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 			return newError("cannot assign field on non-struct: %s", obj.Type())
 		}
 
+		value := evalAssignedValue(node, env)
+		if isError(value) {
+			return value
+		}
+
 		// Assign the field
 		structObj.Fields[fieldExpr.Field.Value] = value
 		return value
 	}
 
+	// Handle index assignment: a[i] = value / h[k] = value. Arrays, buffers and
+	// hashes are all pointers, so mutating one in place is what the enclosing
+	// environment sees; no write-back is needed, which is why the VM emits a
+	// store after OpSetIndex and this does not.
+	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
+		container := eval(idxExpr.Left, env)
+		if isError(container) {
+			return container
+		}
+
+		index := eval(idxExpr.Index, env)
+		if isError(index) {
+			return index
+		}
+
+		value := evalAssignedValue(node, env)
+		if isError(value) {
+			return value
+		}
+
+		if err := evalSetIndex(container, index, value); err != nil {
+			return err
+		}
+		return value
+	}
+
 	return newError("invalid assignment target")
+}
+
+// evalAssignedValue is what the assignment stores: the right-hand side, or, for
+// a compound assignment, the target's current value folded with it.
+//
+// The target is read before the right-hand side because the compiler desugars
+// `x += v` to `x = x <op> v` and then compiles that infix expression left to
+// right. Reading them the other way round is a divergence nothing catches until
+// both have side effects.
+func evalAssignedValue(node *ast.AssignExpression, env *object.Environment) object.Object {
+	if node.Operator == "" {
+		return eval(node.Value, env)
+	}
+
+	current := eval(node.Left, env)
+	if isError(current) {
+		return current
+	}
+
+	value := eval(node.Value, env)
+	if isError(value) {
+		return value
+	}
+
+	return evalInfixExpression(node.Operator, current, value)
+}
+
+// evalSetIndex stores value at index inside container, mirroring the VM's
+// execSetIndex arm for arm. It returns an error object, or nil on success.
+// The two implementations exist separately -- one works on the stack, one on
+// evaluated objects -- so the messages are kept identical deliberately: the
+// parity harness compares what a program prints, and a divergence in wording
+// is a divergence.
+func evalSetIndex(container, index, value object.Object) object.Object {
+	switch c := container.(type) {
+	case *object.Array:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return newError("array index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Elements)) {
+			return newError("array index out of bounds: %d (len %d)", idx.Value, len(c.Elements))
+		}
+		c.Elements[idx.Value] = value
+		return nil
+	case *object.Bytes:
+		idx, ok := index.(*object.Integer)
+		if !ok {
+			return newError("bytes index must be INTEGER, got %s", index.Type())
+		}
+		if idx.Value < 0 || idx.Value >= int64(len(c.Value)) {
+			return newError("bytes index out of bounds: %d (len %d)", idx.Value, len(c.Value))
+		}
+		val, ok := value.(*object.Integer)
+		if !ok {
+			return newError("bytes element must be INTEGER, got %s", value.Type())
+		}
+		if val.Value < 0 || val.Value > 255 {
+			return newError("bytes element out of range: %d (want 0-255)", val.Value)
+		}
+		c.Value[idx.Value] = byte(val.Value)
+		return nil
+	case *object.Hash:
+		hashKey, ok := index.(object.Hashable)
+		if !ok {
+			return newError("unusable as a hashkey: %s", index.Type())
+		}
+		if c.Pairs == nil {
+			c.Pairs = make(map[object.HashKey]object.HashPair)
+		}
+		c.Pairs[hashKey.HashKey()] = object.HashPair{Key: index, Value: value}
+		return nil
+	default:
+		return newError("index assignment not supported on %s", container.Type())
+	}
 }
 
 func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) object.Object {
@@ -545,10 +812,21 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 		if val, ok := env.Get(enumValKey); ok {
 			return val
 		}
+
+		// A namespaced builtin: str.upper is str_upper. Derived from the flat
+		// name rather than tabulated, which is what lets all 44 families work
+		// without a list to maintain. It matches the compiler's arm in
+		// compileFieldExpression, down to the order: a binding named `str`
+		// wins, so nothing that already works changes meaning.
+		if _, bound := env.Get(ident.Value); !bound {
+			if fn, found := builtins[ident.Value+"_"+node.Field.Value]; found {
+				return fn
+			}
+		}
 	}
 
 	// Evaluate the left side
-	left := Eval(node.Left, env)
+	left := eval(node.Left, env)
 	if isError(left) {
 		return left
 	}
@@ -561,6 +839,16 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 		return NULL
 	}
 
+	// Errors read like structs, mirroring the VM's OpGetField. Both engines go
+	// through object.Error.Field, which is the only way the two can be trusted
+	// to agree about a field set that will grow.
+	if errObj, ok := left.(*object.Error); ok {
+		if val, ok := errObj.Field(node.Field.Value); ok {
+			return val
+		}
+		return NULL
+	}
+
 	return newError("cannot access field %s on type %s", node.Field.Value, left.Type())
 }
 
@@ -568,7 +856,7 @@ func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.
 	// Evaluate all field values
 	fields := make(map[string]object.Object)
 	for _, fieldVal := range node.Fields {
-		val := Eval(fieldVal.Value, env)
+		val := eval(fieldVal.Value, env)
 		if isError(val) {
 			return val
 		}

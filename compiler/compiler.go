@@ -9,6 +9,7 @@ import (
 	"mutant/builtin"
 	"mutant/code"
 	"mutant/object"
+	"path/filepath"
 	"sort"
 )
 
@@ -21,6 +22,21 @@ type Compiler struct {
 	enumDefinitions   map[string][]string          // Maps enum name to tag names
 	loopContexts      []LoopContext
 
+	// moduleDisplays maps a module key to the path a human should see for it,
+	// so an error about another module can name the file rather than repeat
+	// the absolute path the linker uses as a key. Filled by EnterModule, which
+	// runs for every module in dependency order, so a module's imports are
+	// always already in here by the time its own body is compiled.
+	moduleDisplays map[string]string
+
+	// typeOwners records which module declared each struct or enum name.
+	// Unlike values, type names are one flat namespace for the whole program:
+	// they travel in ByteCode.StructDefs/EnumDefs keyed by bare name and are
+	// looked up there by the VM, so two modules cannot each have a `Point`.
+	// Recording the owner is what turns that from a silent overwrite into an
+	// error naming both files.
+	typeOwners map[string]string
+
 	injectSecurityChecks bool
 	hasChkDbg            bool
 	hasChkSnd            bool
@@ -30,6 +46,28 @@ type Compiler struct {
 	securityRNG *mathrand.Rand
 
 	polymorphicEngine *PolymorphicEngine // Optional bytecode mutation engine
+
+	// positions is the parser's node-to-range side table, merged in from every
+	// Program compiled. macroOrigins is its sibling for nodes a macro produced.
+	// Both are keyed by node pointer, so they are accumulated rather than
+	// replaced: the REPL compiles one Program per line against a symbol table
+	// and constant pool that outlive it, and a closure compiled on line 1 is
+	// still callable on line 3.
+	positions    map[ast.Node]ast.Range
+	macroOrigins map[ast.Node]ast.MacroOrigin
+
+	// The position instructions are currently being attributed to, maintained
+	// by Compile as it descends. macroLine/macroCol are the definition site of
+	// the macro the current node was expanded from, and are zero outside one.
+	posLine, posCol       int
+	posEndLine, posEndCol int
+	macroLine, macroCol   int
+
+	sourceFile string
+	sourceText string
+	// moduleSpans maps lines of sourceText back to the files they came from.
+	// Empty for a single-file compile, where SourceFile already answers it.
+	moduleSpans []ModuleSpan
 }
 
 type ByteCode struct {
@@ -38,6 +76,25 @@ type ByteCode struct {
 	StructDefs   map[string][]*ast.Identifier
 	EnumDefs     map[string][]string
 	LuaPatches   map[string]*object.LuaPatch
+
+	// Version is the bytecode container version. It is absent from anything
+	// compiled before versioning existed, which gob decodes to 0 -- so 0 means
+	// BytecodeVersionOrdinalBuiltins and is normalised to it on load.
+	Version int
+
+	// BuiltinNames is what an OpGetBuiltin operand indexes: the builtins this
+	// program referenced, in the order the compiler first saw them. Carrying the
+	// names rather than registry ordinals is what lets a builtin be renamed,
+	// retired or reordered without invalidating artifacts already compiled --
+	// they name what they call, and the runtime resolves those names at load.
+	//
+	// Only referenced builtins are listed, not the whole registry. A program
+	// that calls three builtins should not fail to load because an unrelated
+	// four hundredth was retired.
+	//
+	// Empty for BytecodeVersionOrdinalBuiltins, where the operand is a registry
+	// ordinal resolved through builtin.ResolveLegacyOrdinals instead.
+	BuiltinNames []string
 
 	// OpcodeMap undoes the polymorphic engine's opcode permutation: it is
 	// indexed by the byte found in the instruction stream and yields the real
@@ -52,6 +109,218 @@ type ByteCode struct {
 	// The field is gob-encoded with the rest of ByteCode. An older .mu simply has
 	// no entry for it and decodes to nil, which is the unmutated case.
 	OpcodeMap []byte
+
+	// SourceFile, LineTable and MacroTable are what turn a failing instruction
+	// pointer back into something an analyst can act on. LineTable annotates
+	// Instructions; each CompiledFunction in Constants carries its own.
+	//
+	// These need no Version bump, unlike BuiltinNames above. gob omits zero
+	// values and ignores fields it does not know, so a new runtime reading an
+	// old artifact sees empty tables -- which is exactly true of it -- and an
+	// old runtime reading a new artifact ignores them. Absence is already the
+	// correct reading in both directions, so there is nothing for a version to
+	// disambiguate.
+	//
+	// They are removed from artifacts that leave the machine: see
+	// StripDebugInfo.
+	SourceFile string
+	LineTable  code.LineTable
+	MacroTable code.LineTable
+
+	// EndTable records where each attributed construct ends, so a report can
+	// underline the span that failed rather than pointing at its first
+	// character. Same encoding as LineTable, separately strippable.
+	EndTable code.LineTable
+
+	// SourceText is the program's own source, carried so a failing artifact
+	// can quote the line it died on without reading anything off disk. A .mu
+	// gets copied to the machine that runs it far more often than its .mut
+	// does, and a VM that opens files at fault time to find out where it is
+	// would be a worse idea than the bytes it saves.
+	//
+	// Stripped for release along with everything else here.
+	SourceText string
+
+	// ModuleSpans says which file each line of SourceText came from.
+	//
+	// Linking concatenates every module of a program into one source blob and
+	// compiles that, so SourceFile and the single blob are no longer enough to
+	// answer "where did this instruction come from": a fault in lib.mut would
+	// otherwise be reported as main.mut at the blob's line number, and quoted
+	// against main.mut's text -- a plausible-looking file, line and source
+	// snippet, all three wrong. A wrong answer in the failure reporter is worse
+	// than no answer, so the mapping travels with the program.
+	//
+	// Entries are sorted by StartLine and cover the blob without gaps,
+	// beginning with the first module linked. A single-file program has exactly
+	// one entry, so there is no special case to get wrong.
+	//
+	// Debug info, and stripped with the rest of it: it would otherwise hand a
+	// release artifact the whole import graph and every absolute path in it.
+	ModuleSpans []ModuleSpan
+
+	// GlobalNames are the program's global slots, indexed by slot number, and
+	// carry the same contract CompiledFunction.LocalNames does for a frame:
+	// the name to show for a slot, empty where there is none to show.
+	//
+	// Bare names, not the module-qualified keys the symbol table files them
+	// under -- the qualifier is a linker detail nobody typed. Two modules may
+	// each declare `helper`; they hold different slots, so both are listed,
+	// each against its own.
+	//
+	// Debug info, stripped with the rest: a release artifact would otherwise
+	// name every top-level binding in the program.
+	GlobalNames []string
+}
+
+// ModuleSpan marks where one module's source begins inside the linked blob.
+//
+// StartLine is 1-based and names the first line of the module in SourceText,
+// so a blob line L belongs to the last span whose StartLine is <= L, and its
+// line within that file is L - StartLine + 1.
+type ModuleSpan struct {
+	// Path is the module as it should be shown to a reader -- the same string
+	// SourceFile would have carried had this module been compiled alone.
+	Path string
+
+	// StartLine is the 1-based line of SourceText at which this module begins.
+	StartLine int
+}
+
+// ModuleAt resolves a line of the linked source blob back to the file it came
+// from and its line within that file.
+//
+// It returns ok false when there are no spans -- an artifact compiled before
+// linking existed, or one whose debug info has been stripped. Callers must
+// treat that as "unknown" and fall back to SourceFile rather than guessing:
+// the blob line is only a file line by coincidence when a program has one
+// module.
+func (bc *ByteCode) ModuleAt(line int) (path string, localLine int, ok bool) {
+	if bc == nil || len(bc.ModuleSpans) == 0 || line <= 0 {
+		return "", 0, false
+	}
+
+	// Spans are in link order, which is start-line order. Walking backwards
+	// finds the last one that begins at or before the line.
+	for i := len(bc.ModuleSpans) - 1; i >= 0; i-- {
+		span := bc.ModuleSpans[i]
+		if span.StartLine <= line {
+			return span.Path, line - span.StartLine + 1, true
+		}
+	}
+
+	return "", 0, false
+}
+
+// ModuleLine is the inverse of ModuleAt: it maps a file and a line within that
+// file to the line of the linked source blob the tables are keyed by. It is
+// what a breakpoint goes through -- an editor knows a path and a line number,
+// and the line tables know neither.
+//
+// A program with no spans is one module, so the blob is the file and the line
+// passes through unchanged. That is also the answer for an empty path, which is
+// how a caller says "the program's own source" without having to know whether
+// the program was linked.
+//
+// Matching is by cleaned path first and by base name second. The second pass is
+// there because the path an editor sends is the one the user opened, and the
+// path a span carries is the one the linker resolved: the same file can reach
+// here spelled two ways -- a symlinked checkout, a UNC share, a drive letter in
+// the other case -- and refusing the breakpoint because the spellings differ
+// would be a right answer to the wrong question. An ambiguous base name matches
+// nothing rather than the first candidate: two modules named util.mut is
+// exactly the case where guessing puts the breakpoint in the wrong file.
+func (bc *ByteCode) ModuleLine(path string, line int) (absLine int, ok bool) {
+	if bc == nil || line <= 0 {
+		return 0, false
+	}
+	if len(bc.ModuleSpans) == 0 {
+		return line, true
+	}
+
+	if index, found := bc.moduleSpanFor(path); found {
+		return bc.ModuleSpans[index].StartLine + line - 1, true
+	}
+	return 0, false
+}
+
+// moduleSpanFor finds the span describing path, under the matching rule
+// ModuleLine documents.
+func (bc *ByteCode) moduleSpanFor(path string) (int, bool) {
+	if path == "" {
+		// No file named: the first span is the program's entry module, which is
+		// what SourceFile names and what a single-module program means.
+		return 0, true
+	}
+
+	want := filepath.Clean(path)
+	for i, span := range bc.ModuleSpans {
+		if filepath.Clean(span.Path) == want {
+			return i, true
+		}
+	}
+
+	base := filepath.Base(want)
+	found := -1
+	for i, span := range bc.ModuleSpans {
+		if filepath.Base(span.Path) != base {
+			continue
+		}
+		if found >= 0 {
+			// Two modules share the base name. Picking one would put the
+			// breakpoint in a file the user is not looking at.
+			return 0, false
+		}
+		found = i
+	}
+	if found < 0 {
+		return 0, false
+	}
+	return found, true
+}
+
+// StripDebugInfo removes every source position from the program: the file name,
+// both tables on the main stream, and the name and tables of every compiled
+// function reachable through the constant pool.
+//
+// It is called for release artifacts: those are what leave the machine, and a
+// map from an artifact's bytecode back to its source lines is a
+// reverse-engineering aid worth withholding from them. A .mu compiled to run
+// locally keeps its positions, because the machine running it already holds the
+// source.
+//
+// Polymorphism does not strip. The engine moves every instruction, which would
+// leave a table built at emit time describing the wrong lines, so it carries the
+// tables through the same offset remap it uses to repoint jumps -- see
+// PolymorphicEngine.spliceFillers. Dropping them there instead would have meant
+// no ordinary run ever had positions, since mutation is on by default.
+func (bc *ByteCode) StripDebugInfo() {
+	if bc == nil {
+		return
+	}
+
+	bc.SourceFile = ""
+	bc.SourceText = ""
+	bc.LineTable = nil
+	bc.MacroTable = nil
+	bc.EndTable = nil
+	bc.GlobalNames = nil
+	// ModuleSpans is the most disclosing table of the set: it names every file
+	// the program was built from, by absolute path, and lays out the whole
+	// import graph. Dropping the line tables while shipping that would defeat
+	// the point of stripping.
+	bc.ModuleSpans = nil
+
+	for _, constant := range bc.Constants {
+		if fn, ok := constant.(*object.CompiledFunction); ok {
+			fn.Name = ""
+			fn.Params = nil
+			fn.LocalNames = nil
+			fn.LineTable = nil
+			fn.MacroTable = nil
+			fn.EndTable = nil
+		}
+	}
 }
 
 type EmittedInstruction struct {
@@ -63,6 +332,22 @@ type CompilationScope struct {
 	instructions    code.Instructions
 	lastInstruction EmittedInstruction
 	prevInstruction EmittedInstruction
+
+	// One line table per instruction stream, built as the stream is emitted.
+	// Value types, so a zero CompilationScope is usable and the two existing
+	// composite literals did not have to change.
+	lines  code.LineTableBuilder
+	ends   code.LineTableBuilder
+	macros code.LineTableBuilder
+}
+
+// scopeDebug is everything a finished scope hands back besides its
+// instructions. It exists so leaveScope stays a two-value call as the number of
+// tables grows.
+type scopeDebug struct {
+	lines  code.LineTable
+	ends   code.LineTable
+	macros code.LineTable
 }
 
 type LoopContext struct {
@@ -89,6 +374,8 @@ func New() *Compiler {
 		scopeIndex:        0,
 		structDefinitions: make(map[string][]*ast.Identifier),
 		enumDefinitions:   make(map[string][]string),
+		moduleDisplays:    make(map[string]string),
+		typeOwners:        make(map[string]string),
 		loopContexts:      []LoopContext{},
 	}
 }
@@ -99,7 +386,59 @@ func NewWithState(st *SymbolTable, constants []object.Object) *Compiler {
 	compiler.constants = constants
 	compiler.structDefinitions = make(map[string][]*ast.Identifier)
 	compiler.enumDefinitions = make(map[string][]string)
+	compiler.moduleDisplays = make(map[string]string)
+	compiler.typeOwners = make(map[string]string)
 	return compiler
+}
+
+// ModuleScope names the module a compilation is about to enter.
+//
+// It exists because linking drives every module through one Compiler: without
+// it, the compiler could not tell whose top level it was filling in, and every
+// module's globals would land in one flat namespace where the last `helper`
+// declared won.
+type ModuleScope struct {
+	// Key identifies the module. It has to be stable and unique across the
+	// program; the linker uses the file's canonical absolute path.
+	Key string
+
+	// Display is the module as a reader should see it -- the path relative to
+	// the working directory. It appears in errors about this module, and
+	// nowhere else.
+	Display string
+
+	// Namespaces maps every namespace this module's imports bound to the Key
+	// of the module it names.
+	Namespaces map[string]string
+}
+
+// EnterModule points the compiler at the next module: its top-level
+// definitions are filed under scope.Key, and `ns.name` inside it resolves
+// through scope.Namespaces.
+//
+// Call it before compiling each module, in dependency order. A compilation
+// that never calls it -- the REPL, the playground, a single file -- keeps the
+// one flat global scope it always had.
+func (c *Compiler) EnterModule(scope ModuleScope) {
+	if scope.Display != "" {
+		c.moduleDisplays[scope.Key] = scope.Display
+	}
+	c.symbolTable.SetCurrentModule(scope.Key)
+	for namespace, key := range scope.Namespaces {
+		c.symbolTable.BindNamespace(namespace, key)
+	}
+}
+
+// moduleName renders a module key for a human. It falls back to the key
+// itself, which is a real path, rather than to something evasive.
+func (c *Compiler) moduleName(key string) string {
+	if display, ok := c.moduleDisplays[key]; ok {
+		return display
+	}
+	if key == "" {
+		return "this program"
+	}
+	return key
 }
 
 // SeedTypeDefinitions pre-loads struct and enum declarations recorded by an
@@ -164,7 +503,144 @@ func (c *Compiler) EnablePolymorphismWithSeed(level int, seed int64) {
 	}
 }
 
+// Compile emits code for node, tracking the source position instructions are
+// attributed to.
+//
+// The position bookkeeping lives here rather than inside the dispatch switch so
+// that the switch -- which is the compiler -- stays about compiling. A node with
+// no recorded range does not reset the current position, it inherits the
+// enclosing one, which is the right answer for the nodes the compiler
+// synthesises on its own behalf: they belong to whatever the user wrote that
+// caused them.
 func (c *Compiler) Compile(node ast.Node) error {
+	if program, ok := node.(*ast.Program); ok {
+		c.absorbPositions(program)
+	}
+
+	origin, fromMacro := c.macroOrigins[node]
+
+	rng, ok := c.positions[node]
+	if !ok || !rng.Start.IsValid() || (!fromMacro && !anchorsPosition(node)) {
+		return c.compileNode(node)
+	}
+
+	savedLine, savedCol := c.posLine, c.posCol
+	savedEndLine, savedEndCol := c.posEndLine, c.posEndCol
+	savedMacroLine, savedMacroCol := c.macroLine, c.macroCol
+
+	c.posLine, c.posCol = rng.Start.Line, rng.Start.Column
+
+	// The end is optional: a node whose range the parser only half filled in
+	// still gets a usable start, and the reporter falls back to a caret on the
+	// start column rather than underlining a span it cannot trust.
+	c.posEndLine, c.posEndCol = 0, 0
+	if rng.End.IsValid() {
+		c.posEndLine, c.posEndCol = rng.End.Line, rng.End.Column
+	}
+
+	if fromMacro && origin.Definition.Start.IsValid() {
+		c.macroLine, c.macroCol = origin.Definition.Start.Line, origin.Definition.Start.Column
+	}
+
+	err := c.compileNode(node)
+
+	c.posLine, c.posCol = savedLine, savedCol
+	c.posEndLine, c.posEndCol = savedEndLine, savedEndCol
+	c.macroLine, c.macroCol = savedMacroLine, savedMacroCol
+	return err
+}
+
+// anchorsPosition reports whether a node should move the position instructions
+// are attributed to, or leave it where its parent set it.
+//
+// Only statements and calls anchor. Attributing every expression node its own
+// position sounds more precise and is not: it costs one table entry per
+// instruction -- measured at parity with the instruction stream itself, against
+// the single-digit percent this is supposed to cost -- and buys a column inside
+// an expression that no traceback frame reports anyway. A frame is a call, and a
+// fault is somewhere in a statement; those are the two granularities that get
+// read, so those are the two that get recorded.
+//
+// Infix and index expressions anchor as well, and they are the exception that
+// proves the rule: they are where a well-formed program actually fails at
+// runtime -- division by zero, a type mismatch across an operator, an index
+// past the end -- so they are the two places a caret under the sub-expression
+// is worth more than the entries it costs. `total / count(xs)` names which
+// division rather than which line.
+//
+// A node a macro produced anchors regardless, because it is the only place its
+// origin can be attached.
+func anchorsPosition(node ast.Node) bool {
+	switch node.(type) {
+	case ast.Statement, *ast.CallExpression, *ast.InfixExpression, *ast.IndexExpression:
+		return true
+	}
+	return false
+}
+
+// absorbPositions merges a Program's position side-tables into the compiler's.
+// Merging rather than assigning is what makes the REPL work: each line is its
+// own Program, and code compiled from an earlier one is still live.
+func (c *Compiler) absorbPositions(program *ast.Program) {
+	if program == nil {
+		return
+	}
+
+	if len(program.NodePositions) > 0 {
+		if c.positions == nil {
+			c.positions = make(map[ast.Node]ast.Range, len(program.NodePositions))
+		}
+		for node, rng := range program.NodePositions {
+			c.positions[node] = rng
+		}
+	}
+
+	if len(program.MacroExpansions) > 0 {
+		if c.macroOrigins == nil {
+			c.macroOrigins = make(map[ast.Node]ast.MacroOrigin, len(program.MacroExpansions))
+		}
+		for node, origin := range program.MacroExpansions {
+			c.macroOrigins[node] = origin
+		}
+	}
+}
+
+// SetSourceFile records the path reported in tracebacks and on errors. It is
+// stripped along with the line tables from anything built for distribution.
+func (c *Compiler) SetSourceFile(path string) { c.sourceFile = path }
+
+// SetSourceText embeds the program's source so a failing artifact can quote the
+// line it died on. Stripped for release along with the position tables.
+func (c *Compiler) SetSourceText(text string) { c.sourceText = text }
+
+// SetModuleSpans records which file each line of the linked source blob came
+// from. The linker calls it once, with one span per module in link order; a
+// single-file compile leaves it unset and the VM falls back to SourceFile.
+//
+// Spans must be sorted by StartLine, which link order already guarantees.
+func (c *Compiler) SetModuleSpans(spans []ModuleSpan) {
+	c.moduleSpans = append([]ModuleSpan(nil), spans...)
+}
+
+// parameterNames pulls the declared names out of a function literal so a
+// traceback can label the arguments it finds on the stack. A nil parameter --
+// which a hand-built AST in a test can produce -- becomes an empty name, and
+// the renderer falls back to the position for that one argument.
+func parameterNames(params []*ast.Identifier) []string {
+	if len(params) == 0 {
+		return nil
+	}
+
+	names := make([]string, len(params))
+	for i, param := range params {
+		if param != nil {
+			names[i] = param.Value
+		}
+	}
+	return names
+}
+
+func (c *Compiler) compileNode(node ast.Node) error {
 	switch node := node.(type) {
 	case *ast.Program:
 		for _, s := range node.Statements {
@@ -193,6 +669,8 @@ func (c *Compiler) Compile(node ast.Node) error {
 			c.emit(code.OpMinus)
 		case "!":
 			c.emit(code.OpBang)
+		case "~":
+			c.emit(code.OpBitNot)
 		default:
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
@@ -236,6 +714,16 @@ func (c *Compiler) Compile(node ast.Node) error {
 			c.emit(code.OpDiv)
 		case "%":
 			c.emit(code.OpMod)
+		case "&":
+			c.emit(code.OpBitAnd)
+		case "|":
+			c.emit(code.OpBitOr)
+		case "^":
+			c.emit(code.OpBitXor)
+		case "<<":
+			c.emit(code.OpShiftLeft)
+		case ">>":
+			c.emit(code.OpShiftRight)
 		case ">":
 			c.emit(code.OpGreater)
 		case ">=":
@@ -247,6 +735,8 @@ func (c *Compiler) Compile(node ast.Node) error {
 		default:
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
+	case *ast.MatchExpression:
+		return c.compileMatchExpression(node)
 	case *ast.IfExpression:
 		if err := c.Compile(node.Condition); err != nil {
 			return err
@@ -259,9 +749,7 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 
-		if c.lastInstructionIs(code.OpPop) {
-			c.removeLastPop()
-		}
+		c.leaveOneValue(node.Consequence)
 
 		// emit bogus jump location
 		jumpPos := c.emit(code.OpJump, 9999)
@@ -276,9 +764,7 @@ func (c *Compiler) Compile(node ast.Node) error {
 				return err
 			}
 
-			if c.lastInstructionIs(code.OpPop) {
-				c.removeLastPop()
-			}
+			c.leaveOneValue(node.Alternative)
 		}
 
 		afterAlternativePosition := len(c.currentInstructions())
@@ -300,6 +786,10 @@ func (c *Compiler) Compile(node ast.Node) error {
 	case *ast.StringLiteral:
 		str := &object.String{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(str))
+	case *ast.TemplateLiteral:
+		if err := c.compileTemplateLiteral(node); err != nil {
+			return err
+		}
 	case *ast.Boolean:
 		if node.Value {
 			c.emit(code.OpTrue)
@@ -405,16 +895,41 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 		freeSymbols := c.symbolTable.FreeSymbols
 		numLocals := c.symbolTable.numDefinitions
-		insts := c.leaveScope()
+		localNames := c.symbolTable.LocalSlotNames()
+		// Read before leaveScope drops the table. Every capture of one of this
+		// function's locals has already been discovered, because a capture is
+		// discovered while the inner literal is compiled and every inner literal
+		// is inside the body just compiled.
+		capturedLocals := c.symbolTable.CapturedLocals()
+		insts, debug := c.leaveScope()
 
+		// The reads and writes of a captured slot were emitted before anyone knew
+		// it would be captured, so they are patched now rather than at emit time.
+		// Only the opcode byte changes -- the cell forms take the same one-byte
+		// operand -- so nothing moves and no jump target, line-table offset or
+		// loop patch has to be recomputed.
+		boxCapturedLocals(insts, capturedLocals)
+
+		// The capture list OpClosure consumes is built in the *enclosing* scope,
+		// and it pushes cells rather than values: that shared pointer is the
+		// whole mechanism. loadSymbol is deliberately not used here -- it reads
+		// through storage, and this list is the one place that wants the storage
+		// itself.
 		for _, sym := range freeSymbols {
-			c.loadSymbol(sym)
+			c.emitCapture(sym)
 		}
 
 		compiledFun := &object.CompiledFunction{
-			Instructions: insts,
-			NumLocals:    numLocals,
-			NumParams:    len(node.Parameters),
+			Instructions:   insts,
+			NumLocals:      numLocals,
+			NumParams:      len(node.Parameters),
+			CapturedLocals: capturedLocals,
+			Name:           node.Name,
+			Params:         parameterNames(node.Parameters),
+			LocalNames:     localNames,
+			LineTable:      debug.lines,
+			MacroTable:     debug.macros,
+			EndTable:       debug.ends,
 		}
 
 		fnIndex := c.addConstant(compiledFun)
@@ -450,6 +965,12 @@ func (c *Compiler) Compile(node ast.Node) error {
 	case *ast.ForStatement:
 		return c.compileForStatement(node)
 
+	case *ast.WhileStatement:
+		return c.compileWhileStatement(node)
+
+	case *ast.ForInStatement:
+		return c.compileForInStatement(node)
+
 	case *ast.BreakStatement:
 		if len(c.loopContexts) == 0 {
 			return fmt.Errorf("break used outside of for loop")
@@ -468,6 +989,9 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 	case *ast.StructStatement:
 		// Store struct definition
+		if err := c.claimTypeName("struct", node.Name.Value); err != nil {
+			return err
+		}
 		c.structDefinitions[node.Name.Value] = node.Fields
 		return nil
 
@@ -476,6 +1000,9 @@ func (c *Compiler) Compile(node ast.Node) error {
 		tags := []string{}
 		for _, variant := range node.Variants {
 			tags = append(tags, variant.Value)
+		}
+		if err := c.claimTypeName("enum", node.Name.Value); err != nil {
+			return err
 		}
 		c.enumDefinitions[node.Name.Value] = tags
 		return nil
@@ -509,6 +1036,13 @@ func (c *Compiler) Compile(node ast.Node) error {
 		// compiled cleanly and then crashed when it was run.
 		return fmt.Errorf("internal: nothing to compile where an expression was expected")
 
+	case *ast.ImportStatement:
+		// Nothing to emit. An import is resolved and linked before compilation
+		// begins, so by the time the compiler sees this node the imported
+		// module's statements are already in the stream ahead of it. The node
+		// survives only as the record of what the author wrote -- which is what
+		// the formatter and the language server read it for.
+
 	default:
 		// Every AST node type has a case above. A new one landing here would
 		// otherwise compile to nothing at all, silently.
@@ -529,9 +1063,22 @@ func (c *Compiler) ByteCode() *ByteCode {
 		StructDefs:   c.structDefinitions,
 		EnumDefs:     c.enumDefinitions,
 		LuaPatches:   make(map[string]*object.LuaPatch),
+		Version:      BytecodeVersion,
+		BuiltinNames: c.symbolTable.ReferencedBuiltins(),
+		SourceFile:   c.sourceFile,
+		SourceText:   c.sourceText,
+		GlobalNames:  c.symbolTable.GlobalSlotNames(),
+		ModuleSpans:  c.moduleSpans,
+		LineTable:    c.scopes[c.scopeIndex].lines.Build(),
+		MacroTable:   c.scopes[c.scopeIndex].macros.Build(),
+		EndTable:     c.scopes[c.scopeIndex].ends.Build(),
 	}
 
-	// Apply polymorphic mutations if engine is enabled
+	// Apply polymorphic mutations if engine is enabled. The engine carries the
+	// line tables through its own offset remap, because mutation is on by
+	// default -- `mutant prog.mut` compiles at level 5 -- and dropping
+	// positions here would mean no ordinary run ever had them. What actually
+	// removes them is building for release; see generator.compile.
 	if c.polymorphicEngine != nil {
 		bytecode = c.polymorphicEngine.Mutate(bytecode)
 	}
@@ -609,8 +1156,19 @@ func (c *Compiler) addConstant(obj object.Object) int {
 func (c *Compiler) emit(op code.Opcode, operands ...int) int {
 	ins := code.Make(op, operands...)
 	pos := c.addInstruction(ins)
+	c.recordPosition(pos)
 	c.setLastInstruction(op, pos)
 	return pos
+}
+
+// recordPosition notes where the instruction beginning at ip came from. Both
+// builders drop the call when there is no position to record, so an instruction
+// outside any macro costs nothing in the macro table.
+func (c *Compiler) recordPosition(ip int) {
+	scope := &c.scopes[c.scopeIndex]
+	scope.lines.Add(ip, c.posLine, c.posCol)
+	scope.ends.Add(ip, c.posEndLine, c.posEndCol)
+	scope.macros.Add(ip, c.macroLine, c.macroCol)
 }
 
 func (c *Compiler) addInstruction(ins []byte) int {
@@ -648,10 +1206,27 @@ func (c *Compiler) replaceInstruction(pos int, newInstruction []byte) {
 	}
 }
 
+// changeOperand back-patches operand 0 of the instruction at pos, which is how
+// every forward jump gets its real target once the target is known.
+//
+// The operands after the first are read back and re-emitted unchanged. Rebuilding
+// the instruction from operand 0 alone would be right for every single-operand
+// opcode and silently wrong for a wider one: code.Make would produce a shorter
+// instruction, replaceInstruction would write only those bytes, and the tail of
+// the original -- OpIterNext's binding count -- would survive as the first byte
+// of whatever came next. That corrupts the stream from the patch point onward
+// rather than failing at it.
 func (c *Compiler) changeOperand(pos int, operand int) {
-	op := code.Opcode(c.currentInstructions()[pos])
-	newInstruction := code.Make(op, operand)
-	c.replaceInstruction(pos, newInstruction)
+	ins := c.currentInstructions()
+	op := code.Opcode(ins[pos])
+
+	operands := []int{operand}
+	if def, err := code.Lookup(byte(op)); err == nil && len(def.OperandWidths) > 1 {
+		existing, _ := code.ReadOperands(def, ins[pos+1:])
+		operands = append(operands, existing[1:]...)
+	}
+
+	c.replaceInstruction(pos, code.Make(op, operands...))
 }
 
 // compileLogicalExpression emits short-circuit code for && / || that leaves a
@@ -715,12 +1290,18 @@ func (c *Compiler) enterScope() {
 	c.symbolTable = NewEnclosedSymbolTable(c.symbolTable)
 }
 
-func (c *Compiler) leaveScope() code.Instructions {
+func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
 	instructions := c.currentInstructions()
+	debug := scopeDebug{
+		lines:  c.scopes[c.scopeIndex].lines.Build(),
+		ends:   c.scopes[c.scopeIndex].ends.Build(),
+		macros: c.scopes[c.scopeIndex].macros.Build(),
+	}
+
 	c.scopes = c.scopes[:len(c.scopes)-1]
 	c.scopeIndex--
 	c.symbolTable = c.symbolTable.Outer
-	return instructions
+	return instructions, debug
 }
 
 func (c *Compiler) loadSymbol(s Symbol) {
@@ -730,12 +1311,436 @@ func (c *Compiler) loadSymbol(s Symbol) {
 	case LocalScope:
 		c.emit(code.OpGetLocal, s.Index)
 	case BuiltinScope:
-		c.emit(code.OpGetBuiltin, s.Index)
+		// s.Index is the builtin's ordinal in the global registry, and that is
+		// deliberately not what gets emitted. An ordinal in the instruction
+		// stream makes the registry append-only forever: nothing can be renamed,
+		// retired or reordered without rebinding every call in every .mu already
+		// written. The operand indexes this program's own table of names
+		// instead, which the runtime resolves by name at load.
+		//
+		// The high bit marks the operand as a name-table index. It costs nothing
+		// here and makes a pre-v2.5 runtime handed this program stop on its own
+		// bounds check rather than silently call whichever builtin sits at that
+		// registry ordinal; see code.BuiltinNameTableFlag.
+		c.emit(code.OpGetBuiltin, code.BuiltinNameTableFlag|c.symbolTable.ReferenceBuiltin(s.Name))
 	case FreeScope:
+		// OpGetFree reads through the cell. A free whose original is the
+		// enclosing function's own name is captured by value instead and is not
+		// a cell; the VM's arm handles both, which is also what keeps bytecode
+		// compiled before boxing running unchanged.
 		c.emit(code.OpGetFree, s.Index)
 	case FunctionScope:
 		c.emit(code.OpCurrentClosure)
 	}
+}
+
+// emitCapture pushes the storage for symbol so OpClosure can put it in the new
+// closure's Free list. It is loadSymbol's counterpart for the capture list: the
+// same five scopes, but a boxed local yields its cell rather than its value.
+//
+// Only three of the five can appear, because Resolve returns globals and
+// builtins without capturing them -- an inner function reaches those directly.
+func (c *Compiler) emitCapture(s Symbol) {
+	switch s.Scope {
+	case LocalScope:
+		c.emit(code.OpCaptureLocal, s.Index)
+	case FreeScope:
+		// A capture two functions deep. This frame's Free[i] already holds the
+		// cell the owner boxed, so the inner closure is handed the same pointer
+		// and all three levels share one location.
+		c.emit(code.OpCaptureFree, s.Index)
+	case FunctionScope:
+		// The enclosing function's own name, for recursion. Not storage and not
+		// assignable, so it is captured by value; emitAssignStore refuses to
+		// write it.
+		c.emit(code.OpCurrentClosure)
+	default:
+		// Unreachable for anything Resolve produces; emitting the read form
+		// keeps a future scope from silently capturing nothing.
+		c.loadSymbol(s)
+	}
+}
+
+// boxCapturedLocals rewrites the plain local accessors for captured slots to
+// their cell forms, in place.
+//
+// The pass exists because of an ordering problem with no cheaper answer: a
+// capture is discovered when the *inner* function literal is compiled, and by
+// then the enclosing function has already emitted OpGetLocal/OpSetLocal for the
+// slot. Boxing every local instead would remove the pass and put a heap
+// allocation and an indirection on the hottest path in the VM, for the small
+// minority of locals anything captures.
+//
+// It walks by operand width rather than scanning for opcode bytes: an operand
+// can hold any value, including one that equals OpGetLocal, and a scan would
+// eventually rewrite a constant index or a jump target instead of an
+// instruction.
+func boxCapturedLocals(ins code.Instructions, captured []int) {
+	if len(captured) == 0 {
+		return
+	}
+	boxed := make(map[int]bool, len(captured))
+	for _, index := range captured {
+		boxed[index] = true
+	}
+
+	for ip := 0; ip < len(ins); {
+		def, err := code.Lookup(ins[ip])
+		if err != nil {
+			// Not decodable, so neither is anything after it. Stopping is right:
+			// this only ever runs on a stream this compiler just emitted, and
+			// guessing where the next instruction starts would corrupt it.
+			return
+		}
+		operands, read := code.ReadOperands(def, ins[ip+1:])
+		switch code.Opcode(ins[ip]) {
+		case code.OpGetLocal:
+			if len(operands) == 1 && boxed[operands[0]] {
+				ins[ip] = byte(code.OpGetLocalCell)
+			}
+		case code.OpSetLocal:
+			if len(operands) == 1 && boxed[operands[0]] {
+				ins[ip] = byte(code.OpSetLocalCell)
+			}
+		}
+		ip += 1 + read
+	}
+}
+
+// emitAssignStore writes the value on top of the stack back into symbol's
+// storage and leaves it there as the assignment expression's value.
+//
+// It exists because SymbolScope has five values and assignment used to branch
+// on two: everything that was not GlobalScope was written with OpSetLocal
+// against symbol.Index, and that index only means a frame slot for LocalScope.
+// A free variable's index is its position in the closure's capture list, so
+// writing free 0 landed on local 0 -- usually the first parameter -- and the
+// program carried on with a plausible wrong value. loadSymbol has always
+// switched all five ways; this is the write side of the same switch.
+//
+// Four of the five scopes are storage and are written. The captured one writes
+// through a cell -- the frame slot and every closure over the variable point at
+// the same one -- which is what lets a closure accumulate into a variable its
+// enclosing frame can still read. Builtins and the enclosing function's own name
+// are not storage and never should have compiled; they are refused here.
+func (c *Compiler) emitAssignStore(symbol Symbol) error {
+	if err := c.emitStoreOnly(symbol); err != nil {
+		return err
+	}
+	// Reloading is what makes an assignment evaluate to the value assigned,
+	// which is what every other assignment form here does and what the
+	// evaluator does. loadSymbol reads back through exactly the storage
+	// emitStoreOnly wrote to, scope for scope.
+	c.loadSymbol(symbol)
+	return nil
+}
+
+// emitStoreOnly writes the value on top of the stack into symbol's storage and
+// leaves nothing behind. Callers that want the assignment to have a value say
+// so by reloading something afterwards.
+func (c *Compiler) emitStoreOnly(symbol Symbol) error {
+	switch symbol.Scope {
+	case GlobalScope:
+		c.emit(code.OpSetGlobal, symbol.Index)
+	case LocalScope:
+		// Rewritten to the cell forms by boxCapturedLocals if it turns out
+		// something captures this slot, which is not known yet: the capture is
+		// discovered when the inner literal is compiled, and that has not
+		// happened at the point this runs.
+		c.emit(code.OpSetLocal, symbol.Index)
+	case FreeScope:
+		// The write goes through the shared cell, so the enclosing frame and
+		// every other closure over the same variable see it -- which is what
+		// Environment.Update has always done in the tree-walking evaluator.
+		//
+		// The one free that is not a cell is the enclosing function's own name,
+		// captured by value for recursion. Writing it is refused here rather
+		// than at run time, where the failure would be an opaque type error
+		// about a closure.
+		if original, ok := c.symbolTable.freeOriginal(symbol.Index); ok && original.Scope == FunctionScope {
+			return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
+		}
+		c.emit(code.OpSetFree, symbol.Index)
+	case BuiltinScope:
+		return fmt.Errorf("cannot assign to builtin: %s", symbol.Name)
+	case FunctionScope:
+		return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
+	default:
+		return fmt.Errorf("internal: no assignment path for %s in scope %s", symbol.Name, symbol.Scope)
+	}
+	return nil
+}
+
+// compileForInStatement emits the iterator-driven loop shape.
+//
+//	<iterable>
+//	OpIterInit          ; the iterable is replaced by a cursor over it
+//	head:
+//	OpIterNext end, n   ; push the next binding(s), or jump to end when spent
+//	<store bindings>
+//	<body>
+//	OpJump head
+//	end:
+//	OpPop               ; drop the cursor
+//
+// The cursor is left on the stack for the whole loop and dropped at `end`,
+// which is also where `break` is patched to -- so every way out of the loop
+// goes through the same pop and none of them leaks a stack slot. `continue`
+// is patched to `head`, where the advance lives: a for-in has no post section
+// of its own, the advance *is* the post section.
+func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
+	if node.Value == nil {
+		return fmt.Errorf("for ... in has no name to bind")
+	}
+	if node.Key != nil && node.Key.Value == node.Value.Value {
+		// Both halves would write the same slot, so the loop would silently
+		// read the key and then overwrite it with the value.
+		return fmt.Errorf("for ... in binds %s twice", node.Key.Value)
+	}
+
+	if err := c.Compile(node.Iterable); err != nil {
+		return err
+	}
+	c.emit(code.OpIterInit)
+
+	// Defined before the body is compiled, so the body can resolve them, and
+	// once rather than per iteration, so the slot is stable across the loop.
+	bindings := 1
+	valueSymbol := c.symbolTable.Define(node.Value.Value)
+	var keySymbol Symbol
+	if node.Key != nil {
+		bindings = 2
+		keySymbol = c.symbolTable.Define(node.Key.Value)
+	}
+
+	headPosition := len(c.currentInstructions())
+	nextPosition := c.emit(code.OpIterNext, 9999, bindings)
+
+	// Stored in reverse of the push order: OpIterNext pushes the key first and
+	// the value on top, so the value comes off first.
+	c.emitBindingStore(valueSymbol)
+	if node.Key != nil {
+		c.emitBindingStore(keySymbol)
+	}
+
+	c.loopContexts = append(c.loopContexts, LoopContext{})
+	if err := c.Compile(node.Body); err != nil {
+		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+		return err
+	}
+
+	// Deliberately no removeLastPop here, unlike the two condition-driven
+	// loops. Dropping the body's trailing pop leaves its last expression's
+	// value on the stack once per iteration, and this loop keeps its cursor
+	// underneath that -- so the second iteration reads the leftover value as
+	// the cursor. The body has to be stack-neutral.
+
+	ctx := &c.loopContexts[len(c.loopContexts)-1]
+	for _, pos := range ctx.continuePositions {
+		c.changeOperand(pos, headPosition)
+	}
+
+	c.emit(code.OpJump, headPosition)
+
+	loopEndPosition := len(c.currentInstructions())
+	c.changeOperand(nextPosition, loopEndPosition)
+	for _, pos := range ctx.breakPositions {
+		c.changeOperand(pos, loopEndPosition)
+	}
+	c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+
+	// Drop the cursor. Reached by falling out of the loop and by every break.
+	c.emit(code.OpPop)
+
+	return nil
+}
+
+// emitBindingStore stores the top of the stack into a loop binding. The plain
+// local form is right even when a closure in the body captures the binding:
+// boxCapturedLocals rewrites it to the cell form afterwards, once the capture
+// is known.
+// compileMatchExpression emits the compare-and-jump chain a `match` is.
+//
+// The subject is compiled once and stays on the stack for the whole
+// expression; each alternative duplicates it to test against, because OpEqual
+// and OpJumpFalse both consume what they read. The shape per arm is:
+//
+//	<subject>                                  ; pushed once, before any arm
+//	OpDup / <pattern> / OpEqual / OpJumpFalse  ; once per alternative
+//	OpPop                                      ; this arm matched: drop subject
+//	<arm body>                                 ; leaves exactly one value
+//	OpJump end
+//	...
+//	OpMatchFail                                ; nothing matched
+//	end:
+//
+// A scratch local holding the subject would work too, and was rejected:
+// SymbolTable.Define never reuses a slot, so a match inside a large function
+// would spend one of the 256 local slots per occurrence and eventually panic
+// in code.Make. OpDup already existed and costs one byte.
+func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
+	if len(node.Arms) == 0 {
+		return fmt.Errorf("match has no arms")
+	}
+
+	if err := c.Compile(node.Subject); err != nil {
+		return err
+	}
+
+	endJumps := []int{}
+	matchAlwaysSucceeds := false
+
+	for _, arm := range node.Arms {
+		if arm == nil || arm.Body == nil {
+			return fmt.Errorf("match arm has no body")
+		}
+
+		// Jumps meaning "an alternative matched, run the body", and the one
+		// test whose failure leaves the arm entirely.
+		matchedJumps := []int{}
+		missedJump := -1
+
+		for i, pattern := range arm.Patterns {
+			c.emit(code.OpDup)
+			if err := c.Compile(pattern); err != nil {
+				return err
+			}
+			c.emit(code.OpEqual)
+
+			if i == len(arm.Patterns)-1 {
+				missedJump = c.emit(code.OpJumpFalse, 9999)
+				break
+			}
+
+			// Not the last alternative of `a | b | c`: failing this one only
+			// rules out this one, so it falls through to the next test rather
+			// than leaving the arm.
+			nextAlternative := c.emit(code.OpJumpFalse, 9999)
+			matchedJumps = append(matchedJumps, c.emit(code.OpJump, 9999))
+			c.changeOperand(nextAlternative, len(c.currentInstructions()))
+		}
+
+		for _, pos := range matchedJumps {
+			c.changeOperand(pos, len(c.currentInstructions()))
+		}
+
+		// The arm matched, so the subject has done its work.
+		c.emit(code.OpPop)
+
+		if err := c.Compile(arm.Body); err != nil {
+			return err
+		}
+		c.leaveOneValue(arm.Body)
+
+		endJumps = append(endJumps, c.emit(code.OpJump, 9999))
+
+		if arm.IsWildcard() {
+			// `_` is emitted with no test at all, so there is no jump to
+			// patch and nothing after this arm can be reached.
+			matchAlwaysSucceeds = true
+			continue
+		}
+		c.changeOperand(missedJump, len(c.currentInstructions()))
+	}
+
+	// Falling off the end is an error naming the value, not a null. A match is
+	// an expression, so a silent null would flow on as though an arm had
+	// produced it -- and an enum gaining a variant later is exactly the case
+	// where every existing match would start doing that.
+	if !matchAlwaysSucceeds {
+		c.emit(code.OpMatchFail)
+	}
+
+	endPosition := len(c.currentInstructions())
+	for _, pos := range endJumps {
+		c.changeOperand(pos, endPosition)
+	}
+
+	return nil
+}
+
+// leaveOneValue makes the block just compiled leave exactly one value on the
+// stack, which is what every branch of a value-producing expression owes its
+// caller.
+//
+// A block ending in an expression statement ends in an OpPop -- the statement
+// pushed its value and threw it away -- so removing that pop turns the block
+// back into the value it computed. A block ending in anything else (a `let`, a
+// loop, a `return`, or nothing at all) computed no value, and a branch that
+// pushed nothing while its siblings pushed one leaves everything after it
+// reading one slot too deep.
+//
+// The question is asked of the syntax rather than of the last instruction
+// emitted, and that is not a style choice. A `for (v in xs)` statement also
+// ends in an OpPop -- the one that drops the loop cursor OpIterInit pushed --
+// so a block ending in a loop looks exactly like a block ending in a value to
+// anything that only inspects the instruction stream, and stripping that pop
+// leaves the cursor on the stack as the arm's value.
+func (c *Compiler) leaveOneValue(body *ast.BlockStatement) {
+	if body != nil && len(body.Statements) > 0 {
+		if _, ok := body.Statements[len(body.Statements)-1].(*ast.ExpressionStatement); ok {
+			// An expression statement always emits its OpPop, so this is
+			// always the instruction that pop belongs to.
+			c.removeLastPop()
+			return
+		}
+	}
+	c.emit(code.OpNull)
+}
+
+func (c *Compiler) emitBindingStore(symbol Symbol) {
+	if symbol.Scope == GlobalScope {
+		c.emit(code.OpSetGlobal, symbol.Index)
+		return
+	}
+	c.emit(code.OpSetLocal, symbol.Index)
+}
+
+// compileWhileStatement emits the same loop shape as a for statement with no
+// init and no post section.
+//
+// The one difference that matters is where `continue` lands: a for loop sends
+// it to the post section so the increment still runs, but a while loop has no
+// post section, so it goes straight back to the condition. Sending it to the
+// loop end instead -- or forgetting to patch it at all -- turns `continue` into
+// `break`, which is the kind of wrong that runs.
+func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
+	conditionStartPosition := len(c.currentInstructions())
+	if node.Condition == nil {
+		return fmt.Errorf("while statement has no condition")
+	}
+	if err := c.Compile(node.Condition); err != nil {
+		return err
+	}
+
+	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
+
+	c.loopContexts = append(c.loopContexts, LoopContext{})
+	if err := c.Compile(node.Body); err != nil {
+		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+		return err
+	}
+
+	if c.lastInstructionIs(code.OpPop) {
+		c.removeLastPop()
+	}
+
+	ctx := &c.loopContexts[len(c.loopContexts)-1]
+	for _, pos := range ctx.continuePositions {
+		c.changeOperand(pos, conditionStartPosition)
+	}
+
+	c.emit(code.OpJump, conditionStartPosition)
+	loopEndPosition := len(c.currentInstructions())
+	c.changeOperand(jumpFalsePosition, loopEndPosition)
+
+	for _, pos := range ctx.breakPositions {
+		c.changeOperand(pos, loopEndPosition)
+	}
+
+	c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
+
+	return nil
 }
 
 func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
@@ -814,94 +1819,303 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 		}
 	}
 
+	base, steps, ok := flattenAssignTarget(node.Left)
+	if !ok {
+		return fmt.Errorf("invalid assignment target")
+	}
+
 	// Handle identifier assignment: x = value
-	if ident, ok := node.Left.(*ast.Identifier); ok {
+	if len(steps) == 0 {
 		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 
-		symbol, ok := c.symbolTable.Resolve(ident.Value)
+		symbol, ok := c.symbolTable.Resolve(base.Value)
 		if !ok {
 			// If not found, define it as global
-			symbol = c.symbolTable.Define(ident.Value)
+			symbol = c.symbolTable.Define(base.Value)
 		}
 
-		if symbol.Scope == GlobalScope {
-			c.emit(code.OpSetGlobal, symbol.Index)
-			c.emit(code.OpGetGlobal, symbol.Index)
-		} else {
-			c.emit(code.OpSetLocal, symbol.Index)
-			c.emit(code.OpGetLocal, symbol.Index)
-		}
-		return nil
+		return c.emitAssignStore(symbol)
 	}
 
-	// Handle field assignment: struct.field = value
-	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
-		if err := c.Compile(fieldExpr.Left); err != nil {
-			return err
+	// Assigning through an import namespace would read as "give that module a
+	// different value", which no module system here can honour: the target is
+	// another file's global slot and the write would be invisible at its
+	// declaration. Say so, rather than letting it fall through to "undefined
+	// variable: <namespace>".
+	if steps[0].field != "" {
+		if key, bound := c.symbolTable.LookupNamespace(base.Value); bound {
+			return fmt.Errorf(
+				"cannot assign to %s.%s: %s belongs to %s, and a module owns its own top-level names",
+				base.Value, steps[0].field, steps[0].field, c.moduleName(key),
+			)
 		}
+	}
 
-		fieldNameIndex := c.addConstant(&object.String{Value: fieldExpr.Field.Value})
+	symbol, resolved := c.symbolTable.Resolve(base.Value)
+	if !resolved {
+		return fmt.Errorf("undefined variable: %s", base.Value)
+	}
 
+	// Every hop but the last is loaded again on the way back out, so an index
+	// that is a call would run more than once. Refuse that rather than emit it:
+	// the workaround is one line (`let k = f(); a[k][j] = v`) and the failure it
+	// replaces -- a side effect happening a number of times the source does not
+	// say -- is not one anybody would find by reading the program.
+	for _, step := range steps[:len(steps)-1] {
+		if step.index != nil && !pureAssignIndex(step.index) {
+			return fmt.Errorf(
+				"cannot assign through %s: an index before the last one is evaluated more than once, "+
+					"so it has to be a name or a literal -- bind it to a variable first",
+				node.Left.String(),
+			)
+		}
+	}
+
+	// The value is compiled once, into a slot, and read back from there both as
+	// the innermost store's operand and as what the whole expression evaluates
+	// to. That is the only way the assigned value survives a chain: every store
+	// on the way out consumes three stack slots and leaves one, so the value the
+	// program wrote is gone by the time the outermost store finishes, and before
+	// that it sits underneath intermediate containers with nothing to reach it.
+	// Reading the target back instead would answer with what the container now
+	// holds rather than with what was assigned, and would force the last index
+	// to be re-evaluated -- so `counts[etld1(url)] = 1` would stop compiling.
+	//
+	// The spill happens where the value expression was already being compiled,
+	// so the order a program's side effects run in does not change: container,
+	// then index, then value, exactly as before.
+	spill := c.internalSlot("assign")
+	if err := c.emitAssignChain(symbol, steps, len(steps), func() error {
 		if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
-
-		c.emit(code.OpSetField, fieldNameIndex)
-
-		// If assigning to a named variable field (e.g., p.x = 1), persist the updated struct.
-		if ident, ok := fieldExpr.Left.(*ast.Identifier); ok {
-			symbol, resolved := c.symbolTable.Resolve(ident.Value)
-			if !resolved {
-				return fmt.Errorf("undefined variable: %s", ident.Value)
-			}
-
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-				c.emit(code.OpGetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-				c.emit(code.OpGetLocal, symbol.Index)
-			}
-			c.emit(code.OpGetField, fieldNameIndex)
+		if err := c.emitStoreOnly(spill); err != nil {
+			return err
 		}
+		c.loadSymbol(spill)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// An assignment evaluates to the value assigned -- the same answer the
+	// evaluator gives, the same answer `x = 1`, `p.x = 1` and `x += 1` give
+	// here, and the same answer every language where assignment is an
+	// expression gives. Index assignment used to be the one exception, yielding
+	// whatever OpSetIndex happened to leave on the stack, which was the
+	// container.
+	c.loadSymbol(spill)
+	return nil
+}
+
+// internalSlot hands back the compiler's own storage for kind in the scope being
+// compiled, claiming it the first time it is asked for.
+//
+// One slot per scope is enough, and it is worth saying why, because the obvious
+// worry is an assignment nested inside another one -- `r[q[0] = 1] = 77`, or
+// `a[0] = (b[0] = 5)`. Nothing of the program's runs between this slot being
+// written and being read: the value is spilled where the value expression was
+// already being compiled, and everything between that point and the final read
+// is the chain's own stores. An inner assignment is therefore always finished
+// with the slot before an outer one writes it, and its result is already on the
+// stack. A slot per nesting depth was written first and removed: it guarded
+// against an ordering that spilling in source order had already ruled out, and
+// a safety mechanism nothing can make fail is one that only looks like safety.
+//
+// The key is spelled with a space so no source line can collide with it, and
+// DefineInternal leaves the symbol nameless so it stays out of the debugger and
+// the REPL's completion.
+func (c *Compiler) internalSlot(kind string) Symbol {
+	key := " " + kind
+	if symbol, ok := c.symbolTable.ResolveInternal(key); ok {
+		return symbol
+	}
+	return c.symbolTable.DefineInternal(key)
+}
+
+// assignStep is one hop of an assignment target: `[i]` or `.f`. Every target is
+// a base identifier followed by zero or more of them, and flattening it that way
+// is what lets a write through more than one container be emitted at all --
+// `grid[0][1] = 9` used to mutate a container nothing stored back, and the write
+// disappeared with no error.
+type assignStep struct {
+	index ast.Expression // set for a[i]
+	field string         // set for a.f
+}
+
+// flattenAssignTarget peels an assignment target down to the variable it
+// ultimately writes, returning the hops in source order. It reports false for a
+// target with no variable under it (`f()[0] = 1`, `[1, 2][0] = 1`), which the
+// caller turns into a compile error: there is nowhere to store the result, and
+// emitting a mutation of a temporary would be a write the program never sees.
+func flattenAssignTarget(target ast.Expression) (*ast.Identifier, []assignStep, bool) {
+	var steps []assignStep
+	for {
+		switch t := target.(type) {
+		case *ast.Identifier:
+			for i, j := 0, len(steps)-1; i < j; i, j = i+1, j-1 {
+				steps[i], steps[j] = steps[j], steps[i]
+			}
+			return t, steps, true
+		case *ast.IndexExpression:
+			if t.Index == nil {
+				return nil, nil, false
+			}
+			steps = append(steps, assignStep{index: t.Index})
+			target = t.Left
+		case *ast.FieldExpression:
+			if t.Field == nil {
+				return nil, nil, false
+			}
+			steps = append(steps, assignStep{field: t.Field.Value})
+			target = t.Left
+		default:
+			return nil, nil, false
+		}
+	}
+}
+
+// pureAssignIndex reports whether an index expression can be evaluated more than
+// once without changing what the program does. Names and literals can; a call
+// cannot, and neither can anything built out of one.
+func pureAssignIndex(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.Identifier, *ast.IntegerLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.Boolean:
+		return true
+	case *ast.IndexExpression:
+		return pureAssignIndex(e.Left) && pureAssignIndex(e.Index)
+	case *ast.FieldExpression:
+		return pureAssignIndex(e.Left)
+	default:
+		return false
+	}
+}
+
+// emitAssignChain writes emitValue into base + steps[:depth], storing every
+// container it passed through back where it came from.
+//
+// Both stores leave the container they mutated on the stack, which is the whole
+// trick: the new value of a container one level up is exactly "load that level,
+// mutate it, and take what OpSetIndex hands back". So a nested write is the
+// shallower write with a deeper one supplying its value, and the recursion
+// bottoms out at the base variable, where emitAssignStore finally puts something
+// somewhere that outlives the expression.
+//
+// The alternative -- mutating in place and trusting the containers to be shared
+// -- is what the compiler used to do, and it is only true when a load hands back
+// the same object the slot holds. Globals and locals are stored encrypted, so a
+// load hands back a copy, and the write went into the copy.
+func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int, emitValue func() error) error {
+	last := steps[depth-1]
+
+	// store mutates the container already on the stack and leaves it there.
+	store := func() error {
+		if last.index != nil {
+			if err := c.Compile(last.index); err != nil {
+				return err
+			}
+			if err := emitValue(); err != nil {
+				return err
+			}
+			c.emit(code.OpSetIndex)
+			return nil
+		}
+		if err := emitValue(); err != nil {
+			return err
+		}
+		c.emit(code.OpSetField, c.addConstant(&object.String{Value: last.field}))
 		return nil
 	}
 
-	// Handle index assignment: a[i] = value / h[k] = value
-	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
-		if err := c.Compile(idxExpr.Left); err != nil {
+	if depth == 1 {
+		c.loadSymbol(symbol)
+		if err := store(); err != nil {
 			return err
 		}
-		if err := c.Compile(idxExpr.Index); err != nil {
-			return err
-		}
-		if err := c.Compile(valueExpr); err != nil {
-			return err
-		}
-		c.emit(code.OpSetIndex)
+		// Nothing is reloaded here: the chain leaves the stack as it found it,
+		// and the caller pushes the assigned value.
+		return c.emitStoreOnly(symbol)
+	}
 
-		// If the container is a simple variable, persist the mutated container
-		// back into its slot (mirrors field assignment) and leave it as the
-		// expression's value.
-		if ident, ok := idxExpr.Left.(*ast.Identifier); ok {
-			symbol, resolved := c.symbolTable.Resolve(ident.Value)
-			if !resolved {
-				return fmt.Errorf("undefined variable: %s", ident.Value)
-			}
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-				c.emit(code.OpGetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-				c.emit(code.OpGetLocal, symbol.Index)
-			}
+	return c.emitAssignChain(symbol, steps, depth-1, func() error {
+		if err := c.emitPathLoad(symbol, steps, depth-1); err != nil {
+			return err
 		}
+		return store()
+	})
+}
+
+// emitPathLoad pushes the value of base + steps[:depth].
+func (c *Compiler) emitPathLoad(symbol Symbol, steps []assignStep, depth int) error {
+	c.loadSymbol(symbol)
+	for _, step := range steps[:depth] {
+		if step.index != nil {
+			if err := c.Compile(step.index); err != nil {
+				return err
+			}
+			c.emit(code.OpIndex)
+			continue
+		}
+		c.emit(code.OpGetField, c.addConstant(&object.String{Value: step.field}))
+	}
+	return nil
+}
+
+// claimTypeName records that the module being compiled declares a struct or
+// enum called name, and refuses the declaration if another module already did.
+//
+// Type names are program-wide, so this is the only thing standing between two
+// modules that each declare `Point` and a program where one of them silently
+// gets the other's fields. Outside a modular compile every key is "", so a
+// REPL redeclaring a type on a later line is still free to do it.
+func (c *Compiler) claimTypeName(kind, name string) error {
+	key := c.symbolTable.CurrentModule()
+	if owner, taken := c.typeOwners[name]; taken && owner != key {
+		return fmt.Errorf(
+			"%s %s is declared in both %s and %s: struct and enum names are shared across the whole program, so one of them has to be renamed",
+			kind, name, c.moduleName(owner), c.moduleName(key),
+		)
+	}
+	c.typeOwners[name] = key
+	return nil
+}
+
+// compileTemplateLiteral compiles "a${b}c" as its pieces in source order
+// followed by one OpConcat that joins them.
+//
+// The alternative -- desugaring to a call -- would have been fewer lines and
+// one silent trap: whichever function it called could be shadowed by a module
+// that declares that name, and every interpolated string in the program would
+// then mean something else.
+func (c *Compiler) compileTemplateLiteral(node *ast.TemplateLiteral) error {
+	pieces := 0
+	for i, text := range node.Texts {
+		// An empty text slot contributes nothing and is not worth a constant:
+		// "${a}${b}" has three of them.
+		if text != "" {
+			c.emit(code.OpConstant, c.addConstant(&object.String{Value: text}))
+			pieces++
+		}
+		if i >= len(node.Parts) {
+			continue
+		}
+		if err := c.Compile(node.Parts[i]); err != nil {
+			return err
+		}
+		pieces++
+	}
+
+	if pieces == 0 {
+		c.emit(code.OpConstant, c.addConstant(&object.String{Value: ""}))
 		return nil
 	}
 
-	return fmt.Errorf("invalid assignment target")
+	// A single piece still goes through OpConcat rather than being left on the
+	// stack: "${n}" has to produce a string even when n is an integer.
+	c.emit(code.OpConcat, pieces)
+	return nil
 }
 
 func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
@@ -912,6 +2126,26 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 			c.emit(code.OpEnumValue, typeNameIndex, tagNameIndex)
 			return nil
 		}
+
+		// An import namespace reaches into another module's top level. It is
+		// tried before an ordinary variable of the same name because the
+		// import is a declaration in this very file, and after enums because
+		// those were already a namespace-shaped thing before modules existed.
+		if key, bound := c.symbolTable.LookupNamespace(ident.Value); bound {
+			return c.compileModuleMember(key, ident.Value, node.Field.Value)
+		}
+
+		// A namespaced builtin: fs.read is fs_read. Derived rather than
+		// tabulated, so every family works the moment it is added and nothing
+		// has to be kept in step. It is tried last, so a variable, parameter or
+		// struct called `fs` still wins and no existing program changes
+		// meaning.
+		if _, shadowed := c.symbolTable.Resolve(ident.Value); !shadowed {
+			if flat := ident.Value + "_" + node.Field.Value; builtin.GetBuiltinByName(flat) != nil {
+				c.loadSymbol(Symbol{Name: flat, Scope: BuiltinScope})
+				return nil
+			}
+		}
 	}
 
 	if err := c.Compile(node.Left); err != nil {
@@ -920,6 +2154,26 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 
 	fieldNameIndex := c.addConstant(&object.String{Value: node.Field.Value})
 	c.emit(code.OpGetField, fieldNameIndex)
+	return nil
+}
+
+// compileModuleMember loads name from the top level of the module bound to
+// namespace.
+func (c *Compiler) compileModuleMember(key, namespace, name string) error {
+	if IsModulePrivate(name) {
+		return fmt.Errorf(
+			"%s.%s is private to %s: a top-level name beginning with _ is visible only inside the module that declares it",
+			namespace, name, c.moduleName(key),
+		)
+	}
+
+	symbol, ok := c.symbolTable.ResolveIn(key, name)
+	if !ok {
+		return fmt.Errorf("%s declares no %s, so %s.%s has nothing to refer to",
+			c.moduleName(key), name, namespace, name)
+	}
+
+	c.loadSymbol(symbol)
 	return nil
 }
 

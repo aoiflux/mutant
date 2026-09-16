@@ -345,5 +345,6 @@ func assertJumpsHitBoundaries(t *testing.T, level int, ins code.Instructions) {
 // would mean every assertion about NOP shape had to allow for a block that is
 // jumped over instead -- which is what polymorphic_dead_code_test.go is for.
 func padWithNOPs(pe *PolymorphicEngine, ins code.Instructions, rate float64, protectFinalPop bool) code.Instructions {
-	return pe.padInstructions(ins, rate, protectFinalPop, pe.fillerGenerators(MutationConfig{InsertNOPs: true}))
+	padded, _ := pe.padInstructions(ins, rate, protectFinalPop, pe.fillerGenerators(MutationConfig{InsertNOPs: true}))
+	return padded
 }

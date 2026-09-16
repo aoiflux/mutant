@@ -63,7 +63,7 @@ func Imphash(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("imphash", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameImphash, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -89,7 +89,7 @@ func Imphash(args ...object.Object) (result object.Object) {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"imphash":      stringObj(computeImphash(libs)),
+		BuiltinNameImphash:      stringObj(computeImphash(libs)),
 		"import_count": intObj(int64(importCount)),
 		"dll_count":    intObj(int64(len(libs))),
 	}), nil)
@@ -99,7 +99,7 @@ func Imphash(args ...object.Object) (result object.Object) {
 
 // NTHash returns the NT hash (MD4 of the UTF-16LE password), as used in NTLM.
 func NTHash(args ...object.Object) object.Object {
-	password, errObj := strOneStringArg("nt_hash", args)
+	password, errObj := strOneStringArg(BuiltinNameNTHash, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -122,7 +122,7 @@ var lmMagic = []byte("KGS!@#$%")
 // LMHash returns the legacy LM hash of a password (DES-based; case-insensitive,
 // max 14 chars). Empty password -> aad3b435b51404eeaad3b435b51404ee.
 func LMHash(args ...object.Object) object.Object {
-	password, errObj := strOneStringArg("lm_hash", args)
+	password, errObj := strOneStringArg(BuiltinNameLMHash, args)
 	if errObj != nil {
 		return errObj
 	}

@@ -281,6 +281,28 @@ func functionLiteralInStatementForIdent(stmt mast.Statement, target *mast.Identi
 				return literal, true
 			}
 		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Iterable, target); ok {
+				return literal, true
+			}
+		}
+		if node.Body != nil {
+			if literal, ok := functionLiteralInStatementForIdent(node.Body, target); ok {
+				return literal, true
+			}
+		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Condition, target); ok {
+				return literal, true
+			}
+		}
+		if node.Body != nil {
+			if literal, ok := functionLiteralInStatementForIdent(node.Body, target); ok {
+				return literal, true
+			}
+		}
 	case *mast.ForStatement:
 		if node.Init != nil {
 			if literal, ok := functionLiteralInStatementForIdent(node.Init, target); ok {
@@ -322,6 +344,23 @@ func functionLiteralInExpressionForIdent(expr mast.Expression, target *mast.Iden
 		}
 		if node.Alternative != nil {
 			if literal, ok := functionLiteralInStatementForIdent(node.Alternative, target); ok {
+				return literal, true
+			}
+		}
+	case *mast.MatchExpression:
+		// Patterns cannot hold a function literal -- the pattern grammar admits
+		// literals and enum paths only -- so only the subject and the bodies
+		// are worth searching.
+		if node.Subject != nil {
+			if literal, ok := functionLiteralInExpressionForIdent(node.Subject, target); ok {
+				return literal, true
+			}
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			if literal, ok := functionLiteralInStatementForIdent(arm.Body, target); ok {
 				return literal, true
 			}
 		}
@@ -392,6 +431,12 @@ func functionLiteralInExpressionForIdent(expr mast.Expression, target *mast.Iden
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			if literal, ok := functionLiteralInExpressionForIdent(element, target); ok {
+				return literal, true
+			}
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			if literal, ok := functionLiteralInExpressionForIdent(element, target); ok {
 				return literal, true
 			}

@@ -3,9 +3,11 @@ package analyzer
 import (
 	mast "mutant/ast"
 	"mutant/builtin"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // kindAnnotation matches the `: STRING` / `: STRING|ARRAY|HASH` suffixes that
@@ -335,5 +337,56 @@ func TestBuiltinRichParameterDocsForNewerFamilies(t *testing.T) {
 				t.Fatalf("builtin %q hover text = %q, want parameter bullet %q", tc.name, hover, bullet)
 			}
 		}
+	}
+}
+
+// ruleNameForConfigField derives the rule name severityForRule is asked for
+// from a LintConfig field name: the field with a lower-case first letter, which
+// is the spelling every rule already uses.
+func ruleNameForConfigField(field string) string {
+	if field == "" {
+		return ""
+	}
+	runes := []rune(field)
+	runes[0] = unicode.ToLower(runes[0])
+	return string(runes)
+}
+
+// TestEveryLintRuleReachesItsSeverity walks LintConfig by reflection and checks
+// that severityForRule answers for each field's rule name.
+//
+// This is the third of the three seams a new rule has to be threaded through,
+// and it is the one that fails most quietly. severityForRule's default arm
+// returns (nil, false), which every rule reads as "switched off" -- so a rule
+// with a config field, a settings key and a place in Diagnostics(), but no case
+// here, compiles, runs, and reports nothing, forever. The other two seams have
+// had reflection tests since they were built (TestEveryLintRuleIsSettable and
+// TestEveryLintRuleIsExposedByTheExtension in lsp/internal/server); this one did
+// not, and the gap was found the way such gaps are: by writing a rule and
+// watching it say nothing.
+func TestEveryLintRuleReachesItsSeverity(t *testing.T) {
+	configType := reflect.TypeOf(LintConfig{})
+	if configType.NumField() == 0 {
+		t.Fatal("LintConfig has no fields")
+	}
+
+	config := DefaultLintConfig()
+	for i := 0; i < configType.NumField(); i++ {
+		rule := ruleNameForConfigField(configType.Field(i).Name)
+
+		t.Run(rule, func(t *testing.T) {
+			if _, ok := config.severityForRule(rule); !ok {
+				t.Fatalf("severityForRule(%q) says the rule is off at its default severity; is there a case for it?", rule)
+			}
+
+			// And that case has to read this field rather than another one:
+			// turning this rule off must be what silences it.
+			off := DefaultLintConfig()
+			reflect.ValueOf(&off).Elem().Field(i).SetString(string(LintSeverityOff))
+			if _, ok := off.severityForRule(rule); ok {
+				t.Fatalf("severityForRule(%q) ignores %s; the case is reading the wrong field",
+					rule, configType.Field(i).Name)
+			}
+		})
 	}
 }

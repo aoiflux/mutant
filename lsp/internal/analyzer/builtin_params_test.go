@@ -20,12 +20,12 @@ func TestBuiltinSignatureLabelSpansCoverTheirParameters(t *testing.T) {
 	// The return rides on the end of the label. Spans are prefix offsets, so
 	// appending it leaves every one of them valid — which is the property that
 	// lets one renderer serve both hover and signature help.
-	wantLabel := "bytes_slice(data: STRING, start: INTEGER, length: INTEGER) -> (STRING, ERROR)"
+	wantLabel := "bytes_slice(data: STRING|BYTES, start: INTEGER, length: INTEGER) -> (STRING|BYTES, ERROR)"
 	if label != wantLabel {
 		t.Fatalf("signature label = %q, want %q", label, wantLabel)
 	}
 
-	want := []string{"data: STRING", "start: INTEGER", "length: INTEGER"}
+	want := []string{"data: STRING|BYTES", "start: INTEGER", "length: INTEGER"}
 	if len(spans) != len(want) {
 		t.Fatalf("label carried %d spans, want %d", len(spans), len(want))
 	}
@@ -89,7 +89,7 @@ func TestBuiltinCompletionDetailKeepsItsSortingPrefix(t *testing.T) {
 	if !strings.HasPrefix(*detail, "builtin") {
 		t.Errorf("completion detail = %q, want it to start with \"builtin\"", *detail)
 	}
-	if !strings.Contains(*detail, "len(value: STRING|ARRAY|HASH)") {
+	if !strings.Contains(*detail, "len(value: STRING|BYTES|ARRAY|HASH)") {
 		t.Errorf("completion detail = %q, want it to carry the typed signature", *detail)
 	}
 

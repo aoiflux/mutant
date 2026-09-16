@@ -28,7 +28,7 @@ func FsDeleted(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("fs_deleted", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameFsDeleted, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -97,6 +97,14 @@ func deletedEntryHash(r mftRow, fullPath string, rec residentRecovery) object.Ob
 		"resident":      boolObj(rec.resident),
 		"recoverable":   boolObj(rec.resident && len(rec.data) > 0),
 		"resident_data": stringObj(hex.EncodeToString(rec.data)), // hex, binary-safe
+		// The same bytes, untouched. Recovering a deleted file is the whole point
+		// of the resident case, and writing it back out used to mean decoding the
+		// hex through string_to_bytes -- which returns a multi-value, so it needed
+		// its own statement before the fs_write could be written.
+		//
+		// rec.data is already an owned clone (see recoverResidentData), so nothing
+		// else aliases the buffer a script can now index into and mutate.
+		"resident_data_bytes": &object.Bytes{Value: rec.data},
 	}
 	addMFTTimes(m, "si", r.si != nil, siTimes(r.si))
 	addMFTTimes(m, "fn", r.fn != nil, fnTimes(r.fn))

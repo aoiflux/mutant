@@ -78,7 +78,7 @@ func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 	defer security.SetLocalKeyStoreDirForTesting("")
 
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected malformed payload to fail")
 	}
@@ -102,7 +102,7 @@ func TestRunSecureModeBootstrapsLocalKeysWhenTrustedEnvMissing(t *testing.T) {
 
 func TestRunCompatModeWarnsAndContinuesOnMalformedPayload(t *testing.T) {
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", false, false)
+	err, errType := Run(path, Options{})
 	if err == nil {
 		t.Fatalf("expected compat mode to fail later during decode")
 	}
@@ -128,7 +128,7 @@ func TestRunSecureModeRejectsTamperedSignedPayload(t *testing.T) {
 	tampered := tamperSignedPublicKey(t, string(signed))
 	path := writeTempPayload(t, []byte(tampered))
 
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected secure mode to reject tampered signed payload")
 	}
@@ -156,7 +156,7 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 	}
 
 	path := writeTempPayload(t, signed)
-	err, errType := Run(path, "", true, true)
+	err, errType := Run(path, Options{SecureMode: true, EnforceSignerAuth: true})
 	if err == nil {
 		t.Fatalf("expected decode failure after signature verification")
 	}
@@ -168,17 +168,56 @@ func TestRunSecureModeAcceptsSignatureThenFailsDecode(t *testing.T) {
 	}
 }
 
-func TestRunSecureModeWithoutSignerAuthFlagSkipsSignatureVerification(t *testing.T) {
+// Secure mode without --signer-auth used to match neither verification branch
+// and so verify nothing, while --compat self-verified: the most secure-sounding
+// invocation performed the fewest checks. Self-verification is now the floor in
+// every mode, and --signer-auth upgrades it to trusted-key verification. (M-4)
+func TestSecureModeSelfVerifiesWithoutSignerAuth(t *testing.T) {
 	path := writeTempPayload(t, []byte("legacy-format-payload"))
-	err, errType := Run(path, "", true, false)
+
+	err, errType := Run(path, Options{SecureMode: true})
 	if err == nil {
-		t.Fatalf("expected malformed payload to fail decode")
+		t.Fatalf("expected a malformed payload to fail")
 	}
 	if errType != errrs.ERROR {
 		t.Fatalf("expected errrs.ERROR, got %q", errType)
 	}
-	if errors.Is(err, security.ErrWrongSignature) || errors.Is(err, security.ErrUntrustedSigner) {
-		t.Fatalf("expected secure mode to skip signer verification by default, got: %v", err)
+	if !errors.Is(err, security.ErrWrongSignature) && !errors.Is(err, security.ErrUntrustedSigner) {
+		t.Fatalf("expected secure mode to self-verify and reject the payload, got: %v", err)
+	}
+}
+
+// The security guarantee has to be monotonic in the mode: every check a weaker
+// mode performs, a stronger one performs too. Asserting on the returned error
+// alone cannot show this, because compat's tamper response is `warn` -- it
+// records the failure and continues, so the error that surfaces is the later
+// decode failure. The telemetry counter records the attempt itself, which is
+// the thing that must never be skipped. (M-4)
+func TestSignatureVerificationRunsInEveryMode(t *testing.T) {
+	modes := []struct {
+		name string
+		opts Options
+	}{
+		{"compat", Options{SecureMode: false}},
+		{"default (secure)", Options{SecureMode: true}},
+		{"secure with signer-auth", Options{SecureMode: true, EnforceSignerAuth: true}},
+	}
+
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			before := security.SecurityTelemetrySnapshot()["signature_failed"]
+
+			path := writeTempPayload(t, []byte("legacy-format-payload"))
+			if err, _ := Run(path, mode.opts); err == nil {
+				t.Fatalf("expected a malformed payload to fail")
+			}
+
+			after := security.SecurityTelemetrySnapshot()["signature_failed"]
+			if after == before {
+				t.Fatalf("no signature verification was attempted in %s mode: "+
+					"the checks a mode performs must be a superset of every weaker mode's", mode.name)
+			}
+		})
 	}
 }
 
@@ -209,6 +248,55 @@ func TestEnforceAntiSandboxSecureModeTerminates(t *testing.T) {
 	}
 	if !errors.Is(err, security.ErrSandboxDetected) {
 		t.Fatalf("expected ErrSandboxDetected, got: %v", err)
+	}
+}
+
+// M-7's acceptance test at the layer an operator sees: a terminating probe hit
+// has to name what fired and what to do about it. The message this replaces
+// ("sandbox detected, execution halted for security") fires on ordinary
+// containers, VMs and CI runners -- where this tool is normally run -- and named
+// neither the probe nor --compat.
+func TestEnforceAntiSandboxTerminationNamesTheProbeAndTheRemedy(t *testing.T) {
+	originalSandbox := isSandboxed
+	isSandboxed = func() bool { return true }
+	defer func() {
+		isSandboxed = originalSandbox
+	}()
+
+	originalStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = writer
+
+	enforceErr := enforceAntiSandbox(true, "pre-decode")
+
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatalf("writer.Close: %v", closeErr)
+	}
+	os.Stderr = originalStderr
+
+	var captured bytes.Buffer
+	if _, copyErr := captured.ReadFrom(reader); copyErr != nil {
+		t.Fatalf("read captured stderr: %v", copyErr)
+	}
+	output := captured.String()
+
+	if !errors.Is(enforceErr, security.ErrSandboxDetected) {
+		t.Fatalf("expected ErrSandboxDetected, got: %v", enforceErr)
+	}
+	for _, want := range []string{
+		"event=sandbox_detected",
+		"stage=pre-decode",
+		"action=terminate",
+		"detector=sandbox",
+		"reason:",
+		"--compat",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in the termination notice, got: %s", want, output)
+		}
 	}
 }
 
@@ -268,7 +356,7 @@ func TestEnforceProcessProtectionIgnoresLowConfidence(t *testing.T) {
 	}
 }
 
-func TestEnforceProcessProtectionDisabledByEnv(t *testing.T) {
+func TestEnforceProcessProtectionDisabled(t *testing.T) {
 	originalEnabled := processProtectionOn
 	processProtectionOn = func() bool { return false }
 	defer func() { processProtectionOn = originalEnabled }()

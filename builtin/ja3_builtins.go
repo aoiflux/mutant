@@ -30,7 +30,7 @@ func JA3(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	raw, errObj := requireStringArg("ja3", args[0], 1)
+	raw, errObj := requireStringArg(BuiltinNameJA3, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -50,7 +50,7 @@ func JA3(args ...object.Object) (result object.Object) {
 	sum := md5.Sum([]byte(ja3Str))
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"ja3":           stringObj(ja3Str),
+		BuiltinNameJA3:           stringObj(ja3Str),
 		"ja3_hash":      stringObj(hex.EncodeToString(sum[:])),
 		"tls_version":   intObj(int64(f.version)),
 		"ciphers":       tlsValueArray(f.ciphers),

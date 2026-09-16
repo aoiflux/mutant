@@ -1,0 +1,33 @@
+// Tests for report.mut, which imports stats.mut itself.
+//
+// The import graph is walked from this file, so `report` brings `stats` with
+// it and the whole chain is compiled once, exactly as running main.mut does.
+
+import "report.mut";
+
+let latencies = [12, 47, 31, 8, 92];
+
+before_each(fn() {
+	// Nothing to set up here; this is what a fixture looks like when it has
+	// something to do -- it runs before each test declared after it.
+	latencies = [12, 47, 31, 8, 92];
+});
+
+test("line reports every statistic it promises", fn() {
+	let rendered = report.line("latencies", latencies);
+
+	assert_contains(rendered, "sum=190");
+	assert_contains(rendered, "mean=38");
+	assert_contains(rendered, "max=92");
+});
+
+test("line upper-cases the name it was given", fn() {
+	assert_contains(report.line("latencies", latencies), "LATENCIES");
+});
+
+test("a module's top-level name is its own", fn() {
+	// report.mut and main.mut both declare `label`. Each module has its own
+	// top level, so these are two bindings rather than one overwriting the
+	// other -- and this is the one that report.mut declared.
+	assert_eq(report.label, "report.mut");
+});

@@ -23,7 +23,7 @@ func TimestampNormalize(args ...object.Object) object.Object {
 	}
 	format := "auto"
 	if len(args) == 2 {
-		f, errObj := requireStringArg("timestamp_normalize", args[1], 2)
+		f, errObj := requireStringArg(BuiltinNameTimestampNormalize, args[1], 2)
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
@@ -144,19 +144,19 @@ func TimelineSort(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
 	}
-	events, errObj := requireArrayArg("timeline_sort", args[0], 1)
+	events, errObj := requireArrayArg(BuiltinNameTimelineSort, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
 	field := "ts"
 	if len(args) == 2 {
-		f, errObj := requireStringArg("timeline_sort", args[1], 2)
+		f, errObj := requireStringArg(BuiltinNameTimelineSort, args[1], 2)
 		if errObj != nil {
 			return errObj
 		}
 		field = f
 	}
-	sorted, errObj := sortEventsByField("timeline_sort", events.Elements, field)
+	sorted, errObj := sortEventsByField(BuiltinNameTimelineSort, events.Elements, field)
 	if errObj != nil {
 		return errObj
 	}
@@ -167,13 +167,13 @@ func TimelineMerge(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
 	}
-	sources, errObj := requireArrayArg("timeline_merge", args[0], 1)
+	sources, errObj := requireArrayArg(BuiltinNameTimelineMerge, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
 	field := "ts"
 	if len(args) == 2 {
-		f, errObj := requireStringArg("timeline_merge", args[1], 2)
+		f, errObj := requireStringArg(BuiltinNameTimelineMerge, args[1], 2)
 		if errObj != nil {
 			return errObj
 		}
@@ -188,7 +188,7 @@ func TimelineMerge(args ...object.Object) object.Object {
 		}
 		merged = append(merged, arr.Elements...)
 	}
-	sorted, errObj := sortEventsByField("timeline_merge", merged, field)
+	sorted, errObj := sortEventsByField(BuiltinNameTimelineMerge, merged, field)
 	if errObj != nil {
 		return errObj
 	}

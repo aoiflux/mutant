@@ -50,7 +50,7 @@ func Sort(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	arr, errObj := requireArrayArg("sort", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameSort, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -99,7 +99,7 @@ func ReverseArray(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	arr, errObj := requireArrayArg("reverse", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameReverseArray, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -114,7 +114,7 @@ func Contains(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	arr, errObj := requireArrayArg("contains", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameContains, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -130,7 +130,7 @@ func IndexOf(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	arr, errObj := requireArrayArg("index_of", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameIndexOf, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -146,15 +146,15 @@ func Slice(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3", len(args))
 	}
-	arr, errObj := requireArrayArg("slice", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameSlice, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	start, errObj := requireIntArg("slice", args[1], 2)
+	start, errObj := requireIntArg(BuiltinNameSlice, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
-	end, errObj := requireIntArg("slice", args[2], 3)
+	end, errObj := requireIntArg(BuiltinNameSlice, args[2], 3)
 	if errObj != nil {
 		return errObj
 	}
@@ -177,11 +177,11 @@ func Concat(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	a, errObj := requireArrayArg("concat", args[0], 1)
+	a, errObj := requireArrayArg(BuiltinNameConcat, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	b, errObj := requireArrayArg("concat", args[1], 2)
+	b, errObj := requireArrayArg(BuiltinNameConcat, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -195,7 +195,7 @@ func Flatten(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	arr, errObj := requireArrayArg("flatten", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameFlatten, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -214,7 +214,7 @@ func Unique(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	arr, errObj := requireArrayArg("unique", args[0], 1)
+	arr, errObj := requireArrayArg(BuiltinNameUnique, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -235,17 +235,17 @@ func Range(args ...object.Object) object.Object {
 	if len(args) != 2 && len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=2 or 3", len(args))
 	}
-	start, errObj := requireIntArg("range", args[0], 1)
+	start, errObj := requireIntArg(BuiltinNameRange, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	end, errObj := requireIntArg("range", args[1], 2)
+	end, errObj := requireIntArg(BuiltinNameRange, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
 	step := int64(1)
 	if len(args) == 3 {
-		step, errObj = requireIntArg("range", args[2], 3)
+		step, errObj = requireIntArg(BuiltinNameRange, args[2], 3)
 		if errObj != nil {
 			return errObj
 		}
@@ -277,11 +277,11 @@ func Zip(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	a, errObj := requireArrayArg("zip", args[0], 1)
+	a, errObj := requireArrayArg(BuiltinNameZip, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	b, errObj := requireArrayArg("zip", args[1], 2)
+	b, errObj := requireArrayArg(BuiltinNameZip, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -311,7 +311,7 @@ func Keys(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	h, errObj := requireHashArg("keys", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameKeys, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -327,7 +327,7 @@ func Values(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	h, errObj := requireHashArg("values", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameValues, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -343,7 +343,7 @@ func Entries(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	h, errObj := requireHashArg("entries", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameEntries, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -367,11 +367,11 @@ func HasKey(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	h, errObj := requireHashArg("has_key", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameHasKey, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	hk, errObj := hashableKey("has_key", args[1])
+	hk, errObj := hashableKey(BuiltinNameHasKey, args[1])
 	if errObj != nil {
 		return errObj
 	}
@@ -383,11 +383,11 @@ func Get(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3 (hash, key, default)", len(args))
 	}
-	h, errObj := requireHashArg("get", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameGet, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	hk, errObj := hashableKey("get", args[1])
+	hk, errObj := hashableKey(BuiltinNameGet, args[1])
 	if errObj != nil {
 		return errObj
 	}
@@ -401,11 +401,11 @@ func Set(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return newError("wrong number of arguments. got=%d, want=3 (hash, key, value)", len(args))
 	}
-	h, errObj := requireHashArg("set", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameSet, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	hk, errObj := hashableKey("set", args[1])
+	hk, errObj := hashableKey(BuiltinNameSet, args[1])
 	if errObj != nil {
 		return errObj
 	}
@@ -421,11 +421,11 @@ func Merge(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	a, errObj := requireHashArg("merge", args[0], 1)
+	a, errObj := requireHashArg(BuiltinNameMerge, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	b, errObj := requireHashArg("merge", args[1], 2)
+	b, errObj := requireHashArg(BuiltinNameMerge, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -443,11 +443,11 @@ func Delete(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	h, errObj := requireHashArg("delete", args[0], 1)
+	h, errObj := requireHashArg(BuiltinNameDelete, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	hk, errObj := hashableKey("delete", args[1])
+	hk, errObj := hashableKey(BuiltinNameDelete, args[1])
 	if errObj != nil {
 		return errObj
 	}

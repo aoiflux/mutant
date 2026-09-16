@@ -17,7 +17,8 @@ import (
 )
 
 func padWithDeadCode(pe *PolymorphicEngine, ins code.Instructions, rate float64, protectFinalPop bool) code.Instructions {
-	return pe.padInstructions(ins, rate, protectFinalPop, pe.fillerGenerators(MutationConfig{InsertDeadCode: true}))
+	padded, _ := pe.padInstructions(ins, rate, protectFinalPop, pe.fillerGenerators(MutationConfig{InsertDeadCode: true}))
+	return padded
 }
 
 // A four-instruction stream, padded at rate 1.0, must come back longer and still

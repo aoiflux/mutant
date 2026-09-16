@@ -75,9 +75,8 @@ func executeSinglePatch(loader *PatchLoader, patch *object.LuaPatch, baseCtx *AP
 func cloneAPIContext(ctx *APIContext) *APIContext {
 	if ctx == nil {
 		return &APIContext{
-			Globals:             map[string]object.Object{},
-			BuiltinCapabilities: []string{},
-			PatchName:           "",
+			Globals:   map[string]object.Object{},
+			PatchName: "",
 		}
 	}
 
@@ -86,13 +85,9 @@ func cloneAPIContext(ctx *APIContext) *APIContext {
 		globals[k] = v
 	}
 
-	caps := make([]string, len(ctx.BuiltinCapabilities))
-	copy(caps, ctx.BuiltinCapabilities)
-
 	return &APIContext{
-		Globals:             globals,
-		BuiltinCapabilities: caps,
-		PatchName:           ctx.PatchName,
+		Globals:   globals,
+		PatchName: ctx.PatchName,
 	}
 }
 

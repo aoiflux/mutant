@@ -40,7 +40,7 @@ func BrowserHistory(args ...object.Object) (result object.Object) {
 		}
 	}()
 
-	path, errObj := browserArg("browser_history", args)
+	path, errObj := browserArg(BuiltinNameBrowserHistory, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -102,7 +102,7 @@ func BrowserCookies(args ...object.Object) (result object.Object) {
 		}
 	}()
 
-	path, errObj := browserArg("browser_cookies", args)
+	path, errObj := browserArg(BuiltinNameBrowserCookies, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -173,7 +173,7 @@ func BrowserDownloads(args ...object.Object) (result object.Object) {
 		}
 	}()
 
-	path, errObj := browserArg("browser_downloads", args)
+	path, errObj := browserArg(BuiltinNameBrowserDownloads, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

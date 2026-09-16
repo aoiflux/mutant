@@ -1,0 +1,176 @@
+// Workshop 6 - Malware hidden in ads (malvertising)
+//
+// An ad impression is not one request. It is a CHAIN: publisher -> ad exchange
+// -> tracker -> payload host, each hop a separate HTTP redirect. The browser
+// records that chain twice, in two places that can be cross-checked:
+//
+//   history  - one `urls` row per hop, seconds apart
+//   cookies  - one row per host that got to SET one, including hosts the user
+//              never typed and never saw
+//
+// A cookie whose host never appears in history is a third party that rode in on
+// a redirect. That mismatch is the tell.
+//
+// Input: examples/data/browser_history.sqlite + browser_cookies.sqlite
+//        (synthetic Chromium fixtures; swap in a real profile's History/Cookies).
+//
+// STYLE NOTE: this file uses `for` loops, not each()/map() closures, wherever it
+// accumulates into a variable. That is a readability choice and nothing more --
+// a closure writing an outer variable does write back, and has since captured
+// locals became cells. The one place it still does not is a callback that runs
+// on its own VM (spawn, pmap, peach), which gets a copy of the globals; the
+// editor reports those.
+
+let HISTORY = "examples/data/browser_history.sqlite";
+let COOKIES = "examples/data/browser_cookies.sqlite";
+
+// Hops of one redirect chain land within a few seconds of each other. A bigger
+// gap means the user did something new.
+let CHAIN_GAP_SECONDS = 30;
+
+// Registrable domain (eTLD+1) is the unit of ownership: ads.x.example and
+// track.x.example are ONE actor; cdn.malvert-delivery.top is another.
+let etld1 = fn(url) {
+    return tld_extract(domain_extract(url))["etld1"];
+};
+
+let suspicious_tld = fn(host) {
+    let s = tld_extract(host)["suffix"];
+    return ((s == "top") || (s == "win")) || (s == "zip");
+};
+
+let AD_WORDS = ["ads", "adserve", "doubleclick", "track", "pagead", "syndication"];
+
+let looks_like_adtech = fn(host) {
+    let h = str_lower(host);
+    for (let i = 0; i < len(AD_WORDS); i = i + 1) {
+        if (text_contains(h, AD_WORDS[i])) { return true; }
+    }
+    return false;
+};
+
+putln("=== 6 Malvertising: redirect chains + cookie correlation ===");
+putln("");
+
+let hist, herr = browser_history(HISTORY);
+let cook, cerr = browser_cookies(COOKIES);
+
+if (herr) { putln("[error] browser_history:", herr); };
+if (cerr) { putln("[error] browser_cookies:", cerr); };
+
+// ---- 1. Rebuild the redirect chain from visit timing ----------------------
+// Chromium stores one row per URL with its LAST visit time. Sort by that, and
+// consecutive rows seconds apart are the hops of a single navigation.
+let visits = timeline_sort(hist["entries"], "last_visit");
+
+putln("-- visit sequence (", hist["browser"], ",", hist["count"], "urls) --");
+let prev = 0;
+for (let i = 0; i < len(visits); i = i + 1) {
+    let v = visits[i];
+    let gap = 0;
+    if (prev > 0) { gap = v["last_visit"] - prev; };
+    let marker = "  ";
+    if ((prev > 0) && (gap <= CHAIN_GAP_SECONDS)) { marker = "->"; };
+    putln("  ", marker, " ", v["last_visit_iso"], " (+", gap, "s)  ", domain_extract(v["url"]));
+    prev = v["last_visit"];
+}
+putln("");
+
+// ---- 2. Which registrable domains did the user actually reach? ------------
+let visited = unique(map(visits, fn(v) { return etld1(v["url"]); }));
+putln("-- registrable domains in history --");
+for (let i = 0; i < len(visited); i = i + 1) { putln("   ", visited[i]); }
+putln("");
+
+// ---- 3. Cookies from hosts that are NOT in history ------------------------
+// A domain cookie's host_key carries a leading dot; strip it before comparing.
+putln("-- cookies (", cook["count"], ") vs history --");
+let orphans = [];
+for (let i = 0; i < len(cook["entries"]); i = i + 1) {
+    let ck = cook["entries"][i];
+    let host = str_trim_prefix(ck["host"], ".");
+    let d = tld_extract(host)["etld1"];
+    if (contains(visited, d)) {
+        putln("   ", host, " [", ck["name"], "]  in history");
+    } else {
+        putln("   ", host, " [", ck["name"], "]  NEVER VISITED  <- rode in on a redirect");
+        orphans = push(orphans, d);
+    }
+}
+putln("");
+
+// ---- 4. Score every registrable domain we saw ----------------------------
+// Score the redirect participants, not the destination the user chose: the
+// first hop is the publisher the user meant to visit.
+putln("-- domain scoring --");
+let flagged = [];
+for (let i = 0; i < len(visited); i = i + 1) {
+    let d = visited[i];
+    let score = 0;
+    let why = [];
+
+    if (looks_like_adtech(d)) {
+        score = score + 30;
+        why = push(why, "ad-tech naming");
+    };
+    if (suspicious_tld(d)) {
+        score = score + 40;
+        why = push(why, "high-abuse TLD");
+    };
+    if (contains(orphans, d)) {
+        score = score + 25;
+        why = push(why, "set a cookie without a visit");
+    };
+
+    // Drive-by hops are seen once; a site the user chose accumulates visits.
+    let hops = filter(visits, fn(v) { return etld1(v["url"]) == d; });
+    let busiest = 0;
+    for (let j = 0; j < len(hops); j = j + 1) {
+        if (hops[j]["visit_count"] > busiest) { busiest = hops[j]["visit_count"]; }
+    }
+    if ((busiest == 1) && (i > 0)) {
+        score = score + 20;
+        why = push(why, "single drive-by visit mid-chain");
+    };
+
+    if (score > 0) { putln("   ", d, " => ", score, "  (", str_join(why, ", "), ")"); };
+    if (score >= 50) { flagged = push(flagged, d); };
+}
+putln("");
+
+// ---- 5. Did the chain end in a download? ---------------------------------
+let dl, derr = browser_downloads(HISTORY);
+if (!derr) {
+    putln("-- downloads --");
+    for (let i = 0; i < len(dl["entries"]); i = i + 1) {
+        let d = dl["entries"][i];
+        let src = etld1(d["url"]);
+        let verdict = "";
+        if (contains(flagged, src)) { verdict = "   <- FROM A FLAGGED DOMAIN"; };
+        putln("   ", d["target_path"], " (", d["bytes_total"], "bytes,", d["mime_type"], ") from ", src, verdict);
+    }
+    putln("");
+};
+
+// ---- 6. Model the chain as a graph so it is queryable --------------------
+let db, _ = db_open();
+let prev_node = 0;
+for (let i = 0; i < len(visits); i = i + 1) {
+    let v = visits[i];
+    let n, _ = db_add_artifact(db, "url", {
+        "url":  v["url"],
+        "host": domain_extract(v["url"]),
+        "ts":   v["last_visit"]
+    });
+    if (i > 0) { db_add_relation(db, prev_node, n["node_id"], "redirected_to"); };
+    prev_node = n["node_id"];
+}
+for (let i = 0; i < len(orphans); i = i + 1) {
+    let n, _ = db_add_artifact(db, "cookie_host", { "host": orphans[i] });
+}
+let stats, _ = db_stats(db);
+putln("chain graph:", stats["nodes"], "nodes,", stats["edges"], "edges");
+db_close(db);
+
+putln("");
+putln("verdict: flagged", len(flagged), "domain(s):", str_join(flagged, ", "));

@@ -47,7 +47,19 @@ type LintConfig struct {
 	BuiltinArgType               LintSeverity
 	BuiltinSingleReturn          LintSeverity
 	BuiltinPairReturn            LintSeverity
+	BuiltinDeprecated            LintSeverity
 	SpawnGlobalWrite             LintSeverity
+	UnclosedResource             LintSeverity
+	UncheckedError               LintSeverity
+	MatchExhaustiveness          LintSeverity
+	TlsVerificationDisabled      LintSeverity
+	UnboundedResource            LintSeverity
+	WeakCrypto                   LintSeverity
+	HardcodedSecret              LintSeverity
+	CommandInjection             LintSeverity
+	EvidenceMutation             LintSeverity
+	AssignmentTarget             LintSeverity
+	PathTraversal                LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -81,10 +93,69 @@ func DefaultLintConfig() LintConfig {
 		// is the same mistake from the other side: the name holds the pair, so
 		// the program keeps running with a MULTI_VALUE where it meant a value.
 		BuiltinPairReturn: LintSeverityWarning,
+		// A deprecated builtin still works -- that is the only reason it is
+		// still registered -- so this is a hint, not a warning. It is the one
+		// builtin rule that reports something the program does correctly.
+		BuiltinDeprecated: LintSeverityHint,
+		// Both shapes this reports are compile errors, so error is what the
+		// build will say too. It is the one lint rule that reports something
+		// the compiler refuses outright rather than something it accepts and
+		// runs badly -- which is why it exists: without it, the first anyone
+		// hears of either is a failed build.
+		AssignmentTarget: LintSeverityError,
 		// Writing a global from a spawned callback is the same shape: the write
 		// lands in that worker's copy of the globals and is gone when it
 		// finishes, and nothing at all reports it.
 		SpawnGlobalWrite: LintSeverityWarning,
+		// An unclosed handle is invisible in exactly the same way: the
+		// program runs, reports nothing, and holds an OS resource for the
+		// life of the process. The rule only fires where it can see the
+		// whole lifetime, so a report is about this code rather than a
+		// guess about the rest of the program.
+		UnclosedResource: LintSeverityWarning,
+		// A bound-and-ignored error is the same failure one step earlier:
+		// the call failed, the value beside it is null, and the program
+		// keeps going as though it had succeeded. Warning rather than
+		// error because the code compiles and runs -- which is the whole
+		// problem with it.
+		UncheckedError: LintSeverityWarning,
+		// A match over an enum that misses a variant runs correctly until the
+		// subject is that variant, and then it raises. Warning rather than
+		// error because the miss is usually a variant added since -- the code
+		// was right when it was written, which is exactly why nobody looks.
+		MatchExhaustiveness: LintSeverityWarning,
+		// Turning off certificate verification, or accepting a TLS version
+		// deprecated in 2021, is a decision the code states outright. The rule
+		// reads the literal the runtime will read, so a report here is not a
+		// guess about intent -- it is what the connection will do.
+		TlsVerificationDisabled: LintSeverityWarning,
+		// A range or CIDR larger than the builtin will expand raises at run
+		// time. Warning rather than error for the reason the whole builtin
+		// family is: it parses, it compiles, and it fails only when reached.
+		UnboundedResource: LintSeverityWarning,
+		// A digest compared against one written into the program is deciding
+		// authenticity. Warning rather than error because the code is correct
+		// in every mechanical sense -- it runs, it compares, it is simply
+		// trusting an algorithm that can be made to agree.
+		WeakCrypto: LintSeverityWarning,
+		// A credential in source is in every copy of the source, including the
+		// history after it is deleted. Warning, because the program works
+		// perfectly and that is the problem.
+		HardcodedSecret: LintSeverityWarning,
+		// A value spliced into a string a shell will parse is syntax, not an
+		// argument. Warning rather than error because whether it is reachable
+		// by anyone hostile is a question about the whole program.
+		CommandInjection: LintSeverityWarning,
+		// Writing to a path the program opened as evidence is the one finding
+		// in this family that cannot be undone once it has run. It is still a
+		// warning, because the code does exactly what it says and only the
+		// author knows whether that path is an exhibit or a working copy.
+		EvidenceMutation: LintSeverityWarning,
+		// A path built from a value the program did not write, with nothing
+		// looking at it in between. Warning, because whether the value is
+		// really hostile depends on who can reach this program -- which is the
+		// one thing a single document cannot answer.
+		PathTraversal: LintSeverityWarning,
 	}
 }
 
@@ -113,8 +184,32 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinSingleReturn
 	case "builtinPairReturn":
 		severityName = c.BuiltinPairReturn
+	case "builtinDeprecated":
+		severityName = c.BuiltinDeprecated
 	case "spawnGlobalWrite":
 		severityName = c.SpawnGlobalWrite
+	case "unclosedResource":
+		severityName = c.UnclosedResource
+	case "uncheckedError":
+		severityName = c.UncheckedError
+	case "matchExhaustiveness":
+		severityName = c.MatchExhaustiveness
+	case "tlsVerificationDisabled":
+		severityName = c.TlsVerificationDisabled
+	case "unboundedResource":
+		severityName = c.UnboundedResource
+	case "weakCrypto":
+		severityName = c.WeakCrypto
+	case "hardcodedSecret":
+		severityName = c.HardcodedSecret
+	case "commandInjection":
+		severityName = c.CommandInjection
+	case "assignmentTarget":
+		severityName = c.AssignmentTarget
+	case "evidenceMutation":
+		severityName = c.EvidenceMutation
+	case "pathTraversal":
+		severityName = c.PathTraversal
 	default:
 		return nil, false
 	}
@@ -170,6 +265,17 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintPlatformSupport(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintBuiltinCalls(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSpawnGlobalWrites(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUnclosedResources(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUncheckedErrors(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintMatchExhaustiveness(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintTlsVerificationDisabled(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintUnboundedResource(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintWeakCrypto(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintHardcodedSecret(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintCommandInjection(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintAssignmentTargets(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintEvidenceMutation(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintPathTraversal(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil
@@ -194,30 +300,33 @@ func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 	}
 
 	source := "mutant-lint"
+	// This rule has no scope model, so the only shadowing it can see is an
+	// import binding the namespace. A local `let ntfs = ...` still slips
+	// through -- exactly as it did before namespaces existed, and bolting a
+	// scope walk on here is a bigger change than this rule is worth.
+	bound := boundInNamespaces(importNamespaces(snapshot.Program.Statements))
+
 	result := make([]lsp.Diagnostic, 0, 2)
 	for node := range snapshot.Program.NodePositions {
 		call, ok := node.(*mast.CallExpression)
 		if !ok || call == nil {
 			continue
 		}
-		ident, ok := call.Function.(*mast.Identifier)
-		if !ok || ident == nil || ident.Value == "" {
+		name, anchor, ok := builtinCallee(call.Function, bound)
+		if !ok || !builtin.UnsupportedOn(name, hostGOOS) {
 			continue
 		}
-		if !builtin.UnsupportedOn(ident.Value, hostGOOS) {
-			continue
-		}
-		rng, ok := snapshot.Program.RangeOf(ident)
+		rng, ok := snapshot.Program.RangeOf(anchor)
 		if !ok {
 			continue
 		}
-		platforms, _ := builtin.PlatformSupport(ident.Value)
+		platforms, _ := builtin.PlatformSupport(name)
 		result = append(result, lsp.Diagnostic{
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: severity,
 			Source:   &source,
 			Message: fmt.Sprintf("builtin `%s` is not supported on %s (supported: %s)",
-				ident.Value, hostGOOS, strings.Join(platforms, ", ")),
+				name, hostGOOS, strings.Join(platforms, ", ")),
 		})
 	}
 
@@ -280,6 +389,32 @@ func lintUnreachableCode(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 	for node := range snapshot.Program.NodePositions {
 		if block, ok := node.(*mast.BlockStatement); ok && block != nil {
 			scan(block.Statements)
+		}
+		// An arm after `_` is the same defect one construct over: `_` matches
+		// anything, so the compare-and-jump chain never reaches what follows
+		// it. This belongs here rather than in a rule of its own -- it is
+		// literally code that cannot run, and one knob should govern one idea.
+		if match, ok := node.(*mast.MatchExpression); ok && match != nil {
+			for i, arm := range match.Arms {
+				if arm == nil || !arm.IsWildcard() || i+1 >= len(match.Arms) {
+					continue
+				}
+				next := match.Arms[i+1]
+				if next == nil {
+					break
+				}
+				rng, ok := snapshot.Program.RangeOf(next)
+				if !ok {
+					break
+				}
+				result = append(result, lsp.Diagnostic{
+					Range:    localprotocol.ToLSPRange(rng),
+					Severity: severity,
+					Source:   &source,
+					Message:  "unreachable arm after `_`, which matches anything",
+				})
+				break
+			}
 		}
 	}
 
@@ -495,6 +630,20 @@ func (c *duplicateCollector) collectStatement(stmt mast.Statement, current *decl
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
 	case *mast.StructStatement:
 		c.collectDeclaration(node.Name, current, false)
 	case *mast.EnumStatement:
@@ -533,6 +682,26 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 		}
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
+		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
 		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
@@ -585,6 +754,10 @@ func (c *duplicateCollector) collectExpression(expr mast.Expression, current *de
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:
@@ -816,11 +989,28 @@ func lintUnusedDeclarations(snapshot *Snapshot, lintConfig LintConfig, skipNames
 	result := make([]lsp.Diagnostic, 0, 4)
 	candidates := collectUnusedCandidates(snapshot)
 
+	// A file whose top level declares things but never does anything cannot be
+	// a whole program: its names exist for whatever imports it. This rule sees
+	// one file, so it cannot find those uses, and reporting them unused would
+	// put a warning on every module in a project -- on exactly the names the
+	// module exists to provide.
+	//
+	// The narrow test is deliberate. A file that runs something at its top
+	// level is a program this rule can see all of, and a top-level helper
+	// nothing there calls is still reported, which is the case worth keeping.
+	exports := map[*mast.Identifier]struct{}{}
+	if !hasTopLevelAction(snapshot.Program.Statements) {
+		exports = topLevelDeclaredIdentifiers(snapshot.Program.Statements)
+	}
+
 	for _, ident := range candidates {
 		if ident == nil || ident.Value == "" || ident.Value == "_" {
 			continue
 		}
 		if _, skip := skipNames[ident.Value]; skip {
+			continue
+		}
+		if _, exported := exports[ident]; exported {
 			continue
 		}
 
@@ -866,11 +1056,12 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 	}
 
 	collector := &undefinedCollector{
-		snapshot: snapshot,
-		severity: severity,
-		source:   &source,
-		builtins: knownBuiltins,
-		result:   make([]lsp.Diagnostic, 0, 4),
+		snapshot:   snapshot,
+		severity:   severity,
+		source:     &source,
+		builtins:   knownBuiltins,
+		namespaces: importNamespaces(snapshot.Program.Statements),
+		result:     make([]lsp.Diagnostic, 0, 4),
 	}
 
 	root := newDeclarationScope(nil, 0)
@@ -957,6 +1148,34 @@ func (c *nestingCollector) collectStatement(stmt mast.Statement, inFunction bool
 		if node.Body != nil {
 			c.collectStatement(node.Body, inFunction, nextDepth)
 		}
+	case *mast.WhileStatement:
+		// A while nests exactly as a for does: its body is one level deeper,
+		// its condition is not.
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, inFunction, depth)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, inFunction, nextDepth)
+		}
+	case *mast.ForInStatement:
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, inFunction, depth)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, inFunction, nextDepth)
+		}
 	}
 }
 
@@ -973,6 +1192,25 @@ func (c *nestingCollector) collectExpression(expr mast.Expression, inFunction bo
 	case *mast.MacroLiteral:
 		if node.Body != nil {
 			c.collectStatement(node.Body, true, 0)
+		}
+	case *mast.MatchExpression:
+		nextDepth := depth
+		if inFunction {
+			nextDepth = depth + 1
+			c.maybeAddNestingDiagnostic(node, nextDepth)
+		}
+
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, inFunction, depth)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil || arm.Body == nil {
+				continue
+			}
+			// All arms are siblings at one level, the way an if's two
+			// branches are: a match with twenty arms is wide, not deep, and
+			// counting it as deep would report nesting nobody wrote.
+			c.collectStatement(arm.Body, inFunction, nextDepth)
 		}
 	case *mast.IfExpression:
 		nextDepth := depth
@@ -1037,6 +1275,10 @@ func (c *nestingCollector) collectExpression(expr mast.Expression, inFunction bo
 		for _, element := range node.Elements {
 			c.collectExpression(element, inFunction, depth)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			c.collectExpression(element, inFunction, depth)
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			c.collectExpression(key, inFunction, depth)
@@ -1068,7 +1310,13 @@ type undefinedCollector struct {
 	severity *lsp.DiagnosticSeverity
 	source   *string
 	builtins map[string]struct{}
-	result   []lsp.Diagnostic
+	// namespaces holds the name each `import` binds. They are kept as a
+	// file-wide set rather than entries in the scope chain for two reasons: an
+	// import is legal only at the top level, so there is no inner scope for one
+	// to belong to; and an unaliased import derives its namespace from the file
+	// name, so there is no identifier node to hang a declaration on.
+	namespaces map[string]struct{}
+	result     []lsp.Diagnostic
 }
 
 func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
@@ -1124,6 +1372,30 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		// The loop's own bindings, before the body that reads them. Without
+		// this every `for (v in xs)` body reported `undefined identifier v` at
+		// error severity -- a red squiggle on correct code, and a non-zero exit
+		// from `mutant lint` for any program that uses the loop.
+		if node.Key != nil {
+			c.defineDeclaration(node.Key, current, false)
+		}
+		if node.Value != nil {
+			c.defineDeclaration(node.Value, current, false)
+		}
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
 	case *mast.StructStatement:
 		c.defineDeclaration(node.Name, current, false)
 	case *mast.EnumStatement:
@@ -1142,6 +1414,9 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			return
 		}
 		if _, ok := c.builtins[node.Value]; ok {
+			return
+		}
+		if _, ok := c.namespaces[node.Value]; ok {
 			return
 		}
 		if _, ok := current.find(node.Value); ok {
@@ -1183,6 +1458,26 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
 		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
+		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
 			for _, arg := range node.Arguments {
@@ -1222,9 +1517,26 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			c.collectExpression(node.Value, current)
 		}
 	case *mast.FieldExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+		if node.Left == nil {
+			return
 		}
+		// The left of a field access is usually a value and has to be checked
+		// like any other. Two shapes are not: a namespace an import bound, and
+		// a builtin family -- `str.upper` is str_upper, so `str` names no
+		// variable and reporting it undefined would be a hard error on a
+		// correct program.
+		if namespace, isIdent := node.Left.(*mast.Identifier); isIdent && namespace != nil && namespace.Value != "" {
+			if _, imported := c.namespaces[namespace.Value]; imported {
+				return
+			}
+			// Guarded on the name being unbound, so a local `let str = "x"`
+			// followed by `str.upper` is still the field access it looks like.
+			if _, shadowed := current.find(namespace.Value); !shadowed &&
+				node.Field != nil && isLiveBuiltin(namespace.Value+"_"+node.Field.Value) {
+				return
+			}
+		}
+		c.collectExpression(node.Left, current)
 	case *mast.StructLiteral:
 		if node.Name != nil {
 			c.collectExpression(node.Name, current)
@@ -1237,6 +1549,10 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
+			c.collectExpression(element, current)
+		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
 			c.collectExpression(element, current)
 		}
 	case *mast.HashLiteral:
@@ -1283,7 +1599,8 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
 	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
 	pairSeverity, pairEnabled := lintConfig.severityForRule("builtinPairReturn")
-	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled {
+	deprecatedSeverity, deprecatedEnabled := lintConfig.severityForRule("builtinDeprecated")
+	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled && !deprecatedEnabled {
 		return nil
 	}
 	if !arityEnabled {
@@ -1297,6 +1614,9 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	}
 	if !pairEnabled {
 		pairSeverity = nil
+	}
+	if !deprecatedEnabled {
+		deprecatedSeverity = nil
 	}
 
 	source := "mutant-lint"
@@ -1314,9 +1634,11 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		argTypeSeverity: argTypeSeverity,
 		returnSeverity:  returnSeverity,
 		pairSeverity:    pairSeverity,
+		deprecatedSev:   deprecatedSeverity,
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
+		namespaces:      importNamespaces(snapshot.Program.Statements),
 		result:          make([]lsp.Diagnostic, 0, 2),
 	}
 
@@ -1346,11 +1668,34 @@ type builtinCallCollector struct {
 	argTypeSeverity *lsp.DiagnosticSeverity
 	returnSeverity  *lsp.DiagnosticSeverity
 	pairSeverity    *lsp.DiagnosticSeverity
+	deprecatedSev   *lsp.DiagnosticSeverity
 	source          *string
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
-	result          []lsp.Diagnostic
-	pairCandidates  []pairBindingCandidate
+
+	// namespaces is the set of names this file's imports bind. An imported
+	// `fs` is a module, so `fs.read(...)` is that module's function and not
+	// the builtin fs_read -- and checking it against fs_read's contract would
+	// be a diagnostic about the wrong function entirely.
+	namespaces map[string]struct{}
+
+	result         []lsp.Diagnostic
+	pairCandidates []pairBindingCandidate
+}
+
+// boundIn returns the shadow predicate builtinCallee needs: a name is taken if
+// some enclosing scope declares it, or if an import bound it as a namespace.
+func (c *builtinCallCollector) boundIn(current *declarationScope) func(string) bool {
+	return func(name string) bool {
+		if _, imported := c.namespaces[name]; imported {
+			return true
+		}
+		if current == nil {
+			return false
+		}
+		_, declared := current.find(name)
+		return declared
+	}
 }
 
 func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
@@ -1410,6 +1755,29 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
 		}
+	case *mast.WhileStatement:
+		if node.Condition != nil {
+			c.collectExpression(node.Condition, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
+	case *mast.ForInStatement:
+		// This collector's scope answers one question -- is this name a local
+		// binding rather than the builtin of the same name -- so `for (max in
+		// xs) { max(1, 2); }` must not be held to the builtin's contract.
+		if node.Key != nil {
+			c.defineDeclaration(node.Key, current)
+		}
+		if node.Value != nil {
+			c.defineDeclaration(node.Value, current)
+		}
+		if node.Iterable != nil {
+			c.collectExpression(node.Iterable, current)
+		}
+		if node.Body != nil {
+			c.collectStatement(node.Body, current)
+		}
 	case *mast.StructStatement:
 		c.defineDeclaration(node.Name, current)
 	case *mast.EnumStatement:
@@ -1449,17 +1817,42 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 		if node.Alternative != nil {
 			c.collectStatement(node.Alternative, current)
 		}
+	case *mast.MatchExpression:
+		if node.Subject != nil {
+			c.collectExpression(node.Subject, current)
+		}
+		for _, arm := range node.Arms {
+			if arm == nil {
+				continue
+			}
+			// Patterns are walked because an enum variant pattern names its
+			// enum: `Status.Ok` is a real use of `Status`, and skipping it
+			// would make an enum matched but never otherwise mentioned look
+			// unused. FieldExpression walks only its left, so the variant
+			// name itself is never resolved as a standalone binding.
+			for _, pattern := range arm.Patterns {
+				c.collectExpression(pattern, current)
+			}
+			if arm.Body != nil {
+				c.collectStatement(arm.Body, current)
+			}
+		}
 	case *mast.CallExpression:
 		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil {
 			// Macro special forms (quote/unquote/...) are not builtin calls; do
-			// not arity-check them, but still walk their arguments.
+			// not arity-check them, but still walk their arguments. Keyed on
+			// the bare spelling only: there is no namespaced quote.
 			if isMacroSpecialFormName(ident.Value) {
 				for _, arg := range node.Arguments {
 					c.collectExpression(arg, current)
 				}
 				return
 			}
-			c.checkCall(ident, node.Arguments, current)
+		}
+		// Either spelling: fs_read(p) and fs.read(p) are one call, so both get
+		// checked against one contract.
+		if name, anchor, ok := builtinCallee(node.Function, c.boundIn(current)); ok {
+			c.checkCall(name, anchor, node.Arguments)
 		}
 		if node.Function != nil {
 			c.collectExpression(node.Function, current)
@@ -1510,6 +1903,10 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 		for _, element := range node.Elements {
 			c.collectExpression(element, current)
 		}
+	case *mast.TemplateLiteral:
+		for _, element := range node.Parts {
+			c.collectExpression(element, current)
+		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
 			c.collectExpression(key, current)
@@ -1541,6 +1938,40 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 // must be an unshadowed live builtin, and it must carry a declared return
 // contract. A builtin whose contract says pair, or one with no contract at all,
 // is never reported.
+// checkDeprecated reports a call to a builtin that is kept only for
+// compatibility, and names what replaced it.
+//
+// It is reported at the call and never suppressed by the arity or type rules:
+// the call may be perfectly well-formed, and usually is. The tag is what makes
+// editors strike the name through.
+func (c *builtinCallCollector) checkDeprecated(name string, anchor mast.Node) {
+	if c == nil || c.deprecatedSev == nil || name == "" || anchor == nil {
+		return
+	}
+	replacement, deprecated := builtin.DeprecatedBy(name)
+	if !deprecated {
+		return
+	}
+	rng, ok := c.snapshot.Program.RangeOf(anchor)
+	if !ok {
+		return
+	}
+
+	message := fmt.Sprintf("%s is deprecated.", name)
+	if replacement != "" {
+		message = fmt.Sprintf("%s is deprecated -- use %s instead. The old name keeps working, so this is safe to change at your own pace.",
+			name, replacement)
+	}
+
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.deprecatedSev,
+		Source:   c.source,
+		Tags:     []lsp.DiagnosticTag{lsp.DiagnosticTagDeprecated},
+		Message:  message,
+	})
+}
+
 func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression, current *declarationScope) {
 	if c == nil || c.returnSeverity == nil || len(names) < 2 || value == nil {
 		return
@@ -1550,24 +1981,20 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 	if !ok || call.Function == nil {
 		return
 	}
-	ident, ok := call.Function.(*mast.Identifier)
-	if !ok || ident.Value == "" {
+	name, anchor, ok := builtinCallee(call.Function, c.boundIn(current))
+	if !ok {
 		return
 	}
-	// A user/local binding of this name shadows the builtin.
-	if _, shadowed := current.find(ident.Value); shadowed {
-		return
-	}
-	if _, live := c.builtins[ident.Value]; !live {
+	if _, live := c.builtins[name]; !live {
 		return
 	}
 
-	spec, declared := builtin.ReturnSpec(ident.Value)
+	spec, declared := builtin.ReturnSpec(name)
 	if !declared || spec.Pair {
 		return
 	}
 
-	rng, ok := c.snapshot.Program.RangeOf(ident)
+	rng, ok := c.snapshot.Program.RangeOf(anchor)
 	if !ok {
 		return
 	}
@@ -1589,40 +2016,45 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 		Severity: c.returnSeverity,
 		Source:   c.source,
 		Message: fmt.Sprintf("%s returns a single %s, not a (value, err) pair: %s. Bind one name.",
-			ident.Value, kinds, consequence),
+			name, kinds, consequence),
 	})
 }
 
-func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Expression, current *declarationScope) {
-	if ident == nil || ident.Value == "" {
-		return
-	}
-	// A user/local binding of this name shadows the builtin — not a builtin call.
-	if _, ok := current.find(ident.Value); ok {
+// checkCall checks one call against the builtin contract for name.
+//
+// name is the builtin's flat registry name whichever way the call was spelled,
+// and anchor is the node the squiggle should cover -- the identifier for
+// fs_read(p), the whole `fs.read` for the dotted form. Shadowing has already
+// been decided by builtinCallee, which is what lets one predicate serve every
+// rule instead of each one spelling it slightly differently.
+func (c *builtinCallCollector) checkCall(name string, anchor mast.Node, args []mast.Expression) {
+	if name == "" || anchor == nil {
 		return
 	}
 	// Only real builtins; a stale table key is inert.
-	if _, ok := c.builtins[ident.Value]; !ok {
+	if _, ok := c.builtins[name]; !ok {
 		return
 	}
 
-	if arity, ok := builtinArityFor(ident.Value); ok && !arity.accepts(len(args)) {
+	c.checkDeprecated(name, anchor)
+
+	if arity, ok := builtinArityFor(name); ok && !arity.accepts(len(args)) {
 		// The count is wrong whether or not the rule that reports it is on, so
 		// the type check is suppressed either way.
 		if c.aritySeverity != nil {
-			if rng, ok := c.snapshot.Program.RangeOf(ident); ok {
+			if rng, ok := c.snapshot.Program.RangeOf(anchor); ok {
 				c.result = append(c.result, lsp.Diagnostic{
 					Range:    localprotocol.ToLSPRange(rng),
 					Severity: c.aritySeverity,
 					Source:   c.source,
-					Message:  arity.message(ident.Value, len(args)),
+					Message:  arity.message(name, len(args)),
 				})
 			}
 		}
 		return
 	}
 
-	c.checkArgumentTypes(ident, args)
+	c.checkArgumentTypes(name, args)
 }
 
 // checkArgumentTypes flags an argument whose kind the parameter in that position
@@ -1639,12 +2071,12 @@ func (c *builtinCallCollector) checkCall(ident *mast.Identifier, args []mast.Exp
 //     (argumentTypeIsCertain);
 //  4. that type is expressible as a kind — structs, enums, and errors have no
 //     kind to compare against and are skipped.
-func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args []mast.Expression) {
+func (c *builtinCallCollector) checkArgumentTypes(name string, args []mast.Expression) {
 	if c.argTypeSeverity == nil || len(args) == 0 {
 		return
 	}
 
-	params, ok := builtin.ParamSpecs(ident.Value)
+	params, ok := builtin.ParamSpecs(name)
 	if !ok || len(params) == 0 || !argumentCountFitsParams(params, len(args)) {
 		return
 	}
@@ -1669,7 +2101,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			continue
 		}
 		if param.Accepts(kind) {
-			c.checkArrayElements(ident, i, param, arg)
+			c.checkArrayElements(name, i, param, arg)
 			continue
 		}
 		rng, ok := c.snapshot.Program.RangeOf(arg)
@@ -1680,7 +2112,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
-			Message:  argTypeMessage(ident.Value, i+1, param, kind),
+			Message:  argTypeMessage(name, i+1, param, kind),
 			Data:     ArgTypeDiagnosticData(param, kind),
 		})
 	}
@@ -1696,7 +2128,7 @@ func (c *builtinCallCollector) checkArgumentTypes(ident *mast.Identifier, args [
 // elements are read straight off the syntax. Each element is then held to the
 // same certainty rule as a top-level argument, so an element that is itself a
 // call or an arithmetic expression is skipped rather than guessed at.
-func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
+func (c *builtinCallCollector) checkArrayElements(name string, argIndex int, param builtin.BuiltinParamDoc, arg mast.Expression) {
 	if len(param.Elem) == 0 {
 		return
 	}
@@ -1725,7 +2157,7 @@ func (c *builtinCallCollector) checkArrayElements(ident *mast.Identifier, argInd
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
-			Message:  elementTypeMessage(ident.Value, argIndex+1, param, elementKind),
+			Message:  elementTypeMessage(name, argIndex+1, param, elementKind),
 			Data:     ElementTypeDiagnosticData(param, elementKind),
 		})
 	}
@@ -1757,6 +2189,50 @@ func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]stru
 		names[name] = struct{}{}
 	}
 	return names
+}
+
+// hasTopLevelAction reports whether the file's top level does anything beyond
+// declaring names -- a call, a loop, a conditional, a bare expression.
+//
+// `import` counts as a declaration: a file that only imports and declares is
+// still a module, and treating the import as action would put the warnings
+// straight back on the module that imports another one.
+func hasTopLevelAction(statements []mast.Statement) bool {
+	for _, stmt := range statements {
+		switch stmt.(type) {
+		case *mast.LetStatement, *mast.StructStatement, *mast.EnumStatement, *mast.ImportStatement:
+			continue
+		case nil:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// topLevelDeclaredIdentifiers returns the identifier nodes a file's top-level
+// `let` statements bind. Nodes rather than names: an inner declaration that
+// happens to share a name with a top-level one is a different binding and is
+// still reportable.
+func topLevelDeclaredIdentifiers(statements []mast.Statement) map[*mast.Identifier]struct{} {
+	declared := make(map[*mast.Identifier]struct{}, len(statements))
+	for _, stmt := range statements {
+		let, ok := stmt.(*mast.LetStatement)
+		if !ok || let == nil {
+			continue
+		}
+		names := let.Names
+		if len(names) == 0 && let.Name != nil {
+			names = []*mast.Identifier{let.Name}
+		}
+		for _, ident := range names {
+			if ident != nil {
+				declared[ident] = struct{}{}
+			}
+		}
+	}
+	return declared
 }
 
 func collectUnusedCandidates(snapshot *Snapshot) []*mast.Identifier {
@@ -1818,6 +2294,25 @@ func collectUnusedCandidatesFromStatement(stmt mast.Statement, out *[]*mast.Iden
 		if node.Body != nil {
 			collectUnusedCandidatesFromStatement(node.Body, out)
 		}
+	case *mast.ForInStatement:
+		// The iterable is a read like any other, and the body may read names
+		// from outside the loop.
+		if node.Iterable != nil {
+			collectUnusedCandidatesFromExpression(node.Iterable, out)
+		}
+		if node.Body != nil {
+			collectUnusedCandidatesFromStatement(node.Body, out)
+		}
+	case *mast.WhileStatement:
+		// A name read only by a while condition is used. Without this arm the
+		// unused-declaration rule reports it, which is the false-positive class
+		// every walker here exists to avoid.
+		if node.Condition != nil {
+			collectUnusedCandidatesFromExpression(node.Condition, out)
+		}
+		if node.Body != nil {
+			collectUnusedCandidatesFromStatement(node.Body, out)
+		}
 	}
 }
 
@@ -1844,6 +2339,17 @@ func collectUnusedCandidatesFromExpression(expr mast.Expression, out *[]*mast.Id
 		}
 		if node.Alternative != nil {
 			collectUnusedCandidatesFromStatement(node.Alternative, out)
+		}
+	case *mast.MatchExpression:
+		// Patterns are skipped: this gathers declarations that might be
+		// unused, and a pattern declares nothing.
+		if node.Subject != nil {
+			collectUnusedCandidatesFromExpression(node.Subject, out)
+		}
+		for _, arm := range node.Arms {
+			if arm != nil && arm.Body != nil {
+				collectUnusedCandidatesFromStatement(arm.Body, out)
+			}
 		}
 	case *mast.CallExpression:
 		if node.Function != nil {
@@ -1891,6 +2397,14 @@ func collectUnusedCandidatesFromExpression(expr mast.Expression, out *[]*mast.Id
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
 			collectUnusedCandidatesFromExpression(element, out)
+		}
+	// A name used only inside a ${...} hole is used. Without this arm the
+	// unused-declaration rule reports every variable an interpolated string
+	// reads, which is a warning on correct code -- the one thing these rules
+	// promise never to produce.
+	case *mast.TemplateLiteral:
+		for _, part := range node.Parts {
+			collectUnusedCandidatesFromExpression(part, out)
 		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {

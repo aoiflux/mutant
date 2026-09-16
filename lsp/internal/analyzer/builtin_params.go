@@ -87,6 +87,8 @@ func paramKindForType(t Type) (builtin.ParamKind, bool) {
 		return builtin.ParamBool, true
 	case TypeString:
 		return builtin.ParamString, true
+	case TypeBytes:
+		return builtin.ParamBytes, true
 	case TypeArray:
 		return builtin.ParamArray, true
 	case TypeHash:
@@ -99,6 +101,12 @@ func paramKindForType(t Type) (builtin.ParamKind, bool) {
 		return builtin.ParamStruct, true
 	case TypeEnum:
 		return builtin.ParamEnum, true
+	// TypeError is deliberately absent even though builtin.ParamError now
+	// exists. This direction exists to judge an argument against a parameter's
+	// declared kinds, and no parameter declares ParamError -- so mapping it
+	// would make every typed position reject an error, which is a new
+	// diagnostic rather than a bridge, and one that needs its own
+	// false-positive case made before it fires on anyone.
 	default:
 		return "", false
 	}
@@ -148,7 +156,20 @@ func argumentCountFitsParams(params []builtin.BuiltinParamDoc, argCount int) boo
 // same call fails — see the requireXArg helpers in builtin/arg_helpers.go — so
 // what the editor says before the run matches what the program says during it.
 func argTypeMessage(name string, position int, p builtin.BuiltinParamDoc, got builtin.ParamKind) string {
-	return fmt.Sprintf("argument %d to `%s` must be %s, got %s", position, name, kindListText(p.Kinds), got)
+	message := fmt.Sprintf("argument %d to `%s` must be %s, got %s", position, name, kindListText(p.Kinds), got)
+
+	// Binary into a text builtin is the mistake the BYTES type exists to catch,
+	// and it is the one case where naming the repair is worth the extra clause:
+	// the reader has a buffer, the builtin wants text, and the conversion is
+	// deliberately explicit so there is no way to guess it from the message
+	// above. No quick fix accompanies this -- bytes_to_string follows the
+	// (value, err) convention, so wrapping the argument in place would hand the
+	// builtin a MULTI_VALUE and trade a warning for a runtime error.
+	if got == builtin.ParamBytes && p.Accepts(builtin.ParamString) {
+		message += `; convert it with bytes_to_string(value, "utf8")`
+	}
+
+	return message
 }
 
 // elementTypeMessage renders the complaint for an element of an array argument,

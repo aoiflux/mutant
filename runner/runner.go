@@ -17,6 +17,7 @@ import (
 	"mutant/object"
 	luaruntime "mutant/runtime/lua"
 	"mutant/security"
+	"mutant/serialize"
 	"mutant/vm"
 	"os"
 	"path/filepath"
@@ -36,17 +37,32 @@ var (
 
 const processProtectionTerminateConfidence = 80
 
+// Options carries the per-run switches resolved from the command line. Mutant
+// takes no configuration from environment variables, so everything that shapes
+// a run arrives here from argv and is therefore visible in the invocation an
+// analyst records. See docs/CONFIGURATION_POLICY.md.
+type Options struct {
+	Password          string
+	SecureMode        bool
+	EnforceSignerAuth bool
+	Timing            bool
+
+	// TrustedKeyPath names a file holding the hex-encoded ed25519 public key to
+	// verify against. Empty means the local keystore. A path, never key material.
+	TrustedKeyPath string
+}
+
 // stopwatch prints elapsed-since-start to stderr for each labelled stage when
-// MUTANT_TIMING is set. Zero overhead otherwise. (dev-sec-platform-upgrades)
+// --timing is passed. Zero overhead otherwise. (dev-sec-platform-upgrades)
 type stopwatch struct {
 	on    bool
 	start time.Time
 	last  time.Time
 }
 
-func newStopwatch() *stopwatch {
+func newStopwatch(on bool) *stopwatch {
 	now := time.Now()
-	return &stopwatch{on: os.Getenv("MUTANT_TIMING") != "", start: now, last: now}
+	return &stopwatch{on: on, start: now, last: now}
 }
 
 func (s *stopwatch) mark(label string) {
@@ -59,8 +75,10 @@ func (s *stopwatch) mark(label string) {
 	s.last = now
 }
 
-func Run(srcpath string, password string, secureMode bool, enforceSignerAuth bool) (error, errrs.ErrorType) {
-	sw := newStopwatch()
+func Run(srcpath string, opts Options) (error, errrs.ErrorType) {
+	password, secureMode, enforceSignerAuth := opts.Password, opts.SecureMode, opts.EnforceSignerAuth
+
+	sw := newStopwatch(opts.Timing)
 	signedCode, err := os.ReadFile(srcpath)
 	if err != nil {
 		return err, errrs.ERROR
@@ -73,8 +91,15 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 	}
 	defer security.SecureZero(signedCode)
 
+	// The reproducibility record (F-1). These are the exact bytes that are about
+	// to run, before verification, decoding or execution could have altered
+	// anything -- so a case manifest written by this program names the artifact
+	// that actually produced it. Nothing is recorded unless the program opens a
+	// case; this is a digest and an assignment.
+	builtin.SetProgramIdentity(srcpath, signedCode)
+
 	if secureMode && enforceSignerAuth {
-		trustedPublicKey, generated, keyDir, keyErr := security.ResolveTrustedPublicKeyHex()
+		trustedPublicKey, generated, keyDir, keyErr := security.ResolveTrustedPublicKeyHexFromPath(opts.TrustedKeyPath)
 		if keyErr != nil {
 			return fmt.Errorf("failed to resolve trusted public key: %w", keyErr), errrs.ERROR
 		}
@@ -94,10 +119,25 @@ func Run(srcpath string, password string, secureMode bool, enforceSignerAuth boo
 				return responseErr, errrs.ERROR
 			}
 		}
-	} else if !secureMode {
+	} else {
+		// Self-verification is the floor: it runs in every mode. --signer-auth in
+		// secure mode upgrades it to verification against a trusted public key.
+		//
+		// This branch used to read `else if !secureMode`, which left secure mode
+		// without --signer-auth -- a plain `mutant prog.mu` -- matching neither
+		// branch and verifying nothing at all, while --compat self-verified. The
+		// most secure-sounding invocation performed the fewest checks. Security is
+		// now monotonic in the mode. (M-4)
+		stage := "compat-mode-verify"
+		if secureMode {
+			stage = "secure-mode-self-verify"
+			fmt.Fprintln(os.Stderr, "[security] self-verification only; add --signer-auth "+
+				"(with --trusted-key <path>) to verify against a trusted public key")
+		}
+
 		if err := security.VerifyCode(signedCode); err != nil {
-			security.RecordSignatureFailure("compat-mode-verify")
-			if responseErr := security.ApplyTamperResponse("signature_failed", "compat-mode-verify", secureMode, err); responseErr != nil {
+			security.RecordSignatureFailure(stage)
+			if responseErr := security.ApplyTamperResponse("signature_failed", stage, secureMode, err); responseErr != nil {
 				return responseErr, errrs.ERROR
 			}
 		}
@@ -154,7 +194,9 @@ func enforceAntiDebug(secureMode bool, stage string) error {
 	}
 	security.RecordDebuggerDetected(stage)
 
-	return security.ApplyTamperResponse("debugger_detected", stage, secureMode, security.ErrDebuggerDetected)
+	return security.ApplyTamperResponseWithDetail(
+		"debugger_detected", stage, secureMode,
+		security.ErrDebuggerDetected, security.DebuggerTamperDetail())
 }
 
 func enforceAntiSandbox(secureMode bool, stage string) error {
@@ -163,7 +205,9 @@ func enforceAntiSandbox(secureMode bool, stage string) error {
 	}
 	security.RecordSandboxDetected(stage)
 
-	return security.ApplyTamperResponse("sandbox_detected", stage, secureMode, security.ErrSandboxDetected)
+	return security.ApplyTamperResponseWithDetail(
+		"sandbox_detected", stage, secureMode,
+		security.ErrSandboxDetected, security.SandboxTamperDetail())
 }
 
 func enforceProcessProtection(secureMode bool, stage string) error {
@@ -187,11 +231,12 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 		}
 
 		security.RecordProcessProtectionDetected(stage)
-		return security.ApplyTamperResponse(
+		return security.ApplyTamperResponseWithDetail(
 			"process_protection_detected",
 			stage,
 			secureMode,
 			security.ErrProcessProtectionDetected,
+			processProtectionDetail(signal),
 		)
 	}
 
@@ -200,6 +245,42 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 
 func isProcessProtectionEnabled() bool {
 	return true
+}
+
+// processProtectionDetail names the probe that fired and what it saw, so a
+// terminating run reports "trampoline" rather than only that process protection
+// triggered. The signal is the one already in hand: nothing is probed twice. (M-7)
+func processProtectionDetail(signal security.AntiTamperSignal) security.TamperDetail {
+	detail := security.TamperDetail{
+		Detector:   "process-protection",
+		Kind:       signal.Name,
+		Confidence: signal.Confidence,
+	}
+	if signal.Detail != "" {
+		detail.Signals = []string{signal.Detail}
+	}
+
+	return detail
+}
+
+// remoteProcessDetail names the process that scored over the threshold and the
+// signals that put it there. The PID and name go in because the remedy for a
+// false positive is to recognise the process -- an EDR agent, a monitoring
+// daemon -- and an unnamed score is not something an operator can act on. (M-7)
+func remoteProcessDetail(verdict security.ProcessRiskVerdict) security.TamperDetail {
+	detail := security.TamperDetail{
+		Detector:   "remote-process-scan",
+		Kind:       fmt.Sprintf("%s(pid %d)", verdict.Name, verdict.PID),
+		Confidence: verdict.FinalScore,
+	}
+
+	for _, signal := range verdict.Signals {
+		if signal.Detected {
+			detail.Signals = append(detail.Signals, signal.Name)
+		}
+	}
+
+	return detail
 }
 
 func enforceRemoteProcessProtection(secureMode bool, stage string) error {
@@ -219,11 +300,12 @@ func enforceRemoteProcessProtection(secureMode bool, stage string) error {
 		}
 
 		security.RecordProcessProtectionDetected(stage)
-		return security.ApplyTamperResponse(
+		return security.ApplyTamperResponseWithDetail(
 			"remote_process_protection_detected",
 			stage,
 			secureMode,
 			security.ErrProcessProtectionDetected,
+			remoteProcessDetail(verdict),
 		)
 	}
 
@@ -246,7 +328,7 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	reader := bytes.NewReader(inflatedData)
 
 	var bytecode *compiler.ByteCode
-	registerTypes()
+	serialize.RegisterGobTypes()
 	dec := gob.NewDecoder(reader)
 	if err := dec.Decode(&bytecode); err != nil {
 		return nil, err
@@ -438,8 +520,33 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	}
 	io.WriteString(os.Stdout, last.Inspect())
 	io.WriteString(os.Stdout, "\n")
+	reportUncaughtError(last)
 
 	return nil, ""
+}
+
+// reportUncaughtError expands on an error a program ended on.
+//
+// Errors are ordinary values here, so a program whose last expression is one
+// has not crashed and its exit status does not change. But an error that
+// reaches the end unhandled is almost always the thing the analyst wants to
+// look at, and Inspect deliberately carries only a position: a full stack
+// printed by Inspect would repeat on every caught error a loop prints.
+//
+// The detail goes to stderr so the program's value on stdout stays exactly what
+// it was and stays pipeable. It appears only when the error carries a stack,
+// which means only in a build that kept its debug info.
+func reportUncaughtError(value object.Object) {
+	errObj, ok := value.(*object.Error)
+	if !ok || errObj == nil || len(errObj.Stack) == 0 {
+		return
+	}
+
+	if snippet := errObj.Snippet(); snippet != "" {
+		io.WriteString(os.Stderr, "\n"+snippet+"\n")
+	}
+	io.WriteString(os.Stderr, "\nraised at (most recent call first):\n")
+	io.WriteString(os.Stderr, errObj.Traceback()+"\n")
 }
 
 func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, secureMode bool) error {
@@ -448,8 +555,7 @@ func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, sec
 	}
 
 	ctx := &luaruntime.APIContext{
-		Globals:             map[string]object.Object{},
-		BuiltinCapabilities: resolveLuaBuiltinCapabilities(),
+		Globals: map[string]object.Object{},
 	}
 
 	if err := executeLuaPatches(bytecode.LuaPatches, password, len(bytecode.Instructions), ctx); err != nil {
@@ -458,36 +564,4 @@ func executeLuaPatchesBeforeVM(bytecode *compiler.ByteCode, password string, sec
 	}
 
 	return nil
-}
-
-func resolveLuaBuiltinCapabilities() []string {
-	defaults := security.DefaultBuiltinCapabilityPolicy()
-	caps := make([]string, 0, len(defaults))
-	for capability := range defaults {
-		caps = append(caps, capability)
-	}
-	return caps
-}
-
-func registerTypes() {
-	gob.Register(&object.Float{})
-	gob.Register(&object.Integer{})
-	gob.Register(&object.Boolean{})
-	gob.Register(&object.Null{})
-	gob.Register(&object.ReturnValue{})
-	gob.Register(&object.MultiValue{})
-	gob.Register(&object.Error{})
-	gob.Register(&object.Function{})
-	gob.Register(&object.String{})
-	gob.Register(&builtin.BuiltIn{})
-	gob.Register(&object.Array{})
-	gob.Register(&object.Hash{})
-	gob.Register(&object.Quote{})
-	gob.Register(&object.Macro{})
-	gob.Register(&object.CompiledFunction{})
-	gob.Register(&object.Closure{})
-	gob.Register(&object.Encrypted{})
-	gob.Register(&object.Struct{})
-	gob.Register(&object.EnumValue{})
-	gob.Register(&object.LuaPatch{})
 }
