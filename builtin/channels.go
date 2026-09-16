@@ -209,7 +209,7 @@ func ChanSend(args ...object.Object) object.Object {
 	if len(args) != 2 && len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	mc, errObj := channelArg("chan_send", args[0])
+	mc, errObj := channelArg(BuiltinNameChanSend, args[0])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -217,7 +217,7 @@ func ChanSend(args ...object.Object) object.Object {
 	timeoutMs := int64(-1)
 	if len(args) == 3 {
 		var terr *object.Error
-		if timeoutMs, terr = timeoutArg("chan_send", 3, args[2]); terr != nil {
+		if timeoutMs, terr = timeoutArg(BuiltinNameChanSend, 3, args[2]); terr != nil {
 			return resultAndError(nil, terr)
 		}
 	}
@@ -283,7 +283,7 @@ func ChanRecv(args ...object.Object) object.Object {
 	if len(args) != 1 && len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	mc, errObj := channelArg("chan_recv", args[0])
+	mc, errObj := channelArg(BuiltinNameChanRecv, args[0])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -291,7 +291,7 @@ func ChanRecv(args ...object.Object) object.Object {
 	timeoutMs := int64(-1)
 	if len(args) == 2 {
 		var terr *object.Error
-		if timeoutMs, terr = timeoutArg("chan_recv", 2, args[1]); terr != nil {
+		if timeoutMs, terr = timeoutArg(BuiltinNameChanRecv, 2, args[1]); terr != nil {
 			return resultAndError(nil, terr)
 		}
 	}
@@ -342,7 +342,7 @@ func ChanTryRecv(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	if _, errObj := channelArg("chan_try_recv", args[0]); errObj != nil {
+	if _, errObj := channelArg(BuiltinNameChanTryRecv, args[0]); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	return ChanRecv(args[0], intObj(0))
@@ -358,7 +358,7 @@ func ChanClose(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	mc, errObj := channelArg("chan_close", args[0])
+	mc, errObj := channelArg(BuiltinNameChanClose, args[0])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

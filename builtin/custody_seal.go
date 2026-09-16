@@ -230,7 +230,7 @@ func CaseWrite(args ...object.Object) object.Object {
 		result["signature_error"] = reason
 	}
 
-	return custodyManifestResult("case_write", result)
+	return custodyManifestResult(BuiltinNameCaseWrite, result)
 }
 
 // CaseManifestVerify checks a written manifest: that its contents still hash to
@@ -295,7 +295,7 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 
 	signed, _ := seal["signed"].(bool)
 	if !signed {
-		return custodyManifestResult("case_manifest_verify", result)
+		return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
 	}
 	result["signed"] = true
 
@@ -321,7 +321,7 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 		}
 	}
 
-	return custodyManifestResult("case_manifest_verify", result)
+	return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
 }
 
 // stringField reads a string out of a decoded JSON object, or "" when it is

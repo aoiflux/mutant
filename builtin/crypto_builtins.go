@@ -33,7 +33,7 @@ func X509Parse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	input, errObj := requireStringArg("x509_parse", args[0], 1)
+	input, errObj := requireStringArg(BuiltinNameX509Parse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -77,7 +77,7 @@ func JWTDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	token, errObj := requireStringArg("jwt_decode", args[0], 1)
+	token, errObj := requireStringArg(BuiltinNameJWTDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -134,16 +134,16 @@ func AESEncrypt(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 (key, plaintext)", len(args)))
 	}
-	key, errObj := requireStringArg("aes_encrypt", args[0], 1)
+	key, errObj := requireStringArg(BuiltinNameAESEncrypt, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	plaintext, errObj := requireBinaryArg("aes_encrypt", args[1], 2)
+	plaintext, errObj := requireBinaryArg(BuiltinNameAESEncrypt, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	gcm, errObj := newAESGCM("aes_encrypt", key)
+	gcm, errObj := newAESGCM(BuiltinNameAESEncrypt, key)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -157,14 +157,14 @@ func AESEncrypt(args ...object.Object) object.Object {
 }
 
 func AESDecrypt(args ...object.Object) object.Object {
-	return aesDecrypt(args, "aes_decrypt", false)
+	return aesDecrypt(args, BuiltinNameAESDecrypt, false)
 }
 
 // AESDecryptBytes decrypts into a buffer. Plaintext recovered from a cipher is
 // binary until something proves otherwise, and a buffer is also the form whose
 // contents the VM can actually wipe afterwards.
 func AESDecryptBytes(args ...object.Object) object.Object {
-	return aesDecrypt(args, "aes_decrypt_bytes", true)
+	return aesDecrypt(args, BuiltinNameAESDecryptBytes, true)
 }
 
 func aesDecrypt(args []object.Object, opName string, binary bool) object.Object {
@@ -217,7 +217,7 @@ func PEMDecode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	s, errObj := requireStringArg("pem_decode", args[0], 1)
+	s, errObj := requireStringArg(BuiltinNamePEMDecode, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

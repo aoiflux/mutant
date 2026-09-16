@@ -13,7 +13,7 @@ func BytesLen(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	value, errObj := requireBytesStringArg("bytes_len", args[0], 1)
+	value, errObj := requireBytesStringArg(BuiltinNameBytesLen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -26,12 +26,12 @@ func BytesGet(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	value, errObj := requireBytesStringArg("bytes_get", args[0], 1)
+	value, errObj := requireBytesStringArg(BuiltinNameBytesGet, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	offset, errObj := requireNonNegativeOffset("bytes_get", args[1], 2)
+	offset, errObj := requireNonNegativeOffset(BuiltinNameBytesGet, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -48,17 +48,17 @@ func BytesSlice(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 
-	value, errObj := requireBytesStringArg("bytes_slice", args[0], 1)
+	value, errObj := requireBytesStringArg(BuiltinNameBytesSlice, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	start, errObj := requireNonNegativeOffset("bytes_slice", args[1], 2)
+	start, errObj := requireNonNegativeOffset(BuiltinNameBytesSlice, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	length, errObj := requireNonNegativeOffset("bytes_slice", args[2], 3)
+	length, errObj := requireNonNegativeOffset(BuiltinNameBytesSlice, args[2], 3)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -74,51 +74,51 @@ func BytesSlice(args ...object.Object) object.Object {
 }
 
 func BytesReadU16LE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u16_le", 2, false)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU16Le, 2, false)
 }
 
 func BytesReadU16BE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u16_be", 2, true)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU16Be, 2, true)
 }
 
 func BytesReadU32LE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u32_le", 4, false)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU32Le, 4, false)
 }
 
 func BytesReadU32BE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u32_be", 4, true)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU32Be, 4, true)
 }
 
 func BytesReadU64LE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u64_le", 8, false)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU64Le, 8, false)
 }
 
 func BytesReadU64BE(args ...object.Object) object.Object {
-	return bytesReadUnsigned(args, "bytes_read_u64_be", 8, true)
+	return bytesReadUnsigned(args, BuiltinNameBytesReadU64Be, 8, true)
 }
 
 func BytesWriteU16LE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u16_le", 2, false)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU16Le, 2, false)
 }
 
 func BytesWriteU16BE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u16_be", 2, true)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU16Be, 2, true)
 }
 
 func BytesWriteU32LE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u32_le", 4, false)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU32Le, 4, false)
 }
 
 func BytesWriteU32BE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u32_be", 4, true)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU32Be, 4, true)
 }
 
 func BytesWriteU64LE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u64_le", 8, false)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU64Le, 8, false)
 }
 
 func BytesWriteU64BE(args ...object.Object) object.Object {
-	return bytesWriteUnsigned(args, "bytes_write_u64_be", 8, true)
+	return bytesWriteUnsigned(args, BuiltinNameBytesWriteU64Be, 8, true)
 }
 
 func BytesCStrAt(args ...object.Object) object.Object {
@@ -126,17 +126,17 @@ func BytesCStrAt(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 
-	value, errObj := requireBytesStringArg("bytes_cstr_at", args[0], 1)
+	value, errObj := requireBytesStringArg(BuiltinNameBytesCstrAt, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	offset, errObj := requireNonNegativeOffset("bytes_cstr_at", args[1], 2)
+	offset, errObj := requireNonNegativeOffset(BuiltinNameBytesCstrAt, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	maxLength, errObj := requireNonNegativeOffset("bytes_cstr_at", args[2], 3)
+	maxLength, errObj := requireNonNegativeOffset(BuiltinNameBytesCstrAt, args[2], 3)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -226,7 +226,7 @@ func BytesCursorNew(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	data, errObj := requireBytesStringArg("bytes_cursor_new", args[0], 1)
+	data, errObj := requireBytesStringArg(BuiltinNameBytesCursorNew, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -239,7 +239,7 @@ func BytesCursorTell(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	_, offset, _, _, errObj := requireBytesCursor("bytes_cursor_tell", args[0], 1)
+	_, offset, _, _, errObj := requireBytesCursor(BuiltinNameBytesCursorTell, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -252,12 +252,12 @@ func BytesCursorSeek(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	data, _, cursorLen, binary, errObj := requireBytesCursor("bytes_cursor_seek", args[0], 1)
+	data, _, cursorLen, binary, errObj := requireBytesCursor(BuiltinNameBytesCursorSeek, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	offset, errObj := requireNonNegativeOffset("bytes_cursor_seek", args[1], 2)
+	offset, errObj := requireNonNegativeOffset(BuiltinNameBytesCursorSeek, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -274,7 +274,7 @@ func BytesCursorEOF(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	_, offset, cursorLen, _, errObj := requireBytesCursor("bytes_cursor_eof", args[0], 1)
+	_, offset, cursorLen, _, errObj := requireBytesCursor(BuiltinNameBytesCursorEof, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -283,31 +283,31 @@ func BytesCursorEOF(args ...object.Object) object.Object {
 }
 
 func BytesCursorReadU8(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u8", 1, false)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU8, 1, false)
 }
 
 func BytesCursorReadU16LE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u16_le", 2, false)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU16Le, 2, false)
 }
 
 func BytesCursorReadU16BE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u16_be", 2, true)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU16Be, 2, true)
 }
 
 func BytesCursorReadU32LE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u32_le", 4, false)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU32Le, 4, false)
 }
 
 func BytesCursorReadU32BE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u32_be", 4, true)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU32Be, 4, true)
 }
 
 func BytesCursorReadU64LE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u64_le", 8, false)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU64Le, 8, false)
 }
 
 func BytesCursorReadU64BE(args ...object.Object) object.Object {
-	return bytesCursorReadUnsigned(args, "bytes_cursor_read_u64_be", 8, true)
+	return bytesCursorReadUnsigned(args, BuiltinNameBytesCursorReadU64Be, 8, true)
 }
 
 func bytesReadUnsigned(args []object.Object, opName string, size int, bigEndian bool) object.Object {

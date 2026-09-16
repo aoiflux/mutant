@@ -150,11 +150,11 @@ func CsvParse(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	data, errObj := requireBinaryArg("csv_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameCsvParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("csv_parse", args, 2, csvOptionNames...)
+	opts, errObj := formatOptionsArg(BuiltinNameCsvParse, args, 2, csvOptionNames...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -163,7 +163,7 @@ func CsvParse(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	comma, errObj := singleRune("csv_parse", "delimiter", delimiter)
+	comma, errObj := singleRune(BuiltinNameCsvParse, "delimiter", delimiter)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -173,7 +173,7 @@ func CsvParse(args ...object.Object) object.Object {
 	}
 	var commentRune rune
 	if comment != "" {
-		commentRune, errObj = singleRune("csv_parse", "comment", comment)
+		commentRune, errObj = singleRune(BuiltinNameCsvParse, "comment", comment)
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
@@ -281,11 +281,11 @@ func CsvStringify(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	rows, errObj := requireArrayArg("csv_stringify", args[0], 1)
+	rows, errObj := requireArrayArg(BuiltinNameCsvStringify, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("csv_stringify", args, 2, csvStringifyOptionNames...)
+	opts, errObj := formatOptionsArg(BuiltinNameCsvStringify, args, 2, csvStringifyOptionNames...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -293,7 +293,7 @@ func CsvStringify(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	comma, errObj := singleRune("csv_stringify", "delimiter", delimiter)
+	comma, errObj := singleRune(BuiltinNameCsvStringify, "delimiter", delimiter)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -306,7 +306,7 @@ func CsvStringify(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	records, defaultHeader, errObj := csvRecords("csv_stringify", rows, columns, columnsGiven)
+	records, defaultHeader, errObj := csvRecords(BuiltinNameCsvStringify, rows, columns, columnsGiven)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -490,7 +490,7 @@ func XmlParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("xml_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameXmlParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -633,11 +633,11 @@ func XmlFind(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	node, errObj := requireHashArg("xml_find", args[0], 1)
+	node, errObj := requireHashArg(BuiltinNameXmlFind, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	path, errObj := requireStringArg("xml_find", args[1], 2)
+	path, errObj := requireStringArg(BuiltinNameXmlFind, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -752,7 +752,7 @@ func NdjsonParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("ndjson_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameNdjsonParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -799,7 +799,7 @@ func NdjsonStringify(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	values, errObj := requireArrayArg("ndjson_stringify", args[0], 1)
+	values, errObj := requireArrayArg(BuiltinNameNdjsonStringify, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -826,7 +826,7 @@ func YamlParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("yaml_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameYamlParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -851,7 +851,7 @@ func YamlParseAll(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("yaml_parse_all", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameYamlParseAll, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -901,7 +901,7 @@ func TomlParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("toml_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameTomlParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

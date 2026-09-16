@@ -78,7 +78,7 @@ func CborParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("cbor_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameCborParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -154,7 +154,7 @@ func MsgpackParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("msgpack_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameMsgpackParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -226,7 +226,7 @@ func ProtobufParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("protobuf_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameProtobufParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -399,7 +399,7 @@ func DerParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("der_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameDerParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

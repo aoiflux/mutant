@@ -84,7 +84,7 @@ func RegOpen(args ...object.Object) object.Object {
 	registryStore.backends[handle] = backend
 	registryStore.Unlock()
 
-	custodyRecordOpen("reg_open", handle, pathObj.Value)
+	custodyRecordOpen(BuiltinNameRegOpen, handle, pathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":      stringObj(handle),
@@ -132,7 +132,7 @@ func readFileHeader(path string, n int) ([]byte, error) {
 }
 
 func RegEnumKeys(args ...object.Object) object.Object {
-	backend, path, errObj := registryHandleAndPath("reg_enum_keys", args)
+	backend, path, errObj := registryHandleAndPath(BuiltinNameRegEnumKeys, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -148,7 +148,7 @@ func RegEnumKeys(args ...object.Object) object.Object {
 }
 
 func RegEnumValues(args ...object.Object) object.Object {
-	backend, path, errObj := registryHandleAndPath("reg_enum_values", args)
+	backend, path, errObj := registryHandleAndPath(BuiltinNameRegEnumValues, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -167,15 +167,15 @@ func RegGetValue(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
-	backend, errObj := resolveRegistryBackend(args[0], "reg_get_value")
+	backend, errObj := resolveRegistryBackend(args[0], BuiltinNameRegGetValue)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	path, errObj := requireStringArg("reg_get_value", args[1], 2)
+	path, errObj := requireStringArg(BuiltinNameRegGetValue, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	name, errObj := requireStringArg("reg_get_value", args[2], 3)
+	name, errObj := requireStringArg(BuiltinNameRegGetValue, args[2], 3)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -190,7 +190,7 @@ func RegDeletedKeys(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	backend, errObj := resolveRegistryBackend(args[0], "reg_deleted_keys")
+	backend, errObj := resolveRegistryBackend(args[0], BuiltinNameRegDeletedKeys)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -206,7 +206,7 @@ func RegTimeline(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	backend, errObj := resolveRegistryBackend(args[0], "reg_timeline")
+	backend, errObj := resolveRegistryBackend(args[0], BuiltinNameRegTimeline)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -230,7 +230,7 @@ func RegClose(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("reg_close: unknown hive handle: %s", handleObj.Value))
 	}
-	custodyRecordTouch("reg_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameRegClose, handleObj.Value)
 	backend.close()
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handleObj.Value),

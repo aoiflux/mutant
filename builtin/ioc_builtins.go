@@ -16,7 +16,7 @@ import (
 // --- defang / refang ---
 
 func Defang(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("defang", args)
+	s, errObj := strOneStringArg(BuiltinNameDefang, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -34,7 +34,7 @@ var refangReplacer = strings.NewReplacer(
 )
 
 func Refang(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("refang", args)
+	s, errObj := strOneStringArg(BuiltinNameRefang, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -44,7 +44,7 @@ func Refang(args ...object.Object) object.Object {
 // --- IP / CIDR ---
 
 func IPIsPrivate(args ...object.Object) object.Object {
-	ip, errObj := ipArg("ip_is_private", args)
+	ip, errObj := ipArg(BuiltinNameIPIsPrivate, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -55,11 +55,11 @@ func IPInCIDR(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	ipStr, errObj := requireStringArg("ip_in_cidr", args[0], 1)
+	ipStr, errObj := requireStringArg(BuiltinNameIPInCIDR, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	cidr, errObj := requireStringArg("ip_in_cidr", args[1], 2)
+	cidr, errObj := requireStringArg(BuiltinNameIPInCIDR, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -75,7 +75,7 @@ func IPInCIDR(args ...object.Object) object.Object {
 }
 
 func CIDRHosts(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("cidr_hosts", args)
+	s, errObj := strOneStringArg(BuiltinNameCIDRHosts, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -112,7 +112,7 @@ func incrementIP(ip net.IP) {
 }
 
 func IPVersion(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("ip_version", args)
+	s, errObj := strOneStringArg(BuiltinNameIPVersion, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -127,7 +127,7 @@ func IPVersion(args ...object.Object) object.Object {
 }
 
 func IPToInt(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("ip_to_int", args)
+	s, errObj := strOneStringArg(BuiltinNameIPToInt, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -142,7 +142,7 @@ func IntToIP(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return newError("wrong number of arguments. got=%d, want=1", len(args))
 	}
-	n, errObj := requireIntArg("int_to_ip", args[0], 1)
+	n, errObj := requireIntArg(BuiltinNameIntToIP, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
@@ -157,7 +157,7 @@ func IntToIP(args ...object.Object) object.Object {
 // --- domains ---
 
 func DomainExtract(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("domain_extract", args)
+	s, errObj := strOneStringArg(BuiltinNameDomainExtract, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -173,7 +173,7 @@ func DomainExtract(args ...object.Object) object.Object {
 }
 
 func TLDExtract(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("tld_extract", args)
+	s, errObj := strOneStringArg(BuiltinNameTLDExtract, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -193,7 +193,7 @@ func TLDExtract(args ...object.Object) object.Object {
 var domainRe = regexp.MustCompile(`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
 
 func IsValidDomain(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("is_valid_domain", args)
+	s, errObj := strOneStringArg(BuiltinNameIsValidDomain, args)
 	if errObj != nil {
 		return errObj
 	}
@@ -217,7 +217,7 @@ var (
 )
 
 func ExtractIOCs(args ...object.Object) object.Object {
-	s, errObj := strOneStringArg("extract_iocs", args)
+	s, errObj := strOneStringArg(BuiltinNameExtractIOCs, args)
 	if errObj != nil {
 		return errObj
 	}

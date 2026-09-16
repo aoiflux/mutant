@@ -34,11 +34,11 @@ func TimeFormat(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	unix, errObj := requireIntArg("time_format", args[0], 1)
+	unix, errObj := requireIntArg(BuiltinNameTimeFormat, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	layout, errObj := requireStringArg("time_format", args[1], 2)
+	layout, errObj := requireStringArg(BuiltinNameTimeFormat, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -49,11 +49,11 @@ func TimeParse(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	value, errObj := requireStringArg("time_parse", args[0], 1)
+	value, errObj := requireStringArg(BuiltinNameTimeParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	layout, errObj := requireStringArg("time_parse", args[1], 2)
+	layout, errObj := requireStringArg(BuiltinNameTimeParse, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -68,11 +68,11 @@ func TimeDiff(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	a, errObj := requireIntArg("time_diff", args[0], 1)
+	a, errObj := requireIntArg(BuiltinNameTimeDiff, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	b, errObj := requireIntArg("time_diff", args[1], 2)
+	b, errObj := requireIntArg(BuiltinNameTimeDiff, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}
@@ -83,11 +83,11 @@ func TimeAdd(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return newError("wrong number of arguments. got=%d, want=2", len(args))
 	}
-	t, errObj := requireIntArg("time_add", args[0], 1)
+	t, errObj := requireIntArg(BuiltinNameTimeAdd, args[0], 1)
 	if errObj != nil {
 		return errObj
 	}
-	seconds, errObj := requireIntArg("time_add", args[1], 2)
+	seconds, errObj := requireIntArg(BuiltinNameTimeAdd, args[1], 2)
 	if errObj != nil {
 		return errObj
 	}

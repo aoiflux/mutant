@@ -59,17 +59,17 @@ func CaseReport(args ...object.Object) object.Object {
 	if len(args) > 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
-	opts, errObj := formatOptionsArg("case_report", args, 1, caseReportOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameCaseReport, args, 1, caseReportOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	manifest, errObj := caseManifestSnapshot("case_report")
+	manifest, errObj := caseManifestSnapshot(BuiltinNameCaseReport)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	report, errObj := caseReportDocument("case_report", manifest, opts)
+	report, errObj := caseReportDocument(manifest, opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -83,14 +83,14 @@ func CaseBundle(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	dir, errObj := requireStringArg("case_bundle", args[0], 1)
+	dir, errObj := requireStringArg(BuiltinNameCaseBundle, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	if strings.TrimSpace(dir) == "" {
 		return resultAndError(nil, newError("case_bundle: the directory must not be empty"))
 	}
-	opts, errObj := formatOptionsArg("case_bundle", args, 2, caseBundleOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameCaseBundle, args, 2, caseBundleOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -99,26 +99,26 @@ func CaseBundle(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	manifest, errObj := caseManifestSnapshot("case_bundle")
+	manifest, errObj := caseManifestSnapshot(BuiltinNameCaseBundle)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	// One report, two renderings. Built before the directory exists so a
 	// document that cannot be rendered leaves nothing behind.
-	report, errObj := caseReportDocument("case_bundle", manifest, opts)
+	report, errObj := caseReportDocument(manifest, opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	renderOpts, errObj := formatOptionsArg("case_bundle", nil, 1)
+	renderOpts, errObj := formatOptionsArg(BuiltinNameCaseBundle, nil, 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	htmlText, errObj := renderReport("case_bundle", report, "html", renderOpts)
+	htmlText, errObj := renderReport(BuiltinNameCaseBundle, report, "html", renderOpts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	markdownText, errObj := renderReport("case_bundle", report, "markdown", renderOpts)
+	markdownText, errObj := renderReport(BuiltinNameCaseBundle, report, "markdown", renderOpts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -131,7 +131,7 @@ func CaseBundle(args ...object.Object) object.Object {
 
 	written := map[string]writtenArtifact{}
 	for name, text := range map[string]string{bundleHTMLName: htmlText, bundleMarkdownName: markdownText} {
-		artifact, errObj := writeArtifact("case_bundle", filepath.Join(dir, name), []byte(text))
+		artifact, errObj := writeArtifact(BuiltinNameCaseBundle, filepath.Join(dir, name), []byte(text))
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
@@ -160,7 +160,7 @@ func CaseBundle(args ...object.Object) object.Object {
 	}
 	document = append(document, '\n')
 
-	artifact, errObj := writeArtifact("case_bundle", filepath.Join(dir, bundleManifestName), document)
+	artifact, errObj := writeArtifact(BuiltinNameCaseBundle, filepath.Join(dir, bundleManifestName), document)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -168,7 +168,7 @@ func CaseBundle(args ...object.Object) object.Object {
 
 	// SHA256SUMS last, in the format `sha256sum -c` reads, so checking a bundle
 	// needs nothing from this project at all.
-	sums, errObj := writeArtifact("case_bundle", filepath.Join(dir, bundleChecksumsName), []byte(bundleChecksums(written)))
+	sums, errObj := writeArtifact(BuiltinNameCaseBundle, filepath.Join(dir, bundleChecksumsName), []byte(bundleChecksums(written)))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -192,7 +192,7 @@ func CaseBundle(args ...object.Object) object.Object {
 		}))
 	}
 
-	custodyRecordArtifact("case_bundle",
+	custodyRecordArtifact(BuiltinNameCaseBundle,
 		fmt.Sprintf("wrote the case bundle to %s (manifest sha256 %s, signed %t)", dir, manifestHash, signed),
 		map[string]any{
 			"dir":           dir,
@@ -265,7 +265,10 @@ func caseManifestSnapshot(op string) (map[string]any, *object.Error) {
 // caseReportDocument builds the report value. It is a document in exactly the
 // shape `report_new` and its builders produce, so it can be added to before it
 // is rendered: an examiner's conclusions are not something a manifest holds.
-func caseReportDocument(op string, manifest map[string]any, opts *formatOptions) (*object.Hash, *object.Error) {
+// The builtin's name is not a parameter here: formatOptionsArg already put it
+// on opts, and every error this raises goes out through opts. Taking it a second
+// time meant one caller could label the options and the document differently.
+func caseReportDocument(manifest map[string]any, opts *formatOptions) (*object.Hash, *object.Error) {
 	caseInfo := manifestMap(manifest, "case")
 	id := stringField(caseInfo, "id")
 	examiner := stringField(caseInfo, "examiner")

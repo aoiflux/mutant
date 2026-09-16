@@ -201,7 +201,7 @@ func VHDIOpen(args ...object.Object) object.Object {
 	vhdiStore.handles[handle] = vhdiHandleState{ImagePath: pathObj.Value, Session: session}
 	vhdiStore.Unlock()
 
-	custodyRecordOpen("vhdi_open", handle, pathObj.Value)
+	custodyRecordOpen(BuiltinNameVhdiOpen, handle, pathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -215,7 +215,7 @@ func VHDIMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveVHDIHandle(args[0], "vhdi_metadata")
+	state, errObj := resolveVHDIHandle(args[0], BuiltinNameVhdiMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -254,11 +254,11 @@ func VHDIMetadata(args ...object.Object) object.Object {
 // the Bytes form is the right one for nearly every caller. The text form stays
 // because every program written before the type existed calls it.
 func VHDIReadAt(args ...object.Object) object.Object {
-	return vhdiReadAt(args, "vhdi_read_at", false)
+	return vhdiReadAt(args, BuiltinNameVhdiReadAt, false)
 }
 
 func VHDIReadAtBytes(args ...object.Object) object.Object {
-	return vhdiReadAt(args, "vhdi_read_at_bytes", true)
+	return vhdiReadAt(args, BuiltinNameVhdiReadAtBytes, true)
 }
 
 func vhdiReadAt(args []object.Object, opName string, binary bool) object.Object {
@@ -302,7 +302,7 @@ func VHDIMapOffset(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveVHDIHandle(args[0], "vhdi_map_offset")
+	state, errObj := resolveVHDIHandle(args[0], BuiltinNameVhdiMapOffset)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -348,7 +348,7 @@ func VHDIClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("vhdi_close: unknown vhdi handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("vhdi_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameVhdiClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("vhdi_close: %s", err.Error()))
@@ -366,7 +366,7 @@ func EWFOpen(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	segmentPaths, errObj := parseEWFSegmentPaths(args[0], "ewf_open")
+	segmentPaths, errObj := parseEWFSegmentPaths(args[0], BuiltinNameEwfOpen)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -387,7 +387,7 @@ func EWFOpen(args ...object.Object) object.Object {
 	ewfStore.handles[handle] = ewfHandleState{SegmentPaths: segmentPaths, Session: session}
 	ewfStore.Unlock()
 
-	custodyRecordOpen("ewf_open", handle, segmentPaths...)
+	custodyRecordOpen(BuiltinNameEwfOpen, handle, segmentPaths...)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":        stringObj(handle),
@@ -401,7 +401,7 @@ func EWFMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveEWFHandle(args[0], "ewf_metadata")
+	state, errObj := resolveEWFHandle(args[0], BuiltinNameEwfMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -441,11 +441,11 @@ func EWFMetadata(args ...object.Object) object.Object {
 }
 
 func EWFReadAt(args ...object.Object) object.Object {
-	return ewfReadAt(args, "ewf_read_at", false)
+	return ewfReadAt(args, BuiltinNameEwfReadAt, false)
 }
 
 func EWFReadAtBytes(args ...object.Object) object.Object {
-	return ewfReadAt(args, "ewf_read_at_bytes", true)
+	return ewfReadAt(args, BuiltinNameEwfReadAtBytes, true)
 }
 
 func ewfReadAt(args []object.Object, opName string, binary bool) object.Object {
@@ -505,7 +505,7 @@ func EWFClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ewf_close: unknown ewf handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("ewf_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameEwfClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ewf_close: %s", err.Error()))
@@ -547,7 +547,7 @@ func RAWOpen(args ...object.Object) object.Object {
 	rawStore.handles[handle] = rawHandleState{ImagePath: pathObj.Value, Session: session}
 	rawStore.Unlock()
 
-	custodyRecordOpen("raw_open", handle, pathObj.Value)
+	custodyRecordOpen(BuiltinNameRawOpen, handle, pathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -561,7 +561,7 @@ func RAWMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveRAWHandle(args[0], "raw_metadata")
+	state, errObj := resolveRAWHandle(args[0], BuiltinNameRawMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -582,11 +582,11 @@ func RAWMetadata(args ...object.Object) object.Object {
 }
 
 func RAWReadAt(args ...object.Object) object.Object {
-	return rawReadAt(args, "raw_read_at", false)
+	return rawReadAt(args, BuiltinNameRawReadAt, false)
 }
 
 func RAWReadAtBytes(args ...object.Object) object.Object {
-	return rawReadAt(args, "raw_read_at_bytes", true)
+	return rawReadAt(args, BuiltinNameRawReadAtBytes, true)
 }
 
 func rawReadAt(args []object.Object, opName string, binary bool) object.Object {
@@ -646,7 +646,7 @@ func RAWClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("raw_close: unknown raw handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("raw_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameRawClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("raw_close: %s", err.Error()))

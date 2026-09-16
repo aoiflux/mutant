@@ -28,7 +28,7 @@ func FsDeleted(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("fs_deleted", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameFsDeleted, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

@@ -11,7 +11,7 @@ func RegexMatch(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	pattern, input, errObj := regexPatternAndInput("regex_match", args[0], args[1])
+	pattern, input, errObj := regexPatternAndInput(BuiltinNameRegexMatch, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -29,7 +29,7 @@ func RegexFind(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	pattern, input, errObj := regexPatternAndInput("regex_find", args[0], args[1])
+	pattern, input, errObj := regexPatternAndInput(BuiltinNameRegexFind, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -55,7 +55,7 @@ func RegexFindAll(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
 
-	pattern, input, errObj := regexPatternAndInput("regex_find_all", args[0], args[1])
+	pattern, input, errObj := regexPatternAndInput(BuiltinNameRegexFindAll, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -88,7 +88,7 @@ func RegexReplace(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
 
-	pattern, input, errObj := regexPatternAndInput("regex_replace", args[0], args[1])
+	pattern, input, errObj := regexPatternAndInput(BuiltinNameRegexReplace, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -111,7 +111,7 @@ func RegexCaptureGroups(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	pattern, input, errObj := regexPatternAndInput("regex_capture_groups", args[0], args[1])
+	pattern, input, errObj := regexPatternAndInput(BuiltinNameRegexCaptureGroups, args[0], args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

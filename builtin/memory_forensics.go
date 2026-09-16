@@ -54,7 +54,7 @@ func MemMap(args ...object.Object) object.Object {
 // was no representation that could carry it without something downstream reading
 // it as text. It is kept because scripts depend on the {offset, size, hex} shape.
 // mem_read_bytes is the direct route.
-func MemRead(args ...object.Object) object.Object { return memRead(args, "mem_read", false) }
+func MemRead(args ...object.Object) object.Object { return memRead(args, BuiltinNameMemRead, false) }
 
 // MemReadBytes reads a byte range from a memory image as a buffer.
 //
@@ -68,7 +68,7 @@ func MemRead(args ...object.Object) object.Object { return memRead(args, "mem_re
 // back into (n) -- and that decode has to go through string_to_bytes, which
 // returns a multi-value, so it cannot be written inline.
 func MemReadBytes(args ...object.Object) object.Object {
-	return memRead(args, "mem_read_bytes", true)
+	return memRead(args, BuiltinNameMemReadBytes, true)
 }
 
 func memRead(args []object.Object, opName string, binary bool) object.Object {

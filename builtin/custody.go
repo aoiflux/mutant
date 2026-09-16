@@ -203,7 +203,7 @@ func CaseOpen(args ...object.Object) object.Object {
 	}
 	session.timeline = append(session.timeline, custodyEvent{
 		At:    now,
-		Event: "case_open",
+		Event: BuiltinNameCaseOpen,
 		Detail: fmt.Sprintf("case %s opened by %s; hash policy %s",
 			id, examiner, policy),
 	})
@@ -242,7 +242,7 @@ func CaseNote(args ...object.Object) object.Object {
 	custodyStore.Lock()
 	defer custodyStore.Unlock()
 
-	session, errObj := openSessionLocked("case_note")
+	session, errObj := openSessionLocked(BuiltinNameCaseNote)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -392,7 +392,7 @@ func CaseEvidence(args ...object.Object) object.Object {
 		record.HashError = hashError
 	}
 
-	return custodyManifestResult("case_evidence", record.render())
+	return custodyManifestResult(BuiltinNameCaseEvidence, record.render())
 }
 
 // CaseVerify re-measures every source under custody and reports what moved.
@@ -524,7 +524,7 @@ func CaseVerify(args ...object.Object) object.Object {
 	}
 	custodyStore.Unlock()
 
-	return custodyManifestResult("case_verify", report)
+	return custodyManifestResult(BuiltinNameCaseVerify, report)
 }
 
 func CaseManifest(args ...object.Object) object.Object {
@@ -545,7 +545,7 @@ func CaseManifest(args ...object.Object) object.Object {
 			"case_manifest: no case has been opened; call `case_open(id, examiner)` first"))
 	}
 
-	return custodyManifestResult("case_manifest", session.manifest())
+	return custodyManifestResult(BuiltinNameCaseManifest, session.manifest())
 }
 
 func CaseClose(args ...object.Object) object.Object {
@@ -554,7 +554,7 @@ func CaseClose(args ...object.Object) object.Object {
 	}
 
 	custodyStore.Lock()
-	session, errObj := openSessionLocked("case_close")
+	session, errObj := openSessionLocked(BuiltinNameCaseClose)
 	if errObj != nil {
 		custodyStore.Unlock()
 		return resultAndError(nil, errObj)
@@ -566,14 +566,14 @@ func CaseClose(args ...object.Object) object.Object {
 	session.timeline = append(session.timeline, custodyEvent{
 		At:      now,
 		Elapsed: now.Sub(session.OpenedAt),
-		Event:   "case_close",
+		Event:   BuiltinNameCaseClose,
 		Detail:  fmt.Sprintf("case %s closed after %s", session.ID, now.Sub(session.OpenedAt).Round(time.Millisecond)),
 	})
 	manifest := session.manifest()
 	custodyStore.Unlock()
 	custodyActive.Store(false)
 
-	return custodyManifestResult("case_close", manifest)
+	return custodyManifestResult(BuiltinNameCaseClose, manifest)
 }
 
 // custodyManifestResult hands a rendered manifest back to the program.

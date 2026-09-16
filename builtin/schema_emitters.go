@@ -279,7 +279,7 @@ var ecsCategories = map[string]string{
 // EcsEvent renders envelope events as Elastic Common Schema documents.
 // ecs_event(event_or_events, opts?) -> (document_or_documents, err).
 func EcsEvent(args ...object.Object) object.Object {
-	return emitEvents("ecs_event", args, ecsEmitOptions, "version", buildECSDocument)
+	return emitEvents(BuiltinNameEcsEvent, args, ecsEmitOptions, "version", buildECSDocument)
 }
 
 func buildECSDocument(event *object.Hash, config emitConfig) (object.Object, *object.Error) {
@@ -477,7 +477,7 @@ var ocsfHashAlgorithms = []struct {
 // OcsfEvent renders envelope events as OCSF events.
 // ocsf_event(event_or_events, opts?) -> (event_or_events, err).
 func OcsfEvent(args ...object.Object) object.Object {
-	return emitEvents("ocsf_event", args, ocsfEmitOptions, "version", buildOCSFEvent)
+	return emitEvents(BuiltinNameOcsfEvent, args, ocsfEmitOptions, "version", buildOCSFEvent)
 }
 
 func buildOCSFEvent(event *object.Hash, config emitConfig) (object.Object, *object.Error) {
@@ -701,7 +701,7 @@ func timesketchDataType(kind, dataset string) string {
 // TimesketchEvent renders envelope events as Timesketch/plaso JSONL records.
 // timesketch_event(event_or_events, opts?) -> (record_or_records, err).
 func TimesketchEvent(args ...object.Object) object.Object {
-	return emitEvents("timesketch_event", args, timesketchEmitOptions, "data_type", buildTimesketchEvent)
+	return emitEvents(BuiltinNameTimesketchEvent, args, timesketchEmitOptions, "data_type", buildTimesketchEvent)
 }
 
 func buildTimesketchEvent(event *object.Hash, config emitConfig) (object.Object, *object.Error) {

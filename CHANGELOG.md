@@ -58,6 +58,21 @@ exhaustive lists.
   `docs/COMPARISON.md` said "there is no Sigma support at all"; it no longer
   does, and it still says what a rule engine is better at.
 
+- **A probe that checks the field names in a return contract.** A contract's
+  shape (bare or `(value, err)`) and the kind of its success value were both
+  verified against a real call; its **field names** were not, and those are what
+  the editor renders on hover and what a program types. `{path, bytes, format,
+  sha256}` is declared in `builtin/metadata.go` and spelled again wherever the
+  builtin builds its result, with nothing linking the two.
+
+  `TestEveryFieldAnImplementationReturnsIsDeclared` calls a builtin for real and
+  requires every key it returns to be declared -- which catches a typo in either
+  copy, since a renamed key is undeclared and a renamed declaration leaves the
+  real key undeclared. It reuses the existing purity gate, so it reaches only
+  the builtins that compute rather than touch the world: **4 of the 162 that
+  declare fields**. It logs that number rather than implying coverage it does
+  not have, and widens for free as the pure-probe categories do.
+
 - **Every build script writes a `SHA256SUMS` beside what it produced.**
   `scripts/build.sh` and `scripts/build.ps1` write one next to the six binaries
   and another next to the wasm REPL artifacts; `lsp/build.sh` and
@@ -81,6 +96,30 @@ exhaustive lists.
   that it came from us.
 
 ### Changed
+
+- **A builtin no longer spells its own name as a literal.** The name was
+  declared once in `builtin/names.go` and said twice more as a constant -- by
+  the dispatch table and by the return contract -- but the error messages a user
+  actually reads spelled it a fourth way, as a string literal inside the
+  implementation: `requireArrayArg("sort", args[0], 1)`. Renaming a builtin was
+  already caught three ways, and none of them looked at what its errors say, so
+  every message it raised would have gone on quoting a name that no longer
+  existed. The same literal reached the chain of custody, where
+  `custodyRecordOpen("zip_open", ...)` is the name that ends up in a case
+  manifest.
+
+  **456 literals across 56 files** now say the constant. The rewrite was scoped
+  to the function each name is registered to rather than matched across the
+  tree, because short builtin names collide with ordinary hash keys -- `"sort"`,
+  `"slice"`, `"error"` and `"count"` are all both -- and a literal is only
+  suspicious inside the function that owns it.
+  `TestNoBuiltinSpellsItsOwnNameAsALiteral` walks the AST the way `policy/`
+  does and fails if one comes back.
+
+- **`case_report` and `case_bundle` passed the builtin's name to the same
+  function twice**, once inside the options value and once as a parameter the
+  function ignored -- so the options and the document it built could have been
+  labelled differently. The dead parameter is gone.
 
 - **The GitHub Actions workflow is gone, and the docs no longer claim it runs.**
   `.github/workflows/ci.yml` built, vetted and tested on Linux, Windows and

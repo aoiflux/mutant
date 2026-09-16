@@ -36,11 +36,11 @@ func StringToBytes(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	value, errObj := requireStringArg("string_to_bytes", args[0], 1)
+	value, errObj := requireStringArg(BuiltinNameStringToBytes, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	encoding, errObj := requireStringArg("string_to_bytes", args[1], 2)
+	encoding, errObj := requireStringArg(BuiltinNameStringToBytes, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -84,7 +84,7 @@ func StringToBytes(args ...object.Object) object.Object {
 		return resultAndError(&object.Bytes{Value: decoded}, nil)
 
 	default:
-		return resultAndError(nil, unknownEncoding("string_to_bytes", encoding))
+		return resultAndError(nil, unknownEncoding(BuiltinNameStringToBytes, encoding))
 	}
 }
 
@@ -94,11 +94,11 @@ func BytesToString(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	value, errObj := requireBinaryArg("bytes_to_string", args[0], 1)
+	value, errObj := requireBinaryArg(BuiltinNameBytesToString, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	encoding, errObj := requireStringArg("bytes_to_string", args[1], 2)
+	encoding, errObj := requireStringArg(BuiltinNameBytesToString, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -127,6 +127,6 @@ func BytesToString(args ...object.Object) object.Object {
 		return resultAndError(stringObj(base64.StdEncoding.EncodeToString(value)), nil)
 
 	default:
-		return resultAndError(nil, unknownEncoding("bytes_to_string", encoding))
+		return resultAndError(nil, unknownEncoding(BuiltinNameBytesToString, encoding))
 	}
 }

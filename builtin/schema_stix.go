@@ -382,7 +382,7 @@ func StixBundle(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `stix_bundle` must be a HASH of indicators, as extract_iocs returns, got %s", kind))
 	}
 
-	opts, errObj := formatOptionsArg("stix_bundle", args, 2, stixBundleOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameStixBundle, args, 2, stixBundleOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -408,12 +408,12 @@ func StixBundle(args ...object.Object) object.Object {
 			if present == nil {
 				continue
 			}
-			values, errObj := stixValues("stix_bundle", key, present)
+			values, errObj := stixValues(BuiltinNameStixBundle, key, present)
 			if errObj != nil {
 				return resultAndError(nil, errObj)
 			}
 			for _, raw := range values {
-				value, errObj := stixNormalize("stix_bundle", kind, key, raw)
+				value, errObj := stixNormalize(BuiltinNameStixBundle, kind, key, raw)
 				if errObj != nil {
 					return resultAndError(nil, errObj)
 				}
@@ -508,11 +508,11 @@ func StixPattern(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	name, errObj := requireStringArg("stix_pattern", args[0], 1)
+	name, errObj := requireStringArg(BuiltinNameStixPattern, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	raw, errObj := requireStringArg("stix_pattern", args[1], 2)
+	raw, errObj := requireStringArg(BuiltinNameStixPattern, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -521,7 +521,7 @@ func StixPattern(args ...object.Object) object.Object {
 	if !known {
 		return resultAndError(nil, newError("stix_pattern: unknown indicator type %q (accepted: %s)", name, stixKeyNames()))
 	}
-	value, errObj := stixNormalize("stix_pattern", kind, kind.key, raw)
+	value, errObj := stixNormalize(BuiltinNameStixPattern, kind, kind.key, raw)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

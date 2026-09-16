@@ -26,7 +26,7 @@ func GoBuildInfo(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("go_buildinfo", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameGoBuildInfo, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -76,7 +76,7 @@ func GoBuildID(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("go_build_id", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameGoBuildID, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -98,13 +98,13 @@ func GoSymbols(args ...object.Object) (result object.Object) {
 	if len(args) != 1 && len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	path, errObj := requireStringArg("go_symbols", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameGoSymbols, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	mode := "all"
 	if len(args) == 2 {
-		m, errObj := requireStringArg("go_symbols", args[1], 2)
+		m, errObj := requireStringArg(BuiltinNameGoSymbols, args[1], 2)
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
@@ -219,7 +219,7 @@ func BinIsGo(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("bin_is_go", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameBinIsGo, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -274,7 +274,7 @@ func GoTypes(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("go_types", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameGoTypes, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

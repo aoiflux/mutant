@@ -490,7 +490,7 @@ func NtfsOpen(args ...object.Object) object.Object {
 	}
 	ntfsStore.Unlock()
 
-	custodyRecordOpen("ntfs_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameNtfsOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -504,7 +504,7 @@ func NtfsListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveNTFSHandle(args[0], "ntfs_list_files")
+	state, errObj := resolveNTFSHandle(args[0], BuiltinNameNtfsListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -551,11 +551,11 @@ func NtfsListFiles(args ...object.Object) object.Object {
 // so the Bytes form is the one that tells the truth about most reads. The text
 // form stays because every program written before the type existed calls it.
 func NtfsReadFile(args ...object.Object) object.Object {
-	return ntfsReadFile(args, "ntfs_read_file", false)
+	return ntfsReadFile(args, BuiltinNameNtfsReadFile, false)
 }
 
 func NtfsReadFileBytes(args ...object.Object) object.Object {
-	return ntfsReadFile(args, "ntfs_read_file_bytes", true)
+	return ntfsReadFile(args, BuiltinNameNtfsReadFileBytes, true)
 }
 
 func ntfsReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -586,7 +586,7 @@ func NtfsMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveNTFSHandle(args[0], "ntfs_metadata")
+	state, errObj := resolveNTFSHandle(args[0], BuiltinNameNtfsMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -643,7 +643,7 @@ func NtfsClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ntfs_close: unknown ntfs handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("ntfs_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameNtfsClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ntfs_close: %s", err.Error()))
@@ -685,7 +685,7 @@ func FatOpen(args ...object.Object) object.Object {
 	}
 	fatStore.Unlock()
 
-	custodyRecordOpen("fat_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameFatOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -699,7 +699,7 @@ func FatListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveFATHandle(args[0], "fat_list_files")
+	state, errObj := resolveFATHandle(args[0], BuiltinNameFatListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -745,11 +745,11 @@ func FatListFiles(args ...object.Object) object.Object {
 }
 
 func FatReadFile(args ...object.Object) object.Object {
-	return fatReadFile(args, "fat_read_file", false)
+	return fatReadFile(args, BuiltinNameFatReadFile, false)
 }
 
 func FatReadFileBytes(args ...object.Object) object.Object {
-	return fatReadFile(args, "fat_read_file_bytes", true)
+	return fatReadFile(args, BuiltinNameFatReadFileBytes, true)
 }
 
 func fatReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -780,7 +780,7 @@ func FatMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveFATHandle(args[0], "fat_metadata")
+	state, errObj := resolveFATHandle(args[0], BuiltinNameFatMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -838,7 +838,7 @@ func FatClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("fat_close: unknown fat handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("fat_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameFatClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("fat_close: %s", err.Error()))
@@ -880,7 +880,7 @@ func XFATOpen(args ...object.Object) object.Object {
 	}
 	xfatStore.Unlock()
 
-	custodyRecordOpen("xfat_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameXfatOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -894,7 +894,7 @@ func XFATListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFATHandle(args[0], "xfat_list_files")
+	state, errObj := resolveXFATHandle(args[0], BuiltinNameXfatListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -940,11 +940,11 @@ func XFATListFiles(args ...object.Object) object.Object {
 }
 
 func XFATReadFile(args ...object.Object) object.Object {
-	return xfatReadFile(args, "xfat_read_file", false)
+	return xfatReadFile(args, BuiltinNameXfatReadFile, false)
 }
 
 func XFATReadFileBytes(args ...object.Object) object.Object {
-	return xfatReadFile(args, "xfat_read_file_bytes", true)
+	return xfatReadFile(args, BuiltinNameXfatReadFileBytes, true)
 }
 
 func xfatReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -975,7 +975,7 @@ func XFATMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFATHandle(args[0], "xfat_metadata")
+	state, errObj := resolveXFATHandle(args[0], BuiltinNameXfatMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1032,7 +1032,7 @@ func XFATClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("xfat_close: unknown xfat handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("xfat_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameXfatClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("xfat_close: %s", err.Error()))
@@ -1074,7 +1074,7 @@ func ExtOpen(args ...object.Object) object.Object {
 	}
 	extStore.Unlock()
 
-	custodyRecordOpen("ext_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameExtOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1088,7 +1088,7 @@ func ExtListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveEXTHandle(args[0], "ext_list_files")
+	state, errObj := resolveEXTHandle(args[0], BuiltinNameExtListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1130,11 +1130,11 @@ func ExtListFiles(args ...object.Object) object.Object {
 }
 
 func ExtReadFile(args ...object.Object) object.Object {
-	return extReadFile(args, "ext_read_file", false)
+	return extReadFile(args, BuiltinNameExtReadFile, false)
 }
 
 func ExtReadFileBytes(args ...object.Object) object.Object {
-	return extReadFile(args, "ext_read_file_bytes", true)
+	return extReadFile(args, BuiltinNameExtReadFileBytes, true)
 }
 
 func extReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -1165,7 +1165,7 @@ func ExtMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveEXTHandle(args[0], "ext_metadata")
+	state, errObj := resolveEXTHandle(args[0], BuiltinNameExtMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1219,7 +1219,7 @@ func ExtClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("ext_close: unknown ext handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("ext_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameExtClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("ext_close: %s", err.Error()))
@@ -1261,7 +1261,7 @@ func HFSOpen(args ...object.Object) object.Object {
 	}
 	hfsStore.Unlock()
 
-	custodyRecordOpen("hfs_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameHfsOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1275,7 +1275,7 @@ func HFSListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveHFSHandle(args[0], "hfs_list_files")
+	state, errObj := resolveHFSHandle(args[0], BuiltinNameHfsListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1312,11 +1312,11 @@ func HFSListFiles(args ...object.Object) object.Object {
 }
 
 func HFSReadFile(args ...object.Object) object.Object {
-	return hfsReadFile(args, "hfs_read_file", false)
+	return hfsReadFile(args, BuiltinNameHfsReadFile, false)
 }
 
 func HFSReadFileBytes(args ...object.Object) object.Object {
-	return hfsReadFile(args, "hfs_read_file_bytes", true)
+	return hfsReadFile(args, BuiltinNameHfsReadFileBytes, true)
 }
 
 func hfsReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -1347,7 +1347,7 @@ func HFSMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveHFSHandle(args[0], "hfs_metadata")
+	state, errObj := resolveHFSHandle(args[0], BuiltinNameHfsMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1408,7 +1408,7 @@ func HFSClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("hfs_close: unknown hfs handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("hfs_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameHfsClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("hfs_close: %s", err.Error()))
@@ -1450,7 +1450,7 @@ func XFSOpen(args ...object.Object) object.Object {
 	}
 	xfsStore.Unlock()
 
-	custodyRecordOpen("xfs_open", handle, volumePathObj.Value)
+	custodyRecordOpen(BuiltinNameXfsOpen, handle, volumePathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
@@ -1464,7 +1464,7 @@ func XFSListFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFSHandle(args[0], "xfs_list_files")
+	state, errObj := resolveXFSHandle(args[0], BuiltinNameXfsListFiles)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1503,11 +1503,11 @@ func XFSListFiles(args ...object.Object) object.Object {
 }
 
 func XFSReadFile(args ...object.Object) object.Object {
-	return xfsReadFile(args, "xfs_read_file", false)
+	return xfsReadFile(args, BuiltinNameXfsReadFile, false)
 }
 
 func XFSReadFileBytes(args ...object.Object) object.Object {
-	return xfsReadFile(args, "xfs_read_file_bytes", true)
+	return xfsReadFile(args, BuiltinNameXfsReadFileBytes, true)
 }
 
 func xfsReadFile(args []object.Object, opName string, binary bool) object.Object {
@@ -1538,7 +1538,7 @@ func XFSMetadata(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveXFSHandle(args[0], "xfs_metadata")
+	state, errObj := resolveXFSHandle(args[0], BuiltinNameXfsMetadata)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1593,7 +1593,7 @@ func XFSClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("xfs_close: unknown xfs handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("xfs_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameXfsClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("xfs_close: %s", err.Error()))

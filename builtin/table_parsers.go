@@ -112,7 +112,7 @@ func TableOpen(args ...object.Object) object.Object {
 	tableStore.handles[handle] = tableHandleState{ImagePath: pathObj.Value, Session: session}
 	tableStore.Unlock()
 
-	custodyRecordOpen("table_open", handle, pathObj.Value)
+	custodyRecordOpen(BuiltinNameTableOpen, handle, pathObj.Value)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":          stringObj(handle),
@@ -133,7 +133,7 @@ func TableListPartitions(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveTableHandle(args[0], "table_list_partitions")
+	state, errObj := resolveTableHandle(args[0], BuiltinNameTableListPartitions)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -156,7 +156,7 @@ func TablePartitionInfo(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
 
-	state, errObj := resolveTableHandle(args[0], "table_partition_info")
+	state, errObj := resolveTableHandle(args[0], BuiltinNameTablePartitionInfo)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -198,7 +198,7 @@ func TableClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("table_close: unknown table handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("table_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameTableClose, handleObj.Value)
 
 	if err := state.Session.Close(); err != nil {
 		return resultAndError(nil, newError("table_close: %s", err.Error()))

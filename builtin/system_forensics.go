@@ -91,7 +91,7 @@ func ProcessTree(args ...object.Object) object.Object {
 }
 
 func ProcessOpenFiles(args ...object.Object) object.Object {
-	pid, errObj := sfParsePIDArg("process_open_files", args)
+	pid, errObj := sfParsePIDArg(BuiltinNameProcessOpenFiles, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -123,7 +123,7 @@ func ProcessOpenFiles(args ...object.Object) object.Object {
 }
 
 func ProcessThreads(args ...object.Object) object.Object {
-	pid, errObj := sfParsePIDArg("process_threads", args)
+	pid, errObj := sfParsePIDArg(BuiltinNameProcessThreads, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -165,7 +165,7 @@ func ProcessThreads(args ...object.Object) object.Object {
 }
 
 func ProcessModules(args ...object.Object) object.Object {
-	pid, errObj := sfParsePIDArg("process_modules", args)
+	pid, errObj := sfParsePIDArg(BuiltinNameProcessModules, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -185,7 +185,7 @@ func ProcessModules(args ...object.Object) object.Object {
 }
 
 func ProcessHash(args ...object.Object) object.Object {
-	pid, errObj := sfParsePIDArg("process_hash", args)
+	pid, errObj := sfParsePIDArg(BuiltinNameProcessHash, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -252,7 +252,7 @@ func ProcessMemoryScan(args ...object.Object) object.Object {
 }
 
 func ProcessEnv(args ...object.Object) object.Object {
-	pid, errObj := sfParsePIDArg("process_env", args)
+	pid, errObj := sfParsePIDArg(BuiltinNameProcessEnv, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

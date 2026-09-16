@@ -432,7 +432,7 @@ func HiveOpen(args ...object.Object) (result object.Object) {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	path, errObj := requireStringArg("hive_open", args[0], 1)
+	path, errObj := requireStringArg(BuiltinNameHiveOpen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -446,7 +446,7 @@ func HiveOpen(args ...object.Object) (result object.Object) {
 	hiveStore.hives[handle] = hive
 	hiveStore.Unlock()
 
-	custodyRecordOpen("hive_open", handle, path)
+	custodyRecordOpen(BuiltinNameHiveOpen, handle, path)
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle": stringObj(handle),
 		"path":   stringObj(path),
@@ -457,7 +457,7 @@ func HiveClose(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	handle, errObj := requireStringArg("hive_close", args[0], 1)
+	handle, errObj := requireStringArg(BuiltinNameHiveClose, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -468,13 +468,13 @@ func HiveClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("hive_close: invalid handle %q", handle))
 	}
-	custodyRecordTouch("hive_close", handle)
+	custodyRecordTouch(BuiltinNameHiveClose, handle)
 	return resultAndError(boolObj(true), nil)
 }
 
 func HiveKeyInfo(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_key_info", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_key_info", args)
+	defer hiveRecover(BuiltinNameHiveKeyInfo, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveKeyInfo, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -492,8 +492,8 @@ func HiveKeyInfo(args ...object.Object) (result object.Object) {
 }
 
 func HiveListKeys(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_list_keys", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_list_keys", args)
+	defer hiveRecover(BuiltinNameHiveListKeys, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveListKeys, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -511,8 +511,8 @@ func HiveListKeys(args ...object.Object) (result object.Object) {
 }
 
 func HiveListValues(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_list_values", &result)
-	hive, path, errObj := hiveHandleAndPath("hive_list_values", args)
+	defer hiveRecover(BuiltinNameHiveListValues, &result)
+	hive, path, errObj := hiveHandleAndPath(BuiltinNameHiveListValues, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -533,19 +533,19 @@ func HiveListValues(args ...object.Object) (result object.Object) {
 }
 
 func HiveGetValue(args ...object.Object) (result object.Object) {
-	defer hiveRecover("hive_get_value", &result)
+	defer hiveRecover(BuiltinNameHiveGetValue, &result)
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3 (handle, keypath, valuename)", len(args)))
 	}
-	hive, errObj := resolveHive(args[0], "hive_get_value")
+	hive, errObj := resolveHive(args[0], BuiltinNameHiveGetValue)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	path, errObj := requireStringArg("hive_get_value", args[1], 2)
+	path, errObj := requireStringArg(BuiltinNameHiveGetValue, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	valueName, errObj := requireStringArg("hive_get_value", args[2], 3)
+	valueName, errObj := requireStringArg(BuiltinNameHiveGetValue, args[2], 3)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

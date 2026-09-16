@@ -25,7 +25,7 @@ func SigmaParse(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("sigma_parse", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameSigmaParse, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -54,7 +54,7 @@ func SigmaParseAll(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	data, errObj := requireBinaryArg("sigma_parse_all", args[0], 1)
+	data, errObj := requireBinaryArg(BuiltinNameSigmaParseAll, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -82,7 +82,7 @@ func SigmaMatch(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	rule, errObj := sigmaRuleArg("sigma_match", args[0], 1)
+	rule, errObj := sigmaRuleArg(BuiltinNameSigmaMatch, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -99,11 +99,11 @@ func SigmaScan(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	rules, errObj := sigmaRulesArg("sigma_scan", args[0], 1)
+	rules, errObj := sigmaRulesArg(BuiltinNameSigmaScan, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	events, errObj := sigmaEventsArg("sigma_scan", args[1], 2)
+	events, errObj := sigmaEventsArg(BuiltinNameSigmaScan, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

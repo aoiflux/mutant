@@ -108,7 +108,7 @@ func NetConnectScan(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 4 to `net_connect_scan` must be INTEGER, got %s", args[3].Type()))
 	}
-	if errObj := validatePortRange("net_connect_scan", startPort.Value, endPort.Value); errObj != nil {
+	if errObj := validatePortRange(BuiltinNameNetConnectScan, startPort.Value, endPort.Value); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
@@ -155,7 +155,7 @@ func NetUDPScan(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 4 to `net_udp_scan` must be INTEGER, got %s", args[3].Type()))
 	}
-	if errObj := validatePortRange("net_udp_scan", startPort.Value, endPort.Value); errObj != nil {
+	if errObj := validatePortRange(BuiltinNameNetUdpScan, startPort.Value, endPort.Value); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 

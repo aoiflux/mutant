@@ -13,11 +13,11 @@ import (
 // It has always returned byte-exact content -- a Go string holds arbitrary bytes
 // -- so it is not itself lossy. What it cannot do is tell the rest of the
 // program that the content is binary, which is what fs_read_bytes is for.
-func FsRead(args ...object.Object) object.Object { return fsRead(args, "fs_read", false) }
+func FsRead(args ...object.Object) object.Object { return fsRead(args, BuiltinNameFsRead, false) }
 
 // FsReadBytes reads a whole file as a buffer.
 func FsReadBytes(args ...object.Object) object.Object {
-	return fsRead(args, "fs_read_bytes", true)
+	return fsRead(args, BuiltinNameFsReadBytes, true)
 }
 
 func fsRead(args []object.Object, opName string, binary bool) object.Object {
@@ -43,7 +43,7 @@ func FsWrite(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `fs_write` must be STRING, got %s", args[0].Type()))
 	}
-	content, errObj := requireBinaryArg("fs_write", args[1], 2)
+	content, errObj := requireBinaryArg(BuiltinNameFsWrite, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -62,7 +62,7 @@ func FsAppend(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `fs_append` must be STRING, got %s", args[0].Type()))
 	}
-	content, errObj := requireBinaryArg("fs_append", args[1], 2)
+	content, errObj := requireBinaryArg(BuiltinNameFsAppend, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

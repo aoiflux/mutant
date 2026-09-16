@@ -38,7 +38,7 @@ func HTTPParseRequest(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("http_parse_request: %s", err.Error()))
 	}
-	return resultAndError(requestToHash("http_parse_request", req))
+	return resultAndError(requestToHash(BuiltinNameHttpParseRequest, req))
 }
 
 // HTTPParseResponse parses a raw HTTP response into a structured hash.
@@ -55,14 +55,14 @@ func HTTPParseResponse(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("http_parse_response: %s", err.Error()))
 	}
-	return resultAndError(responseToHash("http_parse_response", resp))
+	return resultAndError(responseToHash(BuiltinNameHttpParseResponse, resp))
 }
 
 // HTTPConnReadRequest reads exactly one HTTP request from a connection handle,
 // honouring Content-Length / chunked framing.
 // http_conn_read_request(handle INTEGER, timeout_ms INTEGER) -> HASH
 func HTTPConnReadRequest(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout("http_conn_read_request", args)
+	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadRequest, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -71,13 +71,13 @@ func HTTPConnReadRequest(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("http_conn_read_request: %s", err.Error()))
 	}
-	return resultAndError(requestToHash("http_conn_read_request", req))
+	return resultAndError(requestToHash(BuiltinNameHttpConnReadRequest, req))
 }
 
 // HTTPConnReadResponse reads exactly one HTTP response from a connection handle.
 // http_conn_read_response(handle INTEGER, timeout_ms INTEGER) -> HASH
 func HTTPConnReadResponse(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout("http_conn_read_response", args)
+	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadResponse, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -86,7 +86,7 @@ func HTTPConnReadResponse(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("http_conn_read_response: %s", err.Error()))
 	}
-	return resultAndError(responseToHash("http_conn_read_response", resp))
+	return resultAndError(responseToHash(BuiltinNameHttpConnReadResponse, resp))
 }
 
 // HTTPConnReadRequestHead reads a request's line + headers WITHOUT consuming the
@@ -97,7 +97,7 @@ func HTTPConnReadResponse(args ...object.Object) object.Object {
 //
 //	proto,query,headers,content_length,chunked}
 func HTTPConnReadRequestHead(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout("http_conn_read_request_head", args)
+	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadRequestHead, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -136,7 +136,7 @@ func HTTPConnReadRequestHead(args ...object.Object) object.Object {
 //
 //	proto,headers,content_length,chunked}
 func HTTPConnReadResponseHead(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout("http_conn_read_response_head", args)
+	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadResponseHead, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

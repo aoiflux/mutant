@@ -51,18 +51,18 @@ func ReportWrite(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	reportHash, errObj := requireHashArg("report_write", args[0], 1)
+	reportHash, errObj := requireHashArg(BuiltinNameReportWrite, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	path, errObj := requireStringArg("report_write", args[1], 2)
+	path, errObj := requireStringArg(BuiltinNameReportWrite, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	if strings.TrimSpace(path) == "" {
 		return resultAndError(nil, newError("report_write: the path must not be empty"))
 	}
-	opts, errObj := formatOptionsArg("report_write", args, 3, reportWriteOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportWrite, args, 3, reportWriteOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -75,12 +75,12 @@ func ReportWrite(args ...object.Object) object.Object {
 	// Rendered before anything is created, so a document with a block nothing
 	// renders leaves no half-written file behind for someone to find later and
 	// take for a report.
-	text, errObj := renderReport("report_write", reportHash, format, opts)
+	text, errObj := renderReport(BuiltinNameReportWrite, reportHash, format, opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	written, errObj := writeArtifact("report_write", path, []byte(text))
+	written, errObj := writeArtifact(BuiltinNameReportWrite, path, []byte(text))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -89,7 +89,7 @@ func ReportWrite(args ...object.Object) object.Object {
 	// hashed to. That is the whole of the link between an investigation and the
 	// documents it produced: the manifest can be checked, and it names a digest
 	// the report either still has or does not.
-	custodyRecordArtifact("report_write",
+	custodyRecordArtifact(BuiltinNameReportWrite,
 		fmt.Sprintf("wrote %s as %s (%d bytes, sha256 %s)", path, format, written.bytes, written.digest),
 		map[string]any{
 			"path":   path,

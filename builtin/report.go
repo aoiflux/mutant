@@ -67,14 +67,14 @@ func ReportNew(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	title, errObj := requireStringArg("report_new", args[0], 1)
+	title, errObj := requireStringArg(BuiltinNameReportNew, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	if strings.TrimSpace(title) == "" {
 		return resultAndError(nil, newError("report_new: a report needs a title; it is the one line that says what was examined"))
 	}
-	opts, errObj := formatOptionsArg("report_new", args, 2, reportNewOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportNew, args, 2, reportNewOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -130,15 +130,15 @@ func ReportSection(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	report, errObj := requireHashArg("report_section", args[0], 1)
+	report, errObj := requireHashArg(BuiltinNameReportSection, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	heading, errObj := requireStringArg("report_section", args[1], 2)
+	heading, errObj := requireStringArg(BuiltinNameReportSection, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("report_section", args, 3, reportSectionOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportSection, args, 3, reportSectionOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -147,7 +147,7 @@ func ReportSection(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	sections, errObj := reportSections("report_section", report)
+	sections, errObj := reportSections(BuiltinNameReportSection, report)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -164,11 +164,11 @@ func ReportText(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	report, errObj := requireHashArg("report_text", args[0], 1)
+	report, errObj := requireHashArg(BuiltinNameReportText, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	text, errObj := requireStringArg("report_text", args[1], 2)
+	text, errObj := requireStringArg(BuiltinNameReportText, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -176,7 +176,7 @@ func ReportText(args ...object.Object) object.Object {
 		"kind": stringObj(reportBlockText),
 		"text": stringObj(text),
 	})
-	return reportAppend("report_text", report, block)
+	return reportAppend(BuiltinNameReportText, report, block)
 }
 
 var reportListOptions = []string{"ordered"}
@@ -186,15 +186,15 @@ func ReportList(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	report, errObj := requireHashArg("report_list", args[0], 1)
+	report, errObj := requireHashArg(BuiltinNameReportList, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	items, errObj := requireArrayArg("report_list", args[1], 2)
+	items, errObj := requireArrayArg(BuiltinNameReportList, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("report_list", args, 3, reportListOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportList, args, 3, reportListOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -209,7 +209,7 @@ func ReportList(args ...object.Object) object.Object {
 	// than appearing as a Go value in the middle of a sentence.
 	elements := make([]object.Object, 0, len(items.Elements))
 	for i, item := range items.Elements {
-		text, errObj := csvFieldText("report_list", item, i, 0)
+		text, errObj := csvFieldText(BuiltinNameReportList, item, i, 0)
 		if errObj != nil {
 			return resultAndError(nil, newError("report_list: item %d must be a scalar, got %s", i, item.Type()))
 		}
@@ -221,7 +221,7 @@ func ReportList(args ...object.Object) object.Object {
 		"items":   &object.Array{Elements: elements},
 		"ordered": boolObj(ordered),
 	})
-	return reportAppend("report_list", report, block)
+	return reportAppend(BuiltinNameReportList, report, block)
 }
 
 var reportTableOptions = []string{"columns", "caption", "header"}
@@ -236,15 +236,15 @@ func ReportTable(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	report, errObj := requireHashArg("report_table", args[0], 1)
+	report, errObj := requireHashArg(BuiltinNameReportTable, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	rows, errObj := requireArrayArg("report_table", args[1], 2)
+	rows, errObj := requireArrayArg(BuiltinNameReportTable, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("report_table", args, 3, reportTableOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportTable, args, 3, reportTableOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -261,7 +261,7 @@ func ReportTable(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("report_table: a table with no rows and no columns says nothing; pass `columns` to record that the search found nothing, or write a sentence with report_text"))
 	}
 
-	records, hasHeader, errObj := csvRecords("report_table", rows, columns, columnsGiven)
+	records, hasHeader, errObj := csvRecords(BuiltinNameReportTable, rows, columns, columnsGiven)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -289,7 +289,7 @@ func ReportTable(args ...object.Object) object.Object {
 	if caption != "" {
 		values["caption"] = stringObj(caption)
 	}
-	return reportAppend("report_table", report, makeHashObject(values))
+	return reportAppend(BuiltinNameReportTable, report, makeHashObject(values))
 }
 
 var reportRenderOptions = []string{"fragment", "table", "delimiter", "formula_guard"}
@@ -299,20 +299,20 @@ func ReportRender(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	reportHash, errObj := requireHashArg("report_render", args[0], 1)
+	reportHash, errObj := requireHashArg(BuiltinNameReportRender, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	format, errObj := requireStringArg("report_render", args[1], 2)
+	format, errObj := requireStringArg(BuiltinNameReportRender, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg("report_render", args, 3, reportRenderOptions...)
+	opts, errObj := formatOptionsArg(BuiltinNameReportRender, args, 3, reportRenderOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
-	text, errObj := renderReport("report_render", reportHash, format, opts)
+	text, errObj := renderReport(BuiltinNameReportRender, reportHash, format, opts)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

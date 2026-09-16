@@ -231,7 +231,7 @@ func ZipOpen(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	archivePath, errObj := requireStringArg("zip_open", args[0], 1)
+	archivePath, errObj := requireStringArg(BuiltinNameZipOpen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -258,7 +258,7 @@ func ZipOpen(args ...object.Object) object.Object {
 	zipStore.handles[handle] = zipHandleState{Path: archivePath, Reader: reader}
 	zipStore.Unlock()
 
-	custodyRecordOpen("zip_open", handle, archivePath)
+	custodyRecordOpen(BuiltinNameZipOpen, handle, archivePath)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":             stringObj(handle),
@@ -277,7 +277,7 @@ func ZipEntries(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveZipHandle(args[0], "zip_entries")
+	state, errObj := resolveZipHandle(args[0], BuiltinNameZipEntries)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -309,11 +309,11 @@ func ZipEntries(args ...object.Object) object.Object {
 // Bytes form is the right one for nearly every caller. The text form exists so
 // the family reads like every other reader in the language.
 func ZipRead(args ...object.Object) object.Object {
-	return zipRead(args, "zip_read", false)
+	return zipRead(args, BuiltinNameZipRead, false)
 }
 
 func ZipReadBytes(args ...object.Object) object.Object {
-	return zipRead(args, "zip_read_bytes", true)
+	return zipRead(args, BuiltinNameZipReadBytes, true)
 }
 
 func zipRead(args []object.Object, opName string, binary bool) object.Object {
@@ -389,7 +389,7 @@ func ZipClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("zip_close: unknown zip handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("zip_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameZipClose, handleObj.Value)
 
 	if err := state.Reader.Close(); err != nil {
 		return resultAndError(nil, newError("zip_close: %s", err.Error()))
@@ -600,7 +600,7 @@ func TarOpen(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	archivePath, errObj := requireStringArg("tar_open", args[0], 1)
+	archivePath, errObj := requireStringArg(BuiltinNameTarOpen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -657,7 +657,7 @@ func TarOpen(args ...object.Object) object.Object {
 	tarStore.handles[handle] = state
 	tarStore.Unlock()
 
-	custodyRecordOpen("tar_open", handle, archivePath)
+	custodyRecordOpen(BuiltinNameTarOpen, handle, archivePath)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"handle":             stringObj(handle),
@@ -731,7 +731,7 @@ func TarEntries(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
 
-	state, errObj := resolveTarHandle(args[0], "tar_entries")
+	state, errObj := resolveTarHandle(args[0], BuiltinNameTarEntries)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -768,11 +768,11 @@ func TarEntries(args ...object.Object) object.Object {
 // therefore quadratic, and a program that wants most of an archive is better
 // off decompressing it once to a plain .tar first.
 func TarRead(args ...object.Object) object.Object {
-	return tarRead(args, "tar_read", false)
+	return tarRead(args, BuiltinNameTarRead, false)
 }
 
 func TarReadBytes(args ...object.Object) object.Object {
-	return tarRead(args, "tar_read_bytes", true)
+	return tarRead(args, BuiltinNameTarReadBytes, true)
 }
 
 func tarRead(args []object.Object, opName string, binary bool) object.Object {
@@ -857,7 +857,7 @@ func TarClose(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("tar_close: unknown tar handle: %s", handleObj.Value))
 	}
 
-	custodyRecordTouch("tar_close", handleObj.Value)
+	custodyRecordTouch(BuiltinNameTarClose, handleObj.Value)
 
 	if err := state.File.Close(); err != nil {
 		return resultAndError(nil, newError("tar_close: %s", err.Error()))
