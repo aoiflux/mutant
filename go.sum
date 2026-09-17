@@ -28,6 +28,8 @@ github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuy
 github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d/go.mod h1:rBZYJk541a8SKzHPHnH3zbiI+7dagKZ0cgpgrD7Fyho=
 github.com/aoiflux/graphene v0.4.0 h1:CtI2cS1xb5hbbiXKa8UtA+ttD/wVWD5Aya9Xav2FoJw=
 github.com/aoiflux/graphene v0.4.0/go.mod h1:cajlcsc421LNejLmlagk0tn85Oh+usSf7MpGl7uNEJo=
+github.com/aoiflux/graphene v0.9.0 h1:64/Lys40+Znbef1DLxLHeGeKRTxfxmGx2vdHIUx27ow=
+github.com/aoiflux/graphene v0.9.0/go.mod h1:cajlcsc421LNejLmlagk0tn85Oh+usSf7MpGl7uNEJo=
 github.com/aoiflux/libewf v0.2.1 h1:0vxq7uej+05mcJbXYC6EQ1HiwAe5Q1X6wGoA/Uex51g=
 github.com/aoiflux/libewf v0.2.1/go.mod h1:YWexiYapcjyNUtoId1HDAZHPhzSMt3YJY8AoxhjUWNU=
 github.com/aoiflux/libext v0.2.0 h1:j32AJ7po9yAeWSKfsC78cynrXbmqN3+hmWzP/bDl9lA=

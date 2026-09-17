@@ -91,7 +91,7 @@ require (
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Velocidex/ordereddict v0.0.0-20250821063524-02dc06e46238
-	github.com/aoiflux/graphene v0.4.0
+	github.com/aoiflux/graphene v0.9.0
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/google/uuid v1.6.0
 	github.com/mandiant/GoReSym v1.7.1

@@ -123,6 +123,16 @@ func RenderReplHelp(topic string, options ReplHelpOptions) string {
 		return detail
 	}
 
+	// The dotted spelling is the same function, so it is the same help.
+	// help("hash.blake2") used to fall through to "No help found" while
+	// help("hash_blake2") answered, which reads as the dotted form not
+	// existing -- the one thing it is documented to do.
+	if flat, ok := flattenFamilyTopic(normalizedTopic); ok {
+		if detail := renderBuiltinDetail(flat, mode, options.SupportedBuiltins); detail != "" {
+			return detail
+		}
+	}
+
 	if example := renderExamplesHelp(normalizedTopic); example != "" {
 		return example
 	}
@@ -131,6 +141,14 @@ func RenderReplHelp(topic string, options ReplHelpOptions) string {
 }
 
 func ReplCompletionCandidates(prefix string, options ReplHelpOptions) []string {
+	// A prefix with a dot in it is asking about a family. completionPrefixFromLine
+	// splits on space, tab, `(`, `,` and `:` but not on `.`, so typing `hash.`
+	// arrives here whole -- and nothing in the flat registry starts with
+	// `hash.`, so the REPL offered nothing for a spelling it accepts.
+	if members := familyCompletionEntries(strings.TrimSpace(prefix), options); members != nil {
+		return members
+	}
+
 	entries := make([]completionEntry, 0, 16+len(options.Symbols)+len(Builtins))
 	for _, symbol := range options.Symbols {
 		trimmed := strings.TrimSpace(symbol)
@@ -162,6 +180,35 @@ func ReplCompletionCandidates(prefix string, options ReplHelpOptions) []string {
 	}
 
 	return filterAndRankCompletions(entries, strings.TrimSpace(prefix), nil)
+}
+
+// familyCompletionEntries answers a `namespace.` or `namespace.partial` prefix
+// with that family's members, spelled the way they were asked for. It returns
+// nil for a prefix with no dot, and for a dotted prefix that heads no family
+// -- which is field access on a value, and not something this can complete.
+func familyCompletionEntries(prefix string, options ReplHelpOptions) []string {
+	namespace, partial, found := strings.Cut(prefix, ".")
+	if !found || namespace == "" || strings.Contains(partial, ".") {
+		return nil
+	}
+
+	flatPrefix := namespace + "_"
+	mode := normalizeHelpMode(options.Mode)
+	entries := make([]completionEntry, 0, 8)
+	for _, name := range builtinNamesForMode(mode, options.SupportedBuiltins) {
+		if !strings.HasPrefix(name, flatPrefix) || len(name) == len(flatPrefix) {
+			continue
+		}
+		member := name[len(flatPrefix):]
+		if !strings.HasPrefix(member, partial) {
+			continue
+		}
+		entries = append(entries, completionEntry{value: namespace + "." + member, kind: completionKindBuiltin})
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return filterAndRankCompletions(entries, prefix, nil)
 }
 
 func ReplCompletionCandidatesForLine(line string, options ReplHelpOptions) []string {
@@ -303,6 +350,22 @@ func defaultKindOrder(kind completionKind) completionKind {
 	default:
 		return 5
 	}
+}
+
+// flattenFamilyTopic turns `hash.blake2` into `hash_blake2` when that names a
+// builtin. It reports false for anything else, so `a.b` -- which is field
+// access on a value, not a namespace -- is not answered with someone else's
+// documentation.
+func flattenFamilyTopic(topic string) (string, bool) {
+	namespace, member, found := strings.Cut(topic, ".")
+	if !found || namespace == "" || member == "" || strings.Contains(member, ".") {
+		return "", false
+	}
+	flat := namespace + "_" + member
+	if GetBuiltinByName(flat) == nil {
+		return "", false
+	}
+	return flat, true
 }
 
 func completionPrefixFromLine(line string) string {

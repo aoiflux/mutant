@@ -335,10 +335,24 @@ func constrainBody(fn *solvedFunction, body *mast.BlockStatement, byName map[str
 		}
 	}
 
+	// The shadow predicate builtinCallee needs. This solver's model of scope
+	// is the function's own parameters and the file's other functions -- a
+	// parameter named `fs` is a value with a read field, not the builtin
+	// family, exactly as it is to the compiler.
+	bound := func(name string) bool {
+		for _, param := range fn.params {
+			if param == name {
+				return true
+			}
+		}
+		_, isFunction := byName[name]
+		return isFunction
+	}
+
 	visit := func(e mast.Expression) {
 		switch n := e.(type) {
 		case *mast.CallExpression:
-			constrainCall(n, narrow, byName)
+			constrainCall(n, narrow, byName, bound)
 		case *mast.InfixExpression:
 			switch n.Operator {
 			case "+":
@@ -483,7 +497,28 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 // constrainCall narrows the arguments of one call against whatever the callee
 // demands — a builtin's declared contract, or another user function's solved
 // parameters.
-func constrainCall(call *mast.CallExpression, narrow func(mast.Expression, kindSet), byName map[string]*solvedFunction) {
+//
+// The builtin half accepts either spelling: `fs.read(p)` and `fs_read(p)` are
+// the same call, and asking only for an *mast.Identifier meant a dotted call
+// contributed no evidence at all -- so a parameter used only through dotted
+// calls stayed unconstrained and hovered as any.
+//
+// The other two halves stay identifier-only on purpose. "Calling a parameter
+// means that parameter is a function" is a statement about a bare name, and a
+// user function is reached by one: `util.helper` is a module member, which
+// byName does not hold and this solver cannot see across files.
+func constrainCall(call *mast.CallExpression, narrow func(mast.Expression, kindSet), byName map[string]*solvedFunction, bound func(string) bool) {
+	if name, _, ok := builtinCallee(call.Function, bound); ok {
+		if params, ok := builtin.ParamSpecs(name); ok {
+			if _, isIdent := call.Function.(*mast.Identifier); isIdent {
+				// Calling a parameter means that parameter is a function.
+				narrow(call.Function, ksFn)
+			}
+			constrainAgainstParams(call, params, narrow)
+			return
+		}
+	}
+
 	callee, ok := call.Function.(*mast.Identifier)
 	if !ok || callee == nil {
 		return
@@ -491,20 +526,6 @@ func constrainCall(call *mast.CallExpression, narrow func(mast.Expression, kindS
 
 	// Calling a parameter means that parameter is a function.
 	narrow(call.Function, ksFn)
-
-	if params, ok := builtin.ParamSpecs(callee.Value); ok {
-		if !argumentCountFitsParams(params, len(call.Arguments)) {
-			return // the arity rule's complaint, not this one's
-		}
-		for i, arg := range call.Arguments {
-			param, ok := paramForArgument(params, i)
-			if !ok {
-				continue
-			}
-			narrow(arg, kindSetFor(param.Kinds))
-		}
-		return
-	}
 
 	target, ok := byName[callee.Value]
 	if !ok || target == nil {
@@ -515,6 +536,23 @@ func constrainCall(call *mast.CallExpression, narrow func(mast.Expression, kindS
 			break
 		}
 		narrow(arg, target.kinds[i])
+	}
+}
+
+// constrainAgainstParams narrows each argument against the parameter it lands
+// on. An argument count the contract does not admit is left alone: that is
+// the arity rule's complaint, not this one's, and narrowing against the wrong
+// parameter would turn one diagnostic into two.
+func constrainAgainstParams(call *mast.CallExpression, params []builtin.BuiltinParamDoc, narrow func(mast.Expression, kindSet)) {
+	if !argumentCountFitsParams(params, len(call.Arguments)) {
+		return
+	}
+	for i, arg := range call.Arguments {
+		param, ok := paramForArgument(params, i)
+		if !ok {
+			continue
+		}
+		narrow(arg, kindSetFor(param.Kinds))
 	}
 }
 

@@ -945,12 +945,12 @@ language is for.
 ## Where to go next
 
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
-- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 497 builtins,
+- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 498 builtins,
   with signatures and return shapes
 - **[MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md)** — syntax and
   semantics
 - **[Why Mutant, and when not to](COMPARISON.md)** — how this compares with
   plaso, Velociraptor, osquery and a YARA+Sigma pipeline
-- **`examples/`** — 116 runnable programs, including `examples/workshop/` for
+- **`examples/`** — 123 runnable programs, including `examples/workshop/` for
   guided exercises and `examples/forensics/supertimeline.mut` for a longer
   timeline build

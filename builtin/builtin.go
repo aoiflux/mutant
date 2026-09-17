@@ -236,6 +236,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameDbShortestPath, &BuiltIn{DbShortestPath}},
 	{BuiltinNameDbTimeline, &BuiltIn{DbTimeline}},
 	{BuiltinNameDbStats, &BuiltIn{DbStats}},
+	{BuiltinNameDbCompact, &BuiltIn{DbCompact}},
 	// generic bytes/parser helpers
 	{BuiltinNameBytesLen, &BuiltIn{BytesLen}},
 	{BuiltinNameBytesGet, &BuiltIn{BytesGet}},

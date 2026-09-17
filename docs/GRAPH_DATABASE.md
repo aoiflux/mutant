@@ -32,6 +32,7 @@ returning `(result, err)`; destructure with `let value, err = ...` and check
 | `db_bfs` | `(db, origin, depth, direction)` | `{nodes, edges}` — arrays of IDs reached |
 | `db_shortest_path` | `(db, from, to)` | array of node IDs from `from` to `to` |
 | `db_stats` | `(db)` | `{nodes, edges, has_storage, ...}` |
+| `db_compact` | `(db)` | `{has_storage, delta_records_before, delta_records_after}` |
 | `db_timeline` | `(db)` | array of timeline event hashes |
 
 `nodeType` and `edgeType` are optional integer/enum values in the range
@@ -249,12 +250,33 @@ putln("");
 long-running disk-backed graph mean compaction is overdue: everything
 written since the last compaction stays in memory and is replayed on every
 open, so an uncompacted store degrades in memory use, open time, and read
-speed with no error to signal it. There is currently no `db_*` builtin a
-mutant script can call to trigger compaction itself — watch these fields via
-`db_stats` and plan maintenance accordingly. When a store is compacted, it is
-rewritten in a newer on-disk format that older mutant builds cannot open, so
-account for that in any deployment that mixes build versions against the
-same graph file.
+speed with no error to signal it.
+
+`db_compact(db)` is what acts on those figures. It merges the delta layer
+into the compact store and truncates the write-ahead log, which is what
+gives the memory back.
+
+```
+let stats, err = db_stats(db);
+if (err) { putln("[error] db_stats: ", err); };
+if (stats["has_storage"] && stats["delta_records"] > 100000) {
+  let report, err = db_compact(db);
+  if (err) { putln("[error] db_compact: ", err); };
+  putf("compacted: ", report["delta_records_before"], " -> ", report["delta_records_after"]);
+  putln("");
+};
+```
+
+It reports what it moved rather than just that it ran, because a compaction
+that merged nothing and one that merged a million records both return
+successfully. On an in-memory handle it is a no-op and reports
+`has_storage: false`, so a script that compacts on a schedule does not have
+to know which kind of handle it was given.
+
+When a store is compacted it is rewritten in a newer on-disk format that
+older mutant builds cannot open, so account for that in any deployment that
+mixes build versions against the same graph file. Reading is unaffected: this
+build opens a store written by any earlier one.
 
 `db_timeline(db)` returns the chronological list of timeline events recorded
 for the graph — but only events from `db_add_artifact` (`{action:

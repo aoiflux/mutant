@@ -32,8 +32,17 @@ import (
 const (
 	defaultGrammarPath = "mutant-vscode-extension/syntaxes/mutant.tmLanguage.json"
 
-	// builtinScope names the one rule in the grammar that gendocs owns.
+	// builtinScope names the flat-spelling rule that gendocs owns.
 	builtinScope = "support.function.builtin.mutant"
+
+	// namespacedScope names the dotted-spelling rule. `hash.blake2` is
+	// `hash_blake2` -- one function, two spellings -- and the flat
+	// alternation cannot match the dotted one, so it fell through to the
+	// generic property rule and read as a struct field. The language server's
+	// semantic tokens correct that in an open editor; what this rule covers is
+	// everywhere the grammar is all there is -- a fenced block in Markdown, the
+	// marketplace preview, a diff on the web.
+	namespacedScope = "support.function.builtin.namespaced.mutant"
 
 	// The alternation is wrapped so that a builtin is highlighted only where it
 	// is called: `\b` keeps `fs_read` out of `my_fs_read`, and the lookahead
@@ -51,8 +60,15 @@ var plainIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // grammarBuiltinRule finds the builtin rule's match assignment in the grammar
 // text. It is anchored on the scope name rather than on position, so the
 // rewrite cannot land in a neighbouring rule if the file is reordered.
-var grammarBuiltinRule = regexp.MustCompile(
-	`("name"\s*:\s*"` + regexp.QuoteMeta(builtinScope) + `"\s*,\s*"match"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+var grammarBuiltinRule = ruleMatcher(builtinScope)
+
+// grammarNamespacedRule is the same, for the dotted rule.
+var grammarNamespacedRule = ruleMatcher(namespacedScope)
+
+func ruleMatcher(scope string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`("name"\s*:\s*"` + regexp.QuoteMeta(scope) + `"\s*,\s*"match"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+}
 
 // builtinAlternation builds the match pattern from the registry.
 //
@@ -69,6 +85,41 @@ func builtinAlternation() (string, error) {
 	}
 	sortLongestFirst(names)
 	return alternationPrefix + strings.Join(names, "|") + alternationSuffix, nil
+}
+
+// namespacedAlternation is the same list with each name's FIRST underscore
+// turned into a dot, which is exactly the fold the compiler performs in
+// reverse: `bytes_cursor_read_u8` is reachable as `bytes.cursor_read_u8` and
+// not as `bytes.cursor.read_u8`, because only the first underscore is a
+// namespace separator.
+//
+// Pairs rather than family-times-member, deliberately. A cross product would
+// be a fraction of the size and would paint `rand.upper` -- a call to nothing
+// -- as a builtin. Highlighting a name the language does not have is the same
+// class of wrong as not highlighting one it does.
+//
+// A name with no underscore has no dotted spelling and is left out.
+func namespacedAlternation() (string, error) {
+	names, err := builtinNames()
+	if err != nil {
+		return "", err
+	}
+
+	dotted := make([]string, 0, len(names))
+	for _, name := range names {
+		namespace, member, found := strings.Cut(name, "_")
+		if !found || namespace == "" || member == "" {
+			continue
+		}
+		// The parser accepts whitespace either side of the dot, so the
+		// grammar has to as well or `hash . blake2` reads as two things.
+		dotted = append(dotted, namespace+`\s*\.\s*`+member)
+	}
+	if len(dotted) == 0 {
+		return "", fmt.Errorf("no namespaced builtins to write into the grammar")
+	}
+	sortLongestFirst(dotted)
+	return alternationPrefix + strings.Join(dotted, "|") + alternationSuffix, nil
 }
 
 // builtinNames is the registry as the grammar sees it: every registered name,
@@ -167,6 +218,22 @@ func renderGrammar(document string) (string, error) {
 
 	rendered := grammarBuiltinRule.ReplaceAllStringFunc(document, func(rule string) string {
 		return grammarBuiltinRule.FindStringSubmatch(rule)[1] + string(encoded)
+	})
+
+	namespaced, err := namespacedAlternation()
+	if err != nil {
+		return "", err
+	}
+	encodedNamespaced, err := json.Marshal(namespaced)
+	if err != nil {
+		return "", fmt.Errorf("encoding the namespaced alternation as a JSON string: %w", err)
+	}
+	foundNamespaced := grammarNamespacedRule.FindAllStringIndex(rendered, -1)
+	if len(foundNamespaced) != 1 {
+		return "", fmt.Errorf("expected exactly one %s rule with a match pattern, found %d", namespacedScope, len(foundNamespaced))
+	}
+	rendered = grammarNamespacedRule.ReplaceAllStringFunc(rendered, func(rule string) string {
+		return grammarNamespacedRule.FindStringSubmatch(rule)[1] + string(encodedNamespaced)
 	})
 
 	// Read the result back through the parser rather than trusting the

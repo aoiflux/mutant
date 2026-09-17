@@ -1531,9 +1531,24 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			}
 			// Guarded on the name being unbound, so a local `let str = "x"`
 			// followed by `str.upper` is still the field access it looks like.
-			if _, shadowed := current.find(namespace.Value); !shadowed &&
-				node.Field != nil && isLiveBuiltin(namespace.Value+"_"+node.Field.Value) {
-				return
+			if _, shadowed := current.find(namespace.Value); !shadowed && node.Field != nil {
+				if isLiveBuiltin(namespace.Value + "_" + node.Field.Value) {
+					return
+				}
+				// The family exists and this member does not, which is a typo
+				// in the member. Walking the left instead reported `undefined
+				// identifier hash` for `hash.blake3(x)` -- true of the name it
+				// checked and useless to the author, because `hash` is not what
+				// they got wrong and the half they did get wrong never appears.
+				// The flat spelling has always named it: `hash_blake3`.
+				//
+				// Gated on the family existing, which is the same gate
+				// builtinCallee applies: a receiver that heads no family is
+				// someone's value and its fields are not this rule's business.
+				if len(builtinFamilyMembers(namespace.Value)) > 0 {
+					c.reportUnknownFamilyMember(node, namespace.Value)
+					return
+				}
 			}
 		}
 		c.collectExpression(node.Left, current)
@@ -1561,6 +1576,25 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			c.collectExpression(value, current)
 		}
 	}
+}
+
+// reportUnknownFamilyMember complains about `hash.blake3` by the name the
+// author would search for -- the flat one, which is the name the registry
+// keys on and the one the capability reference lists.
+func (c *undefinedCollector) reportUnknownFamilyMember(node *mast.FieldExpression, namespace string) {
+	rng, ok := c.snapshot.Program.RangeOf(node)
+	if !ok {
+		// Without a range for the whole expression the squiggle would cover
+		// only the namespace, which is the half that is correct.
+		return
+	}
+	c.result = append(c.result, lsp.Diagnostic{
+		Range:    localprotocol.ToLSPRange(rng),
+		Severity: c.severity,
+		Source:   c.source,
+		Message: fmt.Sprintf("undefined identifier `%s_%s`: %s is a builtin family, but it has no %s",
+			namespace, node.Field.Value, namespace, node.Field.Value),
+	})
 }
 
 func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope, fromMultiNameLet bool) {

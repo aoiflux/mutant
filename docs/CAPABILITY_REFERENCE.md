@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **497 registered builtins** across **38 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **498 registered builtins** across **38 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -13,6 +13,7 @@ This is the canonical, category-grouped catalog of every Mutant builtin. There a
 - **Parameter types are shown inline** in each signature, e.g. `str_repeat(s: STRING, n: INTEGER)`. A parameter with no type shown accepts any value. These are the same contracts the language server checks a call against (the `builtinArgType` diagnostic), and the same words the runtime uses when a call fails. A parameter shown as `BYTES|STRING` accepts either representation and the builtin hands back the one it was given; `string_to_bytes(s, "raw")` converts losslessly from a builtin that still returns text.
 - **The Platforms column** lists the operating systems a builtin actually works on. `all` means it is pure-Go and cross-platform (it operates on captured artifacts, so it runs on any host). A restricted set (e.g. `windows/linux`) means the builtin fails honestly elsewhere — and the language server will flag such a call when you are editing on an unsupported OS (the `platformSupport` diagnostic).
 - **Pure-Go, no cgo.** The entire standard library builds and runs with `CGO_ENABLED=0` on Windows, Linux, and macOS.
+- **Every builtin has two spellings.** A name with an underscore in it is also reachable through its family: `hash.blake2` is `hash_blake2`, `fs.read` is `fs_read`, and so on for every name in this table. The two are one function — the dotted form is folded into the flat one at compile time rather than looked up in a list — so the tables below list only the flat name. A variable, parameter or imported module that already binds the family name wins, so no existing program changes meaning.
 
 ## Platform-restricted builtins
 
@@ -408,7 +409,7 @@ HTTP client requests and low-level request/response parsing and building for pro
 | `http_post(url: STRING, body: STRING\|HASH\|STRUCT, contentType?: STRING) -> (HASH, ERROR)` | all | Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted. |
 | `http_request(method: STRING, url: STRING, body: STRING\|HASH\|STRUCT, headers: HASH\|STRUCT) -> (HASH, ERROR)` | all | Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable). |
 
-## Graph Database (14)
+## Graph Database (15)
 
 Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifact attributes, BFS traversal, shortest-path, statistics, and timelines. See [GRAPH_DATABASE.md](GRAPH_DATABASE.md).
 
@@ -420,9 +421,10 @@ Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifa
 | `db_add_relation(db: INTEGER, from: INTEGER, to: INTEGER, relation: STRING) -> (HASH, ERROR)` | all | Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported. |
 | `db_bfs(db: INTEGER, origin: INTEGER, depth: INTEGER, direction: STRING) -> (HASH, ERROR)` | all | Breadth-first traversal from origin up to depth. direction is "in", "out", or "both". All four arguments are required. |
 | `db_close(db: INTEGER) -> (BOOLEAN, ERROR)` | all | Closes a graph database handle and flushes pending state. |
+| `db_compact(db: INTEGER) -> (HASH, ERROR)` | all | Merges a disk-backed store's pending writes into its image and truncates the write-ahead log, which is what gives the memory back. Everything written since the last compaction stays resident and is replayed at every open, so a store that is never compacted grows in memory and open time with no error to signal it -- db_stats' delta_records and wal_bytes are the figures that say it is due. Compacting an in-memory handle is a no-op and reports has_storage false. Note that compacting with this build rewrites the store in a newer on-disk format that older mutant builds cannot open. Returns (report, err). |
 | `db_index_prop(db: INTEGER, nodeID: INTEGER, key: STRING, value: STRING) -> (BOOLEAN, ERROR)` | all | Indexes a property (key=value) on a node. All four arguments are required. |
 | `db_open() -> (INTEGER, ERROR)` | all | Creates an in-memory graph database handle. |
-| `db_open_disk(path: STRING) -> (INTEGER, ERROR)` | all | Opens or creates a disk-backed graph database. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open. |
+| `db_open_disk(path: STRING, opts?: HASH) -> (INTEGER, ERROR)` | all | Opens or creates a disk-backed graph database. opts is an optional {memory_budget, discover_memory_budget, verify_on_open} hash: memory_budget caps what the store holds, in bytes, and is a whole-store figure rather than a whole-process one, so leave room for the program using it; discover_memory_budget:true derives that cap from the cgroup or Job Object limit the process is already under, and an explicit memory_budget always wins over it; verify_on_open:true checks the property indexes against the records before the handle is returned. An unknown option key is an error rather than ignored. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open; reading is unaffected. |
 | `db_query(db: INTEGER) -> ([]INTEGER, ERROR)` | all | Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language. |
 | `db_query_nodes(db: INTEGER, nodeType?: INTEGER\|ENUM_VALUE) -> ([]INTEGER, ERROR)` | all | Returns node IDs, optionally filtered to a single node type (integer/enum). |
 | `db_shortest_path(db: INTEGER, from: INTEGER, to: INTEGER) -> ([]INTEGER, ERROR)` | all | Computes shortest path between two graph nodes. |

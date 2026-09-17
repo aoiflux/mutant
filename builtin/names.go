@@ -200,6 +200,7 @@ const (
 	BuiltinNameDbShortestPath        = "db_shortest_path"
 	BuiltinNameDbTimeline            = "db_timeline"
 	BuiltinNameDbStats               = "db_stats"
+	BuiltinNameDbCompact             = "db_compact"
 	BuiltinNameBytesLen              = "bytes_len"
 	BuiltinNameBytesGet              = "bytes_get"
 	BuiltinNameBytesSlice            = "bytes_slice"

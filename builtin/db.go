@@ -1,11 +1,13 @@
 package builtin
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/aoiflux/graphene"
+	"github.com/aoiflux/graphene/disk"
 	"github.com/aoiflux/graphene/store"
 
 	"mutant/object"
@@ -31,6 +33,12 @@ var (
 )
 
 const DATA = 0
+
+// dbDefaultNodeType is the type db_add_node uses when a script names none, and
+// the one db_add_artifact has always used.
+func dbDefaultNodeType() store.NodeType {
+	return store.CustomNodeType(uint16(DATA))
+}
 
 func dbTypeFromEnumValue(enumValue *object.EnumValue, kind string) (int64, object.Object) {
 	if enumValue.Value == nil || enumValue.Value.Type() == object.NULL_OBJ {
@@ -111,20 +119,86 @@ func DbOpen(args ...object.Object) object.Object {
 }
 
 func DbOpenDisk(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) != 1 && len(args) != 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	path, ok := args[0].(*object.String)
 	if !ok {
-		return resultAndError(nil, newError("argument to `db_open_disk` must be STRING, got %s", args[0].Type()))
+		return resultAndError(nil, newError("argument 1 to `db_open_disk` must be STRING, got %s", args[0].Type()))
 	}
-	g, err := graphene.Open(path.Value)
+
+	opts := disk.Options{}
+	if len(args) == 2 {
+		parsed, errObj := dbOpenOptions(args[1])
+		if errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		opts = parsed
+	}
+
+	g, err := graphene.OpenWithOptions(path.Value, opts)
 	if err != nil {
 		return resultAndError(nil, newError("db_open_disk: %s", err.Error()))
 	}
 	handle := atomic.AddInt64(&dbHandleCounter, 1)
 	dbHandles.Store(handle, g)
 	return resultAndError(intObj(handle), nil)
+}
+
+// dbOpenOptions maps the optional second argument of db_open_disk onto the
+// store's open-time options.
+//
+// Only the memory ceiling is exposed, and deliberately. The store has a large
+// options surface -- signing, audit, retention, redaction, roles -- and every
+// one of those is a forensic-integrity decision that belongs in its own
+// builtin with its own contract, not in an untyped hash a script assembles.
+// Memory is different: a script that ingests a large graph either fits in the
+// ceiling it is running under or is killed, and nothing else in the language
+// lets it say so.
+//
+// An unknown key is refused rather than ignored. A misspelled option that is
+// silently dropped reads as a store running under a budget it does not have.
+func dbOpenOptions(arg object.Object) (disk.Options, *object.Error) {
+	opts := disk.Options{}
+
+	hash, ok := arg.(*object.Hash)
+	if !ok {
+		return opts, newError("argument 2 to `db_open_disk` must be HASH, got %s", arg.Type())
+	}
+
+	for _, pair := range hash.Pairs {
+		key, ok := pair.Key.(*object.String)
+		if !ok {
+			return opts, newError("db_open_disk: option keys must be STRING, got %s", pair.Key.Type())
+		}
+		switch key.Value {
+		case "memory_budget":
+			budget, ok := pair.Value.(*object.Integer)
+			if !ok {
+				return opts, newError("db_open_disk: memory_budget must be INTEGER, got %s", pair.Value.Type())
+			}
+			if budget.Value < 0 {
+				return opts, newError("db_open_disk: memory_budget must not be negative, got %d", budget.Value)
+			}
+			opts.MemoryBudget = budget.Value
+		case "discover_memory_budget":
+			discover, ok := pair.Value.(*object.Boolean)
+			if !ok {
+				return opts, newError("db_open_disk: discover_memory_budget must be BOOLEAN, got %s", pair.Value.Type())
+			}
+			opts.DiscoverMemoryBudget = discover.Value
+		case "verify_on_open":
+			verify, ok := pair.Value.(*object.Boolean)
+			if !ok {
+				return opts, newError("db_open_disk: verify_on_open must be BOOLEAN, got %s", pair.Value.Type())
+			}
+			opts.VerifyOnOpen = verify.Value
+		default:
+			return opts, newError("db_open_disk: unknown option %q; known options are memory_budget, discover_memory_budget, verify_on_open", key.Value)
+		}
+	}
+
+	return opts, nil
 }
 
 func DbClose(args ...object.Object) object.Object {
@@ -145,6 +219,15 @@ func DbClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("db_close: invalid handle %d", h.Value))
 	}
+	// The side journal db_timeline reads is keyed by handle and lives in
+	// Go memory, not in the graph. Handles come from a counter that never
+	// repeats, so a process that opens and closes graphs -- which is every
+	// net_serve handler -- grew that map for as long as it ran. Dropped
+	// before Close so the events go even if Close reports an error: the
+	// handle is already out of dbHandles by this point and nothing can ask
+	// for them again.
+	dbTimelineForget(h.Value)
+
 	if err := g.Close(); err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))
 	}
@@ -180,6 +263,37 @@ func DbAddNode(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_add_node: %s", err.Error()))
 	}
 	return resultAndError(intObj(int64(nodeID)), nil)
+}
+
+// dbAddIndexedNode creates one node and registers every indexed property it
+// carries, in a single transaction.
+//
+// db_add_artifact used to do this as one AddNode followed by one
+// IndexNodeProperty per attribute, each its own commit and its own fsync, and
+// each with its error discarded -- so a node could end up in the graph
+// carrying half the properties the script asked for, and answer queries as
+// though that were the whole of it. The file header already named the remedy:
+// a builtin that spans several store calls needs graphene's own Begin/Commit
+// rather than a lock.
+//
+// Tx.AddNode hands back the reserved id straight away, so the entries can name
+// the node they describe inside the same transaction. Entries are framed in
+// sorted key order, which makes two identical ingests write identical bytes --
+// something the per-call loop could not promise, because a hash is walked in
+// whatever order it is walked.
+func dbAddIndexedNode(handle int64, nodeType store.NodeType, props map[string][]byte) (int64, error) {
+	g, found := dbGet(handle)
+	if !found {
+		return 0, fmt.Errorf("invalid handle %d", handle)
+	}
+
+	tx := g.Begin()
+	nodeID := tx.AddNode(&store.Node{Labels: []store.NodeType{nodeType}})
+	tx.IndexNodeProperties(nodeID, props)
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(nodeID), nil
 }
 
 func DbAddEdge(args ...object.Object) object.Object {
@@ -408,6 +522,62 @@ func DbStats(args ...object.Object) object.Object {
 	}
 
 	return resultAndError(makeHashObject(out), nil)
+}
+
+// DbCompact merges a disk-backed store's delta layer into its image and
+// truncates the WAL.
+//
+// db_stats has always reported delta_records and wal_bytes -- the two figures
+// that say a store is overdue -- and both the reference and db.go's own
+// comment told the reader to compact, while nothing in the language could.
+// Everything written since the last compaction stays resident and is replayed
+// at every open, so a long-lived store degraded in memory and open time with
+// no error to signal it and no way to act on the numbers.
+//
+// Compacting an in-memory handle is a no-op rather than an error: an
+// in-memory graph has no delta to merge, and a script that compacts on a
+// schedule should not have to know which kind of handle it was given.
+// has_storage says which happened.
+func DbCompact(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+	h, ok := args[0].(*object.Integer)
+	if !ok {
+		return resultAndError(nil, newError("argument to `db_compact` must be INTEGER, got %s", args[0].Type()))
+	}
+	g, found := dbGet(h.Value)
+	if !found {
+		return resultAndError(nil, newError("db_compact: invalid handle %d", h.Value))
+	}
+
+	// Read before, compact, read after. The two figures are what makes the
+	// call worth reporting on: "it ran" is not evidence that anything moved.
+	before, hadStorage := dbDeltaRecords(g)
+
+	if err := g.Compact(); err != nil {
+		return resultAndError(nil, newError("db_compact: %s", err.Error()))
+	}
+
+	after, _ := dbDeltaRecords(g)
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"has_storage":          boolObj(hadStorage),
+		"delta_records_before": intObj(before),
+		"delta_records_after":  intObj(after),
+	}), nil)
+}
+
+// dbDeltaRecords reports the uncompacted record count, and whether the handle
+// has a storage layer to report one at all. A Stats error is reported as no
+// storage rather than propagated: this is instrumentation on a compaction, and
+// failing the compaction because the figure describing it could not be read
+// would be the tail wagging the dog.
+func dbDeltaRecords(g *graphene.Graph) (int64, bool) {
+	stats, err := g.Stats()
+	if err != nil || stats == nil || !stats.HasStorage {
+		return 0, false
+	}
+	return int64(stats.Storage.DeltaRecords()), true
 }
 
 func dbParseDirection(s string) store.Direction {

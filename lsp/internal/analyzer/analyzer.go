@@ -190,7 +190,7 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 			return text, rng, true
 		}
 	case *mast.ForInStatement:
-		if text, ok := keywordHoverText("for"); ok {
+		if text, ok := forInHoverText(); ok {
 			return text, rng, true
 		}
 	case *mast.ReturnStatement:
@@ -247,7 +247,16 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 	seen := make(map[string]struct{}, len(keywords)+len(builtin.Builtins)+8)
 	for _, keyword := range keywords {
 		kind := lsp.CompletionItemKindKeyword
-		items = append(items, lsp.CompletionItem{Label: keyword, Kind: &kind})
+		completion := lsp.CompletionItem{Label: keyword, Kind: &kind}
+		// The same table hover reads. A keyword completion carried no
+		// documentation at all while the descriptions sat one file away, and
+		// four of them -- in, else, true, false -- were reachable from
+		// nowhere else: none is an AST node of its own, so a cursor on one
+		// lands on whatever encloses it. This is the second route to them.
+		if doc, ok := keywordHoverText(keyword); ok {
+			completion.Documentation = lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: doc}
+		}
+		items = append(items, completion)
 		seen[keyword] = struct{}{}
 	}
 	for _, b := range builtin.Builtins {

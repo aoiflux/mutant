@@ -2163,7 +2163,17 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 		// has to be kept in step. It is tried last, so a variable, parameter or
 		// struct called `fs` still wins and no existing program changes
 		// meaning.
-		if _, shadowed := c.symbolTable.Resolve(ident.Value); !shadowed {
+		//
+		// A BuiltinScope hit is not one of those bindings. DefineBuiltin writes
+		// every builtin into the same store Resolve reads, so asking Resolve
+		// alone answered "taken" for the four families whose own name is also a
+		// builtin -- rand, sort, assert, gunzip -- and `rand.int` compiled to a
+		// field access on a builtin, which the VM can only refuse. The evaluator
+		// asks env.Get, which holds no builtins, and folded; so did the language
+		// server, which offered those nine members in completion. Excluding the
+		// builtin scope here is what makes the three agree, and it cannot change
+		// an existing program: OpGetField on a builtin has never returned.
+		if symbol, shadowed := c.symbolTable.Resolve(ident.Value); !shadowed || symbol.Scope == BuiltinScope {
 			if flat := ident.Value + "_" + node.Field.Value; builtin.GetBuiltinByName(flat) != nil {
 				c.loadSymbol(Symbol{Name: flat, Scope: BuiltinScope})
 				return nil

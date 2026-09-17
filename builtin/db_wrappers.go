@@ -26,18 +26,7 @@ func DbAddArtifact(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 2 to `db_add_artifact` must be STRING, got %s", args[1].Type()))
 	}
 
-	nodeResult := DbAddNode(handleObj)
-	nodePayload, errObj := dbUnwrapPair(nodeResult)
-	if errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	nodeID, ok := nodePayload.(*object.Integer)
-	if !ok {
-		return resultAndError(nil, newError("db_add_artifact: unexpected node id payload type %T", nodePayload))
-	}
-
-	_, _ = dbUnwrapPair(DbIndexProp(handleObj, nodeID, stringObj("artifact_type"), typeObj))
-	indexed := int64(1)
+	props := map[string][]byte{"artifact_type": []byte(typeObj.Value)}
 
 	if len(args) == 3 {
 		attrs, ok := args[2].(*object.Hash)
@@ -49,22 +38,28 @@ func DbAddArtifact(args ...object.Object) object.Object {
 			if !ok {
 				continue
 			}
-			val := stringObj(pair.Value.Inspect())
-			_, _ = dbUnwrapPair(DbIndexProp(handleObj, nodeID, stringObj("attr_"+keyObj.Value), val))
-			indexed++
+			props["attr_"+keyObj.Value] = []byte(pair.Value.Inspect())
 		}
+	}
+
+	// One transaction: the node and everything indexed about it land together
+	// or not at all. The per-property loop this replaces discarded each
+	// indexing error, so a half-indexed artifact was reported as a whole one.
+	nodeID, err := dbAddIndexedNode(handleObj.Value, dbDefaultNodeType(), props)
+	if err != nil {
+		return resultAndError(nil, newError("db_add_artifact: %s", err.Error()))
 	}
 
 	dbTimelineAppend(handleObj.Value, makeHashObject(map[string]object.Object{
 		"action":        stringObj("add_artifact"),
-		"node_id":       intObj(nodeID.Value),
+		"node_id":       intObj(nodeID),
 		"artifact_type": stringObj(typeObj.Value),
 	}))
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"node_id":       intObj(nodeID.Value),
+		"node_id":       intObj(nodeID),
 		"artifact_type": stringObj(typeObj.Value),
-		"indexed_props": intObj(indexed),
+		"indexed_props": intObj(int64(len(props))),
 	}), nil)
 }
 
@@ -139,6 +134,15 @@ func DbTimeline(args ...object.Object) object.Object {
 	dbTimelineStore.Unlock()
 
 	return resultAndError(&object.Array{Elements: copied}, nil)
+}
+
+// dbTimelineForget drops one handle's events. db_close is the only caller:
+// a handle is gone the moment it is closed, so the events are unreachable
+// and holding them only costs memory.
+func dbTimelineForget(handle int64) {
+	dbTimelineStore.Lock()
+	delete(dbTimelineStore.events, handle)
+	dbTimelineStore.Unlock()
 }
 
 func dbTimelineAppend(handle int64, event object.Object) {

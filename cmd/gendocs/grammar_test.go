@@ -127,6 +127,7 @@ func TestGrammarOrdersPrefixesAfterWhatTheyPrefix(t *testing.T) {
 // and leaves every other byte, including the line endings, where it found them.
 func TestRenderGrammarTouchesOnlyTheBuiltinRule(t *testing.T) {
 	const before = `\b(?:len|putln)\b(?=\s*\()`
+	const beforeNamespaced = `\b(?:str\s*\.\s*upper)\b(?=\s*\()`
 	fixture := `{
   "name": "Mutant",
   "repository": {
@@ -140,6 +141,10 @@ func TestRenderGrammarTouchesOnlyTheBuiltinRule(t *testing.T) {
     },
     "builtins": {
       "patterns": [
+        {
+          "name": "` + namespacedScope + `",
+          "match": ` + quoted(t, beforeNamespaced) + `
+        },
         {
           "name": "` + builtinScope + `",
           "match": ` + quoted(t, before) + `
@@ -160,11 +165,17 @@ func TestRenderGrammarTouchesOnlyTheBuiltinRule(t *testing.T) {
 		t.Fatalf("builtinAlternation: %v", err)
 	}
 
-	// Putting the old pattern back has to reproduce the input exactly. Anything
-	// else means the rewrite reached outside the rule it owns.
+	afterNamespaced, err := namespacedAlternation()
+	if err != nil {
+		t.Fatalf("namespacedAlternation: %v", err)
+	}
+
+	// Putting both old patterns back has to reproduce the input exactly.
+	// Anything else means the rewrite reached outside the rules it owns.
 	restored := strings.Replace(rendered, quoted(t, after), quoted(t, before), 1)
+	restored = strings.Replace(restored, quoted(t, afterNamespaced), quoted(t, beforeNamespaced), 1)
 	if restored != fixture {
-		t.Errorf("renderGrammar changed something other than the %s pattern", builtinScope)
+		t.Errorf("renderGrammar changed something other than the %s and %s patterns", builtinScope, namespacedScope)
 	}
 }
 

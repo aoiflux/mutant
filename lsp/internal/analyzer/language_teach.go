@@ -16,9 +16,21 @@ var keywordHoverDocs = map[string]string{
 	"if":       "Conditional expression. Executes the consequence block when the condition is truthy, otherwise runs else if present.",
 	"else":     "Alternative branch for an if expression.",
 	"return":   "Returns one or more values from the current function.",
-	"for":      "Loop construct with init, condition, and post expressions: for (init; cond; post) { ... }.",
-	"in":       "Names the collection a for loop walks: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds an index and an element -- or, over a hash, a key and a value. A single binding over a hash yields its keys.",
-	"while":    "Loop that repeats its body while the condition stays truthy: while (cond) { ... }. Unlike for, it has no init or post section, so continue goes straight back to the condition.",
+	"for": "Three-clause loop: for (init; cond; post) { ... }. The parentheses are required and all three clauses are optional -- for (;;) { ... } is the endless form. init may be a let or an expression, and runs once, in a scope created for the loop. continue runs the post section before re-testing, so the increment is not skipped. The loop variable is one binding for the whole loop, not a fresh one per iteration, so a closure made in the body sees the final value.",
+	"in": "Walks a collection: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds " +
+		"both halves. Four things iterate, and what one binding yields differs:\n\n" +
+		"| iterable | two bindings | one binding |\n" +
+		"| --- | --- | --- |\n" +
+		"| array | index, element | element |\n" +
+		"| hash | key, value | **key** |\n" +
+		"| string | rune index, one-character string | character |\n" +
+		"| bytes | index, byte as INTEGER | byte as INTEGER |\n\n" +
+		"A hash is walked in sorted key order, the same order a hash renders in, so two runs visit it the same way. " +
+		"A string is walked by rune and a bytes buffer by byte, which is why the two are not interchangeable here. " +
+		"Anything else is a run-time error. continue advances the iterator -- a for ... in has no post section, so " +
+		"the advance is the post section. The bindings are one slot for the whole loop rather than a fresh pair per " +
+		"iteration, so a closure made in the body sees the final values. Binding the same name twice is refused.",
+	"while": "Repeats its body while the condition stays truthy: while (cond) { ... }. The condition is required -- while () is refused rather than read as endless, so write while (true) when that is what you mean. Unlike for it has no init or post section, so continue goes straight back to the condition and the body itself has to make progress. Truthiness follows the same rule as if: the condition need not be a boolean.",
 	"match":    "Expression that takes the first arm whose pattern equals the subject: match (x) { 1 | 2 => \"few\", Status.Ok => \"ok\", _ => \"other\" }. A pattern is a literal, a negated number, an enum variant, or `_` for anything, and alternatives are joined with `|`. An arm body is one expression or a block, and the match evaluates to it. Without a `_` arm, a subject that no arm matches is a run-time error rather than null.",
 	"break":    "Exits the nearest enclosing loop immediately.",
 	"continue": "Skips to the next iteration of the nearest enclosing loop.",
@@ -126,6 +138,26 @@ func stabilityFooterLine(name string) string {
 	}
 }
 
+// forInHoverText is the card for `for (v in xs)`.
+//
+// It used to render keywordHoverDocs["for"] -- the three-clause loop's
+// card, describing an init, a condition and a post section that a for ... in
+// does not have -- because both constructs are dispatched from a `for`
+// token. They are separate AST nodes with separate semantics and they need
+// separate cards.
+//
+// The prose was already in the table under "in", reachable by nothing:
+// `in` is not a node of its own, so a cursor on it lands on the enclosing
+// ForInStatement and got the `for` card too. This is what makes that entry
+// live, and it stays the single source of the text.
+func forInHoverText() (string, bool) {
+	doc, ok := keywordHoverDocs["in"]
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("keyword `for ... in`\n\n%s", doc), true
+}
+
 func keywordHoverText(keyword string) (string, bool) {
 	doc, ok := keywordHoverDocs[keyword]
 	if !ok {
@@ -169,13 +201,44 @@ func languageSnippetCompletionItems() []lsp.CompletionItem {
 				Value: "Classic for-loop template.",
 			},
 		},
+		// The index walk this replaces -- `for (let i = 0; i < len(items); ...)`
+		// with the element fished out by hand -- was offered as the way to walk
+		// an array, and the language has had `for ... in` all along. The editor
+		// was teaching the longer form of something it could have written.
+		// These two match the extension's own forin/forkv snippets, so whichever
+		// set fires the advice is the same.
 		{
-			Label:            "for loop over array",
+			Label:            "for ... in loop",
 			Kind:             &snippetKind,
 			Detail:           strPtr("Snippet"),
-			InsertText:       strPtr("for (${1:let i = 0}; i < len(${2:items}); i = i + 1) {\n  let ${3:item} = ${2:items}[i];\n  ${4:// body}\n}"),
+			InsertText:       strPtr("for (${1:item} in ${2:items}) {\n  ${3:// body}\n}"),
 			InsertTextFormat: &snippetFormat,
-			Documentation:    lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: "Loop over all array elements by index."},
+			Documentation: lsp.MarkupContent{
+				Kind:  lsp.MarkupKindMarkdown,
+				Value: "Walk a collection. One binding yields each element -- or, over a hash, each key.",
+			},
+		},
+		{
+			Label:            "for ... in loop, both halves",
+			Kind:             &snippetKind,
+			Detail:           strPtr("Snippet"),
+			InsertText:       strPtr("for (${1:key}, ${2:value} in ${3:collection}) {\n  ${4:// body}\n}"),
+			InsertTextFormat: &snippetFormat,
+			Documentation: lsp.MarkupContent{
+				Kind:  lsp.MarkupKindMarkdown,
+				Value: "Bind both halves: index and element over an array, key and value over a hash.",
+			},
+		},
+		{
+			Label:            "while loop",
+			Kind:             &snippetKind,
+			Detail:           strPtr("Snippet"),
+			InsertText:       strPtr("while (${1:condition}) {\n  ${2:// body}\n}"),
+			InsertTextFormat: &snippetFormat,
+			Documentation: lsp.MarkupContent{
+				Kind:  lsp.MarkupKindMarkdown,
+				Value: "Repeat while the condition holds. The condition is required; write `while (true)` for an endless loop.",
+			},
 		},
 		{
 			Label:            "function declaration",
