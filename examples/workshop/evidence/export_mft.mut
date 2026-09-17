@@ -1,0 +1,112 @@
+// Export a standalone $MFT from an NTFS volume -- by hand, from the boot sector.
+//
+// Run this ONCE, on the facilitator's machine, to produce the $MFT that the
+// workshop ships. Students then point 09_revenant.mut's MFT_PATH at the
+// resulting file and need no admin rights and no disk image at all.
+//
+//   VOLUME can be:
+//     "\\\\.\\Q:"                  a mounted NTFS volume (Windows, ADMIN)
+//     "/dev/sdb1"                  an NTFS partition (Linux, root)
+//     "some_ntfs_partition.raw"    a dd of a single NTFS partition
+//
+// This file is also the best 10 minutes in the workshop, because there is no
+// "parse NTFS" builtin being called here. There is a boot sector, five integer
+// reads at five documented offsets, one multiplication, and a filesystem falls
+// out. Everything a forensic suite does starts exactly like this.
+
+let VOLUME = "\\\\.\\Q:";
+let OUT    = "examples/workshop/evidence/case_quilldrop.mft";
+let MB     = 1048576;
+let GRAB   = 24 * MB;      // plenty for a small volume; trailing zeros are skipped
+
+putln("=== export_mft: NTFS boot sector -> $MFT ===");
+putln("");
+
+let img, oerr = raw_open(VOLUME);
+if (oerr) {
+    putln("[error] raw_open:", oerr);
+    putln("On Windows this needs an elevated shell. On Linux, root.");
+    return;
+};
+let h = img["handle"];
+
+// ---------------------------------------------------------------------------
+// The NTFS boot sector: 512 bytes, at offset 0 of the VOLUME (not the disk).
+// Every field below is at a fixed, published offset. This is the whole of it.
+let boot, berr = raw_read_at_bytes(h, 0, 512);
+if (berr) { putln("[error] raw_read_at_bytes:", berr); raw_close(h); return; };
+
+// Offset 0x03, 8 bytes: the OEM ID. On NTFS it literally spells "NTFS    ".
+// bytes_slice is fallible, so bind (value, err) rather than nesting the call.
+let oem_bytes, _ = bytes_slice(boot, 3, 8);
+let oem, _ = bytes_to_string(oem_bytes, "latin1");
+putln("0x03  OEM ID                 : '${oem}'");
+if (str_trim(oem) != "NTFS") {
+    putln("That is not an NTFS boot sector. Is VOLUME a whole DISK rather than a");
+    putln("volume? A disk starts with an MBR/GPT; the NTFS boot sector lives at");
+    putln("the start of the partition. table_open() will tell you where that is.");
+    raw_close(h);
+    return;
+};
+
+let bps, _   = bytes_read_u16_le(boot, 11);   // 0x0B bytes per sector
+let spc, _   = bytes_get(boot, 13);           // 0x0D sectors per cluster
+let mftlcn, _ = bytes_read_u64_le(boot, 48);  // 0x30 first cluster of $MFT
+
+putln("0x0B  bytes per sector       : ${bps}");
+putln("0x0D  sectors per cluster    : ${spc}");
+putln("0x30  \$MFT starting cluster  : ${mftlcn}");
+
+let cluster_bytes = bps * spc;
+let mft_offset    = mftlcn * cluster_bytes;
+putln("");
+putln("cluster size = ${bps} x ${spc} = ${cluster_bytes} bytes");
+putln("\$MFT begins at cluster ${mftlcn} => byte offset ${mft_offset}");
+putln("");
+
+// ---------------------------------------------------------------------------
+// Confirm before copying 24 MB: the first four bytes there must be "FILE".
+let probe, perr = raw_read_at_bytes(h, mft_offset, 4);
+if (perr) { putln("[error] probe read:", perr); raw_close(h); return; };
+let sig, _ = bytes_to_string(probe, "latin1");
+putln("bytes at that offset        : '${sig}'");
+if (sig != "FILE") {
+    putln("Expected 'FILE' -- the MFT record signature. Arithmetic or volume wrong.");
+    raw_close(h);
+    return;
+};
+putln("=> that is an MFT record header. We found the \$MFT with five integer reads.");
+putln("");
+
+// ---------------------------------------------------------------------------
+// Copy it out. raw_read_at caps a single read at 32 MiB, so this loops.
+let CHUNK = 8 * MB;
+let _, werr = fs_write(OUT, "");
+if (werr) { putln("[error] fs_write:", werr); raw_close(h); return; };
+
+let copied = 0;
+for (i in range(0, GRAB / CHUNK)) {
+    let part, rerr = raw_read_at_bytes(h, mft_offset + copied, CHUNK);
+    if (rerr) { putln("[stop] read at +${copied}:", rerr); continue; };
+    let _, aerr = fs_append(OUT, part);
+    if (aerr) { putln("[error] fs_append:", aerr); continue; };
+    copied = copied + CHUNK;
+}
+raw_close(h);
+
+putln("wrote ${OUT}  (${copied} bytes)");
+putln("");
+
+// ---------------------------------------------------------------------------
+// And now the same job, done by the builtin, over the file we just carved.
+let mft, merr = mft_parse(OUT);
+if (merr) {
+    putln("[error] mft_parse:", merr);
+} else {
+    let n = mft["count"];
+    let skipped = mft["skipped"];
+    let kind = mft["source_type"];
+    putln("mft_parse(${OUT}) -> ${n} records (${skipped} skipped), source_type=${kind}");
+    putln("");
+    putln("Set MFT_PATH in 09_revenant.mut to this file and TELL 6 runs.");
+};

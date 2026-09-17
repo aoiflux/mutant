@@ -1,0 +1,407 @@
+// Workshop 9 - REVENANT: where did they lie to me?
+//
+// Case QUILLDROP, question three -- and the most important idea in the workshop:
+//
+//        YOU CANNOT DELETE A FACT. YOU CAN ONLY CREATE A CONTRADICTION.
+//
+// Anti-forensics feels like it should win. The attacker has administrator rights
+// on the machine, they run last, and they can rewrite the timestamps a forensic
+// timeline is built from. Tool 8 already showed the damage: three of our Sigma
+// hits are dated two years before the email that delivered them.
+//
+// But every one of those edits is itself an event, and every edit leaves the
+// edited record disagreeing with a record the attacker did not think to edit.
+// The tells below are all of that one shape:
+//
+//   * mtime EARLIER than crtime     - modified before it was born.
+//   * ctime LATER than mtime        - the metadata changed long after the
+//                                     content did. Setting a timestamp IS a
+//                                     metadata change, so the act of lying
+//                                     stamps itself onto the record.
+//   * identical times across files  - a human saves files one at a time; a
+//                                     script sets them in one pass.
+//   * holes in a sequence           - the log's own counter says how many lines
+//                                     used to be there.
+//   * present in the timeline,      - deletion removes the data, not the
+//     absent from disk                metadata that described it.
+//
+// Input: the fsagen bodyfile, and the collection (to see what is still there).
+
+let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
+let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";
+
+// Optional. If you have a real NTFS $MFT or volume image, point this at it and
+// the last section runs. Leave it as-is and the tool says so plainly.
+let MFT_PATH = "";
+
+putln("=== 9 REVENANT - anti-forensics detection ===");
+putln("");
+
+let have, _ = fs_exists(BODYFILE);
+if (!have) {
+    putln("No bodyfile at", BODYFILE);
+    putln("Build it:  sh examples/workshop/evidence/build_evidence.sh");
+    return;
+};
+
+let rows, berr = bodyfile_parse(BODYFILE);
+if (berr) { putln("[error] bodyfile_parse:", berr); return; };
+putln("examining ${len(rows)} records");
+putln("");
+
+let iso = fn(unix) {
+    if (unix <= 0) { return "(not recorded)"; };
+    return time_format(unix, "2006-01-02 15:04:05");
+};
+
+// ---------------------------------------------------------------------------
+// TELL 1 - the impossible file: modified before it existed.
+//
+// crtime is when the file was born. mtime is when its contents last changed.
+// Content cannot change before there is a file to hold it. Any tool that writes
+// mtime without also writing crtime creates this, and on NTFS crtime is harder
+// to reach, which is why so many of them do.
+putln("-- TELL 1: mtime earlier than crtime (modified before birth) --");
+
+let impossible = filter(rows, fn(r) {
+    let m = r["mtime"];
+    let b = r["crtime"];
+    return ((m > 0) && (b > 0)) && (m < b);
+});
+
+for (r in impossible) {
+    let gap_days = (r["crtime"] - r["mtime"]) / 86400;
+    putln("   " + r["name"]);
+    let born = iso(r["crtime"]);
+    let mod  = iso(r["mtime"]);
+    putln("      born ${born}, but 'modified' ${mod}");
+    putln("      => backdated by ~${gap_days} days. This is not possible.");
+}
+if (len(impossible) == 0) { putln("   none."); };
+putln("");
+
+// ---------------------------------------------------------------------------
+// TELL 2 - the act of lying, recorded.
+//
+// This is the subtle one, and it is the one that survives a careful attacker.
+// Setting a file's timestamps is a change to the file's METADATA. On NTFS and
+// on ext, the metadata-change time (ctime) is maintained by the kernel and is
+// NOT settable from user mode by the ordinary timestamp API.
+//
+// So a file whose ctime is far LATER than its mtime is a file whose metadata
+// was rewritten long after its content stopped changing -- which is the exact
+// footprint of a timestomp, stamped by the operating system, at the moment the
+// attacker was covering their tracks.
+putln("-- TELL 2: ctime long after mtime (metadata rewritten later) --");
+
+let SUSPICIOUS_LAG_DAYS = 30;
+let lagged = filter(rows, fn(r) {
+    let m = r["mtime"];
+    let c = r["ctime"];
+    return ((m > 0) && (c > 0)) && ((c - m) > (SUSPICIOUS_LAG_DAYS * 86400));
+});
+
+for (r in lagged) {
+    let lag = (r["ctime"] - r["mtime"]) / 86400;
+    let mod = iso(r["mtime"]);
+    let chg = iso(r["ctime"]);
+    putln("   " + r["name"]);
+    putln("      content last changed ${mod}");
+    putln("      metadata changed     ${chg}   (+${lag} days)");
+}
+if (len(lagged) == 0) { putln("   none."); };
+putln("");
+if (len(lagged) > 0) {
+    putln("   ^ read that again: the metadata change time is WHEN THEY DID IT.");
+    putln("     The attacker chose the fake mtime. The kernel chose the ctime.");
+    putln("     Only one of those two is under their control.");
+    putln("");
+};
+
+// ---------------------------------------------------------------------------
+// TELL 3 - too tidy. Files that share an exact timestamp.
+//
+// A person editing files produces timestamps scattered across seconds, minutes
+// and hours. A script setting them produces the SAME value, because it was
+// given one value. Grouping by timestamp and looking for clusters costs one
+// pass and needs no threshold-tuning.
+putln("-- TELL 3: files sharing one exact mtime (set in a single pass) --");
+
+let by_time = {};
+for (r in rows) {
+    let m = r["mtime"];
+    if (m <= 0) { continue; };
+    let key = to_string(m);
+    by_time = set(by_time, key, push(get(by_time, key, []), r["name"]));
+}
+
+let clusters = 0;
+for (key in by_time) {
+    let names = by_time[key];
+    if (len(names) < 2) { continue; };
+    clusters = clusters + 1;
+    // to_int is fallible, so it returns (value, err) -- bind both. Using
+    // `iso(to_int(key))` passes the PAIR, not the number, and the comparison
+    // inside iso() then fails on a type it was never given. The language
+    // server flags this; so does the traceback, by naming the argument.
+    let when_unix, _ = to_int(key);
+    let when = iso(when_unix);
+    putln("   ${when} shared by ${len(names)} files:");
+    for (n in names) { putln("      " + n); }
+}
+if (clusters == 0) { putln("   none."); };
+putln("");
+
+// ---------------------------------------------------------------------------
+// TELL 4 - the hole in the log.
+//
+// The implant numbered its own beacons. Whoever truncated the log removed
+// lines; they did not renumber the survivors. The counter is a witness the
+// attacker did not know was in the room.
+putln("-- TELL 4: gaps in a self-numbered sequence --");
+
+let all, _ = fs_walk(EVIDENCE, 16);
+let logs = filter(all, fn(f) {
+    if (f["is_dir"]) { return false; };
+    return text_contains(str_lower(f["path"]), "agent.log");
+});
+
+for (lg in logs) {
+    let text, terr = fs_read(lg["path"]);
+    if (terr) { continue; };
+
+    // One regex, every sequence number in the file. Omit the limit -- passing
+    // 0 asks for zero matches, which is a quiet way to find nothing.
+    let found, rerr = regex_find_all("seq=([0-9]+)", text);
+    if (rerr) { putln("[error] regex_find_all:", rerr); continue; };
+    if (len(found) == 0) { continue; };
+
+    let nums = map(found, fn(s) {
+        let n, _ = to_int(str_trim_prefix(s, "seq="));
+        return n;
+    });
+    let lo = nums[0];
+    let hi = nums[0];
+    for (n in nums) {
+        if (n < lo) { lo = n; };
+        if (n > hi) { hi = n; };
+    }
+
+    let expected = (hi - lo) + 1;
+    let missing  = expected - len(nums);
+    putln("   " + lg["path"]);
+    putln("      seq ${lo}..${hi}: ${expected} expected, ${len(nums)} present, ${missing} MISSING");
+
+    if (missing > 0) {
+        // Name the boundary. The window that is gone is the window that mattered.
+        //
+        // NOTE the inner loop spelling: `for (i in range(...))`, not
+        // `for (let i = 0; ...)`. In this build, a C-style `for` or a `while`
+        // written directly inside a `for..in` body corrupts the outer
+        // iterator ("loop cursor was replaced on the stack"). for..in nests
+        // inside for..in safely, and so does a C-style loop inside a function
+        // the body calls.
+        let seen = sort(nums);
+        for (i in range(1, len(seen))) {
+            if (seen[i] > (seen[i-1] + 1)) {
+                let a = seen[i-1];
+                let b = seen[i];
+                let lost = (b - a) - 1;
+                putln("      gap: seq ${a} -> ${b}  (${lost} beacons removed)");
+            };
+        }
+        putln("      => somebody cut a window out of this log after it was written.");
+    };
+}
+if (len(logs) == 0) { putln("   no agent log in the collection."); };
+putln("");
+
+// ---------------------------------------------------------------------------
+// TELL 5 - the ghosts: described by the timeline, missing from the disk.
+//
+// Deleting a file removes its contents. It does not remove the row that a
+// collection tool already wrote about it. Every one of these is a file the
+// attacker had, used, and did not want you to have.
+putln("-- TELL 5: in the timeline, not on the disk --");
+
+let on_disk = [];
+for (f in all) { if (!f["is_dir"]) { on_disk = push(on_disk, str_lower(f["name"])); }; }
+
+let ghosts = [];
+for (r in rows) {
+    let name = r["name"];
+    // The bodyfile's name is a path; compare on the last component.
+    let parts = text_split(name, "/");
+    let base  = str_lower(str_trim_suffix(last(parts), " (deleted)"));
+    if (!contains(on_disk, base)) { ghosts = push(ghosts, r); };
+}
+
+putln("   ${len(ghosts)} record(s) with no surviving file");
+let listed = 0;
+for (g in ghosts) {
+    if (listed >= 8) { continue; };
+    listed = listed + 1;
+    let born = iso(g["crtime"]);
+    let gone = iso(g["ctime"]);
+    let size = g["size"];
+    putln("      " + g["name"]);
+    putln("         created ${born}, last metadata change ${gone}, ${size} bytes");
+}
+if (len(ghosts) > 8) { putln("      ... ${len(ghosts) - 8} more"); };
+putln("");
+
+// ---------------------------------------------------------------------------
+// TELL 6 - THE REAL THING: NTFS timestomping, from an $MFT.
+//
+// Everything above works on a bodyfile, which is what most collections give
+// you. But if you have a real $MFT -- a standalone one, or an NTFS volume
+// image -- NTFS itself gives you a far stronger case, because NTFS stores
+// every file's timestamps TWICE:
+//
+//   $STANDARD_INFORMATION (SI)  - what Explorer shows, what the shell sorts by,
+//                                 and what the ordinary Win32 SetFileTime API
+//                                 writes. This is the one an attacker edits.
+//   $FILE_NAME (FN)             - written by the KERNEL when the directory
+//                                 entry is created. There is no supported
+//                                 user-mode call that sets it. Tools that do
+//                                 reach it have to write the MFT directly.
+//
+// So SI and FN start out agreeing, and they only stop agreeing when somebody
+// intervenes. That gives four independent tells, and mft_parse exposes the
+// fields for all four -- including the sub-second fractions, which is the part
+// most tooling drops on the floor.
+putln("-- TELL 6: NTFS \$MFT analysis (SI vs FN, 100ns resolution) --");
+
+if (MFT_PATH == "") {
+    putln("   not run: no \$MFT configured -- and a bodyfile is second-resolution");
+    putln("   by format, so these tests CANNOT run on it. That is a different");
+    putln("   answer from 'found nothing', and a report has to say which one.");
+    putln("");
+    putln("   To run it, set MFT_PATH at the top of this file to either:");
+    putln("     - a standalone \$MFT  (KAPE, FTK Imager, or: icat image.dd 0 > MFT)");
+    putln("     - an NTFS volume image (.raw / .dd of a single NTFS partition)");
+    putln("     - on Windows, as Administrator: the live volume  \\\\.\\C:");
+    putln("   evidence/make_ntfs_image.ps1 builds a small one for this workshop.");
+} else {
+    let mft, merr = mft_parse(MFT_PATH);
+    if (merr) {
+        putln("[error] mft_parse:", merr);
+    } else {
+        let entries = mft["entries"];
+        let record_count = mft["count"];
+        let src = mft["source_type"];
+        putln("   ${record_count} records from ${src}");
+        putln("");
+
+        // (a) THE CLASSIC. A file cannot be created before it was created.
+        //     SI created < FN created is not "unusual"; it is impossible.
+        let si_before_fn = filter(entries, fn(e) {
+            let si = get(e, "si_created", 0);
+            let fnc = get(e, "fn_created", 0);
+            return ((si > 0) && (fnc > 0)) && (si < fnc);
+        });
+
+        // (b) SI and FN disagree at all on the creation time. Weaker than (a)
+        //     -- a forward-dated stomp lands here rather than in (a) -- but it
+        //     catches the operator who was careless in the other direction.
+        let si_fn_differ = filter(entries, fn(e) {
+            let si = get(e, "si_created", 0);
+            let fnc = get(e, "fn_created", 0);
+            return ((si > 0) && (fnc > 0)) && (si != fnc);
+        });
+
+        // (c) THE FRACTION. NTFS counts in 100-nanosecond units. A timestamp
+        //     the OS wrote essentially never lands on a whole second. A
+        //     timestamp a tool parsed out of "2024-01-05 08:00:00" always does.
+        //     This one catches a stomp even when SI and FN were BOTH rewritten,
+        //     which is what the careful tools do.
+        let whole_second = filter(entries, fn(e) {
+            let si = get(e, "si_created", 0);
+            if (si <= 0) { return false; };
+            return ((get(e, "si_created_ns", 0) == 0) &&
+                    (get(e, "si_modified_ns", 0) == 0)) &&
+                    (get(e, "si_accessed_ns", 0) == 0);
+        });
+
+        // (d) The MFT entry's own modification time. Rewriting SI rewrites the
+        //     record, and si_mft_modified moves when that happens -- so an
+        //     entry whose metadata changed long after its content did is the
+        //     $MFT-resolution version of TELL 2 above.
+        let mft_lag = filter(entries, fn(e) {
+            let m = get(e, "si_modified", 0);
+            let r = get(e, "si_mft_modified", 0);
+            return ((m > 0) && (r > 0)) && ((r - m) > (30 * 86400));
+        });
+
+        putln("   (a) SI created EARLIER than FN created : ${len(si_before_fn)}  <- impossible");
+        putln("   (b) SI and FN creation disagree at all : ${len(si_fn_differ)}");
+        putln("   (c) all SI times on a whole second     : ${len(whole_second)}  <- tool-written");
+        putln("   (d) MFT record rewritten long after    : ${len(mft_lag)}");
+        putln("");
+
+        // A file that trips more than one of these is not a coincidence.
+        // Score it, because a single tell has false positives and three do not.
+        let names_in = fn(list, path) {
+            for (e in list) { if (e["path"] == path) { return true; }; }
+            return false;
+        };
+
+        putln("   -- ranked suspects --");
+        let ranked = [];
+        for (e in si_fn_differ) {
+            let p = e["path"];
+            let score = 0;
+            let why = [];
+            if (names_in(si_before_fn, p)) { score = score + 50; why = push(why, "SI<FN"); };
+            if (names_in(whole_second, p)) { score = score + 30; why = push(why, "whole-second"); };
+            if (names_in(mft_lag, p))      { score = score + 20; why = push(why, "MFT rewritten late"); };
+            score = score + 10;            why = push(why, "SI!=FN");
+            ranked = push(ranked, {"path": p, "score": score, "why": why, "e": e});
+        }
+        ranked = reverse(sort_by(ranked, fn(r) { return r["score"]; }));
+
+        let listed = 0;
+        for (r in ranked) {
+            if (listed >= 15) { continue; };
+            listed = listed + 1;
+            let sc  = r["score"];
+            let why = str_join(r["why"], " + ");
+            let e   = r["e"];
+            putln("   [${sc}] " + r["path"]);
+            putln("         " + why);
+            putln("         SI created " + get(e, "si_created_iso", "?"));
+            putln("         FN created " + get(e, "fn_created_iso", "?"));
+        }
+        if (len(ranked) == 0) { putln("   none -- SI and FN agree on every record."); };
+        putln("");
+        putln("   The FN timestamps are the true ones. Rebuild the timeline on");
+        putln("   fn_created and the attacker's chosen dates simply evaporate.");
+    };
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+let stomped = unique(concat(map(impossible, fn(r) { return r["name"]; }),
+                            map(lagged,     fn(r) { return r["name"]; })));
+
+putln("=== FINDING ===");
+putln("${len(stomped)} file(s) carry timestamps that were written, not recorded:");
+for (s in stomped) { putln("   " + s); }
+putln("");
+putln("Their real place in the timeline is the CTIME, not the mtime -- and the");
+putln("ctime says the tampering happened on 12 March, hours after the intrusion");
+putln("started. Anti-forensics is not the end of an investigation. It is a");
+putln("timestamped confession that the operator knew what they had done.");
+putln("");
+putln("Next question -> 10_quarry.mut: what did they actually take?");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * Rank every file by how far its ctime sits from its mtime and print the top
+//   ten. On a clean machine that list is boring. That is the point of baselines.
+// * Tell 3 currently groups on mtime. Group on crtime as well -- and on the
+//   PAIR (mtime, atime), which is what a tool that sets both leaves behind.
+// * A file whose mtime is a round number in local time (exactly 08:00:00) is
+//   suspicious in a way that 08:03:17 is not. Add that scorer.
+// * Feed `stomped` into detect_persistence(facts) and see what it makes of the
+//   startup entry among them.

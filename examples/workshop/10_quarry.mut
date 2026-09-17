@@ -1,0 +1,336 @@
+// Workshop 10 - QUARRY: what did they actually take?
+//
+// Case QUILLDROP, question four. This is the question the client actually asks,
+// the one the regulator asks, and the one that decides whether a breach is
+// notifiable. "Some documents" is not an answer. A list is an answer.
+//
+// The good news is structural, and it is the second line worth stealing:
+//
+//        THE ATTACKER WROTE YOU AN INVENTORY LIST AND CALLED IT A ZIP.
+//
+// Exfiltration is the one step in an intrusion that cannot be done vaguely.
+// To take files, the operator has to enumerate exactly which files -- and then
+// record that enumeration in a container format with a published structure, a
+// per-member size, and a per-member CRC-32 checksum.
+//
+// That CRC-32 is the whole trick. We never extract the archive (extracting
+// attacker-supplied archives on an examiner's workstation is how examiners
+// become incidents). We read the central directory, take each member's stored
+// checksum, and compare it against the checksum of the candidate original still
+// sitting in the Documents folder. A match is not "a file with the same name".
+// It is the same bytes, proven, without ever decompressing anything.
+
+let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
+
+putln("=== 10 QUARRY - exfiltration reconstruction ===");
+putln("");
+
+let present, _ = fs_exists(EVIDENCE);
+if (!present) {
+    putln("No evidence at", EVIDENCE);
+    putln("Build it:  sh examples/workshop/evidence/build_evidence.sh");
+    return;
+};
+
+let all, werr = fs_walk(EVIDENCE, 16);
+if (werr) { putln("[error] fs_walk:", werr); return; };
+let files = filter(all, fn(e) { return !e["is_dir"]; });
+
+let basename = fn(p) {
+    let parts = text_split(text_replace(p, "\\", "/"), "/");
+    return last(parts);
+};
+
+// Small labels. A string literal cannot appear inside a ${...} hole, so
+// anything that needs quoting gets a name first.
+let size_label = fn(n) { return to_string(n) + " bytes"; };
+let member_label = fn(m) {
+    return m["name"] + " (" + to_string(m["size"]) + " bytes)";
+};
+
+// ---------------------------------------------------------------------------
+// 1. Find the packages. Staging happens somewhere temporary and somewhere
+//    hidden, because the operator does not want the user to notice the disk
+//    filling up.
+putln("-- archives in staging locations --");
+
+let STAGING_HINTS = ["/temp/", "/tmp/", "/.cache", "/appdata/local/temp",
+                     "\\temp\\", "\\.cache", "$recycle"];
+let ARCHIVE_EXTS  = [".zip", ".7z", ".rar", ".tar", ".gz", ".cab"];
+
+let archives = [];
+for (f in files) {
+    let low = str_lower(f["path"]);
+
+    let is_archive = false;
+    for (e in ARCHIVE_EXTS) { if (str_ends_with(low, e)) { is_archive = true; }; }
+    if (!is_archive) { continue; };
+
+    let staged = false;
+    for (hint in STAGING_HINTS) { if (text_contains(low, hint)) { staged = true; }; }
+
+    let where = "ordinary location";
+    if (staged) { where = "STAGING LOCATION"; };
+    let bytes = f["size"];
+    putln("   " + f["path"]);
+    putln("      ${bytes} bytes - ${where}");
+    if (staged) { archives = push(archives, f); };
+}
+if (len(archives) == 0) {
+    putln("   no archive in a staging location.");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 2. Read the inventory WITHOUT extracting.
+//
+// zip_open reads only the central directory, so opening a 40 GB collection is
+// cheap. zip_entries then lists every member with its sizes, its compression
+// method, its CRC-32 -- and `unsafe_path`, which flags a member whose name
+// would escape the destination directory on extraction. An archive containing
+// one of those is a finding in its own right, whoever built it.
+//
+// Nothing here writes to disk and nothing here decompresses. That is a
+// deliberate property of these builtins, not a style choice.
+putln("-- the manifest (read from the central directory; nothing extracted) --");
+
+// Build a lookup of every ordinary file on the disk, by basename, with its
+// CRC-32. This is the "what did we have" side of the comparison.
+let disk_by_name = {};
+for (f in files) {
+    let data, rerr = fs_read_bytes(f["path"]);
+    if (rerr) { continue; };
+    let name = str_lower(basename(f["path"]));
+    disk_by_name = set(disk_by_name, name, {
+        "path": f["path"], "size": f["size"], "crc": str_lower(hash_crc32(data))
+    });
+}
+
+let stolen = [];
+let unproven = [];
+let total_bytes = 0;
+
+for (a in archives) {
+    let zh, zerr = zip_open(a["path"]);
+    if (zerr) { putln("[error] zip_open:", zerr); continue; };
+    let handle = zh["handle"];
+
+    let unsafe_count = get(zh, "unsafe_path_count", 0);
+    putln("   " + a["path"]);
+    if (unsafe_count > 0) {
+        putln("      !! ${unsafe_count} member(s) with an escaping path -- a finding by itself");
+    };
+
+    let members, merr = zip_entries(handle);
+    if (merr) { putln("[error] zip_entries:", merr); zip_close(handle); continue; };
+    putln("      ${len(members)} members");
+    putln("");
+
+    for (m in members) {
+        let name = str_lower(basename(m["name"]));
+        total_bytes = total_bytes + m["size"];
+
+        // The zip stores CRC-32 as a number; hash_crc32 returns 8 hex chars.
+        // Convert one to the other and compare. from_base is fallible.
+        let candidate = get(disk_by_name, name, {});
+        if (len(candidate) == 0) {
+            unproven = push(unproven, m["name"]);
+            putln("      ?  ${member_label(m)}  no original on this disk");
+            continue;
+        };
+
+        let disk_crc, cerr = from_base(candidate["crc"], 16);
+        if (cerr) { unproven = push(unproven, m["name"]); continue; };
+
+        if (disk_crc == m["crc32"]) {
+            stolen = push(stolen, candidate["path"]);
+            putln("      OK ${member_label(m)}");
+            putln("         CRC-32 matches " + candidate["path"]);
+        } else {
+            unproven = push(unproven, m["name"]);
+            putln("      !  ${member_label(m)}  same name, DIFFERENT bytes");
+        };
+    }
+
+    zip_close(handle);
+}
+putln("");
+
+// ---------------------------------------------------------------------------
+// 3. The answer, in the form the client asked for.
+putln("-- what left the building --");
+putln("${len(stolen)} document(s) proven identical to a member of the archive");
+putln("${len(unproven)} member(s) that could not be matched to an original");
+putln("${total_bytes} bytes total in the package");
+putln("");
+
+// Classify by where they came from. "18 files" is a number; "the Q1 close and
+// six HR onboarding packs" is a notification decision.
+let buckets = {};
+for (p in stolen) {
+    let low = str_lower(text_replace(p, "\\", "/"));
+    let label = "other";
+    if (text_contains(low, "/finance/")) { label = "finance"; };
+    if (text_contains(low, "/hr/"))      { label = "HR / personal data"; };
+    if (text_contains(low, "/ops/"))     { label = "operations"; };
+    buckets = set(buckets, label, get(buckets, label, 0) + 1);
+}
+for (label in buckets) {
+    let n = buckets[label];
+    putln("   ${n} x ${label}");
+}
+if (has_key(buckets, "HR / personal data")) {
+    putln("");
+    putln("   ^ personal data is in the package. That is a notification clock");
+    putln("     starting, and it is why 'what did they take' is not a technical");
+    putln("     question with a technical answer.");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 4. And where did it go? The implant logged its own C2 traffic.
+//
+// detect_network_beacon does not look for a bad IP address; there is no list of
+// bad IP addresses that stays true for a week. It measures REGULARITY -- the
+// coefficient of variation of the gaps between connections. Human traffic is
+// bursty and irregular. Scheduled traffic is not. A low CV is a machine.
+putln("-- the channel: beacon analysis --");
+
+let flows = [];
+for (f in files) {
+    if (!text_contains(str_lower(f["path"]), "agent.log")) { continue; };
+    let text, terr = fs_read(f["path"]);
+    if (terr) { continue; };
+
+    for (line in text_split(text, "\n")) {
+        let groups, gerr = regex_capture_groups(
+            "^([0-9T:Z-]+) .* dst=([0-9.]+):([0-9]+) sent=([0-9]+)", str_trim(line));
+        if (gerr) { continue; };
+        if (len(groups) < 5) { continue; };
+
+        let when, perr = time_parse(groups[1], "2006-01-02T15:04:05Z");
+        if (perr) { continue; };
+        let sent, serr = to_int(groups[4]);
+        if (serr) { continue; };
+
+        flows = push(flows, {"dst": groups[2], "ts": when, "bytes": sent});
+    }
+}
+
+if (len(flows) == 0) {
+    putln("   no connection records in the collection.");
+} else {
+    putln("   ${len(flows)} connection records");
+    let beacon, berr = detect_network_beacon(flows);
+    if (berr) {
+        putln("[error] detect_network_beacon:", berr);
+    } else {
+        for (hit in beacon["hits"]) {
+            let dst  = hit["dst"];
+            let mean = hit["interval_mean_s"];
+            let cv   = hit["interval_cv"];
+            let conf = hit["confidence"];
+            let sc   = hit["score"];
+            let n    = hit["count"];
+            putln("   " + defang(dst));
+            putln("      ${n} connections, mean gap ${mean}s");
+            putln("      interval CV ${cv}  score ${sc}  confidence ${conf}");
+            putln("      reasons: " + str_join(hit["reasons"], ", "));
+        }
+        if (len(beacon["hits"]) == 0) {
+            putln("   nothing regular enough to call a beacon.");
+            putln("");
+            putln("   -- and that is the attacker winning, briefly --");
+            putln("");
+            putln("   Regularity is measured as the coefficient of variation of the");
+            putln("   gaps between connections. 09_revenant.mut found that somebody");
+            putln("   cut a window out of this log. That missing window is now ONE");
+            putln("   enormous gap in an otherwise metronomic series, and one huge");
+            putln("   outlier is all it takes to push the variance past the");
+            putln("   threshold. The log tampering did not just hide the beacons it");
+            putln("   deleted -- it hid the beacons it LEFT BEHIND.");
+            putln("");
+            putln("   So use the finding. Split the series at the hole and measure");
+            putln("   the intact run on its own:");
+            putln("");
+
+            // Sort by time, find the median gap, and cut wherever a gap is
+            // wildly larger than that -- i.e. at the seams the tampering left.
+            let ordered = timeline_sort(flows, "ts");
+            let gaps = [];
+            for (i in range(1, len(ordered))) {
+                gaps = push(gaps, ordered[i]["ts"] - ordered[i-1]["ts"]);
+            }
+            let sorted_gaps = sort(gaps);
+            let median = sorted_gaps[len(sorted_gaps) / 2];
+            let cut_at = median * 3;
+
+            let segments = [];
+            let current = [ordered[0]];
+            for (i in range(1, len(ordered))) {
+                if ((ordered[i]["ts"] - ordered[i-1]["ts"]) > cut_at) {
+                    segments = push(segments, current);
+                    current = [];
+                };
+                current = push(current, ordered[i]);
+            }
+            segments = push(segments, current);
+
+            let longest = segments[0];
+            for (s in segments) { if (len(s) > len(longest)) { longest = s; }; }
+
+            putln("   median gap ${median}s -> cutting the series at any gap over ${cut_at}s");
+            putln("   ${len(segments)} contiguous segment(s); longest has ${len(longest)} connections");
+
+            let again, aerr = detect_network_beacon(longest);
+            if (aerr) {
+                putln("[error] detect_network_beacon:", aerr);
+            } else {
+                for (hit in again["hits"]) {
+                    let dst  = hit["dst"];
+                    let mean = hit["interval_mean_s"];
+                    let cv   = hit["interval_cv"];
+                    let conf = hit["confidence"];
+                    let sc   = hit["score"];
+                    let n    = hit["count"];
+                    putln("   >> " + defang(dst));
+                    putln("      ${n} connections, mean gap ${mean}s");
+                    putln("      interval CV ${cv}  score ${sc}  confidence ${conf}");
+                    putln("      reasons: " + str_join(hit["reasons"], ", "));
+                }
+                if (len(again["hits"]) == 0) {
+                    putln("   still nothing. The channel was not periodic.");
+                } else {
+                    putln("");
+                    putln("   There it is. A gap that barely varies is not a person.");
+                    putln("   Note what made this work: a finding from the PREVIOUS");
+                    putln("   tool. Anti-forensics is not a wall, it is a signpost --");
+                    putln("   it tells you which part of the evidence mattered enough");
+                    putln("   to be worth destroying.");
+                };
+            };
+        } else {
+            putln("");
+            putln("   A gap that barely varies is not a person. Note that we never");
+            putln("   needed to know the address was malicious -- only that its");
+            putln("   traffic had no human in it.");
+        };
+    };
+};
+putln("");
+
+putln("Last question -> 11_verdict.mut: will any of this survive a lawyer?");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * A member of the archive with NO original on disk is the interesting case:
+//   the operator took something that has since been deleted. Cross-reference
+//   `unproven` against the ghosts 09_revenant.mut found in the bodyfile.
+// * hashset_load() takes an NSRL-style list of known-good hashes. Load one and
+//   subtract every known Windows file from your suspect list in one call --
+//   that is how a 400,000-file collection becomes a 40-file collection.
+// * zip_entries reports each member's `modified` time. Build a timeline from
+//   the archive's own metadata and compare it to the bodyfile's. Two records
+//   of the same files, written by two different programs.
+// * tar_open/tar_entries do the same for the .tar.gz a Linux triage script
+//   produces -- same shape, one different builtin.

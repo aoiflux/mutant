@@ -1,0 +1,326 @@
+// Workshop 13 - HEXEYE: be the parser, then let the parser be the parser.
+//
+// This is the segment that makes everything else believable.
+//
+// Forensic tools feel like magic because you hand them a file and they hand you
+// a verdict. That feeling is dangerous: a tool you cannot explain is a tool you
+// cannot defend, and "Autopsy said so" is not testimony. So before we call any
+// parser, we are going to BE one.
+//
+// We will write a hex dumper -- an actual one, in about fifteen lines -- point
+// it at a file, and then walk the file's header by hand: read an integer at a
+// documented offset, follow it to another offset, read another integer, and
+// keep going until a structure falls out of what looked like noise.
+//
+// Then we call the builtin that does the same thing and check that it agrees.
+//
+// The point is not that the builtin is faster. The point is that after this,
+// you know exactly what it did -- and you know that a file format is not magic.
+// It is a treasure map where X is always at byte 0x3C.
+
+let TARGET = "examples/data/sample_win.exe";
+let CARVE_TARGET = "examples/data/memory_dump.bin";
+
+putln("=== 13 HEXEYE - read the bytes yourself ===");
+putln("");
+
+let have, _ = fs_exists(TARGET);
+if (!have) {
+    putln("No file at", TARGET);
+    putln("This example uses a PE that ships with the repository. Run from the");
+    putln("repository root, or set TARGET to any Windows .exe or .dll.");
+    return;
+};
+
+// ---------------------------------------------------------------------------
+// 1. A hex editor, written here, in front of you.
+//
+// Three columns, the way every hex editor has shown them since the 1970s:
+// the offset, the bytes, and whichever of those bytes happen to be printable.
+// bytes_get reads one byte as an integer; bytes_hex formats a number as
+// zero-padded hex. That is the entire dependency list.
+let HEXDIGITS = "0123456789ABCDEF";
+
+let hex2 = fn(n) {
+    let hi = n / 16;
+    let lo = n - (hi * 16);
+    return str_char_at(HEXDIGITS, hi) + str_char_at(HEXDIGITS, lo);
+};
+
+let printable = fn(n) {
+    if ((n >= 32) && (n <= 126)) {
+        let c, err = bytes_char_from_int(n);
+        if (err) { return "."; };
+        return c;
+    };
+    return ".";
+};
+
+let hexdump = fn(data, base, length) {
+    let total, _ = bytes_len(data);
+    let end = base + length;
+    if (end > total) { end = total; };
+
+    for (row in range(base, end, 16)) {
+        let offset, _ = bytes_hex(row, 8);
+        let hex = "";
+        let txt = "";
+        for (i in range(row, row + 16)) {
+            if (i >= end) {
+                hex = hex + "   ";
+            } else {
+                let b, berr = bytes_get(data, i);
+                if (berr) { b = 0; };
+                hex = hex + hex2(b) + " ";
+                txt = txt + printable(b);
+            };
+            if (i == (row + 7)) { hex = hex + " "; };
+        }
+        putln(offset + "  " + hex + " |" + txt + "|");
+    }
+};
+
+let data, rerr = fs_read_bytes(TARGET);
+if (rerr) { putln("[error] fs_read_bytes:", rerr); return; };
+let size, _ = bytes_len(data);
+
+putln("file: ${TARGET}  (${size} bytes)");
+putln("");
+putln("-- the first 64 bytes, as any hex editor would show them --");
+hexdump(data, 0, 64);
+putln("");
+putln("   Look at the very first two bytes: 4D 5A. In the ASCII column: 'MZ'.");
+putln("   Those are the initials of Mark Zbikowski, who designed the DOS");
+putln("   executable format in 1983. Every Windows program still starts with");
+putln("   his initials. File formats are archaeology.");
+putln("");
+
+// ---------------------------------------------------------------------------
+// 2. Follow the map. Four reads and we are inside the PE header.
+putln("-- walking the header by hand --");
+
+// 0x00: the DOS signature.
+let m0, _ = bytes_get(data, 0);
+let m1, _ = bytes_get(data, 1);
+putln("0x00  signature            : " + hex2(m0) + " " + hex2(m1) +
+      "  ('" + printable(m0) + printable(m1) + "')");
+if ((m0 != 77) || (m1 != 90)) {
+    putln("      not an MZ file -- stopping here rather than reading garbage.");
+    return;
+};
+
+// 0x3C: e_lfanew. A 32-bit little-endian POINTER to the real header. This one
+// field is why a 1983 format could grow a 1993 format inside it.
+let e_lfanew, err = bytes_read_u32_le(data, 60);
+if (err) { putln("[error]", err); return; };
+let lf_hex, _ = bytes_hex(e_lfanew, 8);
+putln("0x3C  e_lfanew             : ${e_lfanew}  (${lf_hex})  <- a pointer");
+putln("");
+putln("      So: go to that offset and look.");
+putln("");
+hexdump(data, e_lfanew, 32);
+putln("");
+
+// At e_lfanew: "PE\0\0".
+//
+// bytes_slice is fallible, so it returns (value, err) like every other call
+// that can fail. Nesting it directly inside bytes_to_string passes the PAIR
+// rather than the buffer, and the error says so by name: "got MULTI_VALUE".
+// Bind both halves.
+let sig_bytes, sberr = bytes_slice(data, e_lfanew, 4);
+if (sberr) { putln("[error] bytes_slice:", sberr); return; };
+let sig, serr = bytes_to_string(sig_bytes, "latin1");
+if (serr) { putln("[error]", serr); return; };
+let visible = text_replace(sig, "\0", ".");
+putln("${lf_hex}  PE signature         : '${visible}'");
+
+// The COFF header, immediately after the 4-byte signature.
+let machine, _  = bytes_read_u16_le(data, e_lfanew + 4);
+let nsections, _ = bytes_read_u16_le(data, e_lfanew + 6);
+let timestamp, _ = bytes_read_u32_le(data, e_lfanew + 8);
+let optsize, _  = bytes_read_u16_le(data, e_lfanew + 20);
+let charact, _  = bytes_read_u16_le(data, e_lfanew + 22);
+
+let arch = match (machine) {
+    332   => "x86 (i386)",
+    34404 => "x64 (AMD64)",
+    452   => "ARM",
+    43620 => "ARM64",
+    _     => "unknown",
+};
+let mach_hex, _ = bytes_hex(machine, 4);
+putln("  +04  Machine              : ${mach_hex}  ${arch}");
+putln("  +06  NumberOfSections     : ${nsections}");
+putln("  +14  SizeOfOptionalHeader : ${optsize}");
+let ch_hex, _ = bytes_hex(charact, 4);
+putln("  +16  Characteristics      : ${ch_hex}");
+
+// The one field that is pure forensics: the linker wrote the build time here,
+// as a plain Unix timestamp, and almost nobody removes it.
+let built = time_format(timestamp, "2006-01-02 15:04:05");
+putln("  +08  TimeDateStamp        : ${timestamp}  = ${built} UTC");
+putln("");
+putln("      That is the COMPILE TIME, sitting in the file, in the clear.");
+putln("      Compare it against when the file appeared on the victim's disk:");
+putln("        * built long before it arrived  -> an off-the-shelf tool");
+putln("        * built hours before it arrived -> compiled for this target");
+putln("        * built in the future, or 1970, or all zeroes -> somebody");
+putln("          scrubbed it, which is itself a finding");
+putln("");
+
+// ---------------------------------------------------------------------------
+// 3. The section table. It starts right after the optional header, and each
+//    entry is exactly 40 bytes. Now we are reading a TABLE by hand.
+putln("-- section table (40 bytes per entry, read by hand) --");
+putln("   name        vsize     vaddr     rawsize   rawptr    flags");
+
+let table = (e_lfanew + 24) + optsize;
+for (i in range(0, nsections)) {
+    let at = table + (i * 40);
+
+    let name_bytes, nberr = bytes_slice(data, at, 8);
+    if (nberr) { continue; };
+    let raw_name, nerr = bytes_to_string(name_bytes, "latin1");
+    if (nerr) { continue; };
+    let name = str_trim(text_replace(raw_name, "\0", " "));
+
+    let vsize, _   = bytes_read_u32_le(data, at + 8);
+    let vaddr, _   = bytes_read_u32_le(data, at + 12);
+    let rawsize, _ = bytes_read_u32_le(data, at + 16);
+    let rawptr, _  = bytes_read_u32_le(data, at + 20);
+    let flags, _   = bytes_read_u32_le(data, at + 36);
+
+    let fx, _ = bytes_hex(flags, 8);
+    putln("   " + str_pad_right(name, 12, " ") +
+          str_pad_right(to_string(vsize), 10, " ") +
+          str_pad_right(to_string(vaddr), 10, " ") +
+          str_pad_right(to_string(rawsize), 10, " ") +
+          str_pad_right(to_string(rawptr), 10, " ") + fx);
+
+    // The top three flag bits are the memory protection the loader will apply:
+    //   0x20000000 MEM_EXECUTE   0x40000000 MEM_READ   0x80000000 MEM_WRITE
+    // A section that is writable AND executable can rewrite its own code while
+    // it runs. Compilers do not emit one. Unpacking stubs do.
+    let MEM_EXECUTE = 536870912;    // 0x20000000
+    let MEM_WRITE   = 2147483648;   // 0x80000000
+    if (((flags & MEM_EXECUTE) != 0) && ((flags & MEM_WRITE) != 0)) {
+        putln("      ^^ WRITABLE *and* EXECUTABLE -- self-modifying. Packed, probably.");
+    };
+}
+putln("");
+
+// ---------------------------------------------------------------------------
+// 4. Now the builtin. Same file, same questions, one call each.
+//
+// Everything above took forty lines. Everything below takes four. The
+// difference between the two is not capability -- it is that you can now say
+// what the four lines did, and defend it.
+putln("-- the same file, through the builtins --");
+
+let pe, perr = bin_pe_parse(TARGET);
+if (perr) { putln("[error] bin_pe_parse:", perr); } else {
+    putln("   bin_pe_parse  -> " + to_string(pe));
+};
+
+let sec, secerr = bin_sections(TARGET);
+if (!secerr) {
+    let n = len(sec["sections"]);
+    putln("   bin_sections  -> ${n} sections");
+};
+
+// imphash: a hash of the names of the functions a binary imports, in order.
+// Two samples from the same build pipeline share it even when every byte of
+// their payload differs, which is how malware families get clustered.
+let ih, iherr = imphash(TARGET);
+if (iherr) { putln("   imphash       -> (no import table)"); } else {
+    let h = ih["imphash"];
+    let c = ih["import_count"];
+    putln("   imphash       -> ${h}  (${c} imports)");
+    putln("                    search that hash on VirusTotal and you get the");
+    putln("                    family, not the sample.");
+};
+
+let ent, enterr = bin_entropy(TARGET);
+if (!enterr) { putln("   bin_entropy   -> " + to_string(ent)); };
+
+let isgo, goerr = bin_is_go(TARGET);
+if (!goerr) {
+    let yes = isgo["is_go"];
+    putln("   bin_is_go     -> ${yes}");
+    if (yes) {
+        // go_symbols recovers function names via the pclntab, which survives
+        // stripping -- so a "stripped" Go binary still tells you its own
+        // function names, its package layout, and its module dependencies.
+        let syms, serr2 = go_symbols(TARGET, "user");
+        if (!serr2) {
+            let fc = syms["user_function_count"];
+            putln("   go_symbols    -> ${fc} user functions recovered");
+            putln("                    ...from a STRIPPED binary. Go's runtime needs");
+            putln("                    the symbol table for stack traces, so it cannot");
+            putln("                    be removed. Strip it and it is still there.");
+        };
+    };
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 5. CARVING: finding files INSIDE other files.
+//
+// A memory dump, a pagefile, unallocated space, a corrupt disk -- none of them
+// have a directory. But the files inside them still start with their magic
+// bytes, so you can find them by scanning for signatures. That is carving, and
+// it is how data is recovered when the filesystem is gone.
+let carveable, _ = fs_exists(CARVE_TARGET);
+if (!carveable) {
+    putln("-- carving: skipped, no ${CARVE_TARGET} --");
+} else {
+    putln("-- carving ${CARVE_TARGET} --");
+
+    for (kind in ["pe", "zip", "png", "pdf", "gzip"]) {
+        let hits, cerr = fs_carve(CARVE_TARGET, kind);
+        if (cerr) { continue; };
+        if (len(hits) == 0) { continue; };
+        putln("   ${kind}: ${len(hits)} signature(s)");
+
+        // Show the first one as hex, so it is a fact and not a claim.
+        let blob, berr = fs_read_bytes(CARVE_TARGET);
+        if (berr) { continue; };
+        let first = hits[0]["offset"];
+        let fh, _ = bytes_hex(first, 8);
+        putln("      first at ${fh}:");
+        hexdump(blob, first, 32);
+    }
+    putln("");
+    putln("   fs_carve reports OFFSETS, not extracted files -- it says where a");
+    putln("   signature is, not how long the thing is, because the length lives");
+    putln("   inside the format and every format keeps it somewhere else.");
+    putln("   Extracting is your job, and you now have the tool for it:");
+    putln("   bytes_slice from the offset, and the format's own length field.");
+};
+putln("");
+
+putln("What you just did, in order:");
+putln("  read a byte -> read a pointer -> follow it -> read a table");
+putln("There is no step in any forensic tool that is harder than that.");
+putln("There are only more offsets.");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * bytes_cursor_new / bytes_cursor_read_u32_le give you a STREAMING reader:
+//   the cursor remembers where it is, so parsing a header reads like the
+//   specification reads, top to bottom, with no offset arithmetic at all.
+//   Rewrite section 2 with a cursor and compare the two for readability.
+//
+// * A ZIP's End Of Central Directory record sits at the END of the file and
+//   starts with 50 4B 05 06. Scan backwards for it, read the central directory
+//   offset out of it, and walk the member list by hand -- then check yourself
+//   against zip_entries().
+//
+// * evidence/export_mft.mut does this exact exercise on an NTFS VOLUME: read
+//   the boot sector, take bytes-per-sector and sectors-per-cluster and the
+//   $MFT's starting cluster, multiply, and land on the first MFT record. Five
+//   integer reads and a filesystem appears. Run it on a live volume (as
+//   Administrator) and watch your own disk give up its Master File Table.
+//
+// * fs_magic() is the ~40-signature version of what you did in section 2.
+//   Read builtin/fs_forensics.go's signature table and add one of your own.

@@ -19,6 +19,46 @@ construction**, and **custom analysis logic** — are the same in any language.
 | 5 | [05_timestomp_detection.mut](05_timestomp_detection.mut) | Detect NTFS timestomping (SI vs FN timestamps) | **an NTFS `$MFT`** |
 | 6 | [06_malvertising_chain.mut](06_malvertising_chain.mut) | Cross-check two artifacts against each other: reconstruct redirect chains from history, then find the hosts that set a cookie without ever appearing in it | two shipped fixtures |
 
+---
+
+## Case QUILLDROP — the 2-hour hands-on workshop (7–13)
+
+The files above teach the *method* one idea at a time. The files below apply all
+of it to **one intrusion**, start to finish, as a 2-hour build-it-yourself
+session. Each tool answers the question the previous one raised.
+
+- **[CASE_QUILLDROP.md](CASE_QUILLDROP.md)** — the story. Read it first.
+- **[RUN_SHEET_2H.md](RUN_SHEET_2H.md)** — minute-by-minute plan, no slides.
+- **[evidence/README.md](evidence/README.md)** — generating the evidence with
+  [`fsagen`](https://github.com/aoiflux/fsagen), seeded so every student's
+  evidence — and therefore every student's report digest — is identical.
+
+| # | File | The question it answers | Headline move |
+|---|------|------------------------|---------------|
+| 13 | [13_hexeye.mut](13_hexeye.mut) | *What is actually in this file?* | Write a hex editor, walk a PE header by hand, then check yourself against `bin_pe_parse`. **Run this first** — it earns everything else. |
+| 7 | [07_dropzone.mut](07_dropzone.mut) | *How did it get in?* | Read the NTFS **Mark-of-the-Web** stream — the download's origin URL — and match it to the phishing email. |
+| 8 | [08_supertimeline.mut](08_supertimeline.mut) | *What happened, in what order?* | `bodyfile` → `mactime` → `events_from` → **Sigma rules running in the language**, then out as Timesketch/ECS/OCSF. |
+| 9 | [09_revenant.mut](09_revenant.mut) | *Where did they lie to me?* | Six anti-forensics tells, including SI-vs-FN `$MFT` analysis at 100 ns resolution. |
+| 10 | [10_quarry.mut](10_quarry.mut) | *What did they take?* | Prove 18 documents were stolen by **CRC-32**, without ever extracting the archive. Then beat the beacon detector's blind spot. |
+| 11 | [11_verdict.mut](11_verdict.mut) | *Will this survive a lawyer?* | Chain of custody, Ed25519-signed manifest, and a live tamper test that fails on purpose. |
+
+Supporting files under `evidence/`:
+
+| File | What it does |
+|---|---|
+| `quilldrop.playbook.yaml` | the fsagen playbook that synthesizes the intrusion |
+| `build_evidence.ps1` / `.sh` | one command to produce the corpus + bodyfile |
+| `make_ntfs_image.ps1` | facilitator-only, admin, once: builds a **real** NTFS volume with a **real** timestomp, for genuine `$MFT` analysis |
+| `export_mft.mut` | reads an NTFS boot sector and carves out the `$MFT` by hand — five integer reads and a filesystem appears |
+
+### The three lines the workshop is built on
+
+1. **You cannot delete a fact. You can only create a contradiction.** (tool 9)
+2. **The attacker wrote you an inventory list and called it a zip.** (tool 10)
+3. **Analysis is what you did. Evidence is what you can prove you did.** (tool 11)
+
+---
+
 ## More examples to pick from (each self-contained, ~15–25 lines)
 
 Short, standalone snippets — great for "here's a thing Mutant makes easy" moments.
@@ -45,7 +85,25 @@ mutant run examples/workshop/ioc_extract.mut -pwd mypass
 mutant     examples/workshop/ioc_extract.mu   -pwd mypass
 ```
 
-(Use any password you like; the same one for both commands.)
+(Use any password you like; the same one for both commands. `-pwd` is deprecated
+because it puts the credential in the process table — omit it and be prompted,
+or use `--password-stdin`.)
+
+**Run from PowerShell/cmd, not Git Bash or WSL.** Secure mode halts when the
+host looks like an analysis sandbox, and Git Bash trips the WSL detector:
+`sandbox detected, execution halted for security`. Use a native shell, or pass
+`--compat` to downgrade that to a warning.
+
+### Language gotchas worth knowing before you start
+
+| Gotcha | What you see | Fix |
+|---|---|---|
+| Fallible builtins return `(value, err)` | nesting one passes the pair: `got MULTI_VALUE` | `let v, e = f(x);` |
+| There is no `null` literal | `undefined variable: null` | a bare `return;` yields null; test with `is_null()` |
+| No string literal inside `${...}` | parse error naming the line *inside* the string | bind a local, then `${local}` |
+| Builtins are not first-class values | `map(xs, defang)` fails | `map(xs, fn(d) { return defang(d); })` |
+| `while` / C-style `for` inside a `for…in` | `loop cursor was replaced on the stack` | use `for (i in range(a, b))` — `for…in` nests fine |
+| `regex_find_all(p, s, 0)` | no matches — `0` is the result *limit* | omit the third argument |
 
 ## Input for step 5
 

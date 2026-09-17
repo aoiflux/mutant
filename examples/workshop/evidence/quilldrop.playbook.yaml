@@ -1,0 +1,259 @@
+# Case QUILLDROP — fsagen playbook
+#
+# Synthesizes the triage collection the workshop investigates. Run it seeded so
+# every student's evidence is byte-identical:
+#
+#   fsagen --seed 88412 --playbook examples/workshop/evidence/quilldrop.playbook.yaml \
+#          --timeline examples/workshop/evidence/case_quilldrop.body \
+#          examples/workshop/evidence/case_quilldrop
+#
+# NOTE ON SCHEMA: field names below follow the documented fsagen playbook schema.
+# fsagen moves; before the workshop, validate with
+#
+#   fsagen --generate-schema .
+#
+# and reconcile anything that drifted. The .mut tools do not depend on this file
+# being exactly right -- they depend on the *paths* listed in evidence/README.md.
+# If an action name changed, fix it here; the tools keep working.
+
+start: 2026-03-11T09:00:00Z
+
+variables:
+  victim: r.mehta
+  host: MRD-FIN-07
+  c2: 45.147.229.83
+  lure: Invoice_MRD-88412
+
+actors:
+  # The clerk's user profile: where the intrusion lands.
+  - name: clerk
+    base: Users/r.mehta
+
+  # Machine-wide state: startup folder, the implant's own log directory.
+  - name: machine
+    base: ProgramData
+
+  # Ordinary business activity. This exists so the students have to FILTER.
+  # A signal in a folder of ten files is not a finding, it is a coincidence.
+  - name: business
+    base: Users/r.mehta/Documents
+
+# ---------------------------------------------------------------------------
+steps:
+
+  # -- 0. Background: a normal working week ---------------------------------
+  # Generated first so the noise predates the intrusion, the way real noise does.
+  - actor: business
+    offset: 0m
+    every: 22m
+    repeat: 40
+    actions:
+      - action: create
+        path: finance/close/wk${SEQ}_ledger_${RND:4}.csv
+        ext: .csv
+        content_len: 4096
+      - action: create
+        path: hr/onboarding/emp_${SEQ}_${RND:3}.docx
+        ext: .docx
+        content_len: 8192
+
+  - actor: business
+    offset: 10m
+    every: 35m
+    repeat: 18
+    actions:
+      - action: create
+        path: ops/manifests/freight_${SEQ}.json
+        ext: .json
+        content_len: 2048
+
+  # -- 1. The lure lands (09:14) --------------------------------------------
+  - actor: clerk
+    offset: 14m
+    actions:
+      - action: create
+        path: AppData/Local/Microsoft/Outlook/inbox/${VAR:lure}.eml
+        template: email
+        content: |
+          From: accounts@meridian-logistics-billing.top
+          To: r.mehta@meridianlogistics.example
+          Subject: OVERDUE: Invoice MRD-88412 - final notice before referral
+          Date: Wed, 11 Mar 2026 09:14:02 +0000
+          Message-ID: <88412.quill@meridian-logistics-billing.top>
+          Reply-To: billing-desk@meridian-logistics-billing.top
+          Content-Type: text/html; charset=utf-8
+
+          <html><body>
+          <p>Dear Accounts Payable,</p>
+          <p>Invoice <b>MRD-88412</b> (EUR 41,880.00) is 31 days overdue. The
+          signed copy is attached to our secure portal:</p>
+          <p><a href="http://cdn.meridian-logistics-billing.top/inv/88412/Invoice_MRD-88412.pdf.exe">
+          Download signed invoice (PDF)</a></p>
+          <p>Failure to settle by 13/03 results in referral to collections.</p>
+          <p>Billing Desk<br>Meridian Logistics (Billing Services)</p>
+          </body></html>
+
+  # -- 2. The download (09:16) ----------------------------------------------
+  # A PE with a document-looking name. The MoTW is what makes this teachable:
+  # NTFS keeps the download's ORIGIN in an alternate data stream.
+  - actor: clerk
+    offset: 16m
+    actions:
+      - action: create
+        path: Downloads/${VAR:lure}.pdf.exe
+        ext: .exe
+        content_len: 92160
+      - action: motw
+        path: Downloads/${VAR:lure}.pdf.exe
+        zone_id: 3
+        host_url: http://cdn.meridian-logistics-billing.top/inv/88412/Invoice_MRD-88412.pdf.exe
+        referrer_url: http://meridian-logistics-billing.top/portal/88412
+
+  # -- 3. The implant is written (09:17) ------------------------------------
+  # svchost.exe is a real Windows binary -- in System32. In AppData it is a lie.
+  - actor: clerk
+    offset: 17m
+    actions:
+      - action: create
+        path: AppData/Roaming/MeridianSync/svchost.exe
+        ext: .exe
+        content_len: 148480
+      - action: create
+        path: AppData/Roaming/MeridianSync/config.dat
+        ext: .bin
+        content_len: 16384
+      - action: ads
+        path: AppData/Roaming/MeridianSync/svchost.exe
+        stream: quill
+
+  # -- 4. Persistence (09:17) ------------------------------------------------
+  - actor: machine
+    offset: 17m
+    actions:
+      - action: create
+        path: Microsoft/Windows/Start Menu/Programs/StartUp/MeridianSync.cmd
+        content: |
+          @echo off
+          start "" /min "%APPDATA%\MeridianSync\svchost.exe" --service --quiet
+      - action: create
+        path: MeridianSync/logs/agent.log
+        content: |
+          2026-03-11T09:17:44Z agent[4188] INFO  service registered
+          2026-03-11T09:17:44Z agent[4188] INFO  host=MRD-FIN-07 build=q.3.1.7
+
+  - actor: clerk
+    offset: 18m
+    actions:
+      - action: create
+        path: Desktop/sync_register.reg
+        content: |
+          Windows Registry Editor Version 5.00
+
+          [HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run]
+          "MeridianSync"="\"C:\\Users\\r.mehta\\AppData\\Roaming\\MeridianSync\\svchost.exe\" --service --quiet"
+
+          [HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\RunOnce]
+          "SyncRepair"="powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA"
+
+  # -- 5. The beacon: every 300 s, for hours --------------------------------
+  # Perfectly regular intervals. Humans are never this punctual; that regularity
+  # IS the detection (detect_network_beacon measures the coefficient of variation).
+  - actor: machine
+    offset: 22m
+    every: 5m
+    repeat: 170
+    actions:
+      - action: append
+        path: MeridianSync/logs/agent.log
+        content: "${DATE:2006-01-02T15:04:05Z} agent[4188] DEBUG beacon seq=${SEQ} dst=45.147.229.83:443 sent=512 recv=384 rtt=41ms\n"
+
+  # -- 6. Staging: documents copied to a hidden cache (22:40) ---------------
+  - actor: clerk
+    offset: 13h40m
+    every: 40s
+    repeat: 24
+    actions:
+      - action: create
+        path: AppData/Local/Temp/.cache/stg_${SEQ}_${RND:6}.tmp
+        ext: .csv
+        content_len: 4096
+
+  # -- 7. Packaged for exfil (23:05) ----------------------------------------
+  - actor: clerk
+    offset: 14h5m
+    actions:
+      - action: create
+        path: AppData/Local/Temp/.cache/bkp_20260311.zip
+        ext: .zip
+        content_len: 61440
+      - action: create
+        path: AppData/Local/Temp/.cache/MANIFEST.txt
+        content: |
+          bkp_20260311.zip
+          24 objects staged from Documents\finance\close and Documents\hr\onboarding
+          split=none compress=deflate
+
+  # -- 8. ANTI-FORENSICS: backdate the implant (12 Mar 00:10) ---------------
+  # mtime/atime are pushed back two years. crtime is NOT settable this way, so
+  # it stays at the real moment of creation -- and a file modified two years
+  # BEFORE it was born is physically impossible. That is 09_revenant.mut's
+  # headline rule, and this is where it comes from.
+  - actor: clerk
+    offset: 15h10m
+    actions:
+      - action: mace
+        path: AppData/Roaming/MeridianSync/svchost.exe
+        atime: 2024-01-05T08:00:00Z
+        mtime: 2024-01-05T08:00:00Z
+      - action: mace
+        path: AppData/Roaming/MeridianSync/config.dat
+        atime: 2024-01-05T08:00:00Z
+        mtime: 2024-01-05T08:00:00Z
+      - action: mace
+        path: Downloads/${VAR:lure}.pdf.exe
+        atime: 2024-01-05T08:00:00Z
+        mtime: 2024-01-05T08:00:00Z
+
+  - actor: machine
+    offset: 15h10m
+    actions:
+      - action: mace
+        path: Microsoft/Windows/Start Menu/Programs/StartUp/MeridianSync.cmd
+        atime: 2024-01-05T08:00:00Z
+        mtime: 2024-01-05T08:00:00Z
+
+  # -- 9. ANTI-FORENSICS: cut the beacon window out of the log (00:12) ------
+  # Rotate, then truncate. The rotated copy survives; the live log is emptied.
+  # The sequence numbers in the rotated file now have a hole in them.
+  - actor: machine
+    offset: 15h12m
+    actions:
+      - action: rotate
+        path: MeridianSync/logs/agent.log
+        new_path: MeridianSync/logs/agent.log.1
+      - action: truncate
+        path: MeridianSync/logs/agent.log
+      - action: append
+        path: MeridianSync/logs/agent.log
+        content: "2026-03-12T00:12:31Z agent[4188] INFO  log rotated\n"
+
+  # -- 10. ANTI-FORENSICS: delete the staging tree (00:15) ------------------
+  # The .tmp files go. The zip stays, because the operator still needed it.
+  - actor: clerk
+    offset: 15h15m
+    every: 1s
+    repeat: 24
+    actions:
+      - action: delete
+        path: AppData/Local/Temp/.cache/stg_${SEQ}_${RND:6}.tmp
+
+  # -- 11. Business carries on, oblivious ------------------------------------
+  - actor: business
+    offset: 16h
+    every: 30m
+    repeat: 8
+    actions:
+      - action: create
+        path: finance/close/post_incident_${SEQ}.csv
+        ext: .csv
+        content_len: 2048

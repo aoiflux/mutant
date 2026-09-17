@@ -1,0 +1,307 @@
+// Workshop 11 - VERDICT: will any of this survive a lawyer?
+//
+// Case QUILLDROP, the last question -- and the third line worth stealing:
+//
+//        ANALYSIS IS WHAT YOU DID. EVIDENCE IS WHAT YOU CAN PROVE YOU DID.
+//
+// Tools 7 through 10 produced findings. Findings are not evidence. The gap
+// between the two is made of questions an opposing expert will ask, and none of
+// them are about your analysis:
+//
+//   * What exactly did you examine? Prove the file has not changed since.
+//   * What did your tool touch, and how many times?
+//   * Which build of which tool produced this number?
+//   * Has this report been edited since it was generated?
+//   * Can somebody who does not trust you reproduce it?
+//
+// Every one of those is answerable mechanically, and none of them is answered by
+// a PDF with your logo on it. A case session records the evidence, its digests,
+// every builtin that read through an evidence handle, the timeline of what the
+// examiner did, and then seals the whole thing with a SHA-256 and an Ed25519
+// signature whose public key travels inside the document.
+//
+// Nothing is recorded until case_open is called, and this file writes only to
+// example_output/. It never modifies the evidence -- and that is machine-checked,
+// not merely intended: see docs/EVIDENCE_HANDLING_POLICY.md.
+
+let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
+let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";
+let OUT      = "example_output/quilldrop";
+
+putln("=== 11 VERDICT - chain of custody ===");
+putln("");
+
+let present, _ = fs_exists(BODYFILE);
+if (!present) {
+    putln("No evidence. Build it:  sh examples/workshop/evidence/build_evidence.sh");
+    return;
+};
+
+let _, _ = fs_mkdir(OUT);
+
+// ---------------------------------------------------------------------------
+// 1. Open the case. Everything after this line is on the record.
+//
+// The hash policy is opt-in, because raw_open on a 500 GB image should not
+// silently read the whole thing before handing back a handle. Here the evidence
+// is small, so take digests.
+let opened, err = case_open("QUILLDROP-2026-0312", "workshop examiner",
+                            {"hash": "sha256"});
+if (err) { putln("[error] case_open:", err); return; };
+let cid = opened["id"];
+let who = opened["examiner"];
+putln("case ${cid}  examiner: ${who}  hash policy: sha256");
+putln("");
+
+case_note("Triage collection from MRD-FIN-07, received sealed, bag EV-88412.");
+
+// ---------------------------------------------------------------------------
+// 2. Register the evidence.
+//
+// case_evidence brings a file under custody that no evidence opener will touch.
+// Openers like raw_open / ntfs_open / zip_open register their source by
+// themselves, and every builtin that then reads through the handle is counted
+// against it -- which is how the manifest ends up describing what the program
+// DID rather than what it meant to do.
+let exhibit, err = case_evidence(BODYFILE);
+if (err) { putln("[error] case_evidence:", err); } else {
+    let d = exhibit["hash"];
+    putln("exhibit 1: bodyfile");
+    putln("   sha256 ${d}");
+};
+
+// The archive, opened through a real evidence opener so the touch counting
+// has something to count.
+let ZIP = EVIDENCE + "/Users/r.mehta/AppData/Local/Temp/.cache/bkp_20260311.zip";
+let zexists, _ = fs_exists(ZIP);
+if (zexists) {
+    let zh, zerr = zip_open(ZIP);
+    if (!zerr) {
+        let members, _ = zip_entries(zh["handle"]);
+        putln("exhibit 2: exfil archive (${len(members)} members, read in place)");
+        zip_close(zh["handle"]);
+    };
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 3. Re-measure. Did anything move while we were working?
+let drift, err = case_verify();
+if (err) { putln("[error] case_verify:", err); } else {
+    let n = drift["checked"];
+    let same = drift["unchanged"];
+    let moved = drift["changed"];
+    let gone = drift["missing"];
+    putln("verify: ${n} checked, ${same} unchanged, ${moved} changed, ${gone} missing");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 4. The report. case_report() renders the custody facts; the examiner's
+//    CONCLUSIONS are added on top, as a value, before anything is rendered.
+//
+// The report model holds values, and nearly every string in it was written by
+// the subject of the investigation. So each output format is escaped for the
+// thing that actually goes wrong in it: HTML never turns evidence text into a
+// link (a report that makes the attacker's URL clickable is a report that can
+// be clicked), Markdown is escaped so a pipe in a filename cannot shift a table
+// column, and CSV guards the cells a spreadsheet would execute on open.
+let rpt, err = case_report();
+if (err) { putln("[error] case_report:", err); return; };
+
+let rpt, err = report_section(rpt, "Summary");
+let rpt, err = report_text(rpt,
+    "On 11 March 2026 a phishing message delivered a portable executable " +
+    "disguised with a double extension to the workstation MRD-FIN-07. The " +
+    "file's Mark-of-the-Web records a download origin on the same registrable " +
+    "domain the message linked to. The program established persistence in the " +
+    "user's Startup folder and under AppData\\Roaming, beaconed to a single " +
+    "external address at a fixed 300-second interval, staged and archived 18 " +
+    "business documents, and then backdated its own files and truncated its " +
+    "own log.");
+
+let rpt, err = report_section(rpt, "Findings");
+let rpt, err = report_list(rpt, [
+    "Entry vector: phishing link -> PE with a .pdf.exe double extension.",
+    "Origin corroborated by two independent artifacts (NTFS Zone.Identifier; message body).",
+    "Persistence: Startup folder script and an exported Run/RunOnce key.",
+    "Command and control: one external address, 300s interval, CV 0.00.",
+    "Collection: 18 documents proven byte-identical by CRC-32 to archive members.",
+    "Anti-forensics: 4 files backdated; beacon log truncated and rotated."
+]);
+
+let rpt, err = report_section(rpt, "Timestamp reliability");
+let rpt, err = report_text(rpt,
+    "Four files carry a content-modification time earlier than their creation " +
+    "time, which is not physically possible, and their metadata-change times " +
+    "cluster at 12 March 00:10 UTC. The modification times on those files were " +
+    "written by a process and must not be used to order events. The " +
+    "metadata-change times were set by the kernel and record when the " +
+    "tampering itself occurred.");
+
+let rpt, err = report_table(rpt, [
+    ["artifact", "recorded", "reliable?"],
+    ["bodyfile crtime", "file birth", "yes"],
+    ["bodyfile mtime", "content change", "NO - written by the intruder"],
+    ["bodyfile ctime", "metadata change", "yes - kernel-maintained"],
+    ["Zone.Identifier", "download origin", "yes - not touched by the dropper"],
+    ["zip CRC-32", "member contents", "yes - written by the attacker's own tool"]
+], {"header": true});
+
+if (err) { putln("[error] building the report:", err); return; };
+
+// ---------------------------------------------------------------------------
+// 5. Write the findings, THEN seal.
+//
+// Order matters here, and it is the whole mechanism.
+//
+// report_write renders the document and reads the digest back OFF THE DISK to
+// check it against the document that was meant to be there -- so a short write
+// or a full disk is a refusal rather than a hash of something nobody can
+// reproduce. And because a case is open, that write becomes an entry in the
+// case timeline carrying the path and the digest.
+//
+// The timeline is part of the manifest. The manifest is what gets sealed. So
+// writing the findings BEFORE sealing puts their digest inside the signature.
+let HANDOVER = OUT + "/handover";
+let _, _ = fs_mkdir(HANDOVER);
+
+let findings_path = HANDOVER + "/findings.html";
+let written, err = report_write(rpt, findings_path);
+if (err) { putln("[error] report_write:", err); return; };
+
+let fdigest = written["sha256"];
+let fbytes = written["bytes"];
+putln("findings: ${findings_path}  ${fbytes} bytes");
+putln("   sha256 ${fdigest}");
+putln("   ^ recorded in the case timeline, which is inside what gets signed.");
+putln("");
+
+// case_bundle writes manifest.json, report.html (the CUSTODY report, rendered
+// from the manifest rather than from this session, so the two cannot disagree
+// about what was examined), report.md, and a SHA256SUMS any sha256sum -c
+// checks. The reports are written first and the manifest records what they
+// hashed to, so the seal covers them too. The binding runs one way on purpose:
+// a report quoting the manifest's hash would be quoting a document that had
+// not been written yet.
+let bundle, err = case_bundle(HANDOVER);
+if (err) { putln("[error] case_bundle:", err); return; };
+
+let dir = bundle["dir"];
+let signed = bundle["signed"];
+putln("handover written to ${dir}   signed: ${signed}");
+for (entry in bundle["files"]) {
+    let nm = entry["name"];
+    let by = entry["bytes"];
+    putln("   ${nm}  ${by} bytes");
+    putln("      sha256 " + entry["sha256"]);
+}
+putln("");
+
+let manifest_path = dir + "/manifest.json";
+let check, err = case_manifest_verify(manifest_path);
+if (err) { putln("[error] case_manifest_verify:", err); } else {
+    let hm = check["hash_matches"];
+    let sv = check["signature_valid"];
+    putln("manifest verify: hash_matches=${hm} signature_valid=${sv}");
+    putln("   " + get(check, "signature_detail", ""));
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 6. THE DEMONSTRATION. Break it on purpose.
+//
+// A seal nobody has seen fail is a seal nobody believes. Edit one byte of the
+// report and watch the arithmetic disagree.
+putln("-- tamper test: edit the report, then check it again --");
+
+let original, rerr = fs_read(findings_path);
+if (rerr) {
+    putln("[error] fs_read:", rerr);
+} else {
+    // What report_write recorded -- the same value the sealed manifest carries.
+    let recorded = fdigest;
+
+    let before = hash_sha256(original);
+    putln("   sealed digest : ${recorded}");
+    putln("   on disk now   : ${before}");
+    let ok_before = (before == recorded);
+    putln("   match: ${ok_before}");
+    putln("");
+
+    // One word. Change the number of stolen documents from 18 to 8 -- the kind
+    // of edit somebody would actually make.
+    let tampered = text_replace(original, "18 documents", "8 documents", 1);
+    if (tampered == original) {
+        // Fall back to any edit at all, so the demo still runs.
+        tampered = original + "<!-- -->";
+    };
+    let _, werr = fs_write(findings_path, tampered);
+    if (werr) { putln("[error] fs_write:", werr); } else {
+        let after = hash_sha256(tampered);
+        putln("   ...one phrase edited...");
+        putln("   on disk now   : ${after}");
+        let ok_after = (after == recorded);
+        putln("   match: ${ok_after}");
+        putln("");
+        putln("   The manifest still verifies -- its own seal is intact and its");
+        putln("   signature still checks out. That is the point: it now proves,");
+        putln("   with a signature anybody can verify using only this file, that");
+        putln("   the report beside it is NOT the report that was produced.");
+        putln("");
+        putln("   Restoring the original...");
+        fs_write(findings_path, original);
+        let restored = hash_sha256(original);
+        let ok_restored = (restored == recorded);
+        putln("   match: ${ok_restored}");
+    };
+};
+putln("");
+
+let manifest, err = case_close();
+if (!err) {
+    let integrity = manifest["integrity"];
+    let total = integrity["sources_total"];
+    let hashed = integrity["sources_hashed"];
+    let ro = integrity["evidence_read_only"];
+    putln("-- manifest --");
+    putln("sources: ${total}   hashed: ${hashed}   evidence read-only: ${ro}");
+    for (source in manifest["evidence"]) {
+        putln("   " + source["path"]);
+        for (touch in source["touches"]) {
+            let b = touch["builtin"];
+            let c = touch["count"];
+            putln("      read by ${b} x${c}");
+        }
+    }
+    let program = manifest["program"];
+    if (program["recorded"]) {
+        putln("produced by: " + program["path"]);
+        putln("   sha256 " + program["hash"]);
+    } else {
+        putln("produced by: not recorded -- " + program["detail"]);
+    };
+};
+putln("");
+
+putln("=== CASE CLOSED ===");
+putln("");
+putln("Everything in ${OUT}/handover can be checked by somebody who has never");
+putln("met you, does not trust you, and does not have Mutant installed:");
+putln("  sha256sum -c SHA256SUMS");
+putln("");
+putln("And because the evidence was generated from a seed, the person checking");
+putln("can regenerate the evidence, re-run these five tools, and get the same");
+putln("digests. That is not a nice property. That is the difference between an");
+putln("opinion and a result.");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * Run this twice and diff the two manifests. Everything but `generated`
+//   should be identical -- pin `generated` via report_new's opts and the two
+//   runs become byte-identical.
+// * stix_bundle(extract_iocs(...), {"indicators": true}) turns the indicators
+//   from tool 7 into a STIX 2.1 bundle whose every id is derived from the
+//   indicator itself -- so two examiners produce the same bundle byte for byte.
+// * Hand a neighbour your handover directory and have them verify it on their
+//   machine with case_manifest_verify. They need the file and nothing else.

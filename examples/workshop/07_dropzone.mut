@@ -1,0 +1,341 @@
+// Workshop 7 - DROPZONE: how did it get in?
+//
+// Case QUILLDROP, question one. Somewhere in this collection is the file that
+// started it. We do not know its name. We know three things about how malware
+// arrives, and each one is a machine-checkable contradiction:
+//
+//   1. It lies about its TYPE.   A file's name says .pdf; its first two bytes
+//                                say MZ. The name is a claim; magic is evidence.
+//   2. It lies about its NAME.   "Invoice.pdf.exe" -- the first extension is
+//                                there for the human, the second for the OS.
+//   3. It cannot lie about its ORIGIN.  Windows writes the download URL into an
+//                                NTFS alternate data stream called
+//                                Zone.Identifier -- the Mark-of-the-Web. The
+//                                dropper does not control that stream, and
+//                                almost nobody remembers to strip it.
+//
+// (3) is the one that makes this exciting. Every file downloaded through a
+// browser on NTFS carries a receipt naming the site that served it. We are going
+// to read the receipt, and then match it against the phishing email.
+//
+// Input: the fsagen corpus. See evidence/README.md.
+
+let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
+
+putln("=== 7 DROPZONE - entry vector ===");
+putln("");
+
+let present, _ = fs_exists(EVIDENCE);
+if (!present) {
+    putln("No evidence at", EVIDENCE);
+    putln("Build it:  sh examples/workshop/evidence/build_evidence.sh");
+    putln("       or  .\\examples\\workshop\\evidence\\build_evidence.ps1");
+    return;
+};
+
+// ---------------------------------------------------------------------------
+// What each extension PROMISES the first bytes will be. fs_magic reports what
+// they actually are. Disagreement is the finding.
+//
+// Note "zip": .docx/.xlsx/.pptx really are zip containers, so they agree here.
+// A signature table that did not know that would flag every Office document in
+// the company -- and a detector that cries wolf on Office documents is a
+// detector nobody runs twice.
+let PROMISED = {
+    ".pdf":  "pdf",   ".docx": "zip",   ".xlsx": "zip",   ".pptx": "zip",
+    ".zip":  "zip",   ".png":  "png",   ".jpg":  "jpeg",  ".jpeg": "jpeg",
+    ".gif":  "gif",   ".mp4":  "mp4",   ".exe":  "pe",    ".dll":  "pe",
+    ".sqlite": "sqlite", ".db": "sqlite", ".evtx": "evtx", ".lnk": "lnk",
+    ".gz":   "gzip",  ".7z":   "7z",    ".rar":  "rar",   ".doc":  "ole"
+};
+
+// Extensions a *human* reads as "this is a document, it is safe to open".
+let HUMAN_SAFE = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+                  ".txt", ".csv", ".rtf", ".jpg", ".png", ".zip", ".log"];
+
+// ...and the extensions the *operating system* reads as "run this". The
+// double-extension trick needs BOTH: a reassuring inner extension and an
+// executing outer one. Checking only the inner half flags "agent.log.1" --
+// a rotated log file, the most ordinary thing on the disk. This is the whole
+// discipline of detection engineering in one list: a rule that fires on
+// housekeeping gets switched off, and then it is not a rule at all.
+let RISKY_OUTER = [".exe", ".scr", ".com", ".pif", ".bat", ".cmd", ".js",
+                   ".jse", ".vbs", ".vbe", ".ps1", ".hta", ".msi", ".jar",
+                   ".lnk", ".dll", ".wsf"];
+
+let ext_of = fn(path) {
+    let dot = -1;
+    for (let i = 0; i < len(path); i++) {
+        let c = str_char_at(path, i);
+        if (c == ".") { dot = i; };
+        if ((c == "/") || (c == "\\")) { dot = -1; };
+    }
+    if (dot < 0) { return ""; };
+    return str_lower(str_substr(path, dot, len(path) - dot));
+};
+
+// The second-to-last extension, or "" when there is only one.
+let inner_ext_of = fn(path) {
+    let outer = ext_of(path);
+    if (outer == "") { return ""; };
+    return ext_of(str_substr(path, 0, len(path) - len(outer)));
+};
+
+// ---------------------------------------------------------------------------
+// 1. Walk the collection.
+let all, werr = fs_walk(EVIDENCE, 16);
+if (werr) { putln("[error] fs_walk:", werr); return; };
+
+let files = filter(all, fn(e) { return !e["is_dir"]; });
+putln("collection:", len(files), "files under", EVIDENCE);
+putln("");
+
+// ---------------------------------------------------------------------------
+// 2. Type-vs-name and name-vs-name. Two independent checks, one pass.
+putln("-- impostors: what the name says vs what the bytes say --");
+
+let impostors = [];
+for (f in files) {
+    let path = f["path"];
+    let ext  = ext_of(path);
+
+    let reasons = [];
+
+    // (a) double extension: a reassuring inner extension, an executing outer one.
+    let inner = inner_ext_of(path);
+    if (contains(RISKY_OUTER, ext) && contains(HUMAN_SAFE, inner)) {
+        reasons = push(reasons, "double extension (${inner} before ${ext})");
+    };
+
+    // (b) magic mismatch. Only ask fs_magic about extensions we have a promise
+    //     for -- an unknown extension promises nothing and cannot break one.
+    let actual = "";
+    if (has_key(PROMISED, ext)) {
+        let magic, merr = fs_magic(path);
+        if (!merr) {
+            actual = magic["type"];
+            if ((actual != "unknown") && (actual != PROMISED[ext])) {
+                reasons = push(reasons, "${ext} promises ${PROMISED[ext]}, bytes are ${actual}");
+            };
+        };
+    };
+
+    if (len(reasons) > 0) {
+        impostors = push(impostors, {
+            "path": path, "ext": ext, "actual": actual,
+            "size": f["size"], "reasons": reasons
+        });
+    };
+}
+
+if (len(impostors) == 0) {
+    putln("   none. (If the corpus built on a filesystem without the .exe,");
+    putln("    check evidence/README.md.)");
+};
+// A string literal cannot appear inside a ${...} hole -- bind it to a local
+// first. That reads better anyway, and the parser tells you which line.
+for (imp in impostors) {
+    let why  = str_join(imp["reasons"], "; ");
+    let size = imp["size"];
+    putln("   " + imp["path"]);
+    putln("      ${size} bytes - ${why}");
+}
+putln("");
+
+// ---------------------------------------------------------------------------
+// 3. The receipt: Mark-of-the-Web.
+//
+// NTFS stores it as an alternate data stream named Zone.Identifier, addressed
+// by appending ":Zone.Identifier" to the path. It is an INI file:
+//
+//     [ZoneTransfer]
+//     ZoneId=3                <- 3 = Internet
+//     HostUrl=http://.../x.exe
+//     ReferrerUrl=http://.../
+//
+// There is no special builtin for this. fs_read takes the path as given, and
+// the operating system does the rest -- which is the whole trick.
+putln("-- Mark-of-the-Web: where did these files come from? --");
+
+let motw_of = fn(path) {
+    // No literal null in the language: a bare `return` yields one, which is
+    // exactly what "this file has no such stream" should be.
+    let raw, err = fs_read(path + ":Zone.Identifier");
+    if (err) { return; };
+    let fields = {};
+    for (line in text_split(raw, "\n")) {
+        let t = str_trim(line);
+        let eq = text_index(t, "=");
+        if (eq > 0) {
+            let k = str_trim(str_substr(t, 0, eq));
+            let v = str_trim(str_substr(t, eq + 1, len(t) - eq - 1));
+            fields = set(fields, k, v);
+        };
+    }
+    return fields;
+};
+
+let ZONES = {"0": "local machine", "1": "local intranet", "2": "trusted site",
+             "3": "INTERNET", "4": "restricted site"};
+
+let downloaded = [];
+for (f in files) {
+    let m = motw_of(f["path"]);
+    if (is_null(m)) { continue; };
+
+    let zone = get(m, "ZoneId", "?");
+    let host = get(m, "HostUrl", "");
+    let ref  = get(m, "ReferrerUrl", "");
+    let zone_name = get(ZONES, zone, "unknown");
+    putln("   " + f["path"]);
+    putln("      zone ${zone} (${zone_name})");
+    if (host != "") { putln("      served by   " + defang(host)); };
+    if (ref != "")  { putln("      referred by " + defang(ref)); };
+
+    downloaded = push(downloaded, {"path": f["path"], "host": host, "ref": ref});
+}
+if (len(downloaded) == 0) {
+    putln("   no Zone.Identifier streams found.");
+    putln("   Alternate data streams are NTFS-only: on ext4/APFS this is the");
+    putln("   correct answer, not a failure. The rest of the tool still works.");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 4. The lure. Parse the phishing email and pull every indicator out of it.
+putln("-- the email --");
+
+let mails = filter(files, fn(e) { return ext_of(e["path"]) == ".eml"; });
+let mail_domains = [];
+
+// A header may legally appear more than once, so email_headers gives every
+// value as an ARRAY. Most of the time you want the first one.
+let hdr1 = fn(h, name) {
+    let v = get(h, name, "");
+    if (type_of(v) != "ARRAY") { return v; };
+    if (len(v) == 0) { return ""; };
+    return v[0];
+};
+
+for (m in mails) {
+    let raw, rerr = fs_read(m["path"]);
+    if (rerr) { continue; };
+
+    let hdr, herr = email_headers(raw);
+    if (!herr) {
+        putln("   from:     " + hdr1(hdr, "From"));
+        putln("   subject:  " + hdr1(hdr, "Subject"));
+        let reply = hdr1(hdr, "Reply-To");
+        if (reply != "") {
+            putln("   reply-to: ${reply}");
+            putln("             ^ compare to From:. A mismatch is not a bug, it is intent:");
+            putln("               the reply goes somewhere the display name never mentioned.");
+        };
+    };
+
+    // email_urls normalizes what the body and headers contain.
+    let urls, uerr = email_urls(raw);
+    if (!uerr) {
+        for (u in urls) {
+            let link = get(u, "url", "");
+            if (link == "") { continue; };
+            let d = tld_extract(domain_extract(link))["etld1"];
+            mail_domains = push(mail_domains, d);
+            putln("   link:     " + defang(link));
+        };
+    };
+
+    // And the blunt instrument: everything that looks like an indicator,
+    // anywhere in the message, in one call.
+    //
+    // NOTE: a builtin is not a first-class value -- `map(xs, defang)` fails,
+    // because `defang` on its own is not a function object. Wrap it in a
+    // closure and it is. The language server flags this before you run it.
+    let iocs = extract_iocs(raw);
+    if (len(iocs["domains"]) > 0) {
+        let shown = map(iocs["domains"], fn(d) { return defang(d); });
+        putln("   extract_iocs domains: " + str_join(shown, ", "));
+    };
+}
+if (len(mails) == 0) { putln("   no .eml in the collection."); };
+mail_domains = unique(mail_domains);
+putln("");
+
+// ---------------------------------------------------------------------------
+// 5. THE CORRELATION. This is the finding.
+//
+// A file on disk whose Mark-of-the-Web names a domain that also appears in a
+// phishing email is not "suspicious". It is patient zero, with both ends of
+// the delivery proven from two artifacts that were written by two different
+// pieces of software that never spoke to each other.
+putln("-- correlation: download origin vs email links --");
+
+let proven = [];
+for (d in downloaded) {
+    if (d["host"] == "") { continue; };
+    let origin = tld_extract(domain_extract(d["host"]))["etld1"];
+    if (contains(mail_domains, origin)) {
+        putln("   *** " + d["path"]);
+        putln("       downloaded from " + defang(origin));
+        putln("       which is a domain the phishing email linked to.");
+        putln("       => ENTRY VECTOR CONFIRMED from two independent artifacts:");
+        putln("          an NTFS stream written by the browser, and a message");
+        putln("          written by the attacker. Neither knew about the other.");
+        proven = push(proven, d["path"]);
+    } else {
+        putln("   " + d["path"] + " from " + defang(origin) + " (not in any email)");
+    };
+}
+if ((len(downloaded) > 0) && (len(mail_domains) == 0)) {
+    putln("   downloads found, but no email to compare them against.");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// 6. The same job, as one builtin -- for comparison, not instead.
+//
+// detect_suspicious_files runs entropy tiers, magic-under-a-document-extension,
+// and double extensions over a list of paths. It is the shortcut. Everything
+// above is what the shortcut is doing, which is why we wrote it first: you
+// cannot defend a finding you got from a function you cannot explain.
+putln("-- detect_suspicious_files(): the same signals, one call --");
+
+let paths = map(files, fn(e) { return e["path"]; });
+let sus, serr = detect_suspicious_files(paths);
+if (serr) {
+    putln("[error] detect_suspicious_files:", serr);
+} else {
+    let hits = sus["count"];
+    putln("   ${hits} hits across ${len(paths)} files");
+    for (h in sus["hits"]) {
+        let why = str_join(h["reasons"], ",");
+        let typ = h["type"];
+        let ent = h["entropy"];
+        putln("   " + h["path"]);
+        putln("      type=${typ} entropy=${ent} reasons=${why}");
+    }
+    putln("");
+    putln("   Note what it does NOT know: that the .exe came from the internet,");
+    putln("   or that the domain it came from is in an email on the same disk.");
+    putln("   A builtin scores a file. An investigator correlates two artifacts.");
+};
+putln("");
+
+putln("VERDICT: ${len(proven)} file(s) with a proven internet origin matching the lure.");
+for (p in proven) { putln("  " + p); }
+putln("");
+putln("Next question -> 08_supertimeline.mut: what happened, and in what order?");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * A high-entropy file with NO extension at all is invisible to the checks
+//   above. Add fs_entropy() over every file and rank the top ten. Encrypted
+//   configs and packed payloads sit at 7.9+; English text sits near 4.5.
+//
+// * Zone.Identifier is not the only stream. Enumerate other ADS names on the
+//   flagged files -- the playbook puts one called "quill" on the implant, and
+//   a stream whose name nobody recognises is itself a finding.
+//
+// * email_spf_dkim(raw) actually VERIFIES the DKIM signature against DNS,
+//   rather than trusting the header. Run it on the lure and see what a forged
+//   sender looks like when the cryptography disagrees with the From: line.

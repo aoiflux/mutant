@@ -1,0 +1,336 @@
+// Workshop 8 - STRATA: what happened, and in what order?
+//
+// Case QUILLDROP, question two. Tool 7 found the way in. Now we need the
+// SEQUENCE, because a sequence is what turns a pile of suspicious files into
+// an intrusion you can describe to a non-technical person.
+//
+// Three ideas, and the third is the one that changes how you work:
+//
+//   1. A bodyfile gives you FOUR timestamps per file. The live filesystem gives
+//      you one. That is why collections ship a bodyfile.
+//   2. Every artifact has its own idea of time and its own field names. You can
+//      write a mapping for each pair of them (N x M), or normalize once into a
+//      shared vocabulary (N + M). events_from() is the second option.
+//   3. Once events share a vocabulary, DETECTION RULES BECOME PORTABLE. Sigma
+//      rules -- the same YAML SOC teams already run -- execute directly over
+//      this timeline. No backend, no field-mapping file, no Elasticsearch.
+//
+// Input: the fsagen bodyfile, plus the collection for the non-filesystem events.
+
+let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
+let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";
+
+putln("=== 8 STRATA - supertimeline + Sigma ===");
+putln("");
+
+let have, _ = fs_exists(BODYFILE);
+if (!have) {
+    putln("No bodyfile at", BODYFILE);
+    putln("Build it:  sh examples/workshop/evidence/build_evidence.sh");
+    return;
+};
+
+// ---------------------------------------------------------------------------
+// 1. The bodyfile. Two builtins turn a pipe-delimited text file into a timeline.
+//
+//    MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime
+//
+// bodyfile_parse gives one row per FILE, with four times on it.
+// mactime gives one row per DISTINCT TIME, with a MACB flag string saying which
+// of the four fired at that instant. That is the shape an examiner reads.
+let rows, berr = bodyfile_parse(BODYFILE);
+if (berr) { putln("[error] bodyfile_parse:", berr); return; };
+
+let macb = mactime(rows);
+putln("bodyfile: ${len(rows)} files -> ${len(macb)} distinct filesystem events");
+putln("");
+
+// ---------------------------------------------------------------------------
+// 2. Normalize. events_from() maps an artifact onto a fixed vocabulary:
+//    ts, ts_desc, kind, category, message, path, size, hashes -- and `extra`,
+//    which carries the original entry VERBATIM so normalizing loses nothing.
+//
+// One event per timestamp the artifact recorded. Four timestamps on a file
+// means four events, each saying which one it is -- because "created" and
+// "last accessed" are different facts and collapsing them loses the case.
+let fs_events, eerr = events_from(rows, "bodyfile");
+if (eerr) { putln("[error] events_from:", eerr); return; };
+putln("normalized: ${len(fs_events)} filesystem events");
+
+// ---------------------------------------------------------------------------
+// 3. The other sources. A supertimeline that only contains the filesystem is
+//    not super; it is a directory listing with extra steps.
+//
+// Events we build BY HAND have to carry the same envelope events_from() emits:
+// ts, ts_ms, ts_desc and iso. The ECS/OCSF/Timesketch emitters refuse a hash
+// that is missing them rather than writing a record with an empty datetime --
+// because Timesketch silently DROPS such a record on ingest, and a timeline
+// that is quietly short three events is worse than one that failed loudly.
+let make_event = fn(ts, desc, kind, category, message, path) {
+    return {
+        "ts":      ts,
+        "ts_ms":   ts * 1000,
+        "ts_desc": desc,
+        "iso":     time_format(ts, "2006-01-02T15:04:05Z"),
+        "kind":    kind,
+        "category": category,
+        "message": message,
+        "path":    path
+    };
+};
+
+// (a) The phishing email, from its own Date: header.
+let mail_events = [];
+let all, _ = fs_walk(EVIDENCE, 16);
+for (f in all) {
+    if (f["is_dir"]) { continue; };
+    if (!str_ends_with(str_lower(f["path"]), ".eml")) { continue; };
+
+    let raw, rerr = fs_read(f["path"]);
+    if (rerr) { continue; };
+    let hdr, herr = email_headers(raw);
+    if (herr) { continue; };
+
+    let dates = get(hdr, "Date", []);
+    if (type_of(dates) != "ARRAY") { continue; };
+    if (len(dates) == 0) { continue; };
+
+    // RFC 2822, which is its own epoch problem. time_parse takes a Go layout.
+    let when, perr = time_parse(dates[0], "Mon, 02 Jan 2006 15:04:05 -0700");
+    if (perr) { continue; };
+
+    let subjects = get(hdr, "Subject", []);
+    let subject = "(no subject)";
+    if (type_of(subjects) == "ARRAY") {
+        if (len(subjects) > 0) { subject = subjects[0]; };
+    };
+
+    mail_events = push(mail_events, make_event(
+        when, "Message Delivered", "email", "email",
+        "inbound: " + subject, f["path"]));
+}
+putln("email:      ${len(mail_events)} events");
+
+// (b) The implant's own log. It wrote down everything it did, because software
+//     that has to be debugged has to be logged -- including malware.
+let LOG_DIRS = ["/ProgramData/MeridianSync/logs/", "\\ProgramData\\MeridianSync\\logs\\"];
+let log_events = [];
+for (f in all) {
+    if (f["is_dir"]) { continue; };
+    let p = f["path"];
+    let in_logs = false;
+    for (d in LOG_DIRS) { if (text_contains(p, d)) { in_logs = true; }; }
+    if (!in_logs) { continue; };
+
+    let text, terr = fs_read(p);
+    if (terr) { continue; };
+    for (line in text_split(text, "\n")) {
+        let t = str_trim(line);
+        if (len(t) < 21) { continue; };
+        // Leading RFC3339 timestamp, then the rest of the line.
+        let stamp = str_substr(t, 0, 20);
+        let when, perr = time_parse(stamp, "2006-01-02T15:04:05Z");
+        if (perr) { continue; };
+        log_events = push(log_events, make_event(
+            when, "Recorded Time", "agent_log", "log",
+            str_substr(t, 21, len(t) - 21), p));
+    }
+}
+putln("agent log:  ${len(log_events)} events");
+putln("");
+
+// ---------------------------------------------------------------------------
+// 4. Merge. timeline_merge flattens arrays of events and sorts by `ts`.
+let timeline = timeline_merge([fs_events, mail_events, log_events], "ts");
+putln("SUPERTIMELINE: ${len(timeline)} events from 3 source families");
+putln("");
+
+// The intrusion window, not the whole disk. A timeline you cannot read is a
+// timeline you will not read.
+let WINDOW_START = 1773212000;   // 2026-03-11 ~08:00 UTC
+let WINDOW_END   = 1773272000;   // 2026-03-12 ~01:00 UTC
+
+let window = filter(timeline, fn(ev) {
+    return (ev["ts"] >= WINDOW_START) && (ev["ts"] <= WINDOW_END);
+});
+
+putln("-- the intrusion window (${len(window)} events) --");
+let shown = 0;
+for (ev in window) {
+    if (shown >= 45) { continue; };
+    shown = shown + 1;
+    let when = time_format(ev["ts"], "2006-01-02 15:04:05");
+    let kind = ev["kind"];
+    let what = ev["ts_desc"];
+    let msg  = get(ev, "message", "");
+    putln("  ${when}  [${kind}] ${what}");
+    putln("                       ${msg}");
+}
+if (len(window) > 45) { putln("  ... ${len(window) - 45} more"); };
+putln("");
+
+// ---------------------------------------------------------------------------
+// 5. SIGMA. Here is the part worth the whole session.
+//
+// Sigma is the portable detection format: YAML saying which fields to look at
+// and what has to hold. Normally you COMPILE a Sigma rule into a query for some
+// backend. Here the engine is in the language, so the rule runs directly over
+// the timeline we just built.
+//
+// A rule names fields in the SOURCE's own vocabulary -- `name`, `size` -- and
+// sigma looks them up on the event and then inside `extra`, where events_from
+// kept the bodyfile row verbatim. That is why there is no mapping file.
+let RULES = r"""
+title: Executable Written To User Roaming Profile
+id: 7a1c9d20-0000-4000-8000-00000000c001
+description: A PE dropped under AppData\Roaming is a classic implant location.
+detection:
+  selection:
+    name|contains: 'AppData/Roaming/'
+    name|endswith:
+      - '.exe'
+      - '.dll'
+      - '.dat'
+  condition: selection
+level: high
+tags:
+  - attack.persistence
+---
+title: Startup Folder Persistence
+id: 7a1c9d20-0000-4000-8000-00000000c002
+description: Anything written to the Startup folder runs at every logon.
+detection:
+  selection:
+    name|contains: 'Start Menu/Programs/StartUp'
+  condition: selection
+level: high
+tags:
+  - attack.t1547.001
+---
+title: Archive Staged In A Temporary Directory
+id: 7a1c9d20-0000-4000-8000-00000000c003
+description: Collection before exfiltration. The archive is the shipping manifest.
+detection:
+  selection:
+    name|contains: '/Temp/'
+    name|endswith:
+      - '.zip'
+      - '.7z'
+      - '.rar'
+  condition: selection
+level: critical
+tags:
+  - attack.t1560.001
+---
+title: Registry Persistence Exported To Disk
+id: 7a1c9d20-0000-4000-8000-00000000c004
+description: A .reg file is how persistence gets re-applied after a cleanup.
+detection:
+  selection:
+    name|endswith: '.reg'
+  condition: selection
+level: medium
+""";
+
+let rules, rerr = sigma_parse_all(RULES);
+if (rerr) { putln("[error] sigma_parse_all:", rerr); return; };
+putln("-- Sigma: ${len(rules)} rules over ${len(timeline)} events --");
+
+// Note that one rule failing to compile fails the whole call. That is
+// deliberate: a ruleset that quietly loads 43 of its 44 rules is a ruleset you
+// believe covers something it does not.
+
+let report, serr = sigma_scan(rules, timeline);
+if (serr) { putln("[error] sigma_scan:", serr); return; };
+
+// Collapse hits to one line per (rule, path) -- four timestamps on one file
+// would otherwise report the same finding four times.
+let seen = [];
+for (hit in report["hits"]) {
+    let ev = hit["event"];
+    let key = hit["title"] + "|" + get(ev, "path", "?");
+    if (contains(seen, key)) { continue; };
+    seen = push(seen, key);
+    let when  = time_format(ev["ts"], "2006-01-02 15:04:05");
+    let level = get(hit, "level", "?");
+    let title = hit["title"];
+    putln("  [${level}] ${title}");
+    putln("      ${when}  " + get(ev, "path", "?"));
+}
+putln("");
+
+// The honest half, and the reason to run Sigma here rather than in a SIEM:
+// `unmatched_fields` names the fields NO event in the whole scan carried.
+// A rule reading CommandLine against a timeline with no CommandLine did not
+// clear the host -- it never ran. Coverage reports do not say this. This does.
+let blind = get(report, "unmatched_fields", []);
+if (len(blind) > 0) {
+    putln("  BLIND SPOTS - fields no event carried:", str_join(blind, ", "));
+    putln("  Rules reading these did not come back clean. They did not run.");
+} else {
+    putln("  every field every rule read was present in the evidence.");
+};
+putln("");
+
+// ---------------------------------------------------------------------------
+// STOP. Look at the timestamps on those hits.
+//
+// The Startup file and the two files under AppData\Roaming are dated 2024 --
+// two years before the email that delivered them. Sigma is not wrong; Sigma is
+// reporting exactly what the bodyfile says. The bodyfile is reporting exactly
+// what the filesystem says. And the filesystem is repeating what the attacker
+// told it.
+//
+// A timeline is only as honest as its timestamps, and timestamps are the one
+// piece of evidence a user-mode process can rewrite. Every tool you have ever
+// used to build a timeline inherits this problem.
+//
+// That is the entire subject of the next tool.
+putln("!! three hits are dated 2024 -- BEFORE the email that delivered them.");
+putln("   The timeline is built on timestamps, and timestamps can be written to.");
+putln("   09_revenant.mut is about finding where that happened.");
+putln("");
+
+// ---------------------------------------------------------------------------
+// 6. Hand it to the next tool. One vocabulary in, three schemas out.
+let OUT = "example_output/quilldrop";
+let ts_records, terr = timesketch_event(window);
+if (terr) {
+    putln("[error] timesketch_event:", terr);
+} else {
+    let nd, nerr = ndjson_stringify(ts_records);
+    if (nerr) {
+        putln("[error] ndjson_stringify:", nerr);
+    } else {
+        let _, merr = fs_mkdir(OUT);
+        if (merr) { putln("[error] fs_mkdir:", merr); };
+        let _, werr = fs_write(OUT + "/timeline.jsonl", nd);
+        if (werr) {
+            putln("[error] fs_write:", werr);
+        } else {
+            putln("wrote ${OUT}/timeline.jsonl (${len(ts_records)} Timesketch records)");
+            putln("  -> ingest straight into Timesketch, or read it with jq.");
+        };
+    };
+};
+let ecs, cerr = ecs_event(slice(window, 0, 3));
+if (cerr) {
+    putln("[error] ecs_event:", cerr);
+} else {
+    putln("  the same events as ECS documents: ${len(ecs)} ready for Elastic.");
+    putln("  and ocsf_event() for OCSF. One vocabulary in, three schemas out --");
+    putln("  which is why adding a parser costs one mapping, not three.");
+};
+putln("");
+
+putln("Next question -> 09_revenant.mut: where in all this did they lie to me?");
+
+// -- Extend it (5 minutes each) ---------------------------------------------
+//
+// * Write a Sigma rule of your own for something you noticed in tool 7, and
+//   watch it fire without touching any other file.
+// * event_kinds() lists every artifact events_from already understands --
+//   prefetch, evtx, lnk, amcache, shimcache, jumplist, browser history. Each
+//   one is one more line in this file, not one more parser.
+// * An artifact Mutant does not know can be described with a mapping hash
+//   instead of waiting for support: events_from(rows, {kind: ..., times: [...]}).
