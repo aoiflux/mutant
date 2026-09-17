@@ -4,14 +4,14 @@ go 1.26.2
 
 require (
 	github.com/aoiflux/libewf v0.2.1
-	github.com/aoiflux/libext v0.2.0
-	github.com/aoiflux/libfat v0.2.0
-	github.com/aoiflux/libhfs v0.2.0
-	github.com/aoiflux/libntfs v0.3.1
+	github.com/aoiflux/libext v0.3.0
+	github.com/aoiflux/libfat v0.3.1
+	github.com/aoiflux/libhfs v0.3.2
+	github.com/aoiflux/libntfs v0.3.3
 	github.com/aoiflux/libtable v0.2.2
-	github.com/aoiflux/libvhdi v0.2.0
-	github.com/aoiflux/libxfat v1.2.0
-	github.com/aoiflux/libxfs v0.3.1
+	github.com/aoiflux/libvhdi v0.3.0
+	github.com/aoiflux/libxfat v1.4.0
+	github.com/aoiflux/libxfs v0.4.1
 	github.com/chzyer/readline v1.5.1
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/google/gopacket v1.1.19

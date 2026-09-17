@@ -88,11 +88,6 @@ type EvidenceWriteException struct {
 // examiner's or the evidence's?"
 var EvidenceWriteAllowlist = []EvidenceWriteException{
 	{
-		File: "builtin/filesystem_parsers.go", Func: "ReadFile", Lines: 2,
-		Why: "libxfat extracts only to a path, so an exFAT file's content round-trips " +
-			"through os.CreateTemp and is removed in a defer. The volume is never written to.",
-	},
-	{
 		File: "builtin/sqlite_builtins.go", Func: "withSQLiteCopy", Lines: 2,
 		Why: "This is the policy in action rather than an exception to it: SQLite wants to " +
 			"write a journal beside any database it opens, so the evidence database is " +

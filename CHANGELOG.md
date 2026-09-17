@@ -97,6 +97,48 @@ exhaustive lists.
 
 ### Changed
 
+- **Every `github.com/aoiflux/*` dependency is on its latest release.**
+  `libext` v0.2.0 -> v0.3.0, `libfat` v0.2.0 -> v0.3.1, `libhfs` v0.2.0 ->
+  v0.3.2, `libntfs` v0.3.1 -> v0.3.3, `libvhdi` v0.2.0 -> v0.3.0, `libxfat`
+  v1.2.0 -> v1.4.0, `libxfs` v0.3.1 -> v0.4.1. `libewf` v0.2.1, `libtable`
+  v0.2.2 and `graphene` v0.9.0 were already current. No transitive dependency
+  moved.
+
+  Six of the seven needed no code change: nothing exported was removed from
+  any of them, and the four documented breaking changes land on API Mutant
+  does not call -- `libntfs`'s `Options.BaseOffset` (never set here), the
+  `libvhdi` `vhdimap.ByteRange` coordinate space, `libfat`'s `FATReport`
+  offsets, and `libhfs`'s report keys and package clause, which an aliased
+  import is immune to.
+
+- **`xfat_read_file` no longer writes the file it is reading to a temp
+  directory.** libxfat extracted only to a path, so an exFAT file's content
+  round-tripped through `os.CreateTemp` to be read straight back -- the bytes
+  of an evidence file, written to shared storage, to answer a read. v1.3.0
+  added a reading API and the round trip is gone.
+
+  The error behaviour is deliberately unchanged: a chain that runs out before
+  the entry's recorded length is still an error rather than a silently shorter
+  file, and it still wraps libxfat's `ErrTruncatedChain`. `ReadEntry` alone
+  would have returned the short content without saying so, which is why the
+  entry is opened and `Located()` checked instead.
+
+  This retires one of the two entries in `policy.EvidenceWriteAllowlist`. The
+  guard failed the moment the write went away, which is what the allowlist is
+  for; see [docs/EVIDENCE_HANDLING_POLICY.md](docs/EVIDENCE_HANDLING_POLICY.md).
+
+- **A deleted entry's `name` from `xfat_list_files` and `xfat_metadata` no
+  longer ends in `" (deleted)"`.** libxfat stopped decorating the name in
+  v1.3.0. The decoration was presentation inside the parser: it produced a
+  name that could not be compared against the same file seen live, against
+  another tool's output, or against an earlier reading of the same volume, and
+  it landed in every composed path. The `deleted` key already carries the
+  fact, and a script that wants the old rendering appends the string itself.
+
+  The `has_fat_chain` and `indexed` keys keep both their names and their
+  meanings, although the methods behind them were renamed and one had its
+  sense inverted upstream.
+
 - **A builtin no longer spells its own name as a literal.** The name was
   declared once in `builtin/names.go` and said twice more as a constant -- by
   the dispatch table and by the return contract -- but the error messages a user

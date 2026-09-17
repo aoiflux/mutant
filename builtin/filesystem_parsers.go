@@ -150,7 +150,7 @@ type xfatTimes struct {
 }
 
 func xfatTimesFromEntry(entry libxfat.Entry) xfatTimes {
-	ts := entry.GetTimestamps()
+	ts := entry.Timestamps()
 	return xfatTimes{
 		CreatedAt:           formatTime(ts.Created),
 		ModifiedAt:          formatTime(ts.Modified),
@@ -1891,25 +1891,28 @@ func (s *realXFATSession) ListFiles(dirPath string) ([]xfatListEntry, error) {
 
 	out := make([]xfatListEntry, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.GetName()
+		name := entry.Name()
 		// A nameless entry gets a stable placeholder path rather than a unique
 		// one, so repeated runs over the same image agree.
 		if entry.HasNoName() {
 			name = unnamedEntryPlaceholder
 		}
 		out = append(out, xfatListEntry{
-			Name:          name,
-			Path:          joinFSPath(cleanPath, name),
-			EntryCluster:  entry.GetEntryCluster(),
-			Size:          entry.GetSize(),
-			IsDirectory:   entry.IsDir(),
-			Deleted:       entry.IsDeleted(),
-			Special:       entry.IsSpecialFile(),
-			Virtual:       entry.IsVirtualEntry(),
-			Indexed:       entry.IsIndexed(),
-			HasFATChain:   entry.HasFatChain(),
-			Attributes:    entry.GetAttributes(),
-			ValidDataSize: entry.GetValidDataSize(),
+			Name:         name,
+			Path:         joinFSPath(cleanPath, name),
+			EntryCluster: entry.FirstCluster(),
+			Size:         entry.Size(),
+			IsDirectory:  entry.IsDir(),
+			Deleted:      entry.IsDeleted(),
+			Special:      entry.IsSpecialFile(),
+			Virtual:      entry.IsVirtualEntry(),
+			Indexed:      entry.IsInUse(),
+			// IsContiguous is the old DoesNotHaveFatChain, so the old
+			// HasFatChain is its negation. The script-visible key keeps its
+			// name and its meaning.
+			HasFATChain:   !entry.IsContiguous(),
+			Attributes:    entry.Attributes(),
+			ValidDataSize: entry.ValidDataSize(),
 			Times:         xfatTimesFromEntry(entry),
 		})
 	}
@@ -2069,27 +2072,37 @@ func (s *realXFATSession) ReadFile(filePath string) ([]byte, error) {
 		return nil, errors.New("target path is a directory")
 	}
 
-	// libxfat only extracts to a path, so the content has to round-trip through
-	// a temp file. Refuse oversized entries up front rather than writing them to
-	// disk and then pulling the whole thing into memory — the same 32 MiB ceiling
-	// the *_read_at builtins apply.
-	if size := entry.GetSize(); size > maxInMemoryReadBytes {
+	// Refuse oversized entries up front — the same 32 MiB ceiling the
+	// *_read_at builtins apply.
+	if size := entry.Size(); size > maxInMemoryReadBytes {
 		return nil, fmt.Errorf("entry is %d bytes, larger than the %d byte read limit", size, maxInMemoryReadBytes)
 	}
 
-	tmpFile, err := os.CreateTemp("", "mutant-xfat-read-*.bin")
+	// libxfat v1.3.0 added a reading API, so this no longer round-trips the
+	// content through a temp file. The old route wrote the bytes of an
+	// evidence file into the OS temp directory purely to read them straight
+	// back out, which is a side effect a forensics tool is better without.
+	file, err := s.fs.OpenEntry(entry)
 	if err != nil {
 		return nil, err
 	}
-	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
-	defer func() { _ = os.Remove(tmpPath) }()
 
-	if err := s.fs.ExtractEntryContent(entry, tmpPath); err != nil {
+	data, err := file.ReadAll()
+	if err != nil {
 		return nil, err
 	}
 
-	return os.ReadFile(tmpPath)
+	// A chain that runs out before the entry's recorded length is reported,
+	// not returned as a silently shorter file. ExtractEntryContent made this
+	// check itself and ReadEntry does not, which is why neither is called
+	// here: the error behaviour is the one this builtin already had, and it
+	// wraps libxfat's own sentinel so a caller can still match on it.
+	if located, locErr := file.Located(); locErr == nil && located < file.Size() {
+		return nil, fmt.Errorf("%w: %d of %d bytes recoverable for %q",
+			libxfat.ErrTruncatedChain, located, file.Size(), cleanPath)
+	}
+
+	return data, nil
 }
 
 func (s *realEXTSession) ReadFile(filePath string) ([]byte, error) {
@@ -2198,26 +2211,31 @@ func (s *realXFATSession) Metadata(filePath string) (xfatMetadata, error) {
 		return xfatMetadata{}, err
 	}
 
-	name := entry.GetName()
+	name := entry.Name()
 	if entry.HasNoName() {
 		name = unnamedEntryPlaceholder
+	}
+
+	label, err := s.fs.VolumeLabel()
+	if err != nil {
+		return xfatMetadata{}, err
 	}
 
 	return xfatMetadata{
 		Path:          cleanPath,
 		Name:          name,
-		EntryCluster:  entry.GetEntryCluster(),
-		Size:          entry.GetSize(),
+		EntryCluster:  entry.FirstCluster(),
+		Size:          entry.Size(),
 		IsDirectory:   entry.IsDir(),
 		Deleted:       entry.IsDeleted(),
 		Special:       entry.IsSpecialFile(),
 		Virtual:       entry.IsVirtualEntry(),
-		Indexed:       entry.IsIndexed(),
-		HasFATChain:   entry.HasFatChain(),
-		VolumeLabel:   s.fs.GetVolumeLabel(),
-		ClusterSize:   s.fs.GetClusterSize(),
-		Attributes:    entry.GetAttributes(),
-		ValidDataSize: entry.GetValidDataSize(),
+		Indexed:       entry.IsInUse(),
+		HasFATChain:   !entry.IsContiguous(),
+		VolumeLabel:   label,
+		ClusterSize:   s.fs.ClusterSize(),
+		Attributes:    entry.Attributes(),
+		ValidDataSize: entry.ValidDataSize(),
 		Times:         xfatTimesFromEntry(entry),
 	}, nil
 }
@@ -2475,14 +2493,8 @@ func (s *realXFATSession) findEntryByPath(targetPath string) (libxfat.Entry, err
 
 func xfatFindEntryByName(entries []libxfat.Entry, name string) (libxfat.Entry, bool) {
 	for _, entry := range entries {
-		entryName := strings.TrimSpace(entry.GetName())
+		entryName := strings.TrimSpace(entry.Name())
 		if strings.EqualFold(entryName, name) {
-			return entry, true
-		}
-		// libxfat marks recovered entries by appending its DELETED suffix to the
-		// name; take the constant from the library rather than restating it, so
-		// a change there is a compile-time concern rather than a silent miss.
-		if strings.EqualFold(strings.TrimSuffix(entryName, libxfat.DELETED), name) {
 			return entry, true
 		}
 	}

@@ -52,19 +52,24 @@ bodyfiles, plists, syslog, email, deleted-file recovery, and live process memory
 edge of this policy: nothing catches an omission automatically, which is why the
 list is short, grouped and commented.
 
-## 3. The two exceptions
+## 3. The one exception
 
-Both write somewhere other than the evidence. That is the bar.
+It writes somewhere other than the evidence. That is the bar.
 
 | Site | What it writes | Why |
 | --- | --- | --- |
-| `realXFATSession.ReadFile` | `os.CreateTemp` + `os.Remove` | libxfat extracts only to a path, so an exFAT file's content round-trips through a temp file. The volume is opened read-only and never written. |
 | `withSQLiteCopy` / `copyFileContents` | `os.MkdirTemp`, `os.Create`, `os.RemoveAll` | This one is the policy in action rather than an exception to it. SQLite wants to write a journal beside any database it opens, so an evidence database is **copied** into a temp directory and queried there — which is exactly why the original is never opened by something that would modify it. |
 
-Each is recorded in
+It is recorded in
 [`policy.EvidenceWriteAllowlist`](../policy/evidence_policy.go) with an exact
 line count, so a new write added inside an already-permitted function still fails
 the guard.
+
+There were two. `realXFATSession.ReadFile` wrote an exFAT file's content to
+`os.CreateTemp` and read it straight back, because extracting to a path was the
+only way libxfat would part with content. libxfat v1.3.0 added a reading API and
+the exception was retired rather than rewritten -- the guard reported it as a
+hole the moment the write went away, which is the behaviour this list is for.
 
 ### The distinguishing test
 
