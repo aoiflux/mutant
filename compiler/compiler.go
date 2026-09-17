@@ -886,7 +886,13 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.Compile(node.Body); err != nil {
 			return err
 		}
-		if c.lastInstructionIs(code.OpPop) {
+		// Whether the body's last value becomes the return value is a question
+		// about the last statement's syntax, not about the last instruction
+		// emitted -- the distinction leaveOneValue documents. A body ending in
+		// `for (v in xs)` also ends in an OpPop, the one dropping the loop
+		// cursor, so converting that pop into a return hands the caller the
+		// cursor where it expected null.
+		if endsInExpressionStatement(node.Body) {
 			c.replaceLastPopWithReturn()
 		}
 		if !c.lastInstructionIs(code.OpReturnValue) {
@@ -1677,15 +1683,28 @@ func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
 // anything that only inspects the instruction stream, and stripping that pop
 // leaves the cursor on the stack as the arm's value.
 func (c *Compiler) leaveOneValue(body *ast.BlockStatement) {
-	if body != nil && len(body.Statements) > 0 {
-		if _, ok := body.Statements[len(body.Statements)-1].(*ast.ExpressionStatement); ok {
-			// An expression statement always emits its OpPop, so this is
-			// always the instruction that pop belongs to.
-			c.removeLastPop()
-			return
-		}
+	if endsInExpressionStatement(body) {
+		c.removeLastPop()
+		return
 	}
 	c.emit(code.OpNull)
+}
+
+// endsInExpressionStatement reports whether the block just compiled computed a
+// value and threw it away, which is to say whether its trailing OpPop is one
+// that may be removed or rewritten.
+//
+// This is the syntactic question leaveOneValue's comment insists on, factored
+// out so every caller asks it the same way: an expression statement emits its
+// OpPop unconditionally, so a block ending in one always ends in that pop, and
+// a block ending in anything else that happens to end in a pop ends in
+// somebody else's.
+func endsInExpressionStatement(body *ast.BlockStatement) bool {
+	if body == nil || len(body.Statements) == 0 {
+		return false
+	}
+	_, ok := body.Statements[len(body.Statements)-1].(*ast.ExpressionStatement)
+	return ok
 }
 
 func (c *Compiler) emitBindingStore(symbol Symbol) {
@@ -1721,10 +1740,14 @@ func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
 		return err
 	}
 
-	if c.lastInstructionIs(code.OpPop) {
-		c.removeLastPop()
-	}
-
+	// Deliberately no removeLastPop here, and none after the body, init or
+	// post section of a for statement either. A loop body is a statement: it
+	// owes no value to anyone, and `while` is not an expression in this
+	// language, so there is nobody for that value to be owed to. Stripping the
+	// pop of a body ending in an expression statement leaves that value on the
+	// stack once per iteration, which is invisible until the loop sits inside
+	// a for-in -- whose cursor lives below the leak and gets read as whatever
+	// piled up on top of it. See compileForInStatement.
 	ctx := &c.loopContexts[len(c.loopContexts)-1]
 	for _, pos := range ctx.continuePositions {
 		c.changeOperand(pos, conditionStartPosition)
@@ -1744,13 +1767,9 @@ func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
 }
 
 func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
-	initStart := len(c.currentInstructions())
 	if node.Init != nil {
 		if err := c.Compile(node.Init); err != nil {
 			return err
-		}
-		if c.lastInstructionIs(code.OpPop) && c.scopes[c.scopeIndex].lastInstruction.Position >= initStart {
-			c.removeLastPop()
 		}
 	}
 
@@ -1771,24 +1790,28 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 		return err
 	}
 
-	if c.lastInstructionIs(code.OpPop) {
-		c.removeLastPop()
-	}
-
+	// No removeLastPop after the body -- see compileWhileStatement for why the
+	// leak this used to introduce is only ever visible under a for-in.
 	postStartPosition := len(c.currentInstructions())
 	ctx := &c.loopContexts[len(c.loopContexts)-1]
 	for _, pos := range ctx.continuePositions {
 		c.changeOperand(pos, postStartPosition)
 	}
 
+	// The post section is an Expression, not a Statement, so nothing else
+	// discards its value -- and an assignment is an expression that yields the
+	// value it stored, so the usual `i++` pushes one. The pop has to be
+	// emitted here.
+	//
+	// This is the half of the leak that survived "write the body so it ends in
+	// a `let`": a body can be spelled to leave nothing behind, but there is no
+	// spelling of an increment that is not an expression.
 	if node.Post != nil {
 		if err := c.Compile(node.Post); err != nil {
 			c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
 			return err
 		}
-		if c.lastInstructionIs(code.OpPop) {
-			c.removeLastPop()
-		}
+		c.emit(code.OpPop)
 	}
 
 	c.emit(code.OpJump, conditionStartPosition)
