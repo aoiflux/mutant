@@ -105,6 +105,18 @@ func (s *Snapshot) signatureInformationForCall(call *mast.CallExpression, pos ls
 			return lsp.SignatureInformation{}, false
 		}
 		return s.functionLiteralSignature(literal, functionDisplayName(fn.Value, literal.Name)), true
+	case *mast.FieldExpression:
+		// The dotted spelling of a builtin. Without this arm it fell to the
+		// default below, so `fs.read(` offered nothing while `fs_read(` offered
+		// the typed signature -- and the inlay hints built on this went with it.
+		name, _, ok := builtinCallee(fn, s.boundAt(pos))
+		if !ok {
+			return lsp.SignatureInformation{}, false
+		}
+		if sig, ok := builtinSignatureInformation(name); ok {
+			return sig, true
+		}
+		return lsp.SignatureInformation{Label: fmt.Sprintf("%s(...)", name)}, true
 	default:
 		return lsp.SignatureInformation{}, false
 	}

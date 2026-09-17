@@ -1,6 +1,12 @@
 package analyzer
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
+	lsp "github.com/tliron/glsp/protocol_3_16"
+
 	mast "mutant/ast"
 )
 
@@ -73,6 +79,105 @@ func builtinCallee(fn mast.Expression, bound func(string) bool) (name string, an
 	}
 
 	return "", nil, false
+}
+
+// boundAt is the `bound` predicate for the surfaces that have a Snapshot and a
+// position: a let, a parameter or an import namespace visible there beats the
+// derived builtin, exactly as it does in the compiler.
+func (s *Snapshot) boundAt(pos lsp.Position) func(string) bool {
+	if s == nil {
+		return nil
+	}
+	var imports map[string]struct{}
+	if s.Program != nil {
+		imports = importNamespaces(s.Program.Statements)
+	}
+	visible := s.VisibleBindingsAt(pos)
+	if len(imports) == 0 && len(visible) == 0 {
+		return nil
+	}
+
+	return func(name string) bool {
+		if _, imported := imports[name]; imported {
+			return true
+		}
+		for _, b := range visible {
+			if b.ident != nil && b.ident.Value == name {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// namespacedBuiltinAt resolves the builtin named by the dotted expression at
+// pos, whichever half of it the cursor is in.
+//
+// It finds the enclosing field expression the way NodeAt finds anything else --
+// the smallest ranged node containing the position -- because NodeAt itself
+// hands back the innermost node, which for `hash.blake2` is the bare identifier
+// `blake2` and carries no hint that there is a namespace in front of it.
+//
+// onField separates the two questions: the cursor on `blake2` is asking about
+// the function, the cursor on `hash` about the family.
+func (s *Snapshot) namespacedBuiltinAt(pos lsp.Position) (name string, onField bool, ok bool) {
+	if s == nil || s.Program == nil || s.Program.NodePositions == nil {
+		return "", false, false
+	}
+
+	var best *mast.FieldExpression
+	bestSize := int(^uint(0) >> 1)
+	for node, rng := range s.Program.NodePositions {
+		field, isField := node.(*mast.FieldExpression)
+		if !isField || field == nil || !rng.IsValid() || !contains(rng, pos) {
+			continue
+		}
+		if size := rng.End.Offset - rng.Start.Offset; size < bestSize {
+			best, bestSize = field, size
+		}
+	}
+	if best == nil {
+		return "", false, false
+	}
+
+	resolved, _, found := builtinCallee(best, s.boundAt(pos))
+	if !found {
+		return "", false, false
+	}
+
+	// The field's own range is the narrower of the two, so it is asked about
+	// first; anything else inside the expression is the namespace.
+	if best.Field != nil {
+		if rng, has := s.Program.NodePositions[mast.Node(best.Field)]; has && rng.IsValid() && contains(rng, pos) {
+			return resolved, true, true
+		}
+	}
+	return resolved, false, true
+}
+
+// builtinFamilyHoverText is the card for the other half: the cursor on `hash`
+// rather than on `blake2`.
+//
+// There is no builtin called `hash`, so without this the namespace hovered as a
+// bare identifier -- the answer that sends a reader looking for a variable that
+// does not exist. It lists what is in the family, because "what else is in
+// here" is what someone hovering a namespace is actually asking.
+func builtinFamilyHoverText(namespace string) (string, bool) {
+	members := builtinFamilyMembers(namespace)
+	if len(members) == 0 {
+		return "", false
+	}
+	sort.Strings(members)
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "builtin family `%s`\n\n", namespace)
+	fmt.Fprintf(&out, "%d builtins. `%s.%s` and `%s_%s` are the same function.\n\n",
+		len(members), namespace, members[0], namespace, members[0])
+	out.WriteString("**Members**\n\n")
+	for _, member := range members {
+		fmt.Fprintf(&out, "- `%s.%s`\n", namespace, member)
+	}
+	return out.String(), true
 }
 
 // builtinNameSet is the registry as a set, built once.

@@ -106,6 +106,21 @@ func (s *Snapshot) HoverText(pos lsp.Position) (string, mast.Range, bool) {
 		if text, ok := macroSpecialFormHoverText(n.Value); ok {
 			return text, rng, true
 		}
+		// `hash.blake2` is `hash_blake2`, so hovering either half reaches the
+		// card the flat spelling reaches. This sits after everything that
+		// resolves a real binding, which is what keeps a variable called `hash`
+		// winning the way it wins in the compiler -- and before the
+		// bare-identifier fallback, which is what used to answer
+		// "identifier `blake2`" for a call into the standard library.
+		if name, onField, ok := s.namespacedBuiltinAt(pos); ok {
+			if onField {
+				if text, ok := builtinHoverText(name); ok {
+					return text, rng, true
+				}
+			} else if text, ok := builtinFamilyHoverText(n.Value); ok {
+				return text, rng, true
+			}
+		}
 		label := fmt.Sprintf("identifier `%s`", n.Value)
 		if ty, ok := s.TypeOf(n); ok {
 			label += fmt.Sprintf(" : %s", ty)
@@ -910,6 +925,25 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 			}
 		}
 		collectExpressionTokenOverrides(e.Function, overrides)
+		// The dotted spelling of the same call, corrected *after* that walk:
+		// the walk paints the member a `property`, the colour of a struct
+		// field, and reading `fs.read` in one colour and `fs_read` in another
+		// says they are two things.
+		//
+		// Like the bare-identifier arm above, this asks the registry rather
+		// than the scope. A painting pass has no scope to consult, and a wrong
+		// colour on a variable that shadows a family is a much smaller harm
+		// than a wrong hover card -- which does consult it.
+		if field, ok := e.Function.(*mast.FieldExpression); ok && field != nil && field.Field != nil {
+			if namespace, isIdent := field.Left.(*mast.Identifier); isIdent && namespace != nil {
+				if isLiveBuiltin(namespace.Value + "_" + field.Field.Value) {
+					overrides[field.Field] = semanticTokenOverride{
+						typeID:   semanticTokenTypeIndex["function"],
+						modifier: semanticTokenModifierBit("defaultLibrary"),
+					}
+				}
+			}
+		}
 		for _, arg := range e.Arguments {
 			collectExpressionTokenOverrides(arg, overrides)
 		}
