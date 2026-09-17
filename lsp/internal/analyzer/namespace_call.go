@@ -8,6 +8,7 @@ import (
 	lsp "github.com/tliron/glsp/protocol_3_16"
 
 	mast "mutant/ast"
+	"mutant/sema"
 )
 
 // This file holds the one thing every builtin-aware rule needs once a builtin
@@ -62,20 +63,24 @@ func builtinCallee(fn mast.Expression, bound func(string) bool) (name string, an
 			// namespace.
 			return "", nil, false
 		}
-		if bound != nil && bound(namespace.Value) {
-			// A variable, parameter or import namespace called `fs` wins, the
-			// same way it wins in the compiler.
+		// Whether this is a builtin call at all is sema's decision, and asking
+		// it is the point: the fold used to be derived here, again in
+		// compiler.compileFieldExpression, and again in the evaluator, and the
+		// three disagreed. Each asked "is this name already taken?" of a
+		// different thing, so `rand.int` was painted as a builtin here, ran
+		// under the evaluator, and would not compile. One answer now serves all
+		// three.
+		//
+		// bound becomes sema's Bound unchanged, which keeps the gate this arm
+		// has always had: without it every `p.x(...)` in the file would be a
+		// call to a builtin named "p_x", and every rule downstream would be
+		// deciding about a name that does not exist. A variable, parameter or
+		// import namespace called `fs` still wins.
+		folded := semaResolver.ResolveField(sema.ScopeCtx{Bound: bound}, namespace.Value, node.Field.Value)
+		if folded.Kind != sema.FieldBuiltinFold {
 			return "", nil, false
 		}
-
-		derived := namespace.Value + "_" + node.Field.Value
-		// This gate is not optional. Without it every `p.x(...)` in the file
-		// becomes a call to a builtin named "p_x", and each rule would then be
-		// deciding on a name that does not exist.
-		if !isLiveBuiltin(derived) {
-			return "", nil, false
-		}
-		return derived, node, true
+		return folded.Builtin, node, true
 	}
 
 	return "", nil, false
@@ -187,6 +192,10 @@ func builtinFamilyHoverText(namespace string) (string, bool) {
 // struct rather than a namespace, and these rules ask about every call in the
 // file on every keystroke.
 var builtinNameSet = liveBuiltinNames()
+
+// semaResolver is the one decision procedure for what a name refers to.
+// It holds no state, so one instance serves the whole package.
+var semaResolver = sema.NewResolver()
 
 // isLiveBuiltin reports whether name is a builtin in this build.
 func isLiveBuiltin(name string) bool {

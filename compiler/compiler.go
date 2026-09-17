@@ -9,6 +9,7 @@ import (
 	"mutant/builtin"
 	"mutant/code"
 	"mutant/object"
+	"mutant/sema"
 	"path/filepath"
 	"sort"
 )
@@ -2141,43 +2142,98 @@ func (c *Compiler) compileTemplateLiteral(node *ast.TemplateLiteral) error {
 	return nil
 }
 
+// semaResolver is the one decision procedure for what a name refers to. It
+// holds no state, so one instance serves every compilation in the process.
+var semaResolver = sema.NewResolver()
+
+// scopeCtx describes the name environment the compiler has reached, for sema to
+// decide against.
+//
+// It is built per call rather than cached because every predicate closes over
+// state that moves as compilation descends: the symbol table is swapped on
+// entering a function scope, and the namespace map is rebound on entering a
+// module. A cached context would answer for wherever it happened to be built.
+func (c *Compiler) scopeCtx() sema.ScopeCtx {
+	return sema.ScopeCtx{
+		Module: c.symbolTable.CurrentModule(),
+
+		Enums: func(name string) bool {
+			_, declared := c.enumDefinitions[name]
+			return declared
+		},
+
+		Namespace: c.symbolTable.LookupNamespace,
+
+		Bound: func(name string) bool {
+			symbol, found := c.symbolTable.Resolve(name)
+			// A bare builtin is not a binding. DefineBuiltin writes every
+			// builtin into the very store Resolve reads, so without this test
+			// the four families whose own name is also a registered builtin --
+			// rand, sort, assert, gunzip -- came back "taken" and never folded.
+			// That was a901ce4. This is now the only place in the tree that
+			// distinction is drawn, instead of the third of three.
+			return found && symbol.Scope != BuiltinScope
+		},
+
+		Exports: func(key, name string) (sema.ExportFact, bool) {
+			symbol, declared := c.symbolTable.ResolveIn(key, name)
+			if !declared {
+				return sema.ExportFact{}, false
+			}
+			return sema.ExportFact{
+				Name:    symbol.Name,
+				Private: sema.IsModulePrivate(symbol.Name),
+			}, true
+		},
+
+		// ModuleKnown is deliberately nil. module.Load has already succeeded by
+		// the time anything is compiled, so every module in the closure is
+		// loaded by construction and sema never has to hedge here.
+
+		ModuleName: c.moduleName,
+	}
+}
+
 func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 	if ident, ok := node.Left.(*ast.Identifier); ok {
-		if _, exists := c.enumDefinitions[ident.Value]; exists {
+		resolution := semaResolver.ResolveField(c.scopeCtx(), ident.Value, node.Field.Value)
+
+		// A hedged answer means sema was asked about a module it could not see,
+		// which cannot happen behind a successful module.Load. Stopping beats
+		// emitting code for a guess.
+		if resolution.Confidence != sema.Certain {
+			return fmt.Errorf("internal: sema hedged on %s.%s during compilation",
+				ident.Value, node.Field.Value)
+		}
+
+		switch resolution.Kind {
+		case sema.FieldEnumValue:
 			typeNameIndex := c.addConstant(&object.String{Value: ident.Value})
 			tagNameIndex := c.addConstant(&object.String{Value: node.Field.Value})
 			c.emit(code.OpEnumValue, typeNameIndex, tagNameIndex)
 			return nil
-		}
 
-		// An import namespace reaches into another module's top level. It is
-		// tried before an ordinary variable of the same name because the
-		// import is a declaration in this very file, and after enums because
-		// those were already a namespace-shaped thing before modules existed.
-		if key, bound := c.symbolTable.LookupNamespace(ident.Value); bound {
-			return c.compileModuleMember(key, ident.Value, node.Field.Value)
-		}
-
-		// A namespaced builtin: fs.read is fs_read. Derived rather than
-		// tabulated, so every family works the moment it is added and nothing
-		// has to be kept in step. It is tried last, so a variable, parameter or
-		// struct called `fs` still wins and no existing program changes
-		// meaning.
-		//
-		// A BuiltinScope hit is not one of those bindings. DefineBuiltin writes
-		// every builtin into the same store Resolve reads, so asking Resolve
-		// alone answered "taken" for the four families whose own name is also a
-		// builtin -- rand, sort, assert, gunzip -- and `rand.int` compiled to a
-		// field access on a builtin, which the VM can only refuse. The evaluator
-		// asks env.Get, which holds no builtins, and folded; so did the language
-		// server, which offered those nine members in completion. Excluding the
-		// builtin scope here is what makes the three agree, and it cannot change
-		// an existing program: OpGetField on a builtin has never returned.
-		if symbol, shadowed := c.symbolTable.Resolve(ident.Value); !shadowed || symbol.Scope == BuiltinScope {
-			if flat := ident.Value + "_" + node.Field.Value; builtin.GetBuiltinByName(flat) != nil {
-				c.loadSymbol(Symbol{Name: flat, Scope: BuiltinScope})
-				return nil
+		case sema.FieldModuleMember:
+			// sema vouched for this member against this very table, so a miss
+			// is a disagreement between the two rather than a program error.
+			symbol, declared := c.symbolTable.ResolveIn(resolution.ModuleKey, resolution.Member)
+			if !declared {
+				return fmt.Errorf("internal: sema resolved %s.%s to a member the symbol table does not hold",
+					ident.Value, resolution.Member)
 			}
+			c.loadSymbol(symbol)
+			return nil
+
+		case sema.FieldBuiltinFold:
+			c.loadSymbol(Symbol{Name: resolution.Builtin, Scope: BuiltinScope})
+			return nil
+
+		case sema.FieldRefused:
+			return resolution.Refusal
+
+		case sema.FieldValueAccess:
+			// An ordinary field read on a value. Fall through to OpGetField,
+			// which is also where a.b.c, f().x and arr[0].x arrive directly.
 		}
 	}
 
@@ -2187,26 +2243,6 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 
 	fieldNameIndex := c.addConstant(&object.String{Value: node.Field.Value})
 	c.emit(code.OpGetField, fieldNameIndex)
-	return nil
-}
-
-// compileModuleMember loads name from the top level of the module bound to
-// namespace.
-func (c *Compiler) compileModuleMember(key, namespace, name string) error {
-	if IsModulePrivate(name) {
-		return fmt.Errorf(
-			"%s.%s is private to %s: a top-level name beginning with _ is visible only inside the module that declares it",
-			namespace, name, c.moduleName(key),
-		)
-	}
-
-	symbol, ok := c.symbolTable.ResolveIn(key, name)
-	if !ok {
-		return fmt.Errorf("%s declares no %s, so %s.%s has nothing to refer to",
-			c.moduleName(key), name, namespace, name)
-	}
-
-	c.loadSymbol(symbol)
 	return nil
 }
 

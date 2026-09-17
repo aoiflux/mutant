@@ -1,8 +1,15 @@
 package evaluator
 
-import "mutant/builtin"
+import (
+	"mutant/builtin"
+	"mutant/sema"
+)
 
 var builtins = buildBuiltinMap()
+
+// semaResolver is the one decision procedure for what a name refers to.
+// It holds no state, so one instance serves the whole package.
+var semaResolver = sema.NewResolver()
 
 func buildBuiltinMap() map[string]*builtin.BuiltIn {
 	entries := make(map[string]*builtin.BuiltIn, len(builtin.Builtins))

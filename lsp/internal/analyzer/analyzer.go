@@ -10,6 +10,7 @@ import (
 	"mutant/builtin"
 	"mutant/lexer"
 	mutantparser "mutant/parser"
+	"mutant/sema"
 	"mutant/token"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -945,7 +946,7 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		// than a wrong hover card -- which does consult it.
 		if field, ok := e.Function.(*mast.FieldExpression); ok && field != nil && field.Field != nil {
 			if namespace, isIdent := field.Left.(*mast.Identifier); isIdent && namespace != nil {
-				if isLiveBuiltin(namespace.Value + "_" + field.Field.Value) {
+				if folded := semaResolver.ResolveField(sema.ScopeCtx{}, namespace.Value, field.Field.Value); folded.Kind == sema.FieldBuiltinFold {
 					overrides[field.Field] = semanticTokenOverride{
 						typeID:   semanticTokenTypeIndex["function"],
 						modifier: semanticTokenModifierBit("defaultLibrary"),

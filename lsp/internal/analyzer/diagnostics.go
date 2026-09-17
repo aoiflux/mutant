@@ -9,6 +9,7 @@ import (
 	mast "mutant/ast"
 	"mutant/builtin"
 	localprotocol "mutant/lsp/internal/protocol"
+	"mutant/sema"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -1532,7 +1533,7 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			// Guarded on the name being unbound, so a local `let str = "x"`
 			// followed by `str.upper` is still the field access it looks like.
 			if _, shadowed := current.find(namespace.Value); !shadowed && node.Field != nil {
-				if isLiveBuiltin(namespace.Value + "_" + node.Field.Value) {
+				if semaResolver.ResolveField(sema.ScopeCtx{}, namespace.Value, node.Field.Value).Kind == sema.FieldBuiltinFold {
 					return
 				}
 				// The family exists and this member does not, which is a typo

@@ -13,6 +13,7 @@ import (
 	"mutant/ast"
 	"mutant/builtin"
 	"mutant/object"
+	"mutant/sema"
 	"strings"
 )
 
@@ -813,13 +814,29 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 			return val
 		}
 
-		// A namespaced builtin: str.upper is str_upper. Derived from the flat
-		// name rather than tabulated, which is what lets all 44 families work
-		// without a list to maintain. It matches the compiler's arm in
-		// compileFieldExpression, down to the order: a binding named `str`
-		// wins, so nothing that already works changes meaning.
-		if _, bound := env.Get(ident.Value); !bound {
-			if fn, found := builtins[ident.Value+"_"+node.Field.Value]; found {
+		// A namespaced builtin: str.upper is str_upper. The fold used to be
+		// derived here as well as in the compiler and in the language server,
+		// and the three did not agree -- each asked "is this name taken?" of a
+		// different thing, so rand.int worked under this engine and failed
+		// under the other. sema now makes that decision once; this engine
+		// supplies only what is peculiar to it, which is that a binding lives
+		// in an environment rather than a symbol table.
+		//
+		// Namespace and Enums stay nil deliberately. Imports are resolved and
+		// linked before evaluation begins, so there are no import namespaces
+		// here, and an enum variant was already answered above out of the
+		// environment.
+		folded := semaResolver.ResolveField(sema.ScopeCtx{
+			Bound: func(name string) bool {
+				_, bound := env.Get(name)
+				return bound
+			},
+		}, ident.Value, node.Field.Value)
+		if folded.Kind == sema.FieldBuiltinFold {
+			// Looked up in this engine's own table rather than taken on trust,
+			// so a registry entry with no implementation falls through to field
+			// access exactly as it did before.
+			if fn, found := builtins[folded.Builtin]; found {
 				return fn
 			}
 		}

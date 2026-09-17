@@ -3,6 +3,8 @@ package compiler
 import (
 	"sort"
 	"strings"
+
+	"mutant/sema"
 )
 
 type SymbolScope string
@@ -86,8 +88,13 @@ func qualify(module, name string) string {
 // module that declares it. A leading underscore is the entire rule: there is no
 // export list to keep in step with the code, and the mark travels with every
 // mention of the name rather than living in one place far away from it.
+//
+// The rule itself lives in sema, because the editor has to apply exactly this
+// one and cannot import the compiler. This forwards rather than repeating it:
+// two copies of an export rule is how a language server comes to offer a name
+// the build will refuse.
 func IsModulePrivate(name string) bool {
-	return strings.HasPrefix(name, "_")
+	return sema.IsModulePrivate(name)
 }
 
 func NewSymbolTable() *SymbolTable {
