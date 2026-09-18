@@ -1238,7 +1238,7 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 				URI:        "file:///cycle-defs.mut",
 				LanguageID: "mutant",
 				Version:    1,
-				Text:       "let shared = 1;\n",
+				Text:       "struct shared { n };\n",
 			},
 		}),
 		Notify: func(string, any) {},
@@ -1247,7 +1247,11 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 		t.Fatalf("didOpen defs returned error: %v", err)
 	}
 
-	usageText := "shared;\n"
+	// A struct name is the one declaration another file names bare, so this is
+	// a cross-file reference the compiler would also make. The import is what
+	// brings cycle-defs.mut into this file's closure.
+	const preamble = "import defs \"cycle-defs.mut\";\n"
+	usageText := preamble + "shared;\n"
 	_, _, _, err = s.handler.Handle(&glsp.Context{
 		Method: string(lsp.MethodTextDocumentDidOpen),
 		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
@@ -1266,9 +1270,9 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 
 	for i := 0; i < 30; i++ {
 		if i%2 == 0 {
-			usageText = "shared;\n"
+			usageText = preamble + "shared;\n"
 		} else {
-			usageText = "shared;\nshared;\n"
+			usageText = preamble + "shared;\nshared;\n"
 		}
 
 		_, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
@@ -1296,7 +1300,7 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 			Params: mustJSON(t, lsp.HoverParams{
 				TextDocumentPositionParams: lsp.TextDocumentPositionParams{
 					TextDocument: lsp.TextDocumentIdentifier{URI: "file:///cycle-usage.mut"},
-					Position:     lsp.Position{Line: 0, Character: 1},
+					Position:     lsp.Position{Line: 1, Character: 1},
 				},
 			}),
 		})
@@ -1323,7 +1327,7 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 			Params: mustJSON(t, lsp.DefinitionParams{
 				TextDocumentPositionParams: lsp.TextDocumentPositionParams{
 					TextDocument: lsp.TextDocumentIdentifier{URI: "file:///cycle-usage.mut"},
-					Position:     lsp.Position{Line: 0, Character: 1},
+					Position:     lsp.Position{Line: 1, Character: 1},
 				},
 			}),
 		})
@@ -1340,8 +1344,8 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 		if location.URI != "file:///cycle-defs.mut" {
 			t.Fatalf("definition iteration %d URI = %q, want file:///cycle-defs.mut", i, location.URI)
 		}
-		if location.Range.Start.Line != 0 || location.Range.Start.Character != 4 {
-			t.Fatalf("definition iteration %d start = %+v, want line 0 char 4", i, location.Range.Start)
+		if location.Range.Start.Line != 0 || location.Range.Start.Character != 7 {
+			t.Fatalf("definition iteration %d start = %+v, want line 0 char 7", i, location.Range.Start)
 		}
 
 		referencesAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
@@ -1349,7 +1353,7 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 			Params: mustJSON(t, lsp.ReferenceParams{
 				TextDocumentPositionParams: lsp.TextDocumentPositionParams{
 					TextDocument: lsp.TextDocumentIdentifier{URI: "file:///cycle-usage.mut"},
-					Position:     lsp.Position{Line: 0, Character: 1},
+					Position:     lsp.Position{Line: 1, Character: 1},
 				},
 				Context: lsp.ReferenceContext{IncludeDeclaration: true},
 			}),
@@ -1370,7 +1374,7 @@ func TestHoverDefinitionAndReferencesRemainStableAcrossRepeatedOpenChangeCycles(
 
 		foundDeclaration := false
 		for _, loc := range locations {
-			if loc.URI == "file:///cycle-defs.mut" && loc.Range.Start.Line == 0 && loc.Range.Start.Character == 4 {
+			if loc.URI == "file:///cycle-defs.mut" && loc.Range.Start.Line == 0 && loc.Range.Start.Character == 7 {
 				foundDeclaration = true
 				break
 			}
@@ -3571,141 +3575,6 @@ func TestDefinitionResolvesTopLevelAndParameterBindings(t *testing.T) {
 	}
 }
 
-func TestDefinitionResolvesWorkspaceTopLevelBindingAcrossFiles(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///defs.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///usage.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	defAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDefinition),
-		Params: mustJSON(t, lsp.DefinitionParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///usage.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("definition returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("definition validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	location, ok := defAny.(*lsp.Location)
-	if !ok || location == nil {
-		t.Fatalf("definition result type = %T, want *Location", defAny)
-	}
-	if location.URI != "file:///defs.mut" {
-		t.Fatalf("definition URI = %q, want file:///defs.mut", location.URI)
-	}
-	if location.Range.Start.Line != 0 || location.Range.Start.Character != 4 {
-		t.Fatalf("definition start = %+v, want line 0 char 4", location.Range.Start)
-	}
-}
-
-func TestDefinitionWorkspaceFallbackSkipsAmbiguousTopLevelBindings(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///defs-a.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-a returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///defs-b.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 2;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-b returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///usage-ambiguous.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	defAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDefinition),
-		Params: mustJSON(t, lsp.DefinitionParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///usage-ambiguous.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("definition returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("definition validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	if defAny != nil {
-		t.Fatalf("definition result = %T, want nil for ambiguous workspace symbol", defAny)
-	}
-}
-
 func TestDefinitionResolvesEnumMemberUsageToDeclaration(t *testing.T) {
 	s := New(false)
 	initializeServer(t, s)
@@ -4155,172 +4024,6 @@ func TestReferencesResolveLexicalBindings(t *testing.T) {
 	assertLocationStart(t, locations, 2, 2)
 }
 
-func TestReferencesResolveWorkspaceTopLevelBindingAcrossFiles(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///refs-defs.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///refs-usage.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared + 1;\nshared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	referencesAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentReferences),
-		Params: mustJSON(t, lsp.ReferenceParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///refs-usage.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-			Context: lsp.ReferenceContext{IncludeDeclaration: true},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("references returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("references validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	locations, ok := referencesAny.([]lsp.Location)
-	if !ok {
-		t.Fatalf("references result type = %T, want []Location", referencesAny)
-	}
-	if len(locations) != 3 {
-		t.Fatalf("reference count = %d, want 3", len(locations))
-	}
-	assertLocationURIStart(t, locations, "file:///refs-defs.mut", 0, 4)
-	assertLocationURIStart(t, locations, "file:///refs-usage.mut", 0, 0)
-	assertLocationURIStart(t, locations, "file:///refs-usage.mut", 1, 0)
-
-	referencesAny, validMethod, validParams, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentReferences),
-		Params: mustJSON(t, lsp.ReferenceParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///refs-usage.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-			Context: lsp.ReferenceContext{IncludeDeclaration: false},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("references without declaration returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("references without declaration validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	locations, ok = referencesAny.([]lsp.Location)
-	if !ok {
-		t.Fatalf("references without declaration result type = %T, want []Location", referencesAny)
-	}
-	if len(locations) != 2 {
-		t.Fatalf("reference count without declaration = %d, want 2", len(locations))
-	}
-	assertLocationURIStart(t, locations, "file:///refs-usage.mut", 0, 0)
-	assertLocationURIStart(t, locations, "file:///refs-usage.mut", 1, 0)
-}
-
-func TestReferencesWorkspaceFallbackSkipsAmbiguousTopLevelBindings(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///refs-defs-a.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-a returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///refs-defs-b.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 2;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-b returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///refs-usage-ambiguous.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	referencesAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentReferences),
-		Params: mustJSON(t, lsp.ReferenceParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///refs-usage-ambiguous.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-			Context: lsp.ReferenceContext{IncludeDeclaration: true},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("references returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("references validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	if referencesAny != nil {
-		if locations, ok := referencesAny.([]lsp.Location); ok && len(locations) == 0 {
-			return
-		}
-		t.Fatalf("references result = %T, want nil/empty for ambiguous workspace symbol", referencesAny)
-	}
-}
-
 func TestPrepareRenameAndRenameWorkspaceEdit(t *testing.T) {
 	s := New(false)
 	initializeServer(t, s)
@@ -4396,286 +4099,6 @@ func TestPrepareRenameAndRenameWorkspaceEdit(t *testing.T) {
 	}
 	assertTextEdit(t, changes, 1, 6, "value")
 	assertTextEdit(t, changes, 2, 2, "value")
-}
-
-func TestPrepareRenameResolvesWorkspaceTopLevelBindingAcrossFiles(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///prepare-defs.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///prepare-usage.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	prepareAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentPrepareRename),
-		Params: mustJSON(t, lsp.PrepareRenameParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///prepare-usage.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("prepareRename returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("prepareRename validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	rangeWithPlaceholder, ok := prepareAny.(*lsp.RangeWithPlaceholder)
-	if !ok || rangeWithPlaceholder == nil {
-		t.Fatalf("prepareRename result type = %T, want *RangeWithPlaceholder", prepareAny)
-	}
-	if rangeWithPlaceholder.Placeholder != "shared" {
-		t.Fatalf("prepareRename placeholder = %q, want shared", rangeWithPlaceholder.Placeholder)
-	}
-	if rangeWithPlaceholder.Range.Start.Line != 0 || rangeWithPlaceholder.Range.Start.Character != 0 {
-		t.Fatalf("prepareRename start = %+v, want line 0 char 0", rangeWithPlaceholder.Range.Start)
-	}
-}
-
-func TestPrepareRenameWorkspaceFallbackSkipsAmbiguousTopLevelBindings(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///prepare-defs-a.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-a returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///prepare-defs-b.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 2;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-b returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///prepare-usage-ambiguous.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	prepareAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentPrepareRename),
-		Params: mustJSON(t, lsp.PrepareRenameParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///prepare-usage-ambiguous.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("prepareRename returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("prepareRename validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	if prepareAny != nil {
-		t.Fatalf("prepareRename result = %T, want nil for ambiguous workspace symbol", prepareAny)
-	}
-}
-
-func TestRenameResolvesWorkspaceTopLevelBindingAcrossFiles(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///rename-defs.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///rename-usage.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared + 1;\nshared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	renameAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentRename),
-		Params: mustJSON(t, lsp.RenameParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///rename-usage.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-			NewName: "value",
-		}),
-	})
-	if err != nil {
-		t.Fatalf("rename returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("rename validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	edit, ok := renameAny.(*lsp.WorkspaceEdit)
-	if !ok || edit == nil {
-		t.Fatalf("rename result type = %T, want *WorkspaceEdit", renameAny)
-	}
-	defsChanges := edit.Changes["file:///rename-defs.mut"]
-	usageChanges := edit.Changes["file:///rename-usage.mut"]
-	if len(defsChanges) != 1 {
-		t.Fatalf("defs rename edit count = %d, want 1", len(defsChanges))
-	}
-	if len(usageChanges) != 2 {
-		t.Fatalf("usage rename edit count = %d, want 2", len(usageChanges))
-	}
-	assertTextEdit(t, defsChanges, 0, 4, "value")
-	assertTextEdit(t, usageChanges, 0, 0, "value")
-	assertTextEdit(t, usageChanges, 1, 0, "value")
-}
-
-func TestRenameWorkspaceFallbackSkipsAmbiguousTopLevelBindings(t *testing.T) {
-	s := New(false)
-	initializeServer(t, s)
-
-	_, _, _, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///rename-defs-a.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 1;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-a returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///rename-defs-b.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "let shared = 2;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen defs-b returned error: %v", err)
-	}
-
-	_, _, _, err = s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentDidOpen),
-		Params: mustJSON(t, lsp.DidOpenTextDocumentParams{
-			TextDocument: lsp.TextDocumentItem{
-				URI:        "file:///rename-usage-ambiguous.mut",
-				LanguageID: "mutant",
-				Version:    1,
-				Text:       "shared;\n",
-			},
-		}),
-		Notify: func(string, any) {},
-	})
-	if err != nil {
-		t.Fatalf("didOpen usage returned error: %v", err)
-	}
-
-	renameAny, validMethod, validParams, err := s.handler.Handle(&glsp.Context{
-		Method: string(lsp.MethodTextDocumentRename),
-		Params: mustJSON(t, lsp.RenameParams{
-			TextDocumentPositionParams: lsp.TextDocumentPositionParams{
-				TextDocument: lsp.TextDocumentIdentifier{URI: "file:///rename-usage-ambiguous.mut"},
-				Position:     lsp.Position{Line: 0, Character: 1},
-			},
-			NewName: "value",
-		}),
-	})
-	if err != nil {
-		t.Fatalf("rename returned error: %v", err)
-	}
-	if !validMethod || !validParams {
-		t.Fatalf("rename validity flags = method:%t params:%t", validMethod, validParams)
-	}
-	if renameAny != nil {
-		if edit, ok := renameAny.(*lsp.WorkspaceEdit); ok && edit == nil {
-			return
-		}
-		t.Fatalf("rename result = %T, want nil/empty for ambiguous workspace symbol", renameAny)
-	}
 }
 
 func TestPrepareRenameRejectsNonIdentifierPosition(t *testing.T) {

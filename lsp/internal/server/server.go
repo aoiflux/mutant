@@ -925,7 +925,14 @@ func (s *Server) codeLens(_ *glsp.Context, params *lsp.CodeLensParams) ([]lsp.Co
 		declaration := &lsp.Location{URI: uri, Range: sym.SelectionRange}
 
 		locations, _ := snapshot.ReferenceLocations(uri, pos, false)
-		locations = append(locations, s.workspaceReferenceLocations(sym.Name, declaration, false)...)
+		if key, known := s.sema.KeyForURI(string(uri)); known {
+			locations = append(locations, s.workspaceReferenceLocations(workspaceDeclaration{
+				module:      key,
+				name:        sym.Name,
+				isType:      workspace.IsTypeKind(sym.Kind),
+				declaration: declaration,
+			}, false)...)
+		}
 		locations = dedupeLocations(locations)
 
 		count := len(locations)
@@ -961,8 +968,12 @@ func (s *Server) definition(_ *glsp.Context, params *lsp.DefinitionParams) (any,
 	}
 	location, ok := snapshot.DefinitionLocation(params.TextDocument.URI, params.Position)
 	if !ok {
-		if _, workspaceLocation, ok := s.resolveWorkspaceTopLevelAtPosition(snapshot, params.TextDocument.URI, params.Position, params.TextDocument.URI, false); ok {
-			return workspaceLocation, nil
+		// What is left is a type name declared in a module this file reaches.
+		// Struct and enum names are program-global, so they are the one kind of
+		// declaration another file can name without going through a namespace.
+		declared, found := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position)
+		if found && declared.declaration != nil {
+			return declared.declaration, nil
 		}
 		return nil, nil
 	}
@@ -991,7 +1002,7 @@ func (s *Server) references(_ *glsp.Context, params *lsp.ReferenceParams) ([]lsp
 		locations = nil
 	}
 
-	identName, workspaceLocation, ok := s.resolveWorkspaceTopLevelAtPosition(snapshot, params.TextDocument.URI, params.Position, "", true)
+	declared, ok := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position)
 	if !ok {
 		if len(locations) == 0 {
 			return nil, nil
@@ -999,7 +1010,7 @@ func (s *Server) references(_ *glsp.Context, params *lsp.ReferenceParams) ([]lsp
 		return locations, nil
 	}
 
-	workspaceLocations := s.workspaceReferenceLocations(identName, workspaceLocation, params.Context.IncludeDeclaration)
+	workspaceLocations := s.workspaceReferenceLocations(declared, params.Context.IncludeDeclaration)
 	locations = append(locations, workspaceLocations...)
 	locations = dedupeLocations(locations)
 	if len(locations) == 0 {
@@ -1019,7 +1030,7 @@ func (s *Server) prepareRename(_ *glsp.Context, params *lsp.PrepareRenameParams)
 		if !ok {
 			return nil, nil
 		}
-		if _, ok := s.resolveWorkspaceTopLevelByName(snapshot, params.TextDocument.URI, params.Position, name, params.TextDocument.URI, false); !ok {
+		if _, ok := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position); !ok {
 			return nil, nil
 		}
 		return &lsp.RangeWithPlaceholder{
@@ -1047,11 +1058,11 @@ func (s *Server) rename(_ *glsp.Context, params *lsp.RenameParams) (*lsp.Workspa
 		locations = nil
 	}
 	if len(locations) == 0 {
-		identName, workspaceLocation, ok := s.resolveWorkspaceTopLevelAtPosition(snapshot, params.TextDocument.URI, params.Position, params.TextDocument.URI, false)
+		declared, ok := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position)
 		if !ok {
 			return nil, nil
 		}
-		locations = s.workspaceReferenceLocations(identName, workspaceLocation, true)
+		locations = s.workspaceReferenceLocations(declared, true)
 		if len(locations) == 0 {
 			return nil, nil
 		}
@@ -1449,12 +1460,93 @@ func (s *Server) shouldNotifySemanticFallback() bool {
 	return true
 }
 
-func (s *Server) workspaceTopLevelDefinition(name string, sourceURI lsp.DocumentUri) (*lsp.Location, bool) {
-	return s.symbols.UniqueTopLevelDefinition(name, sourceURI)
+// workspaceDeclaration is the declaration a position refers to, named the way
+// sema names things -- by module rather than by URI -- because that is what a
+// question about visibility has to be asked in terms of.
+type workspaceDeclaration struct {
+	module string
+	name   string
+
+	// isType decides how the name can be written elsewhere. A struct or enum
+	// name is program-global and is written bare; everything else crosses a file
+	// boundary only as `alias.name`, because an import binds one namespace and
+	// nothing else comes with it.
+	isType bool
+
+	declaration *lsp.Location
 }
 
-func (s *Server) workspaceReferenceLocations(name string, declaration *lsp.Location, includeDeclaration bool) []lsp.Location {
-	return s.symbols.ReferenceLocations(name, declaration, includeDeclaration)
+// workspaceDeclarationAt reads a position as a reference to one declaration,
+// wherever that declaration lives.
+//
+// The three readings are tried most-specific first, and they are exhaustive:
+// a reach through a namespace, a name this file declares at its top level, and
+// a type name a module this file reaches declares. A name that is none of those
+// has no cross-file meaning at all, and the honest answer is that there is
+// nothing to look up -- which is where the old index went wrong, by treating
+// every matching string anywhere in the workspace as a candidate.
+func (s *Server) workspaceDeclarationAt(snapshot *analyzer.Snapshot, uri lsp.DocumentUri, pos lsp.Position) (workspaceDeclaration, bool) {
+	if snapshot == nil || s.sema == nil {
+		return workspaceDeclaration{}, false
+	}
+
+	if module, name, declaration, ok := snapshot.ModuleMemberTarget(pos); ok {
+		return workspaceDeclaration{module: module, name: name, declaration: &declaration}, true
+	}
+
+	name, ok := identifierAt(snapshot, pos)
+	if !ok {
+		return workspaceDeclaration{}, false
+	}
+	fromKey, known := s.sema.KeyForURI(string(uri))
+	if !known {
+		return workspaceDeclaration{}, false
+	}
+
+	if declaration, found := snapshot.DefinitionLocation(uri, pos); found {
+		// A local binding is the snapshot's business and stops here: nothing
+		// outside this file can name it, whatever it is called.
+		if !isTopLevelDefinitionLocation(snapshot, declaration) {
+			return workspaceDeclaration{}, false
+		}
+		kind, declared := s.symbols.TopLevelKind(uri, name)
+		if !declared {
+			return workspaceDeclaration{}, false
+		}
+		return workspaceDeclaration{
+			module:      fromKey,
+			name:        name,
+			isType:      workspace.IsTypeKind(kind),
+			declaration: declaration,
+		}, true
+	}
+
+	declared, owner, resolved := s.sema.ResolveTopLevel(fromKey, name)
+	if !resolved || !declared.DeclRange.IsValid() {
+		return workspaceDeclaration{}, false
+	}
+	targetURI, addressable := s.sema.URIOf(owner)
+	if !addressable || targetURI == "" {
+		return workspaceDeclaration{}, false
+	}
+	return workspaceDeclaration{
+		module: owner,
+		name:   name,
+		isType: true,
+		declaration: &lsp.Location{
+			URI:   lsp.DocumentUri(targetURI),
+			Range: localprotocol.ToLSPRange(declared.DeclRange),
+		},
+	}, true
+}
+
+// workspaceReferenceLocations collects the uses of a declaration written in
+// files other than its own.
+func (s *Server) workspaceReferenceLocations(declaration workspaceDeclaration, includeDeclaration bool) []lsp.Location {
+	return s.symbols.ReferencesTo(
+		s.sema, declaration.module, declaration.name, declaration.isType,
+		declaration.declaration, includeDeclaration,
+	)
 }
 
 func rangePtr(rng lsp.Range) *lsp.Range {
@@ -1491,30 +1583,6 @@ func identifierAt(snapshot *analyzer.Snapshot, pos lsp.Position) (string, bool) 
 		return "", false
 	}
 	return name, true
-}
-
-func (s *Server) resolveWorkspaceTopLevelAtPosition(snapshot *analyzer.Snapshot, documentURI lsp.DocumentUri, pos lsp.Position, sourceURI lsp.DocumentUri, requireTopLevelLocalDef bool) (string, *lsp.Location, bool) {
-	name, ok := identifierAt(snapshot, pos)
-	if !ok {
-		return "", nil, false
-	}
-	location, ok := s.resolveWorkspaceTopLevelByName(snapshot, documentURI, pos, name, sourceURI, requireTopLevelLocalDef)
-	if !ok {
-		return "", nil, false
-	}
-	return name, location, true
-}
-
-func (s *Server) resolveWorkspaceTopLevelByName(snapshot *analyzer.Snapshot, documentURI lsp.DocumentUri, pos lsp.Position, name string, sourceURI lsp.DocumentUri, requireTopLevelLocalDef bool) (*lsp.Location, bool) {
-	if snapshot == nil || name == "" {
-		return nil, false
-	}
-	if requireTopLevelLocalDef {
-		if definitionLocation, ok := snapshot.DefinitionLocation(documentURI, pos); ok && !isTopLevelDefinitionLocation(snapshot, definitionLocation) {
-			return nil, false
-		}
-	}
-	return s.workspaceTopLevelDefinition(name, sourceURI)
 }
 
 func identifierNameAndRangeAt(snapshot *analyzer.Snapshot, pos lsp.Position) (string, mast.Range, bool) {

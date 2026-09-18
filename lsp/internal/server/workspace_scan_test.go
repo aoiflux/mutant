@@ -73,8 +73,10 @@ func TestOpenEvictsStaleScannedEntry(t *testing.T) {
 	uri := string(pathToURI(path))
 	openMutantDoc(t, s, uri, "let only_def = 1;\nonly_def;\n")
 
-	if _, ok := s.symbols.UniqueTopLevelDefinition("only_def", "file:///other.mut"); !ok {
-		t.Fatal("expected a unique cross-file definition for only_def after open")
+	// One entry, not two. A stale scanned entry alongside the opened one would
+	// show up here as the same declaration listed twice.
+	if got := s.symbols.WorkspaceSymbols("only_def", 10); len(got) != 1 {
+		t.Fatalf("only_def is indexed %d times after open, want 1: %+v", len(got), got)
 	}
 }
 

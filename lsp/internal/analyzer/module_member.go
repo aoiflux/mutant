@@ -101,29 +101,48 @@ func (s *Snapshot) fieldExpressionAt(pos lsp.Position) (namespaceField, bool) {
 	return best, found
 }
 
-// ModuleMemberDefinition locates the declaration `ns.member` refers to, when the
-// position sits on such an expression and ns is an import namespace.
+// ModuleMemberTarget names the declaration `ns.member` refers to: the module it
+// lives in, its name there, and where it is written.
+//
+// Go-to-definition wants only the last of those. Find-references and rename want
+// the identity, because "every use of this" is a question about a declaration
+// and not about a place -- the same declaration is reached through a different
+// alias in every file that imports it, and under two aliases in a file that
+// imports it twice.
 //
 // It answers only for a Certain resolution. A module the workspace has not read
 // yet yields Provisional, and the editor must then show nothing: a jump to a
-// guess is worse than no jump, because the user cannot tell the difference
-// until they are already looking at the wrong file.
-func (s *Snapshot) ModuleMemberDefinition(pos lsp.Position) (lsp.Location, bool) {
+// guess is worse than no jump, because the user cannot tell the difference until
+// they are already looking at the wrong file.
+func (s *Snapshot) ModuleMemberTarget(pos lsp.Position) (moduleKey, name string, declaration lsp.Location, ok bool) {
 	if s == nil || s.workspace == nil || s.ModuleKey == "" {
-		return lsp.Location{}, false
+		return "", "", lsp.Location{}, false
 	}
-	field, ok := s.fieldExpressionAt(pos)
+	field, found := s.fieldExpressionAt(pos)
+	if !found {
+		return "", "", lsp.Location{}, false
+	}
+
+	owner, uri, declRange, resolved := s.workspace.DefinitionOf(
+		s.ModuleKey, s.localScopeAt(pos), field.left, field.field,
+	)
+	if !resolved || uri == "" || !declRange.IsValid() {
+		return "", "", lsp.Location{}, false
+	}
+	return owner, field.field, lsp.Location{
+		URI:   lsp.DocumentUri(uri),
+		Range: toLSPRange(declRange),
+	}, true
+}
+
+// ModuleMemberDefinition locates the declaration `ns.member` refers to, when the
+// position sits on such an expression and ns is an import namespace.
+func (s *Snapshot) ModuleMemberDefinition(pos lsp.Position) (lsp.Location, bool) {
+	_, _, declaration, ok := s.ModuleMemberTarget(pos)
 	if !ok {
 		return lsp.Location{}, false
 	}
-
-	_, uri, declRange, found := s.workspace.DefinitionOf(
-		s.ModuleKey, s.localScopeAt(pos), field.left, field.field,
-	)
-	if !found || uri == "" || !declRange.IsValid() {
-		return lsp.Location{}, false
-	}
-	return lsp.Location{URI: lsp.DocumentUri(uri), Range: toLSPRange(declRange)}, true
+	return declaration, true
 }
 
 // ModuleMemberDiagnostics reports the reaches into another module that the

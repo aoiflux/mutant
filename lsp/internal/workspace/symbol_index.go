@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -10,9 +8,25 @@ import (
 	mast "mutant/ast"
 	"mutant/lsp/internal/analyzer"
 	localprotocol "mutant/lsp/internal/protocol"
+	"mutant/sema"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
+
+// What this index knows is where names are written. What a name *means* is
+// sema's to say, and this file no longer has an opinion about it.
+//
+// It used to. UniqueTopLevelDefinition answered "where is this declared?" by
+// matching the string against every indexed document, and ReferenceLocations
+// answered "where else is it used?" the same way. Neither knew what an import
+// was, so both were wrong in ways a user met daily: go-to-definition jumped
+// into modules nothing had imported, `_private` resolved across files that the
+// compiler refuses, and two modules legally declaring one name made both
+// unresolvable because the ambiguity was bailed on rather than scoped away.
+//
+// The replacement keeps the collection -- somebody has to walk the documents --
+// and hands every question of visibility to sema.Workspace, which knows what an
+// import binds.
 
 type SymbolIndex struct {
 	mu   sync.RWMutex
@@ -20,8 +34,14 @@ type SymbolIndex struct {
 }
 
 type indexedDocument struct {
-	topLevel   []indexedTopLevelSymbol
-	unresolved []indexedIdentifierUsage
+	topLevel []indexedTopLevelSymbol
+
+	// bare is every identifier written on its own, and member every `a.b`
+	// written as a reach through a name. They are collected without resolving
+	// anything: resolution needs the workspace, which needs the other documents,
+	// and this runs once per document as it is indexed.
+	bare   []indexedUsage
+	member []indexedMemberUsage
 }
 
 type indexedTopLevelSymbol struct {
@@ -30,9 +50,21 @@ type indexedTopLevelSymbol struct {
 	rng  lsp.Range
 }
 
-type indexedIdentifierUsage struct {
-	name     string
-	location lsp.Location
+type indexedUsage struct {
+	name string
+	rng  lsp.Range
+}
+
+type indexedMemberUsage struct {
+	// left is the name before the dot as written -- an import alias if this
+	// document imports one by that name, and otherwise something else entirely.
+	// Deciding which is sema's job and is done at query time.
+	left   string
+	member string
+
+	// rng covers the member name alone, not the whole expression: renaming
+	// `mean` must not eat the `stats.` in front of it.
+	rng lsp.Range
 }
 
 func NewSymbolIndex() *SymbolIndex {
@@ -48,9 +80,11 @@ func (i *SymbolIndex) Update(uri lsp.DocumentUri, snapshot *analyzer.Snapshot) {
 		return
 	}
 
+	bare, member := collectUsages(snapshot)
 	doc := indexedDocument{
-		topLevel:   collectTopLevelSymbols(snapshot),
-		unresolved: collectUnresolvedIdentifierUsages(uri, snapshot),
+		topLevel: collectTopLevelSymbols(snapshot),
+		bare:     bare,
+		member:   member,
 	}
 
 	i.mu.Lock()
@@ -67,68 +101,84 @@ func (i *SymbolIndex) Delete(uri lsp.DocumentUri) {
 	delete(i.docs, uri)
 }
 
-func (i *SymbolIndex) UniqueTopLevelDefinition(name string, sourceURI lsp.DocumentUri) (*lsp.Location, bool) {
-	if i == nil || name == "" {
-		return nil, false
-	}
-
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-
-	var match *lsp.Location
-	for uri, doc := range i.docs {
-		if sourceURI != "" && uri == sourceURI {
-			continue
-		}
-		for _, symbol := range doc.topLevel {
-			if symbol.name != name || !isWorkspaceResolvableTopLevelKind(symbol.kind) {
-				continue
-			}
-			candidate := &lsp.Location{URI: uri, Range: symbol.rng}
-			if match != nil {
-				return nil, false
-			}
-			match = candidate
-		}
-	}
-
-	if match == nil {
-		return nil, false
-	}
-	clone := *match
-	return &clone, true
-}
-
-func (i *SymbolIndex) ReferenceLocations(name string, declaration *lsp.Location, includeDeclaration bool) []lsp.Location {
-	if i == nil || name == "" {
+// ReferencesTo collects every use of one declaration that is written in a file
+// other than the one declaring it.
+//
+// The declaration is named by the module it is in rather than by a URI, because
+// that is what sema answers about. The file-local uses are the snapshot's to
+// find; this adds only what crosses a file boundary, and there are exactly two
+// ways for a use to do that:
+//
+//   - a type, written bare. Struct and enum names are program-global, so `Point`
+//     in an importing file is a use of the `Point` another file declares.
+//   - a value, written `alias.name`, where alias is an import bound to the
+//     declaring module in the file doing the writing. Never bare: an import
+//     binds one namespace and nothing else crosses.
+//
+// Both are restricted to modules whose closure contains the declaring one. A
+// file that does not import it, directly or transitively, cannot be referring
+// to it however exactly its spelling matches.
+func (i *SymbolIndex) ReferencesTo(w *sema.Workspace, declModule, name string, isType bool, declaration *lsp.Location, includeDeclaration bool) []lsp.Location {
+	if i == nil || w == nil || declModule == "" || name == "" {
 		return nil
 	}
 
+	locations := make([]lsp.Location, 0, 4)
+	seen := make(map[lsp.Location]struct{}, 8)
+	add := func(location lsp.Location) {
+		if _, already := seen[location]; already {
+			return
+		}
+		seen[location] = struct{}{}
+		locations = append(locations, location)
+	}
+
+	if includeDeclaration && declaration != nil {
+		add(*declaration)
+	}
+
+	// Importers is the reverse of the closure, computed rather than stored --
+	// see sema.Workspace.Importers for why that trade is the right way round.
+	reachers := make(map[string]bool, 8)
+	for _, key := range w.Importers(declModule) {
+		reachers[key] = true
+	}
+
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	locations := make([]lsp.Location, 0, 4)
-	seen := make(map[string]struct{})
+	for uri, doc := range i.docs {
+		key, known := w.KeyForURI(string(uri))
+		if !known || key == declModule || !reachers[key] {
+			continue
+		}
 
-	if includeDeclaration && declaration != nil {
-		locations = append(locations, *declaration)
-		seen[locationKey(*declaration)] = struct{}{}
-	}
-
-	for _, doc := range i.docs {
-		for _, usage := range doc.unresolved {
-			if usage.name != name {
+		if isType {
+			// A document that declares the name itself is talking about its own,
+			// whatever the type table says. This cannot happen for two types --
+			// claimTypeName refuses that program -- but a `let Point` shadows in
+			// the value namespace and its uses are not uses of the struct.
+			if declaresTopLevel(doc, name) {
 				continue
 			}
-			key := locationKey(usage.location)
-			if _, ok := seen[key]; ok {
-				continue
+			for _, usage := range doc.bare {
+				if usage.name == name {
+					add(lsp.Location{URI: uri, Range: usage.rng})
+				}
 			}
-			seen[key] = struct{}{}
-			locations = append(locations, usage.location)
+			continue
+		}
+
+		for _, alias := range w.AliasesFor(key, declModule) {
+			for _, usage := range doc.member {
+				if usage.left == alias && usage.member == name {
+					add(lsp.Location{URI: uri, Range: usage.rng})
+				}
+			}
 		}
 	}
 
+	sortLocations(locations)
 	if len(locations) == 0 {
 		return nil
 	}
@@ -191,6 +241,32 @@ func (i *SymbolIndex) WorkspaceSymbols(query string, limit int) []lsp.SymbolInfo
 	return results
 }
 
+// TopLevelKind reports how a document declares a top-level name, so a caller can
+// tell a struct from a value without walking the document again.
+func (i *SymbolIndex) TopLevelKind(uri lsp.DocumentUri, name string) (lsp.SymbolKind, bool) {
+	if i == nil {
+		return 0, false
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	for _, symbol := range i.docs[uri].topLevel {
+		if symbol.name == name {
+			return symbol.kind, true
+		}
+	}
+	return 0, false
+}
+
+func declaresTopLevel(doc indexedDocument, name string) bool {
+	for _, symbol := range doc.topLevel {
+		if symbol.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func collectTopLevelSymbols(snapshot *analyzer.Snapshot) []indexedTopLevelSymbol {
 	if snapshot == nil || snapshot.Program == nil {
 		return nil
@@ -207,240 +283,63 @@ func collectTopLevelSymbols(snapshot *analyzer.Snapshot) []indexedTopLevelSymbol
 	return result
 }
 
-func collectUnresolvedIdentifierUsages(uri lsp.DocumentUri, snapshot *analyzer.Snapshot) []indexedIdentifierUsage {
+// collectUsages records where names are written, and decides nothing.
+//
+// Its one piece of syntax-level judgement is which identifiers are bare. The
+// `mean` in `stats.mean` is an identifier with a position of its own, but it is
+// not a name written on its own: nothing in this file could declare it, and
+// counting it as bare would make a rename of some unrelated `mean` reach into
+// the middle of a namespaced call.
+func collectUsages(snapshot *analyzer.Snapshot) ([]indexedUsage, []indexedMemberUsage) {
 	if snapshot == nil || snapshot.Program == nil || snapshot.Program.NodePositions == nil {
-		return nil
+		return nil, nil
+	}
+	positions := snapshot.Program.NodePositions
+
+	fields := make(map[*mast.Identifier]struct{}, 8)
+	for node := range positions {
+		field, isField := node.(*mast.FieldExpression)
+		if isField && field != nil && field.Field != nil {
+			fields[field.Field] = struct{}{}
+		}
 	}
 
-	declaredNames := collectDeclaredIdentifierNames(snapshot)
-	usages := make([]indexedIdentifierUsage, 0, len(snapshot.Program.NodePositions)/4)
-	for node, rng := range snapshot.Program.NodePositions {
-		ident, ok := node.(*mast.Identifier)
-		if !ok || ident == nil || ident.Value == "" || !rng.IsValid() {
+	bare := make([]indexedUsage, 0, len(positions)/4)
+	member := make([]indexedMemberUsage, 0, 4)
+	for node, rng := range positions {
+		if !rng.IsValid() {
 			continue
 		}
-
-		// Fast path: if the name is never declared in this document, the identifier
-		// cannot resolve to a local definition.
-		if _, declared := declaredNames[ident.Value]; declared {
-			pos := lsp.Position{Line: lsp.UInteger(rng.Start.Line - 1), Character: lsp.UInteger(rng.Start.Column - 1)}
-			if _, ok := snapshot.DefinitionLocation(uri, pos); ok {
+		switch typed := node.(type) {
+		case *mast.Identifier:
+			if typed == nil || typed.Value == "" {
 				continue
 			}
+			if _, isFieldName := fields[typed]; isFieldName {
+				continue
+			}
+			bare = append(bare, indexedUsage{name: typed.Value, rng: localprotocol.ToLSPRange(rng)})
+		case *mast.FieldExpression:
+			if typed == nil || typed.Field == nil {
+				continue
+			}
+			left, isIdent := typed.Left.(*mast.Identifier)
+			if !isIdent || left == nil {
+				continue
+			}
+			fieldRange, known := positions[typed.Field]
+			if !known || !fieldRange.IsValid() {
+				continue
+			}
+			member = append(member, indexedMemberUsage{
+				left:   left.Value,
+				member: typed.Field.Value,
+				rng:    localprotocol.ToLSPRange(fieldRange),
+			})
 		}
-
-		usages = append(usages, indexedIdentifierUsage{
-			name: ident.Value,
-			location: lsp.Location{
-				URI:   uri,
-				Range: localprotocol.ToLSPRange(rng),
-			},
-		})
-	}
-	return usages
-}
-
-func collectDeclaredIdentifierNames(snapshot *analyzer.Snapshot) map[string]struct{} {
-	declared := make(map[string]struct{})
-	if snapshot == nil || snapshot.Program == nil {
-		return declared
-	}
-	for _, stmt := range snapshot.Program.Statements {
-		markDeclaredInStatement(stmt, declared)
-	}
-	return declared
-}
-
-func markDeclaredInStatement(stmt mast.Statement, declared map[string]struct{}) {
-	if isNilInterface(stmt) {
-		return
 	}
 
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-		for _, ident := range names {
-			if ident != nil && ident.Value != "" {
-				declared[ident.Value] = struct{}{}
-			}
-		}
-		if node.Value != nil {
-			markDeclaredInExpression(node.Value, declared)
-		}
-	case *mast.StructStatement:
-		if node.Name != nil && node.Name.Value != "" {
-			declared[node.Name.Value] = struct{}{}
-		}
-		for _, field := range node.Fields {
-			if field != nil && field.Value != "" {
-				declared[field.Value] = struct{}{}
-			}
-		}
-	case *mast.EnumStatement:
-		if node.Name != nil && node.Name.Value != "" {
-			declared[node.Name.Value] = struct{}{}
-		}
-		for _, variant := range node.Variants {
-			if variant != nil && variant.Value != "" {
-				declared[variant.Value] = struct{}{}
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			markDeclaredInExpression(expr, declared)
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			markDeclaredInExpression(node.ReturnValue, declared)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			markDeclaredInExpression(node.Expression, declared)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			markDeclaredInStatement(inner, declared)
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			markDeclaredInStatement(node.Init, declared)
-		}
-		if node.Condition != nil {
-			markDeclaredInExpression(node.Condition, declared)
-		}
-		if node.Post != nil {
-			markDeclaredInExpression(node.Post, declared)
-		}
-		if node.Body != nil {
-			markDeclaredInStatement(node.Body, declared)
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			markDeclaredInExpression(node.Condition, declared)
-		}
-		if node.Body != nil {
-			markDeclaredInStatement(node.Body, declared)
-		}
-	case *mast.ForInStatement:
-		// The bindings are declarations: without marking them, a name that only
-		// a loop introduces reads as undefined everywhere it is used.
-		if node.Key != nil {
-			declared[node.Key.Value] = struct{}{}
-		}
-		if node.Value != nil {
-			declared[node.Value.Value] = struct{}{}
-		}
-		if node.Iterable != nil {
-			markDeclaredInExpression(node.Iterable, declared)
-		}
-		if node.Body != nil {
-			markDeclaredInStatement(node.Body, declared)
-		}
-	}
-}
-
-func markDeclaredInExpression(expr mast.Expression, declared map[string]struct{}) {
-	if isNilInterface(expr) {
-		return
-	}
-
-	switch node := expr.(type) {
-	case *mast.FunctionLiteral:
-		for _, param := range node.Parameters {
-			if param != nil && param.Value != "" {
-				declared[param.Value] = struct{}{}
-			}
-		}
-		if node.Body != nil {
-			markDeclaredInStatement(node.Body, declared)
-		}
-	case *mast.MacroLiteral:
-		for _, param := range node.Parameters {
-			if param != nil && param.Value != "" {
-				declared[param.Value] = struct{}{}
-			}
-		}
-		if node.Body != nil {
-			markDeclaredInStatement(node.Body, declared)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			markDeclaredInExpression(node.Condition, declared)
-		}
-		if node.Consequence != nil {
-			markDeclaredInStatement(node.Consequence, declared)
-		}
-		if node.Alternative != nil {
-			markDeclaredInStatement(node.Alternative, declared)
-		}
-	case *mast.MatchExpression:
-		// Patterns declare nothing: there is no binding pattern in this
-		// version, so a pattern is only ever a value to compare against.
-		if node.Subject != nil {
-			markDeclaredInExpression(node.Subject, declared)
-		}
-		for _, arm := range node.Arms {
-			if arm != nil && arm.Body != nil {
-				markDeclaredInStatement(arm.Body, declared)
-			}
-		}
-	case *mast.CallExpression:
-		if node.Function != nil {
-			markDeclaredInExpression(node.Function, declared)
-		}
-		for _, arg := range node.Arguments {
-			markDeclaredInExpression(arg, declared)
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			markDeclaredInExpression(node.Right, declared)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			markDeclaredInExpression(node.Left, declared)
-		}
-		if node.Right != nil {
-			markDeclaredInExpression(node.Right, declared)
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			markDeclaredInExpression(node.Left, declared)
-		}
-		if node.Index != nil {
-			markDeclaredInExpression(node.Index, declared)
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			markDeclaredInExpression(node.Left, declared)
-		}
-		if node.Value != nil {
-			markDeclaredInExpression(node.Value, declared)
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			markDeclaredInExpression(node.Left, declared)
-		}
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			markDeclaredInExpression(node.Name, declared)
-		}
-		for _, field := range node.Fields {
-			if field != nil && field.Value != nil {
-				markDeclaredInExpression(field.Value, declared)
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			markDeclaredInExpression(element, declared)
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			markDeclaredInExpression(key, declared)
-			markDeclaredInExpression(value, declared)
-		}
-	}
+	return bare, member
 }
 
 func isWorkspaceResolvableTopLevelKind(kind lsp.SymbolKind) bool {
@@ -452,19 +351,24 @@ func isWorkspaceResolvableTopLevelKind(kind lsp.SymbolKind) bool {
 	}
 }
 
-func locationKey(location lsp.Location) string {
-	return fmt.Sprintf("%s:%d:%d:%d:%d", location.URI, location.Range.Start.Line, location.Range.Start.Character, location.Range.End.Line, location.Range.End.Character)
+// IsTypeKind reports whether a symbol kind is one that is written bare across
+// module boundaries. It is here rather than in the server because it is the
+// same question isWorkspaceResolvableTopLevelKind answers, narrowed.
+func IsTypeKind(kind lsp.SymbolKind) bool {
+	return kind == lsp.SymbolKindStruct || kind == lsp.SymbolKindEnum
 }
 
-func isNilInterface(v any) bool {
-	if v == nil {
-		return true
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	default:
-		return false
-	}
+// sortLocations gives the result a stable order. The index is a map, so without
+// this the same query returns its answers shuffled, which a client renders as
+// the references list reordering itself between identical requests.
+func sortLocations(locations []lsp.Location) {
+	sort.Slice(locations, func(i, j int) bool {
+		if locations[i].URI != locations[j].URI {
+			return locations[i].URI < locations[j].URI
+		}
+		if locations[i].Range.Start.Line != locations[j].Range.Start.Line {
+			return locations[i].Range.Start.Line < locations[j].Range.Start.Line
+		}
+		return locations[i].Range.Start.Character < locations[j].Range.Start.Character
+	})
 }

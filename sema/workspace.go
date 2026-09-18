@@ -309,7 +309,12 @@ func (w *Workspace) bindingsLocked(key string) map[string]string {
 func (w *Workspace) Closure(key string) ([]string, []Diagnostic) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	return w.closureLocked(key)
+}
 
+// closureLocked is Closure with the read lock already held, so a query that
+// needs both the closure and the facts inside it takes the lock once.
+func (w *Workspace) closureLocked(key string) ([]string, []Diagnostic) {
 	var (
 		reached = make(map[string]bool, 8)
 		diags   []Diagnostic
