@@ -13,7 +13,7 @@ func (s *Snapshot) DocumentHighlights(uri lsp.DocumentUri, pos lsp.Position) ([]
 	}
 
 	resolved, ok := s.resolveDefinition(pos)
-	if !ok || resolved.ident == nil {
+	if !ok || resolved.name == "" {
 		return nil, false
 	}
 
@@ -22,7 +22,7 @@ func (s *Snapshot) DocumentHighlights(uri lsp.DocumentUri, pos lsp.Position) ([]
 		return nil, false
 	}
 
-	writeRanges := s.assignmentWriteRanges(resolved.ident.Value)
+	writeRanges := s.assignmentWriteRanges(resolved.name)
 	highlights := make([]lsp.DocumentHighlight, 0, len(locations))
 	for _, location := range locations {
 		kind := lsp.DocumentHighlightKindRead

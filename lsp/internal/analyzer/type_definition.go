@@ -21,7 +21,7 @@ func (s *Snapshot) TypeDefinitionLocation(uri lsp.DocumentUri, pos lsp.Position)
 		return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(resolved.rng)}, true
 	}
 
-	if typeName, ok := s.structTypeNameForBinding(resolved); ok {
+	if typeName, ok := s.structTypeNameForDeclaration(resolved.ident); ok {
 		if loc, ok := s.structDefinitionLocation(uri, typeName); ok {
 			return loc, true
 		}

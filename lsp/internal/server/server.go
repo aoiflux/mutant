@@ -1054,7 +1054,11 @@ func (s *Server) rename(_ *glsp.Context, params *lsp.RenameParams) (*lsp.Workspa
 		return nil, nil
 	}
 	locations, ok := snapshot.ReferenceLocations(params.TextDocument.URI, params.Position, true)
-	if !ok {
+	if !ok || !snapshot.RenameableAt(params.Position) {
+		// Not renameable means the binding itself has no text to replace --
+		// the namespace of an import that never writes it. Editing only the
+		// uses would leave the binding behind, so nothing is edited here and
+		// the cross-file path below is given its chance instead.
 		locations = nil
 	}
 	if len(locations) == 0 {

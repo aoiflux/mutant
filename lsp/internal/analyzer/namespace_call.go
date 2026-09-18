@@ -93,21 +93,14 @@ func (s *Snapshot) boundAt(pos lsp.Position) func(string) bool {
 	if s == nil {
 		return nil
 	}
-	var imports map[string]struct{}
-	if s.Program != nil {
-		imports = importNamespaces(s.Program.Statements)
-	}
 	visible := s.VisibleBindingsAt(pos)
-	if len(imports) == 0 && len(visible) == 0 {
+	if len(visible) == 0 {
 		return nil
 	}
 
 	return func(name string) bool {
-		if _, imported := imports[name]; imported {
-			return true
-		}
 		for _, b := range visible {
-			if b.ident != nil && b.ident.Value == name {
+			if b.name == name {
 				return true
 			}
 		}

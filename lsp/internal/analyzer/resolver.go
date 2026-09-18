@@ -3,425 +3,214 @@ package analyzer
 import (
 	mast "mutant/ast"
 	localprotocol "mutant/lsp/internal/protocol"
+	"mutant/sema"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
+// Definition, references and the bindings visible at a position, answered by
+// asking sema.Graph rather than by walking the tree.
+//
+// This file was 1547 lines and five recursive switches over every AST node
+// type: one to resolve a definition, one to collect references, one pair to
+// rebuild the scope at a position, and one to find the struct a binding holds.
+// They agreed with each other only by being written carefully, and a node type
+// missing from one of them was a silently wrong answer rather than a build
+// failure. *ast.ImportStatement was missing from all five, which is why an
+// import alias could not be completed, had no definition to go to, and was not
+// listed by VisibleBindingsAt while the comment above isBoundAt said it was.
+//
+// The walk now happens once, in sema.BuildFile, and everything here is a
+// lookup. What remains in this package is the one question the graph refuses:
+// which struct a value holds, which is inference. See struct_type.go.
+
+// binding is what the cursor refers to, in the vocabulary the editor protocol
+// uses.
+//
+// It is a view of a sema.Node rather than a second model of one. sema does not
+// import the editor protocol and must not -- it is read by the compiler too --
+// so the translation from NodeKind to CompletionItemKind happens here, once.
 type binding struct {
+	// name is the name bound. ident is the identifier that binds it, and is
+	// nil when the author never wrote the name: `import "lib/report.mut";`
+	// binds `report` with no `report` in the file.
+	//
+	// Both are here because the callers want different things. Anything that
+	// asks "is this name in scope?" or offers a completion wants the name, and
+	// asking it of ident silently skips every derived import alias. Anything
+	// that looks a declaration up by identity -- an inferred type, a function
+	// literal, the comment above it -- wants the node, and correctly finds
+	// nothing when there is not one.
+	name  string
 	ident *mast.Identifier
 	rng   mast.Range
 	kind  lsp.CompletionItemKind
+
+	// named reports that rng is the name itself rather than the declaration
+	// around it. It is false for exactly one declaration: the namespace of an
+	// `import "lib/report.mut";`, which binds `report` without the word
+	// appearing in the file. Anything that edits text has to ask.
+	named bool
 }
 
-type scope struct {
-	parent *scope
-	defs   map[string]binding
-}
-
-func newScope(parent *scope) *scope {
-	return &scope{parent: parent, defs: make(map[string]binding)}
-}
-
-func (s *scope) define(name string, ident *mast.Identifier, rng mast.Range, kind lsp.CompletionItemKind) {
-	if s == nil || ident == nil || name == "" || !rng.IsValid() {
-		return
+// Graph returns this document's name graph, building it once on first use.
+//
+// It follows the same lazy pattern as the inferred type map: an analysis that
+// only lints never pays for it, and one that answers a position question pays
+// for it once however many questions follow.
+//
+// Nothing reachable from the build may call this. The build asks structHeldBy
+// which struct a declaration holds, structHeldBy may run the inference pass,
+// and a sync.Once that re-enters itself deadlocks rather than recursing -- a
+// language server that stops answering, with no error anywhere. Inference does
+// not ask the graph anything today and must not start: it works out what a name
+// is WORTH, which needs no answer to which declaration it is. If that ever has
+// to change, the fix is to give the oracle a syntactic answer only, not to make
+// this re-entrant.
+func (s *Snapshot) Graph() *sema.Graph {
+	if s == nil {
+		return nil
 	}
-	s.defs[name] = binding{ident: ident, rng: rng, kind: kind}
-}
-
-func (s *scope) resolve(name string) (binding, bool) {
-	for current := s; current != nil; current = current.parent {
-		if b, ok := current.defs[name]; ok {
-			return b, true
-		}
-	}
-	return binding{}, false
+	s.graphOnce.Do(func() {
+		s.graph = sema.BuildFile(s.ModuleKey, s.Program, s.workspace, s.structHeldBy)
+	})
+	return s.graph
 }
 
 func (s *Snapshot) DefinitionLocation(uri lsp.DocumentUri, pos lsp.Position) (*lsp.Location, bool) {
-	if s == nil || s.Program == nil {
-		return nil, false
-	}
-
-	binding, ok := s.resolveDefinition(pos)
+	resolved, ok := s.resolveDefinition(pos)
 	if !ok {
 		return nil, false
 	}
-
-	location := &lsp.Location{
-		URI:   uri,
-		Range: localprotocol.ToLSPRange(binding.rng),
-	}
-	return location, true
+	return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(resolved.rng)}, true
 }
 
+// ReferenceLocations returns every place in this document that refers to
+// whatever the position refers to.
+//
+// The declaration comes first and the uses follow in source order, which is the
+// order they are written in: resolution is forward-only, so nothing can refer
+// to a declaration written below it except a function calling itself, whose
+// declaration is still above the call.
 func (s *Snapshot) ReferenceLocations(uri lsp.DocumentUri, pos lsp.Position, includeDeclaration bool) ([]lsp.Location, bool) {
 	if s == nil || s.Program == nil {
 		return nil, false
 	}
 
-	target, ok := s.resolveDefinition(pos)
+	graph := s.Graph()
+	declared, ok := graph.Resolve(tokenPosition(pos))
 	if !ok {
+		// Deliberately not the self-referring field that resolveDefinition
+		// falls back to. A field whose owning struct is unknown has no
+		// occurrences to report, and hover depends on hearing that: it asks
+		// for references to decide whether the name really is a field, and
+		// `hash.blake2` -- which is the builtin hash_blake2, not a field --
+		// must fall through to the builtin card rather than be described as
+		// one.
 		return nil, false
 	}
 
-	collector := referenceCollector{
-		snapshot:           s,
-		uri:                uri,
-		target:             target,
-		includeDeclaration: includeDeclaration,
-		seen:               make(map[mast.Range]struct{}),
-		locations:          make([]lsp.Location, 0, 4),
+	locations := make([]lsp.Location, 0, 4)
+	// DeclRange rather than Anchor, deliberately. These locations are what
+	// rename turns into edits, and a declaration whose name is not written --
+	// the namespace of an `import "lib/report.mut";` -- has no text to
+	// replace. Offering the statement's range instead would rewrite the path.
+	if includeDeclaration && declared.DeclRange.IsValid() {
+		locations = append(locations, lsp.Location{
+			URI:   uri,
+			Range: localprotocol.ToLSPRange(declared.DeclRange),
+		})
 	}
-	root := newScope(nil)
-	for _, stmt := range s.Program.Statements {
-		collector.collectStatement(stmt, root)
+	for _, use := range graph.UsesOf(declared.ID) {
+		locations = append(locations, lsp.Location{
+			URI:   uri,
+			Range: localprotocol.ToLSPRange(use),
+		})
 	}
-	if len(collector.locations) == 0 {
+
+	if len(locations) == 0 {
 		return nil, false
 	}
-	return collector.locations, true
+	return locations, true
 }
 
+// VisibleBindingsAt returns what the author has bound at a position: a let, a
+// parameter, a loop binding, an import namespace, a struct or an enum name.
+//
+// The import namespace is not a figure of speech here. It was in this comment
+// before it was in the answer.
+func (s *Snapshot) VisibleBindingsAt(pos lsp.Position) []binding {
+	if s == nil || s.Program == nil {
+		return nil
+	}
+
+	nodes := s.Graph().VisibleAt(tokenPosition(pos))
+	bindings := make([]binding, 0, len(nodes))
+	for _, node := range nodes {
+		bindings = append(bindings, bindingOf(node))
+	}
+	return bindings
+}
+
+// structHeldBy is the sema.StructOf the graph is built with: the name of the
+// struct a declaration holds, so that `p.x` resolves to Point's field rather
+// than to Vector's.
+//
+// Two sources, cheapest first. structTypeNameForDeclaration reads the statement
+// that declares the binding and needs no inference pass; TypeOf runs one, and
+// reaches a struct that arrived through a function's return or through another
+// binding. Neither is consulted unless a field expression is actually walked.
+//
+// This runs INSIDE Graph's sync.Once, so neither source may ask for the graph.
+// See the note on Graph: the failure would be a deadlock, not a stack overflow,
+// and a deadlocked language server reports nothing at all.
+func (s *Snapshot) structHeldBy(declaration *mast.Identifier) string {
+	if declaration == nil {
+		return ""
+	}
+	if name, ok := s.structTypeNameForDeclaration(declaration); ok {
+		return name
+	}
+	if held, ok := s.TypeOf(declaration); ok && held.Kind == TypeStruct {
+		return held.Name
+	}
+	return ""
+}
+
+// resolveDefinition is the declaration the position refers to.
+//
+// The fallback is the one answer that is not a declaration: a field name whose
+// owning struct nothing could work out resolves to itself, so the editor
+// reports "this is a field called x" rather than reporting nothing. It is the
+// honest answer to `p.x` where p's type is unknown -- the name is certainly a
+// field, and which one is certainly not known.
 func (s *Snapshot) resolveDefinition(pos lsp.Position) (binding, bool) {
-	root := newScope(nil)
-	for _, stmt := range s.Program.Statements {
-		if resolved, ok := s.resolveStatement(stmt, root, pos); ok {
-			return resolved, true
-		}
+	if s == nil || s.Program == nil {
+		return binding{}, false
+	}
+
+	graph := s.Graph()
+	if declared, ok := graph.Resolve(tokenPosition(pos)); ok {
+		return bindingOf(declared), true
+	}
+	if field, rng, ok := graph.FieldNameAt(tokenPosition(pos)); ok {
+		return binding{name: field.Value, ident: field, rng: rng, kind: lsp.CompletionItemKindField, named: true}, true
 	}
 	return binding{}, false
 }
 
-func (s *Snapshot) resolveStatement(stmt mast.Statement, current *scope, pos lsp.Position) (binding, bool) {
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-
-		if len(names) == 1 {
-			if rng, ok := s.identifierRange(names[0]); ok {
-				current.define(names[0].Value, names[0], rng, kindForLetValue(node.Value))
-				if localprotocol.ContainsPosition(rng, pos) {
-					return binding{ident: names[0], rng: rng, kind: kindForLetValue(node.Value)}, true
-				}
-			}
-		} else {
-			for _, name := range names {
-				if rng, ok := s.identifierRange(name); ok && localprotocol.ContainsPosition(rng, pos) {
-					return binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}, true
-				}
-			}
-		}
-
-		if node.Value != nil {
-			if resolved, ok := s.resolveExpression(node.Value, current, pos); ok {
-				return resolved, true
-			}
-		}
-
-		if len(names) > 1 {
-			for _, name := range names {
-				if rng, ok := s.identifierRange(name); ok {
-					current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-				}
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			if resolved, ok := s.resolveExpression(expr, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			if resolved, ok := s.resolveExpression(node.ReturnValue, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			return s.resolveExpression(node.Expression, current, pos)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			if resolved, ok := s.resolveStatement(inner, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			if resolved, ok := s.resolveExpression(node.Condition, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Body != nil {
-			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.ForInStatement:
-		for _, name := range loopBindings(node) {
-			if rng, ok := s.identifierRange(name); ok {
-				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-				if localprotocol.ContainsPosition(rng, pos) {
-					return binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}, true
-				}
-			}
-		}
-		if node.Iterable != nil {
-			if resolved, ok := s.resolveExpression(node.Iterable, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Body != nil {
-			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			if resolved, ok := s.resolveStatement(node.Init, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Condition != nil {
-			if resolved, ok := s.resolveExpression(node.Condition, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Post != nil {
-			if resolved, ok := s.resolveExpression(node.Post, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Body != nil {
-			if resolved, ok := s.resolveStatement(node.Body, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.StructStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindStruct)
-			if localprotocol.ContainsPosition(rng, pos) {
-				return binding{ident: node.Name, rng: rng, kind: lsp.CompletionItemKindStruct}, true
-			}
-		}
-		for _, field := range node.Fields {
-			if rng, ok := s.identifierRange(field); ok && localprotocol.ContainsPosition(rng, pos) {
-				return binding{ident: field, rng: rng, kind: lsp.CompletionItemKindField}, true
-			}
-		}
-	case *mast.EnumStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindEnum)
-			if localprotocol.ContainsPosition(rng, pos) {
-				return binding{ident: node.Name, rng: rng, kind: lsp.CompletionItemKindEnum}, true
-			}
-		}
-		for _, variant := range node.Variants {
-			if rng, ok := s.identifierRange(variant); ok && localprotocol.ContainsPosition(rng, pos) {
-				return binding{ident: variant, rng: rng, kind: lsp.CompletionItemKindEnumMember}, true
-			}
-		}
-	}
-
-	return binding{}, false
-}
-
-func (s *Snapshot) resolveExpression(expr mast.Expression, current *scope, pos lsp.Position) (binding, bool) {
-	switch node := expr.(type) {
-	case *mast.Identifier:
-		rng, ok := s.identifierRange(node)
-		if !ok || !localprotocol.ContainsPosition(rng, pos) {
-			return binding{}, false
-		}
-		resolved, ok := current.resolve(node.Value)
-		if !ok {
-			return binding{}, false
-		}
-		return resolved, true
-	case *mast.FunctionLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := s.identifierRange(param); ok {
-				child.define(param.Value, param, rng, lsp.CompletionItemKindVariable)
-				if localprotocol.ContainsPosition(rng, pos) {
-					return binding{ident: param, rng: rng, kind: lsp.CompletionItemKindVariable}, true
-				}
-			}
-		}
-		if node.Body != nil {
-			return s.resolveStatement(node.Body, child, pos)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			if resolved, ok := s.resolveExpression(node.Condition, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Consequence != nil {
-			if resolved, ok := s.resolveStatement(node.Consequence, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Alternative != nil {
-			if resolved, ok := s.resolveStatement(node.Alternative, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			if resolved, ok := s.resolveExpression(node.Subject, current, pos); ok {
-				return resolved, true
-			}
-		}
-		for _, arm := range node.Arms {
-			if arm == nil {
-				continue
-			}
-			// Patterns are resolved so that goto-definition on the `Status` of
-			// a `Status.Ok` arm reaches the enum declaration.
-			for _, pattern := range arm.Patterns {
-				if resolved, ok := s.resolveExpression(pattern, current, pos); ok {
-					return resolved, true
-				}
-			}
-			if arm.Body != nil {
-				if resolved, ok := s.resolveStatement(arm.Body, current, pos); ok {
-					return resolved, true
-				}
-			}
-		}
-	case *mast.CallExpression:
-		if node.Function != nil {
-			if resolved, ok := s.resolveExpression(node.Function, current, pos); ok {
-				return resolved, true
-			}
-		}
-		for _, arg := range node.Arguments {
-			if resolved, ok := s.resolveExpression(arg, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			return s.resolveExpression(node.Right, current, pos)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			if resolved, ok := s.resolveExpression(node.Left, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Right != nil {
-			if resolved, ok := s.resolveExpression(node.Right, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			if resolved, ok := s.resolveExpression(node.Left, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Index != nil {
-			if resolved, ok := s.resolveExpression(node.Index, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			if resolved, ok := s.resolveExpression(node.Left, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if node.Value != nil {
-			if resolved, ok := s.resolveExpression(node.Value, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			if resolved, ok := s.resolveExpression(node.Left, current, pos); ok {
-				return resolved, true
-			}
-		}
-		if rng, ok := s.identifierRange(node.Field); ok && localprotocol.ContainsPosition(rng, pos) {
-			if enumType, ok := s.resolveEnumTypeBinding(node.Left, current); ok {
-				if variant, ok := s.enumVariantBinding(enumType.ident.Value, node.Field.Value); ok {
-					return variant, true
-				}
-			}
-			if structType, ok := s.resolveStructTypeName(node.Left, current); ok {
-				if field, ok := s.structFieldBinding(structType, node.Field.Value); ok {
-					return field, true
-				}
-			}
-			return binding{ident: node.Field, rng: rng, kind: lsp.CompletionItemKindField}, true
-		}
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			if resolved, ok := s.resolveExpression(node.Name, current, pos); ok {
-				return resolved, true
-			}
-		}
-		for _, field := range node.Fields {
-			if field == nil {
-				continue
-			}
-			if rng, ok := s.identifierRange(field.Name); ok && localprotocol.ContainsPosition(rng, pos) {
-				if node.Name != nil {
-					if resolvedField, ok := s.structFieldBinding(node.Name.Value, field.Name.Value); ok {
-						return resolvedField, true
-					}
-				}
-				return binding{ident: field.Name, rng: rng, kind: lsp.CompletionItemKindField}, true
-			}
-			if field.Value != nil {
-				if resolved, ok := s.resolveExpression(field.Value, current, pos); ok {
-					return resolved, true
-				}
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			if resolved, ok := s.resolveExpression(element, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			if resolved, ok := s.resolveExpression(element, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			if resolved, ok := s.resolveExpression(key, current, pos); ok {
-				return resolved, true
-			}
-			if resolved, ok := s.resolveExpression(value, current, pos); ok {
-				return resolved, true
-			}
-		}
-	case *mast.MacroLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := s.identifierRange(param); ok {
-				child.define(param.Value, param, rng, lsp.CompletionItemKindVariable)
-				if localprotocol.ContainsPosition(rng, pos) {
-					return binding{ident: param, rng: rng, kind: lsp.CompletionItemKindVariable}, true
-				}
-			}
-		}
-		if node.Body != nil {
-			return s.resolveStatement(node.Body, child, pos)
-		}
-	}
-
-	return binding{}, false
+// RenameableAt reports whether the name at a position can be renamed by
+// editing text.
+//
+// It is false for one thing: a namespace bound by an import that does not write
+// it. `import "lib/report.mut";` binds `report` with no `report` anywhere in
+// the file, so renaming it would edit every use and leave the binding behind --
+// each edit a step towards a program that no longer compiles. The author's fix
+// is to give the import an explicit alias first, which is an edit they make and
+// not one an editor can invent on their behalf.
+func (s *Snapshot) RenameableAt(pos lsp.Position) bool {
+	resolved, ok := s.resolveDefinition(pos)
+	return ok && resolved.named
 }
 
 func (s *Snapshot) identifierRange(ident *mast.Identifier) (mast.Range, bool) {
@@ -431,1117 +220,43 @@ func (s *Snapshot) identifierRange(ident *mast.Identifier) (mast.Range, bool) {
 	return s.Program.RangeOf(ident)
 }
 
-func (s *Snapshot) resolveEnumTypeBinding(expr mast.Expression, current *scope) (binding, bool) {
-	ident, ok := expr.(*mast.Identifier)
-	if !ok || ident == nil {
-		return binding{}, false
-	}
-	resolved, ok := current.resolve(ident.Value)
-	if !ok || resolved.kind != lsp.CompletionItemKindEnum {
-		return binding{}, false
-	}
-	return resolved, true
-}
-
-func (s *Snapshot) enumVariantBinding(enumName, variantName string) (binding, bool) {
-	if s == nil || s.Program == nil || enumName == "" || variantName == "" {
-		return binding{}, false
-	}
-	for _, stmt := range s.Program.Statements {
-		enumStmt, ok := stmt.(*mast.EnumStatement)
-		if !ok || enumStmt.Name == nil || enumStmt.Name.Value != enumName {
-			continue
-		}
-		for _, variant := range enumStmt.Variants {
-			if variant == nil || variant.Value != variantName {
-				continue
-			}
-			rng, ok := s.identifierRange(variant)
-			if !ok {
-				return binding{}, false
-			}
-			return binding{ident: variant, rng: rng, kind: lsp.CompletionItemKindEnumMember}, true
-		}
-	}
-	return binding{}, false
-}
-
-func (s *Snapshot) resolveStructTypeName(expr mast.Expression, current *scope) (string, bool) {
-	ident, ok := expr.(*mast.Identifier)
-	if !ok || ident == nil {
-		return "", false
-	}
-	resolved, ok := current.resolve(ident.Value)
-	if !ok {
-		return "", false
-	}
-	typeName, ok := s.structTypeNameForBinding(resolved)
-	if !ok {
-		return "", false
-	}
-	return typeName, true
-}
-
-func (s *Snapshot) structTypeNameForBinding(target binding) (string, bool) {
-	if s == nil || s.Program == nil || target.ident == nil {
-		return "", false
-	}
-	for _, stmt := range s.Program.Statements {
-		if typeName, ok := s.structTypeNameInStatement(stmt, target.ident); ok {
-			return typeName, true
-		}
-	}
-	return "", false
-}
-
-func (s *Snapshot) structTypeNameInStatement(stmt mast.Statement, target *mast.Identifier) (string, bool) {
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-		for _, name := range names {
-			if name != target {
-				continue
-			}
-			literal, ok := node.Value.(*mast.StructLiteral)
-			if !ok || literal == nil || literal.Name == nil {
-				return "", false
-			}
-			return literal.Name.Value, true
-		}
-		if node.Value != nil {
-			return s.structTypeNameInExpression(node.Value, target)
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			if typeName, ok := s.structTypeNameInExpression(expr, target); ok {
-				return typeName, true
-			}
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			return s.structTypeNameInExpression(node.ReturnValue, target)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			return s.structTypeNameInExpression(node.Expression, target)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			if typeName, ok := s.structTypeNameInStatement(inner, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.ForInStatement:
-		if node.Iterable != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Iterable, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Body != nil {
-			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Condition, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Body != nil {
-			if typeName, ok := s.structTypeNameInStatement(node.Body, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			if typeName, ok := s.structTypeNameInStatement(node.Init, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Condition != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Condition, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Post != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Post, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Body != nil {
-			return s.structTypeNameInStatement(node.Body, target)
-		}
-	}
-	return "", false
-}
-
-func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast.Identifier) (string, bool) {
-	switch node := expr.(type) {
-	case *mast.FunctionLiteral:
-		if node.Body != nil {
-			return s.structTypeNameInStatement(node.Body, target)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Condition, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Consequence != nil {
-			if typeName, ok := s.structTypeNameInStatement(node.Consequence, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Alternative != nil {
-			if typeName, ok := s.structTypeNameInStatement(node.Alternative, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Subject, target); ok {
-				return typeName, true
-			}
-		}
-		for _, arm := range node.Arms {
-			if arm == nil || arm.Body == nil {
-				continue
-			}
-			if typeName, ok := s.structTypeNameInStatement(arm.Body, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.CallExpression:
-		if node.Function != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Function, target); ok {
-				return typeName, true
-			}
-		}
-		for _, arg := range node.Arguments {
-			if typeName, ok := s.structTypeNameInExpression(arg, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			return s.structTypeNameInExpression(node.Right, target)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Left, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Right != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Right, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Left, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Index != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Index, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Left, target); ok {
-				return typeName, true
-			}
-		}
-		if node.Value != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Value, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			return s.structTypeNameInExpression(node.Left, target)
-		}
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			if typeName, ok := s.structTypeNameInExpression(node.Name, target); ok {
-				return typeName, true
-			}
-		}
-		for _, field := range node.Fields {
-			if field != nil && field.Value != nil {
-				if typeName, ok := s.structTypeNameInExpression(field.Value, target); ok {
-					return typeName, true
-				}
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			if typeName, ok := s.structTypeNameInExpression(element, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			if typeName, ok := s.structTypeNameInExpression(key, target); ok {
-				return typeName, true
-			}
-			if typeName, ok := s.structTypeNameInExpression(value, target); ok {
-				return typeName, true
-			}
-		}
-	case *mast.MacroLiteral:
-		if node.Body != nil {
-			return s.structTypeNameInStatement(node.Body, target)
-		}
-	}
-	return "", false
-}
-
-func (s *Snapshot) structFieldBinding(structName, fieldName string) (binding, bool) {
-	if s == nil || s.Program == nil || structName == "" || fieldName == "" {
-		return binding{}, false
-	}
-	for _, stmt := range s.Program.Statements {
-		structStmt, ok := stmt.(*mast.StructStatement)
-		if !ok || structStmt.Name == nil || structStmt.Name.Value != structName {
-			continue
-		}
-		for _, field := range structStmt.Fields {
-			if field == nil || field.Value != fieldName {
-				continue
-			}
-			rng, ok := s.identifierRange(field)
-			if !ok {
-				return binding{}, false
-			}
-			return binding{ident: field, rng: rng, kind: lsp.CompletionItemKindField}, true
-		}
-	}
-	return binding{}, false
-}
-
-func (s *Snapshot) VisibleBindingsAt(pos lsp.Position) []binding {
-	if s == nil || s.Program == nil {
-		return nil
-	}
-
-	current := newScope(nil)
-	current = s.scopeAtProgram(current, pos)
-	visible := make(map[string]binding)
-	for scope := current; scope != nil; scope = scope.parent {
-		for name, bind := range scope.defs {
-			if _, exists := visible[name]; !exists {
-				visible[name] = bind
-			}
-		}
-	}
-
-	bindings := make([]binding, 0, len(visible))
-	for _, bind := range visible {
-		bindings = append(bindings, bind)
-	}
-	return bindings
-}
-
-func (s *Snapshot) scopeAtProgram(current *scope, pos lsp.Position) *scope {
-	for _, stmt := range s.Program.Statements {
-		rng, ok := s.Program.RangeOf(stmt)
-		if ok && positionBeforeRange(pos, rng) {
-			return current
-		}
-		if ok && localprotocol.ContainsPosition(rng, pos) {
-			return s.scopeAtStatement(stmt, current, pos)
-		}
-		s.advanceStatement(stmt, current)
-	}
-	return current
-}
-
-func (s *Snapshot) scopeAtStatement(stmt mast.Statement, current *scope, pos lsp.Position) *scope {
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-		if len(names) == 1 {
-			if rng, ok := s.identifierRange(names[0]); ok {
-				current.define(names[0].Value, names[0], rng, kindForLetValue(node.Value))
-			}
-		}
-		if node.Value != nil {
-			if child, ok := s.scopeAtExpression(node.Value, current, pos); ok {
-				return child
-			}
-		}
-		if len(names) > 1 {
-			for _, name := range names {
-				if rng, ok := s.identifierRange(name); ok {
-					current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-				}
-			}
-		}
-		return current
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			if child, ok := s.scopeAtExpression(expr, current, pos); ok {
-				return child
-			}
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			if child, ok := s.scopeAtExpression(node.ReturnValue, current, pos); ok {
-				return child
-			}
-		}
-		return current
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			if child, ok := s.scopeAtExpression(node.Expression, current, pos); ok {
-				return child
-			}
-		}
-		return current
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			rng, ok := s.Program.RangeOf(inner)
-			if ok && positionBeforeRange(pos, rng) {
-				return current
-			}
-			if ok && localprotocol.ContainsPosition(rng, pos) {
-				return s.scopeAtStatement(inner, current, pos)
-			}
-			s.advanceStatement(inner, current)
-		}
-		return current
-	case *mast.ForInStatement:
-		for _, name := range loopBindings(node) {
-			if rng, ok := s.identifierRange(name); ok {
-				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-			}
-		}
-		if node.Iterable != nil {
-			if child, ok := s.scopeAtExpression(node.Iterable, current, pos); ok {
-				return child
-			}
-		}
-		if node.Body != nil {
-			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
-				return s.scopeAtStatement(node.Body, current, pos)
-			}
-		}
-		return current
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			if child, ok := s.scopeAtExpression(node.Condition, current, pos); ok {
-				return child
-			}
-		}
-		if node.Body != nil {
-			if rng, ok := s.Program.RangeOf(node.Body); ok && localprotocol.ContainsPosition(rng, pos) {
-				return s.scopeAtStatement(node.Body, current, pos)
-			}
-		}
-		return current
-	case *mast.ForStatement:
-		if node.Init != nil {
-			if rng, ok := s.Program.RangeOf(node.Init); ok && localprotocol.ContainsPosition(rng, pos) {
-				return s.scopeAtStatement(node.Init, current, pos)
-			}
-			s.advanceStatement(node.Init, current)
-		}
-		if node.Condition != nil {
-			if child, ok := s.scopeAtExpression(node.Condition, current, pos); ok {
-				return child
-			}
-		}
-		if node.Post != nil {
-			if child, ok := s.scopeAtExpression(node.Post, current, pos); ok {
-				return child
-			}
-		}
-		if node.Body != nil {
-			return s.scopeAtStatement(node.Body, current, pos)
-		}
-		return current
-	case *mast.StructStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindStruct)
-		}
-		return current
-	case *mast.EnumStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindEnum)
-		}
-		return current
-	default:
-		return current
-	}
-}
-
-func (s *Snapshot) scopeAtExpression(expr mast.Expression, current *scope, pos lsp.Position) (*scope, bool) {
-	rng, ok := s.Program.RangeOf(expr)
-	if !ok || !localprotocol.ContainsPosition(rng, pos) {
-		return nil, false
-	}
-
-	switch node := expr.(type) {
-	case *mast.FunctionLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := s.identifierRange(param); ok {
-				child.define(param.Value, param, rng, lsp.CompletionItemKindVariable)
-			}
-		}
-		if node.Body != nil {
-			return s.scopeAtStatement(node.Body, child, pos), true
-		}
-		return child, true
-	case *mast.MacroLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := s.identifierRange(param); ok {
-				child.define(param.Value, param, rng, lsp.CompletionItemKindVariable)
-			}
-		}
-		if node.Body != nil {
-			return s.scopeAtStatement(node.Body, child, pos), true
-		}
-		return child, true
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			if child, ok := s.scopeAtExpression(node.Condition, current, pos); ok {
-				return child, true
-			}
-		}
-		if node.Consequence != nil {
-			return s.scopeAtStatement(node.Consequence, current, pos), true
-		}
-		if node.Alternative != nil {
-			return s.scopeAtStatement(node.Alternative, current, pos), true
-		}
-		return current, true
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			if child, ok := s.scopeAtExpression(node.Subject, current, pos); ok {
-				return child, true
-			}
-		}
-		// Unlike an `if`, a match has many bodies, so the first one cannot
-		// simply be returned: scopeAtStatement is asked for each in turn and
-		// the one that actually contains pos is the answer. A body that does
-		// not contain pos gives back the scope it was handed.
-		for _, arm := range node.Arms {
-			if arm == nil || arm.Body == nil {
-				continue
-			}
-			if child := s.scopeAtStatement(arm.Body, current, pos); child != current {
-				return child, true
-			}
-		}
-		return current, true
-	case *mast.CallExpression:
-		if node.Function != nil {
-			if child, ok := s.scopeAtExpression(node.Function, current, pos); ok {
-				return child, true
-			}
-		}
-		for _, arg := range node.Arguments {
-			if child, ok := s.scopeAtExpression(arg, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			return s.scopeAtExpression(node.Right, current, pos)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			if child, ok := s.scopeAtExpression(node.Left, current, pos); ok {
-				return child, true
-			}
-		}
-		if node.Right != nil {
-			if child, ok := s.scopeAtExpression(node.Right, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			if child, ok := s.scopeAtExpression(node.Left, current, pos); ok {
-				return child, true
-			}
-		}
-		if node.Index != nil {
-			if child, ok := s.scopeAtExpression(node.Index, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			if child, ok := s.scopeAtExpression(node.Left, current, pos); ok {
-				return child, true
-			}
-		}
-		if node.Value != nil {
-			if child, ok := s.scopeAtExpression(node.Value, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			if child, ok := s.scopeAtExpression(node.Left, current, pos); ok {
-				return child, true
-			}
-		}
-		return current, true
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			if child, ok := s.scopeAtExpression(node.Name, current, pos); ok {
-				return child, true
-			}
-		}
-		for _, field := range node.Fields {
-			if field == nil {
-				continue
-			}
-			if field.Value != nil {
-				if child, ok := s.scopeAtExpression(field.Value, current, pos); ok {
-					return child, true
-				}
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			if child, ok := s.scopeAtExpression(element, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			if child, ok := s.scopeAtExpression(element, current, pos); ok {
-				return child, true
-			}
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			if child, ok := s.scopeAtExpression(key, current, pos); ok {
-				return child, true
-			}
-			if child, ok := s.scopeAtExpression(value, current, pos); ok {
-				return child, true
-			}
-		}
-	}
-
-	return current, true
-}
-
-func (s *Snapshot) advanceStatement(stmt mast.Statement, current *scope) {
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-		if len(names) == 1 {
-			if rng, ok := s.identifierRange(names[0]); ok {
-				current.define(names[0].Value, names[0], rng, kindForLetValue(node.Value))
-			}
-		}
-		if node.Value != nil {
-			s.advanceExpression(node.Value, current)
-		}
-		if len(names) > 1 {
-			for _, name := range names {
-				if rng, ok := s.identifierRange(name); ok {
-					current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-				}
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			s.advanceExpression(expr, current)
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			s.advanceExpression(node.ReturnValue, current)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			s.advanceExpression(node.Expression, current)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			s.advanceStatement(inner, current)
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			s.advanceExpression(node.Condition, current)
-		}
-		if node.Body != nil {
-			s.advanceStatement(node.Body, current)
-		}
-	case *mast.ForInStatement:
-		// Defined in the enclosing scope rather than a child, which is what
-		// `for (let i = 0; ...)` already does here and what the VM actually
-		// does with either loop -- see the L-8 phase 1 note on the two engines
-		// disagreeing about loop-body scope.
-		for _, name := range loopBindings(node) {
-			if rng, ok := s.identifierRange(name); ok {
-				current.define(name.Value, name, rng, lsp.CompletionItemKindVariable)
-			}
-		}
-		if node.Iterable != nil {
-			s.advanceExpression(node.Iterable, current)
-		}
-		if node.Body != nil {
-			s.advanceStatement(node.Body, current)
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			s.advanceStatement(node.Init, current)
-		}
-		if node.Condition != nil {
-			s.advanceExpression(node.Condition, current)
-		}
-		if node.Post != nil {
-			s.advanceExpression(node.Post, current)
-		}
-		if node.Body != nil {
-			s.advanceStatement(node.Body, current)
-		}
-	case *mast.StructStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindStruct)
-		}
-	case *mast.EnumStatement:
-		if rng, ok := s.identifierRange(node.Name); ok {
-			current.define(node.Name.Value, node.Name, rng, lsp.CompletionItemKindEnum)
-		}
-	}
-}
-
-func (s *Snapshot) advanceExpression(expr mast.Expression, current *scope) {
-	switch node := expr.(type) {
-	case *mast.FunctionLiteral, *mast.MacroLiteral:
-		return
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			s.advanceExpression(node.Condition, current)
-		}
-		if node.Consequence != nil {
-			s.advanceStatement(node.Consequence, current)
-		}
-		if node.Alternative != nil {
-			s.advanceStatement(node.Alternative, current)
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			s.advanceExpression(node.Subject, current)
-		}
-		for _, arm := range node.Arms {
-			if arm != nil && arm.Body != nil {
-				s.advanceStatement(arm.Body, current)
-			}
-		}
-	case *mast.CallExpression:
-		if node.Function != nil {
-			s.advanceExpression(node.Function, current)
-		}
-		for _, arg := range node.Arguments {
-			s.advanceExpression(arg, current)
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			s.advanceExpression(node.Right, current)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			s.advanceExpression(node.Left, current)
-		}
-		if node.Right != nil {
-			s.advanceExpression(node.Right, current)
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			s.advanceExpression(node.Left, current)
-		}
-		if node.Index != nil {
-			s.advanceExpression(node.Index, current)
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			s.advanceExpression(node.Left, current)
-		}
-		if node.Value != nil {
-			s.advanceExpression(node.Value, current)
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			s.advanceExpression(node.Left, current)
-		}
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			s.advanceExpression(node.Name, current)
-		}
-		for _, field := range node.Fields {
-			if field != nil && field.Value != nil {
-				s.advanceExpression(field.Value, current)
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			s.advanceExpression(element, current)
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			s.advanceExpression(element, current)
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			s.advanceExpression(key, current)
-			s.advanceExpression(value, current)
-		}
-	}
-}
-
-// loopBindings is the names a `for (k, v in xs)` declares, in the order they
-// are written. Key is nil in the one-binding form.
-//
-// They are declarations like any other, and every walk that tracks what is in
-// scope has to say so: without it, the name a loop body is written around is
-// undefined to the analyzer, which reports an error on correct code, offers no
-// completion for it, and finds no definition to go to.
-func loopBindings(node *mast.ForInStatement) []*mast.Identifier {
+func bindingOf(node *sema.Node) binding {
 	if node == nil {
-		return nil
+		return binding{}
 	}
-	names := make([]*mast.Identifier, 0, 2)
-	if node.Key != nil {
-		names = append(names, node.Key)
+	return binding{
+		name:  node.Name,
+		ident: node.Ident,
+		rng:   node.Anchor(),
+		kind:  completionKindFor(node.Kind),
+		named: node.DeclRange.IsValid(),
 	}
-	if node.Value != nil {
-		names = append(names, node.Value)
-	}
-	return names
 }
 
-func kindForLetValue(value mast.Expression) lsp.CompletionItemKind {
-	if _, ok := value.(*mast.FunctionLiteral); ok {
+// completionKindFor is the whole of the translation between what sema knows a
+// declaration to be and what the editor protocol calls it.
+func completionKindFor(kind sema.NodeKind) lsp.CompletionItemKind {
+	switch kind {
+	case sema.KindFunction:
 		return lsp.CompletionItemKindFunction
+	case sema.KindNamespace:
+		return lsp.CompletionItemKindModule
+	case sema.KindStruct:
+		return lsp.CompletionItemKindStruct
+	case sema.KindEnum:
+		return lsp.CompletionItemKindEnum
+	case sema.KindField:
+		return lsp.CompletionItemKindField
+	case sema.KindVariant:
+		return lsp.CompletionItemKindEnumMember
 	}
+	// A let, a parameter and a loop binding are all a variable to an editor.
 	return lsp.CompletionItemKindVariable
 }
 
-func positionBeforeRange(pos lsp.Position, rng mast.Range) bool {
-	line := int(pos.Line) + 1
-	col := int(pos.Character) + 1
-	if line != rng.Start.Line {
-		return line < rng.Start.Line
-	}
-	return col < rng.Start.Column
-}
-
-type referenceCollector struct {
-	snapshot           *Snapshot
-	uri                lsp.DocumentUri
-	target             binding
-	includeDeclaration bool
-	seen               map[mast.Range]struct{}
-	locations          []lsp.Location
-}
-
-func (c *referenceCollector) collectStatement(stmt mast.Statement, current *scope) {
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-
-		if len(names) == 1 {
-			if rng, ok := c.snapshot.identifierRange(names[0]); ok {
-				defined := binding{ident: names[0], rng: rng, kind: kindForLetValue(node.Value)}
-				current.define(names[0].Value, names[0], rng, defined.kind)
-				c.addOccurrenceIfTarget(defined, rng, true)
-			}
-		}
-
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-
-		if len(names) > 1 {
-			for _, name := range names {
-				if rng, ok := c.snapshot.identifierRange(name); ok {
-					defined := binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}
-					current.define(name.Value, name, rng, defined.kind)
-					c.addOccurrenceIfTarget(defined, rng, true)
-				}
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			c.collectExpression(expr, current)
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			c.collectExpression(node.ReturnValue, current)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			c.collectExpression(node.Expression, current)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			c.collectStatement(inner, current)
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.ForInStatement:
-		for _, name := range loopBindings(node) {
-			if rng, ok := c.snapshot.identifierRange(name); ok {
-				defined := binding{ident: name, rng: rng, kind: lsp.CompletionItemKindVariable}
-				current.define(name.Value, name, rng, defined.kind)
-				c.addOccurrenceIfTarget(defined, rng, true)
-			}
-		}
-		if node.Iterable != nil {
-			c.collectExpression(node.Iterable, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			c.collectStatement(node.Init, current)
-		}
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Post != nil {
-			c.collectExpression(node.Post, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.StructStatement:
-		if rng, ok := c.snapshot.identifierRange(node.Name); ok {
-			defined := binding{ident: node.Name, rng: rng, kind: lsp.CompletionItemKindStruct}
-			current.define(node.Name.Value, node.Name, rng, defined.kind)
-			c.addOccurrenceIfTarget(defined, rng, true)
-		}
-		for _, field := range node.Fields {
-			if field == nil {
-				continue
-			}
-			if rng, ok := c.snapshot.identifierRange(field); ok {
-				declared := binding{ident: field, rng: rng, kind: lsp.CompletionItemKindField}
-				c.addOccurrenceIfTarget(declared, rng, true)
-			}
-		}
-	case *mast.EnumStatement:
-		if rng, ok := c.snapshot.identifierRange(node.Name); ok {
-			defined := binding{ident: node.Name, rng: rng, kind: lsp.CompletionItemKindEnum}
-			current.define(node.Name.Value, node.Name, rng, defined.kind)
-			c.addOccurrenceIfTarget(defined, rng, true)
-		}
-		for _, variant := range node.Variants {
-			if variant == nil {
-				continue
-			}
-			if rng, ok := c.snapshot.identifierRange(variant); ok {
-				declared := binding{ident: variant, rng: rng, kind: lsp.CompletionItemKindEnumMember}
-				c.addOccurrenceIfTarget(declared, rng, true)
-			}
-		}
-	}
-}
-
-func (c *referenceCollector) collectExpression(expr mast.Expression, current *scope) {
-	switch node := expr.(type) {
-	case *mast.Identifier:
-		rng, ok := c.snapshot.identifierRange(node)
-		if !ok {
-			return
-		}
-		resolved, ok := current.resolve(node.Value)
-		if !ok {
-			return
-		}
-		c.addOccurrenceIfTarget(resolved, rng, false)
-	case *mast.FunctionLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := c.snapshot.identifierRange(param); ok {
-				defined := binding{ident: param, rng: rng, kind: lsp.CompletionItemKindVariable}
-				child.define(param.Value, param, rng, defined.kind)
-				c.addOccurrenceIfTarget(defined, rng, true)
-			}
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Consequence != nil {
-			c.collectStatement(node.Consequence, current)
-		}
-		if node.Alternative != nil {
-			c.collectStatement(node.Alternative, current)
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			c.collectExpression(node.Subject, current)
-		}
-		for _, arm := range node.Arms {
-			if arm == nil {
-				continue
-			}
-			// Patterns count as references. The unused-declaration rule asks
-			// this collector whether a name is used anywhere, so an enum
-			// mentioned only in match arms would otherwise be reported unused.
-			for _, pattern := range arm.Patterns {
-				c.collectExpression(pattern, current)
-			}
-			if arm.Body != nil {
-				c.collectStatement(arm.Body, current)
-			}
-		}
-	case *mast.CallExpression:
-		if node.Function != nil {
-			c.collectExpression(node.Function, current)
-		}
-		for _, arg := range node.Arguments {
-			c.collectExpression(arg, current)
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Index != nil {
-			c.collectExpression(node.Index, current)
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if rng, ok := c.snapshot.identifierRange(node.Field); ok {
-			if enumType, ok := c.snapshot.resolveEnumTypeBinding(node.Left, current); ok {
-				if variant, ok := c.snapshot.enumVariantBinding(enumType.ident.Value, node.Field.Value); ok {
-					c.addOccurrenceIfTarget(variant, rng, false)
-				}
-			}
-			if structType, ok := c.snapshot.resolveStructTypeName(node.Left, current); ok {
-				if field, ok := c.snapshot.structFieldBinding(structType, node.Field.Value); ok {
-					c.addOccurrenceIfTarget(field, rng, false)
-				}
-			}
-		}
-	case *mast.StructLiteral:
-		if node.Name != nil {
-			c.collectExpression(node.Name, current)
-		}
-		for _, field := range node.Fields {
-			if field == nil {
-				continue
-			}
-			if node.Name != nil {
-				if rng, ok := c.snapshot.identifierRange(field.Name); ok {
-					if declared, ok := c.snapshot.structFieldBinding(node.Name.Value, field.Name.Value); ok {
-						c.addOccurrenceIfTarget(declared, rng, false)
-					}
-				}
-			}
-			if field.Value != nil {
-				c.collectExpression(field.Value, current)
-			}
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			c.collectExpression(element, current)
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			c.collectExpression(element, current)
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			c.collectExpression(key, current)
-			c.collectExpression(value, current)
-		}
-	case *mast.MacroLiteral:
-		child := newScope(current)
-		for _, param := range node.Parameters {
-			if rng, ok := c.snapshot.identifierRange(param); ok {
-				defined := binding{ident: param, rng: rng, kind: lsp.CompletionItemKindVariable}
-				child.define(param.Value, param, rng, defined.kind)
-				c.addOccurrenceIfTarget(defined, rng, true)
-			}
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	}
-}
-
-func (c *referenceCollector) addOccurrenceIfTarget(resolved binding, occurrence mast.Range, declaration bool) {
-	if !sameBinding(resolved, c.target) {
-		return
-	}
-	if declaration && !c.includeDeclaration {
-		return
-	}
-	if !occurrence.IsValid() {
-		return
-	}
-	if _, ok := c.seen[occurrence]; ok {
-		return
-	}
-	c.seen[occurrence] = struct{}{}
-	c.locations = append(c.locations, lsp.Location{
-		URI:   c.uri,
-		Range: localprotocol.ToLSPRange(occurrence),
-	})
-}
-
-func sameBinding(left, right binding) bool {
-	if !left.rng.IsValid() || !right.rng.IsValid() {
-		return false
-	}
-	return left.rng == right.rng
+// tokenPosition converts an editor position to the coordinates ast.Range holds.
+// The protocol counts lines and characters from zero; the lexer counts lines and
+// columns from one.
+func tokenPosition(pos lsp.Position) (line, column int) {
+	return int(pos.Line) + 1, int(pos.Character) + 1
 }

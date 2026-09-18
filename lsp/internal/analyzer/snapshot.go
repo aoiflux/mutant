@@ -43,6 +43,14 @@ type Snapshot struct {
 	typeMap      map[mast.Node]Type
 	structFields map[string]map[string]Type
 
+	// graphOnce guards the name graph: which declaration each name in this
+	// document refers to, which declarations are in scope where, and where each
+	// one is used. It is sema.BuildFile's single walk, and it replaced five
+	// separate ones in this package. Built once, on the first question that
+	// needs it, so an analysis that only lints never pays for it.
+	graphOnce sync.Once
+	graph     *sema.Graph
+
 	// solvedOnce guards the constraint solver in fn_solver.go, which works out
 	// each user function's parameter kinds from how its body uses them. It runs
 	// before inference rather than inside it, because inference consumes its

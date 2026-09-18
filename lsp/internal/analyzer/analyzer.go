@@ -86,11 +86,8 @@ func (s *Snapshot) isBoundAt(name string, pos lsp.Position) bool {
 	if s == nil || s.Program == nil || name == "" {
 		return false
 	}
-	if _, imported := importNamespaces(s.Program.Statements)[name]; imported {
-		return true
-	}
 	for _, binding := range s.VisibleBindingsAt(pos) {
-		if binding.ident != nil && binding.ident.Value == name {
+		if binding.name == name {
 			return true
 		}
 	}
@@ -290,6 +287,9 @@ func (s *Snapshot) PrepareRename(pos lsp.Position) (string, mast.Range, bool) {
 	if !locationsOK {
 		return "", mast.Range{}, false
 	}
+	if !s.RenameableAt(pos) {
+		return "", mast.Range{}, false
+	}
 
 	node, rng, ok := s.NodeAt(pos)
 	if !ok {
@@ -346,23 +346,23 @@ func (s *Snapshot) CompletionItemsAt(pos lsp.Position) []lsp.CompletionItem {
 
 	bindings := s.VisibleBindingsAt(pos)
 	sort.Slice(bindings, func(i, j int) bool {
-		return bindings[i].ident.Value < bindings[j].ident.Value
+		return bindings[i].name < bindings[j].name
 	})
 	for _, bind := range bindings {
-		if bind.ident == nil {
+		if bind.name == "" {
 			continue
 		}
-		if _, ok := seen[bind.ident.Value]; ok {
+		if _, ok := seen[bind.name]; ok {
 			continue
 		}
 		kind := bind.kind
-		item := lsp.CompletionItem{Label: bind.ident.Value, Kind: &kind}
+		item := lsp.CompletionItem{Label: bind.name, Kind: &kind}
 		if ty, ok := s.TypeOf(bind.ident); ok {
 			detail := ty.String()
 			item.Detail = &detail
 		}
 		items = append(items, item)
-		seen[bind.ident.Value] = struct{}{}
+		seen[bind.name] = struct{}{}
 	}
 
 	return stableCompletionItems(items)

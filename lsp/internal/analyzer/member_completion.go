@@ -49,11 +49,11 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 	// to fs_read and friends.
 	shadowed := false
 	for _, b := range s.VisibleBindingsAt(pos) {
-		if b.ident == nil || b.ident.Value != receiver {
+		if b.name != receiver {
 			continue
 		}
 		shadowed = true
-		if typeName, ok := s.structTypeNameForBinding(b); ok {
+		if typeName, ok := s.structTypeNameForDeclaration(b.ident); ok {
 			if fields, ok := s.structFieldNames(typeName); ok {
 				return s.structFieldCompletionItems(typeName, fields, prefix, pos), true
 			}

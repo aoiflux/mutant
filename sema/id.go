@@ -51,27 +51,37 @@ const ModuleSeparator = "\x00"
 // declaration would otherwise be ambiguous, so that two different kinds of
 // binding can never be handed the same identity:
 //
-//	top-level let or function    ""            the name
-//	param, local let, loop bind  "fn/collect"  the name
-//	import namespace             "import"      the alias
-//	struct or enum name          "type"        the type name
-//	struct field, enum variant   "type/Point"  the field or variant
+//	top-level let or function    ScopeTopLevel        the name
+//	param, local let, loop bind  "collect"            the name
+//	import namespace             ScopeImport          the alias
+//	struct or enum name          ScopeType            the type name
+//	struct field, enum variant   ScopeType + "/Point" the field or variant
 //
 // `import util` and `let util` are genuinely different bindings under Mutant's
 // rules -- the compiler tries the namespace first -- so they must not collapse
 // to one ID.
 //
-// A segment is its owner's name where there is one and an ordinal otherwise
-// (`fn#2`, `block#0`). Positions are deliberately absent: a position-based path
-// changes on every keystroke above it, which would make rename wrong mid-edit.
+// A segment is its owner's name where there is one and an ordinal otherwise:
+// the scope of `let collect = fn(a) { ... }` is `collect`, and the scope of an
+// unnamed `fn` passed as an argument is `fn#0`, numbered within its parent.
+// Only a function or macro literal opens a scope, so there is no segment for a
+// block. Positions are deliberately absent: a position-based path changes on
+// every keystroke above it, which would make rename wrong mid-edit.
 type ScopePath string
 
-// Reserved scope roots. They are not identifiers -- `import` and `type` are
-// keywords -- so a user-written scope segment can never collide with one.
+// Reserved scope roots.
+//
+// Each carries a leading NUL, for the same reason ModuleSeparator is NUL: it is
+// the one byte that can appear in no identifier, so a root can never be the
+// name of a scope the author opened. Spelling them as the bare words would have
+// been enough for `import`, which is a keyword, and wrong for `type`, which is
+// not -- `let type = fn() { let Point = 1; };` opens a scope called `type`, and
+// its local `Point` would then have had the very same identity as the field of
+// a `struct Point`. Renaming one would have renamed the other.
 const (
 	ScopeTopLevel ScopePath = ""
-	ScopeImport   ScopePath = "import"
-	ScopeType     ScopePath = "type"
+	ScopeImport   ScopePath = ScopePath(ModuleSeparator + "import")
+	ScopeType     ScopePath = ScopePath(ModuleSeparator + "type")
 )
 
 // Child returns the scope nested inside p under segment.
