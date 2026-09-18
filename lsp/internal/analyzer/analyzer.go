@@ -33,6 +33,70 @@ func (a *Analyzer) Analyze(src string) *Snapshot {
 	}
 }
 
+// AnalyzeInWorkspace is Analyze for a document that has a place in a program:
+// a path on disk, and a workspace that knows what the file's imports name.
+//
+// It is a second entry point rather than a wider signature on Analyze because
+// Analyze has 9 production call sites and about 108 in total. Rewriting ~99
+// tests to pass a nil workspace would be a large diff that asserts nothing, and
+// the ones that matter -- api.Lint, which is handed a string with no file
+// context at all, and the REPL -- genuinely have no path to give.
+//
+// A nil workspace is legal and yields exactly what Analyze yields. Every
+// cross-module feature then declines rather than guessing, which is the same
+// posture the editor takes towards a module it has not read yet.
+func (a *Analyzer) AnalyzeInWorkspace(path, src string, workspace *sema.Workspace) *Snapshot {
+	snapshot := a.Analyze(src)
+	if path != "" {
+		snapshot.ModuleKey = sema.CanonicalKey(path)
+	}
+	snapshot.workspace = workspace
+	return snapshot
+}
+
+// scopeCtx builds the context sema resolves names in for this document.
+//
+// The split is the point: everything file-local -- which names are bound at a
+// position, which enums are declared here -- comes from the snapshot's own scope
+// walk, and everything cross-module comes from the workspace. Neither knows how
+// to do the other's half, and one resolver puts them together with the
+// precedence the compiler uses.
+//
+// With no workspace this still resolves the builtin fold and enum variants,
+// which is all a single file can mean.
+func (s *Snapshot) scopeCtx(pos lsp.Position) sema.ScopeCtx {
+	local := s.localScopeAt(pos)
+	if s == nil || s.workspace == nil {
+		return sema.ScopeCtx{
+			Module: "",
+			Bound:  local.Bound,
+			Enums:  local.Enums,
+		}
+	}
+	return s.workspace.ScopeCtxFor(s.ModuleKey, local)
+}
+
+// isBoundAt reports whether the author bound name at pos -- a let, a parameter,
+// a loop binding, an import namespace, a struct or an enum name.
+//
+// It must not report true for a bare builtin. That exclusion is commit a901ce4:
+// a caller that counts builtins as bindings breaks exactly the families whose
+// own name is also a registered builtin, and there are four of them.
+func (s *Snapshot) isBoundAt(name string, pos lsp.Position) bool {
+	if s == nil || s.Program == nil || name == "" {
+		return false
+	}
+	if _, imported := importNamespaces(s.Program.Statements)[name]; imported {
+		return true
+	}
+	for _, binding := range s.VisibleBindingsAt(pos) {
+		if binding.ident != nil && binding.ident.Value == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Snapshot) NodeAt(pos lsp.Position) (mast.Node, mast.Range, bool) {
 	if s == nil || s.Program == nil || s.Program.NodePositions == nil {
 		return nil, mast.Range{}, false

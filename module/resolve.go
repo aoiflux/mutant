@@ -13,8 +13,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+
+	"mutant/sema"
 )
 
 // Extension is the suffix every Mutant source file carries. An import path
@@ -124,17 +125,13 @@ func validateSpelling(spelling string) error {
 // canonicalKey returns the identity of a file: the value two spellings of the
 // same file must share, so a diamond import compiles it once.
 //
-// Case is folded on Windows and only on Windows. Folding everywhere would
-// merge `Util.mut` and `util.mut` on a case-sensitive filesystem, where they
-// are genuinely two files; folding nowhere would compile the same Windows file
-// twice when two imports disagree about capitalisation, giving duplicate
-// definitions for code that is correct on the platform it was written for.
+// The rule itself lives in sema, which also files every fact it holds under
+// this key, and which the language server can import where it cannot import
+// this package. Two independently-written copies of the rule that defines
+// module identity is how modules come to silently fail to match across
+// case-differing paths, so this forwards rather than repeating it.
 func canonicalKey(absolutePath string) string {
-	key := filepath.Clean(absolutePath)
-	if runtime.GOOS == "windows" {
-		key = strings.ToLower(key)
-	}
-	return key
+	return sema.CanonicalKey(absolutePath)
 }
 
 // fileExists reports whether path names an existing regular file. A directory

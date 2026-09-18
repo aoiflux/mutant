@@ -5,6 +5,7 @@ import (
 
 	mast "mutant/ast"
 	"mutant/parser"
+	"mutant/sema"
 )
 
 // Snapshot is a parsed view of one document.
@@ -19,6 +20,19 @@ type Snapshot struct {
 	Program      *mast.Program
 	ParseErrors  []parser.ParseError
 	Recoverables []parser.RecoverableError
+
+	// ModuleKey and workspace are what this document knows about the rest of
+	// the program, and both are optional: a nil workspace means "this file and
+	// nothing else", which is exactly what the REPL, the playground, api.Lint
+	// and ~99 tests want, and what Analyze(src) has always produced.
+	//
+	// They are read-only here. The workspace is owned by the server and shared
+	// by every open document -- deliberately not per-snapshot, because a
+	// module's exports are read by every file that imports it and rebuilding
+	// them once per importer per keystroke is the latency regression no unit
+	// test would catch.
+	ModuleKey string
+	workspace *sema.Workspace
 
 	// typeMap is the lazily-built, best-effort type of each confidently-typed AST
 	// node (see infer.go). It powers hover/completion/inlay type info and has no

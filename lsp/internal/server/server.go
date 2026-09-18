@@ -15,6 +15,7 @@ import (
 	"mutant/lsp/internal/analyzer"
 	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/lsp/internal/workspace"
+	"mutant/sema"
 	"mutant/token"
 
 	"github.com/tliron/glsp"
@@ -31,6 +32,13 @@ type Server struct {
 	documents *workspace.Store
 	symbols   *workspace.SymbolIndex
 	analyzer  *analyzer.Analyzer
+
+	// sema holds what every indexed file declares and what its imports
+	// name. It is one object for the whole server rather than one per
+	// document: a module's exports are read by every file that imports it,
+	// so hanging them off a per-URI snapshot would rebuild them once per
+	// importer, per keystroke. It has its own lock.
+	sema *sema.Workspace
 
 	mu         sync.RWMutex
 	snapshots  map[lsp.DocumentUri]*analyzer.Snapshot
@@ -71,6 +79,7 @@ func New(debug bool) *Server {
 		documents:    workspace.NewStore(),
 		symbols:      workspace.NewSymbolIndex(),
 		analyzer:     analyzer.New(),
+		sema:         sema.NewWorkspace(nil),
 		snapshots:    make(map[lsp.DocumentUri]*analyzer.Snapshot),
 		semanticPrev: make(map[lsp.DocumentUri]semanticResult),
 		scanned:      make(map[string]lsp.DocumentUri),
@@ -326,7 +335,7 @@ func (s *Server) didOpen(ctx *glsp.Context, params *lsp.DidOpenTextDocumentParam
 	// Drop any disk-indexed copy of this file so the open document is the single
 	// authority (prevents ambiguous duplicate cross-file symbols).
 	s.evictScannedEntryFor(doc.URI)
-	snapshot := s.analyzer.Analyze(doc.Text)
+	snapshot := s.analyzeDoc(doc.URI, doc.Text)
 	s.setSnapshot(doc.URI, snapshot)
 	s.publishDiagnostics(ctx, doc.URI, doc.Version, snapshot)
 	return nil
@@ -340,7 +349,7 @@ func (s *Server) didChange(ctx *glsp.Context, params *lsp.DidChangeTextDocumentP
 		}
 		return err
 	}
-	snapshot := s.analyzer.Analyze(doc.Text)
+	snapshot := s.analyzeDoc(doc.URI, doc.Text)
 	s.setSnapshot(doc.URI, snapshot)
 	s.publishDiagnostics(ctx, doc.URI, doc.Version, snapshot)
 	return nil
@@ -368,7 +377,13 @@ func (s *Server) hover(_ *glsp.Context, params *lsp.HoverParams) (*lsp.Hover, er
 	if !ok {
 		return nil, nil
 	}
-	text, rng, ok := snapshot.HoverText(params.Position)
+	// A reach into another module is tried first: the file-local walk below
+	// cannot see the declaration at all, so it would fall through to
+	// whatever `ns` alone looks like and describe the wrong thing.
+	text, rng, ok := snapshot.ModuleMemberHover(params.Position)
+	if !ok {
+		text, rng, ok = snapshot.HoverText(params.Position)
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -936,6 +951,14 @@ func (s *Server) definition(_ *glsp.Context, params *lsp.DefinitionParams) (any,
 	if !ok {
 		return nil, nil
 	}
+	// A reach into another module is tried first, because it is the only one
+	// of the three that knows what an import means. The file-local walk below
+	// cannot see another file at all, and the workspace fallback after it
+	// matches by name across every indexed document -- which is how
+	// go-to-definition came to jump into modules nothing had imported.
+	if location, ok := snapshot.ModuleMemberDefinition(params.Position); ok {
+		return location, nil
+	}
 	location, ok := snapshot.DefinitionLocation(params.TextDocument.URI, params.Position)
 	if !ok {
 		if _, workspaceLocation, ok := s.resolveWorkspaceTopLevelAtPosition(snapshot, params.TextDocument.URI, params.Position, params.TextDocument.URI, false); ok {
@@ -1193,7 +1216,7 @@ func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParam
 
 	snapshot, ok := s.snapshot(params.TextDocument.URI)
 	if !ok || snapshot == nil {
-		snapshot = s.analyzer.Analyze(doc.Text)
+		snapshot = s.analyzeDoc(doc.URI, doc.Text)
 	}
 
 	// params.Options is intentionally ignored: Mutant formatting is canonical
@@ -1226,7 +1249,7 @@ func (s *Server) rangeFormatting(_ *glsp.Context, params *lsp.DocumentRangeForma
 
 	snapshot, ok := s.snapshot(params.TextDocument.URI)
 	if !ok || snapshot == nil {
-		snapshot = s.analyzer.Analyze(doc.Text)
+		snapshot = s.analyzeDoc(doc.URI, doc.Text)
 	}
 
 	formatted := formatSnapshotText(snapshot)
@@ -1254,7 +1277,7 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 
 	snapshot, ok := s.snapshot(params.TextDocument.URI)
 	if !ok || snapshot == nil {
-		snapshot = s.analyzer.Analyze(doc.Text)
+		snapshot = s.analyzeDoc(doc.URI, doc.Text)
 	}
 
 	formatted := formatSnapshotText(snapshot)
@@ -1310,11 +1333,58 @@ func (s *Server) snapshot(uri lsp.DocumentUri) (*analyzer.Snapshot, bool) {
 	return snapshot, ok
 }
 
+// analyzeDoc parses a document and gives it its place in the program: the path
+// the URI names, and the shared workspace that knows what its imports mean.
+//
+// Every snapshot the server makes for a real document goes through here, so
+// there is one answer to "does this document know about the rest of the
+// program?" rather than one per handler. A URI that is not a file -- an
+// untitled buffer, say -- still analyses, with no module key; it simply has no
+// imports anything could resolve.
+func (s *Server) analyzeDoc(uri lsp.DocumentUri, text string) *analyzer.Snapshot {
+	path, ok := uriToPath(uri)
+	if !ok {
+		path = ""
+	}
+	return s.analyzer.AnalyzeInWorkspace(path, text, s.sema)
+}
+
 func (s *Server) setSnapshot(uri lsp.DocumentUri, snapshot *analyzer.Snapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshots[uri] = snapshot
 	s.safeSymbolUpdate(uri, snapshot)
+	s.safeSemaUpdate(uri, snapshot)
+}
+
+// safeSemaUpdate files this document's declarations in the shared workspace.
+//
+// It is here, beside safeSymbolUpdate, because setSnapshot is the one place
+// every new snapshot passes through -- open, change, save, and the background
+// disk scan alike. Putting it anywhere else would mean a file whose exports the
+// editor knows about through one path and not another.
+//
+// It follows safeSymbolUpdate's panic recovery for the same reason: this runs
+// on the keystroke path, and a panic here would take down a language server
+// that was otherwise working.
+//
+// PutFile reads top-level statements only and touches no files, so the common
+// edit -- typing inside a function body -- costs one walk of the statement list
+// and changes nothing.
+func (s *Server) safeSemaUpdate(uri lsp.DocumentUri, snapshot *analyzer.Snapshot) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logRecoveredPanic("sema.PutFile", uri, recovered)
+		}
+	}()
+	if s.sema == nil || snapshot == nil {
+		return
+	}
+	path, ok := uriToPath(uri)
+	if !ok {
+		return
+	}
+	s.sema.PutFile(string(uri), path, snapshot.Program)
 }
 
 func (s *Server) currentLintConfig() analyzer.LintConfig {

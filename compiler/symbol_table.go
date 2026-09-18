@@ -70,7 +70,13 @@ type SymbolTable struct {
 // name is stored under. NUL is used because it is the one byte that can appear
 // in neither an identifier nor a path, so a qualified key can never collide
 // with an unqualified one.
-const moduleSeparator = "\x00"
+//
+// It is sema's constant rather than its own so that sema.DeclID.String and
+// qualify cannot drift: the graph identifies a top-level declaration by the
+// very key the symbol table files it under, and a parity test compares the two
+// as strings. Two separately-declared bytes that happen to be equal today
+// would make that comparison meaningless.
+const moduleSeparator = sema.ModuleSeparator
 
 // qualify returns the store key that module's top-level name is filed under.
 //

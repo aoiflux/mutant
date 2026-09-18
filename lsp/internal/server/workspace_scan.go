@@ -5,10 +5,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
+
+	"mutant/sema"
 )
 
 const (
@@ -48,19 +49,22 @@ func uriToPath(uri lsp.DocumentUri) (string, bool) {
 }
 
 // canonicalPath returns a comparison key for a path that is stable across the
-// URI-encoding differences between clients (case-insensitive on Windows). It is
-// used to detect that a disk-indexed file and a later-opened editor document are
-// the same file even when their URIs differ.
+// URI-encoding differences between clients. It is used to detect that a
+// disk-indexed file and a later-opened editor document are the same file even
+// when their URIs differ.
+//
+// The comparison rule is sema.CanonicalKey, which module resolution also uses
+// to decide that two import paths name one file. It has to be the same rule:
+// the key this returns is what a document is filed under, and what an import
+// from another file will look it up by. Making the path absolute stays here
+// because that is where the two callers differ -- the loader resolved its path
+// itself, while an editor hands us URIs and we must degrade rather than refuse.
 func canonicalPath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		abs = p
 	}
-	abs = filepath.Clean(abs)
-	if runtime.GOOS == "windows" {
-		abs = strings.ToLower(abs)
-	}
-	return abs
+	return sema.CanonicalKey(abs)
 }
 
 // skipScanDir reports whether a directory should be pruned from the crawl.
@@ -129,7 +133,10 @@ func (s *Server) indexFileFromDisk(path string) bool {
 	if err != nil {
 		return false
 	}
-	snapshot := s.analyzer.Analyze(string(data))
+	// The disk scan is what makes an import to an unopened file resolve at
+	// all, so a scanned file gets the same treatment an open one does: a
+	// module key and the shared workspace.
+	snapshot := s.analyzeDoc(uri, string(data))
 
 	s.mu.Lock()
 	if s.scanned == nil {
@@ -139,6 +146,7 @@ func (s *Server) indexFileFromDisk(path string) bool {
 	s.mu.Unlock()
 
 	s.safeSymbolUpdate(uri, snapshot)
+	s.safeSemaUpdate(uri, snapshot)
 	return true
 }
 

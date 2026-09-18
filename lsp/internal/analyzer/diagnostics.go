@@ -256,6 +256,16 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	}
 	diagnostics = append(diagnostics, syntaxBalanceDiagnostics(snapshot.Source)...)
 
+	// A reach into another module the compiler will refuse. These are not
+	// lints and take no LintConfig: the underscore export rule and "that
+	// module declares no such name" are the language, not a matter of taste,
+	// and the sentence shown is the compiler's own.
+	//
+	// Without a workspace this yields nothing, which is exactly right for
+	// api.Lint and the REPL: they are handed a string with no file context,
+	// so they cannot know what an import names and must not guess.
+	diagnostics = append(diagnostics, snapshot.ModuleMemberDiagnostics()...)
+
 	duplicateDiagnostics := lintDuplicateTopLevelDeclarations(snapshot, lintConfig)
 	diagnostics = append(diagnostics, duplicateDiagnostics...)
 	diagnostics = append(diagnostics, lintUnusedDeclarations(snapshot, lintConfig, duplicateNamesFromDiagnostics(duplicateDiagnostics))...)
