@@ -197,6 +197,22 @@ type Ref struct {
 	// because a separate set can drift out of step with this one and a field
 	// cannot.
 	InCallPosition bool
+
+	// From is the declaration the use sits inside, and is nil at the top level
+	// of the file. Anonymous literals declare nothing, so a use inside one
+	// belongs to the nearest declaration that does.
+	//
+	// It is a pointer rather than a DeclID for two reasons. A Graph never
+	// points outside its own module, so there is nothing here a pointer could
+	// dangle into -- the rule that keeps cross-module references as values
+	// does not apply within one file. And a DeclID is three strings and an
+	// ordinal; storing one per reference on a walk that is already
+	// allocation-bound costs more than the fact is worth.
+	//
+	// With InCallPosition it is a call graph without a second traversal: a
+	// call is an edge From -> Target. That is what `mutant graph export`
+	// writes, and what a call hierarchy would read.
+	From *Node
 }
 
 // ImportEdge is one `import` statement.
@@ -226,6 +242,18 @@ type Scope struct {
 	Parent   *Scope
 	Children []*Scope
 
+	// Owner is the declaration that opened this scope: the function a
+	// parameter belongs to, the struct a field belongs to. It is nil at the
+	// root, and nil for an anonymous literal, which opens a scope without
+	// declaring anything.
+	//
+	// It is the other half of Parent. Parent says which scope encloses this
+	// one; Owner says which declaration does, which is the question a nesting
+	// view asks -- an outline, a call hierarchy, the CONTAINS edge of an
+	// export. Recorded here because the walk knows it for free and anything
+	// else would have to work it out again from positions.
+	Owner *Node
+
 	// Range is the source this scope covers, and is the zero value at the root,
 	// which covers the file.
 	Range ast.Range
@@ -235,6 +263,12 @@ type Scope struct {
 	// declarations -- `let x = 1; let x = 2;` -- and which one a position sees
 	// depends on where the position is.
 	order []*Node
+
+	// enclosing is Owner where there is one and the parent's enclosing
+	// otherwise, so the declaration a use belongs to is a field read rather
+	// than a walk up the chain. It is filled in at push, because a scope's
+	// parent never changes afterwards.
+	enclosing *Node
 
 	// latest is the declaration each name currently resolves to, which is the
 	// most recent one the walk has reached.
@@ -422,15 +456,31 @@ func (b *builder) reference(ident *ast.Identifier, inCall bool) {
 func (b *builder) record(use ast.Node, rng ast.Range, target DeclID, inCall bool) {
 	b.g.refList = append(b.g.refList, Ref{
 		Use: use, UseRange: rng, Target: target, InCallPosition: inCall,
+		From: b.enclosing(),
 	})
+}
+
+// enclosing is the declaration the walk is currently inside: the nearest scope
+// that has an owner. The search skips anonymous literals, which open a scope
+// and declare nothing, so a use inside `map(xs, fn(x) { helper(x); })` is
+// attributed to whatever declares the map call rather than to nothing.
+func (b *builder) enclosing() *Node {
+	return b.scope.enclosing
 }
 
 // push opens a scope. segment names it after the declaration it belongs to
 // where there is one, and after an ordinal otherwise, never after a position:
 // a position-based identity changes on every keystroke above it, which would
 // make a rename mid-edit rename the wrong thing.
-func (b *builder) push(segment string, rng ast.Range) {
-	child := &Scope{Path: b.scope.Path.Child(segment), Parent: b.scope, Range: rng}
+func (b *builder) push(segment string, rng ast.Range, owner *Node) {
+	enclosing := owner
+	if enclosing == nil {
+		enclosing = b.scope.enclosing
+	}
+	child := &Scope{
+		Path: b.scope.Path.Child(segment), Parent: b.scope, Range: rng,
+		Owner: owner, enclosing: enclosing,
+	}
 	b.scope.Children = append(b.scope.Children, child)
 	b.scope = child
 }

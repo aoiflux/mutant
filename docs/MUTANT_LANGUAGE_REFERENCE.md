@@ -1222,6 +1222,9 @@ analyzer the language server uses, so editor and command-line results agree:
   `--run` to select tests by name, `-v`, `--json` for CI, `--fail-fast`, and
   `--cover` / `--coverprofile` for line coverage. With no path it tests the
   current directory. See [TESTING.md](TESTING.md).
+- `mutant graph export --out <dir> [--module-path DIR] <entry.mut>` — write the
+  symbol graph of a whole program to a graph store, for asking questions across
+  a codebase that no single file can answer.
 
 Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
 `vendor`).
@@ -1240,6 +1243,44 @@ A test file is an ordinary program, compiled the same way any program is, so it
 can `import` the module it tests. A file that declares no `test` still counts as
 one test and keeps the original contract: it **passes** unless running it errors
 or its final value is `false`.
+
+### Exporting a program's symbol graph
+
+`mutant graph export` walks the entry file's whole import closure and writes
+down what every name in it means: a node per module and per declaration
+— functions, values, parameters, loop bindings, import aliases, structs, enums,
+fields and variants — and an edge per relationship between them.
+
+```
+mutant graph export --out ./example_graph_data_symbols examples/modules/main.mut
+```
+
+| Edge | From → To | What it says |
+| --- | --- | --- |
+| `DECLARES` | module → declaration | which file a name is written in |
+| `ENCLOSES` | declaration → declaration | which declaration a name is written inside |
+| `REFERENCES` | declaration → declaration | one per use, carrying its position and whether it was a call |
+| `IMPORTS` | module → module | one per resolved `import` |
+| `USES_TYPE` | declaration → struct or enum | a second label on the references that name a type |
+
+Each declaration also carries its kind as a second node label, so counting the
+functions in a program is a count rather than a traversal. The label names are
+written beside the store, so it stays readable without the `mutant` binary.
+
+Three things are worth knowing before relying on it:
+
+- **It is a snapshot.** The compiler and the editor build their own graph in
+  memory and never read this one. An exported store describes the source as it
+  was when it was written, and says nothing about the source afterwards.
+- **Positions are file-local**, matching the files on disk rather than the
+  concatenated source the compiler sees.
+- **A program that does not compile still exports.** Rules the program breaks
+  are printed as refusals and the graph is written anyway, because a graph of a
+  broken program is the one worth having.
+
+The target directory must be empty or absent: a store is written in one pass so
+that what is in it describes one program at one moment. `example_graph_data*/`
+is already in `.gitignore`, which makes it a convenient place to look around.
 
 ### What the linter checks for you
 

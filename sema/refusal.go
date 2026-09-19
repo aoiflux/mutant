@@ -18,6 +18,12 @@ const (
 	// RefuseNoSuchMember is `ns.name` where the module ns names is loaded and
 	// declares no name.
 	RefuseNoSuchMember
+
+	// RefuseDuplicateTypeName is two modules declaring one struct or enum
+	// name. It is the one refusal here that is about a whole program rather
+	// than about one expression, because a type name is the one thing in
+	// Mutant that is not module-scoped.
+	RefuseDuplicateTypeName
 )
 
 // Refusal is a resolution the language does not permit.
@@ -101,4 +107,21 @@ func duplicateNamespaceMessage(importer, namespace, first, second string) string
 // until a scan completes.
 func unresolvedImportMessage(spelling string) string {
 	return fmt.Sprintf("no indexed file matches the import %q", spelling)
+}
+
+// duplicateTypeNameRefusal is the sentence compiler.claimTypeName raises,
+// moved here so there is one of it.
+//
+// Struct and enum names are claimed program-wide: ByteCode.StructDefs is a flat
+// map, so two modules declaring Point would compile to one definition and the
+// second would quietly win. Naming both files is the whole value of the
+// message, because the reader is looking at one of them.
+func duplicateTypeNameRefusal(kind, name, first, second string) *Refusal {
+	return &Refusal{
+		Code: RefuseDuplicateTypeName,
+		Message: fmt.Sprintf(
+			"%s %s is declared in both %s and %s: struct and enum names are shared across the whole program, so one of them has to be renamed",
+			kind, name, first, second,
+		),
+	}
 }

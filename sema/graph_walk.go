@@ -26,14 +26,14 @@ func (b *builder) statement(stmt ast.Statement) {
 
 	case *ast.ReturnStatement:
 		for _, value := range node.ReturnValues {
-			b.expression(value, "")
+			b.expression(value, nil)
 		}
 		if len(node.ReturnValues) == 0 {
-			b.expression(node.ReturnValue, "")
+			b.expression(node.ReturnValue, nil)
 		}
 
 	case *ast.ExpressionStatement:
-		b.expression(node.Expression, "")
+		b.expression(node.Expression, nil)
 
 	case *ast.BlockStatement:
 		// No scope is opened. A block does not introduce one in Mutant:
@@ -43,7 +43,7 @@ func (b *builder) statement(stmt ast.Statement) {
 		}
 
 	case *ast.WhileStatement:
-		b.expression(node.Condition, "")
+		b.expression(node.Condition, nil)
 		b.block(node.Body)
 
 	case *ast.ForInStatement:
@@ -54,13 +54,13 @@ func (b *builder) statement(stmt ast.Statement) {
 				b.declare(name.Value, name, rng, KindLoopBind)
 			}
 		}
-		b.expression(node.Iterable, "")
+		b.expression(node.Iterable, nil)
 		b.block(node.Body)
 
 	case *ast.ForStatement:
 		b.statement(node.Init)
-		b.expression(node.Condition, "")
-		b.expression(node.Post, "")
+		b.expression(node.Condition, nil)
+		b.expression(node.Post, nil)
 		b.block(node.Body)
 
 	case *ast.StructStatement:
@@ -88,11 +88,11 @@ func (b *builder) letStatement(node *ast.LetStatement) {
 		}
 		// Bound before the value is walked, which is what makes a function
 		// literal able to call itself.
-		b.expression(node.Value, segmentFor(bound, ""))
+		b.expression(node.Value, bound)
 		return
 	}
 
-	b.expression(node.Value, "")
+	b.expression(node.Value, nil)
 	for _, name := range names {
 		if rng, ok := b.rangeOf(name); ok {
 			b.declare(name.Value, name, rng, KindValue)
@@ -163,7 +163,7 @@ func (b *builder) typeStatement(name *ast.Identifier, members []*ast.Identifier,
 	}
 
 	declared := b.declareIn(b.types(), name.Value, name, rng, rng, typeKind)
-	memberScope := b.memberScope(segmentFor(declared, name.Value))
+	memberScope := b.memberScope(segmentFor(declared, name.Value), declared)
 	for _, member := range members {
 		if memberRange, ok := b.rangeOf(member); ok {
 			b.declareIn(memberScope, member.Value, member, memberRange, memberRange, memberKind)
@@ -171,7 +171,7 @@ func (b *builder) typeStatement(name *ast.Identifier, members []*ast.Identifier,
 	}
 }
 
-func (b *builder) expression(expr ast.Expression, boundAs string) {
+func (b *builder) expression(expr ast.Expression, boundTo *Node) {
 	switch node := expr.(type) {
 	case nil:
 		return
@@ -180,18 +180,18 @@ func (b *builder) expression(expr ast.Expression, boundAs string) {
 		b.reference(node, false)
 
 	case *ast.FunctionLiteral:
-		b.functionScope(node, node.Parameters, node.Body, boundAs, "fn")
+		b.functionScope(node, node.Parameters, node.Body, boundTo, "fn")
 
 	case *ast.MacroLiteral:
-		b.functionScope(node, node.Parameters, node.Body, boundAs, "macro")
+		b.functionScope(node, node.Parameters, node.Body, boundTo, "macro")
 
 	case *ast.IfExpression:
-		b.expression(node.Condition, "")
+		b.expression(node.Condition, nil)
 		b.block(node.Consequence)
 		b.block(node.Alternative)
 
 	case *ast.MatchExpression:
-		b.expression(node.Subject, "")
+		b.expression(node.Subject, nil)
 		for _, arm := range node.Arms {
 			if arm == nil {
 				continue
@@ -199,7 +199,7 @@ func (b *builder) expression(expr ast.Expression, boundAs string) {
 			// Patterns are walked so that go-to-definition on the `Status` of
 			// a `Status.Ok` arm reaches the enum declaration.
 			for _, pattern := range arm.Patterns {
-				b.expression(pattern, "")
+				b.expression(pattern, nil)
 			}
 			b.block(arm.Body)
 		}
@@ -208,26 +208,26 @@ func (b *builder) expression(expr ast.Expression, boundAs string) {
 		if callee, isIdent := node.Function.(*ast.Identifier); isIdent {
 			b.reference(callee, true)
 		} else {
-			b.expression(node.Function, "")
+			b.expression(node.Function, nil)
 		}
 		for _, arg := range node.Arguments {
-			b.expression(arg, "")
+			b.expression(arg, nil)
 		}
 
 	case *ast.PrefixExpression:
-		b.expression(node.Right, "")
+		b.expression(node.Right, nil)
 
 	case *ast.InfixExpression:
-		b.expression(node.Left, "")
-		b.expression(node.Right, "")
+		b.expression(node.Left, nil)
+		b.expression(node.Right, nil)
 
 	case *ast.IndexExpression:
-		b.expression(node.Left, "")
-		b.expression(node.Index, "")
+		b.expression(node.Left, nil)
+		b.expression(node.Index, nil)
 
 	case *ast.AssignExpression:
-		b.expression(node.Left, "")
-		b.expression(node.Value, "")
+		b.expression(node.Left, nil)
+		b.expression(node.Value, nil)
 
 	case *ast.FieldExpression:
 		b.fieldExpression(node)
@@ -237,12 +237,12 @@ func (b *builder) expression(expr ast.Expression, boundAs string) {
 
 	case *ast.ArrayLiteral:
 		for _, element := range node.Elements {
-			b.expression(element, "")
+			b.expression(element, nil)
 		}
 
 	case *ast.TemplateLiteral:
 		for _, part := range node.Parts {
-			b.expression(part, "")
+			b.expression(part, nil)
 		}
 
 	case *ast.HashLiteral:
@@ -250,8 +250,8 @@ func (b *builder) expression(expr ast.Expression, boundAs string) {
 		// every run. BuildFile sorts the references it produces for exactly
 		// this reason.
 		for key, value := range node.Pairs {
-			b.expression(key, "")
-			b.expression(value, "")
+			b.expression(key, nil)
+			b.expression(value, nil)
 		}
 	}
 }
@@ -278,7 +278,7 @@ func (b *builder) fieldExpression(node *ast.FieldExpression) {
 
 	left, isIdent := node.Left.(*ast.Identifier)
 	if !isIdent {
-		b.expression(node.Left, "")
+		b.expression(node.Left, nil)
 		return
 	}
 
@@ -349,7 +349,7 @@ func (b *builder) structLiteral(node *ast.StructLiteral) {
 				}
 			}
 		}
-		b.expression(field.Value, "")
+		b.expression(field.Value, nil)
 	}
 }
 
@@ -360,8 +360,8 @@ func (b *builder) structLiteral(node *ast.StructLiteral) {
 // parameters are declared in the header: a cursor on a parameter name is inside
 // the scope that parameter belongs to, and a scope stopping at the opening
 // brace would place it in the enclosing one.
-func (b *builder) functionScope(literal ast.Node, params []*ast.Identifier, body *ast.BlockStatement, boundAs, anonPrefix string) {
-	segment := boundAs
+func (b *builder) functionScope(literal ast.Node, params []*ast.Identifier, body *ast.BlockStatement, boundTo *Node, anonPrefix string) {
+	segment := segmentFor(boundTo, "")
 	if segment == "" {
 		segment = b.anonSegment(anonPrefix)
 	}
@@ -370,7 +370,7 @@ func (b *builder) functionScope(literal ast.Node, params []*ast.Identifier, body
 	if !ok {
 		scopeRange, _ = b.rangeOf(body)
 	}
-	b.push(segment, scopeRange)
+	b.push(segment, scopeRange, boundTo)
 	for _, param := range params {
 		if rng, ok := b.rangeOf(param); ok {
 			b.declare(param.Value, param, rng, KindParam)

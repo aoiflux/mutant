@@ -51,6 +51,19 @@ func (g *Graph) Imports() []ImportEdge {
 	return g.imports
 }
 
+// References returns every recorded use in the file, in source order.
+//
+// It is the whole-file form of UsesOf, for a consumer that walks the graph
+// rather than asking about one declaration: the export writes an edge per
+// reference, and asking UsesOf once per declaration would visit the list once
+// per declaration to produce the same set.
+func (g *Graph) References() []Ref {
+	if g == nil {
+		return nil
+	}
+	return g.refList
+}
+
 // DeclarationAt returns the declaration whose own identifier is under the
 // position -- the cursor is on the name being declared, not on a use of it.
 func (g *Graph) DeclarationAt(line, column int) (*Node, bool) {
@@ -248,7 +261,7 @@ func (b *builder) types() *Scope {
 	return b.g.Types
 }
 
-func (b *builder) memberScope(segment string) *Scope {
+func (b *builder) memberScope(segment string, owner *Node) *Scope {
 	types := b.types()
 	want := types.Path.Child(segment)
 	for _, child := range types.Children {
@@ -256,7 +269,7 @@ func (b *builder) memberScope(segment string) *Scope {
 			return child
 		}
 	}
-	child := &Scope{Path: want, Parent: types}
+	child := &Scope{Path: want, Parent: types, Owner: owner}
 	types.Children = append(types.Children, child)
 	return child
 }

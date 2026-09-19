@@ -509,3 +509,114 @@ func nameList(nodes []*Node) []string {
 	}
 	return names
 }
+
+// Which declaration a use sits inside is a fact the walk has and nothing else
+// does. Without it a consumer has to work it out again from positions -- the
+// same "derive it a second time" that produced the five walks this package
+// replaced -- and a call graph becomes a second traversal instead of a filter
+// over the references already recorded.
+func TestAUseKnowsWhichDeclarationItSitsInside(t *testing.T) {
+	g := graphOf(t, "let helper = fn() { return 1; };\n"+
+		"let caller = fn() { return helper(); };\n"+
+		"helper();\n")
+
+	helper := find(t, g, "helper")
+	caller := find(t, g, "caller")
+
+	inside, atTopLevel := 0, 0
+	for _, ref := range g.References() {
+		if ref.Target != helper.ID {
+			continue
+		}
+		switch {
+		case ref.From == nil:
+			atTopLevel++
+		case ref.From.ID == caller.ID:
+			inside++
+		default:
+			t.Fatalf("a use of helper is attributed to %q, which declares neither "+
+				"of the two places it is written", ref.From.Name)
+		}
+	}
+	if inside != 1 {
+		t.Fatalf("%d uses of helper are attributed to caller, want 1", inside)
+	}
+	if atTopLevel != 1 {
+		t.Fatalf("%d uses of helper are at the file's top level, want 1 -- a use "+
+			"outside every declaration belongs to no declaration, not to the "+
+			"nearest one above it", atTopLevel)
+	}
+}
+
+// An anonymous literal opens a scope and declares nothing, so it cannot own a
+// use. The use belongs to the nearest declaration that does -- otherwise every
+// callback in the file would be attributed to the top level, and a call graph
+// would lose exactly the calls that are hardest to find by reading.
+func TestAUseInsideAnAnonymousLiteralBelongsToTheDeclarationAroundIt(t *testing.T) {
+	g := graphOf(t, "let helper = fn(x) { return x; };\n"+
+		"let each = fn(xs, f) { return f(xs); };\n"+
+		"let run = fn() { return each([1], fn(v) { return helper(v); }); };\n")
+
+	helper := find(t, g, "helper")
+	run := find(t, g, "run")
+
+	for _, ref := range g.References() {
+		if ref.Target != helper.ID {
+			continue
+		}
+		if ref.From == nil {
+			t.Fatal("the use of helper inside the callback belongs to no declaration")
+		}
+		if ref.From.ID != run.ID {
+			t.Fatalf("the use of helper inside the callback is attributed to %q, "+
+				"want run -- the anonymous fn declares nothing to own it", ref.From.Name)
+		}
+		return
+	}
+	t.Fatal("the use of helper inside the callback was not recorded at all")
+}
+
+// Owner is exact where enclosing is not: an anonymous literal's scope is owned
+// by nobody, and saying it was owned by the declaration around it would be a
+// small lie that an outline would render as a function nested inside another.
+func TestAScopeKnowsWhichDeclarationOpenedItAndAnAnonymousOneOpensNothing(t *testing.T) {
+	g := graphOf(t, "struct Point { x; y; };\n"+
+		"let named = fn(a) { return a; };\n"+
+		"let holder = fn() { return fn(b) { return b; }; };\n")
+
+	if g.Root.Owner != nil {
+		t.Fatalf("the file's own scope is owned by %q; it is owned by the file",
+			g.Root.Owner.Name)
+	}
+
+	named := find(t, g, "named")
+	if named.Scope != g.Root {
+		t.Fatal("a top-level declaration does not live in the file's scope")
+	}
+
+	owners := map[string]string{}
+	var walk func(*Scope)
+	walk = func(scope *Scope) {
+		for _, child := range scope.Children {
+			owner := "(none)"
+			if child.Owner != nil {
+				owner = child.Owner.Name
+			}
+			owners[string(child.Path)] = owner
+			walk(child)
+		}
+	}
+	walk(g.Root)
+	walk(g.Types)
+
+	if got := owners["named"]; got != "named" {
+		t.Fatalf("the scope of `named` is owned by %s, want named", got)
+	}
+	if got := owners["holder/fn#0"]; got != "(none)" {
+		t.Fatalf("an anonymous literal's scope claims to be owned by %s; it "+
+			"declares nothing, so nothing owns it", got)
+	}
+	if got := owners[string(ScopeType.Child("Point"))]; got != "Point" {
+		t.Fatalf("the scope holding Point's fields is owned by %s, want Point", got)
+	}
+}

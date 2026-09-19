@@ -31,6 +31,7 @@ const (
 	LINTCMD    = "lint"
 	TESTCMD    = "test"
 	DEBUGCMD   = "debug"
+	GRAPHCMD   = "graph"
 	VERSION    = "Version: " + global.Version
 )
 
@@ -74,6 +75,7 @@ var commandHandlers = map[string]func([]string) int{
 	LINTCMD:    handleLintCommand,
 	TESTCMD:    handleTestCommand,
 	DEBUGCMD:   handleDebugCommand,
+	GRAPHCMD:   handleGraphCommand,
 }
 
 func main() {
@@ -192,7 +194,7 @@ func shouldAttemptEmbeddedRun(args []string) bool {
 
 	for _, arg := range args[1:] {
 		switch arg {
-		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD:
+		case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD, GRAPHCMD:
 			return false
 		}
 
@@ -466,7 +468,7 @@ func handleFileInvocation(args []string) (bool, int) {
 
 func isBuiltinCommand(arg string) bool {
 	switch arg {
-	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD:
+	case RELEASECMD, GENCMD, RUNCMD, HELPCMD, FMTCMD, LINTCMD, TESTCMD, DEBUGCMD, GRAPHCMD:
 		return true
 	default:
 		return false
@@ -679,6 +681,8 @@ func printHelpTopic(args []string) {
 		printTestHelp()
 	case DEBUGCMD:
 		printDebugHelp()
+	case GRAPHCMD:
+		printGraphHelp()
 	default:
 		fmt.Printf("unknown help topic: %s\n\n", args[0])
 		printGeneralHelp()
@@ -702,6 +706,7 @@ Usage:
   mutant lint [--strict] <file-or-dir>...
   mutant test [options] [file-or-dir]...
   mutant debug [--port N] [file.mut]
+  mutant graph export --out <dir> <entry.mut>
   mutant help [command]
 
 Commands:
@@ -713,6 +718,8 @@ Commands:
   test       Run *_test.mut files: named tests, assertions and coverage.
   debug      Serve the Debug Adapter Protocol for an editor (breakpoints,
              stepping, variables). Started by the editor, not by hand.
+  graph      Export a program's symbol graph -- declarations, references and
+             imports across the whole module closure -- to a graph store.
   help       Show general or command-specific help.
 
 Global options:
