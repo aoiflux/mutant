@@ -107,6 +107,9 @@ func New(debug bool) *Server {
 	handler.TextDocumentDefinition = s.definition
 	handler.TextDocumentTypeDefinition = s.typeDefinition
 	handler.TextDocumentReferences = s.references
+	handler.TextDocumentPrepareCallHierarchy = s.prepareCallHierarchy
+	handler.CallHierarchyIncomingCalls = s.callHierarchyIncomingCalls
+	handler.CallHierarchyOutgoingCalls = s.callHierarchyOutgoingCalls
 	handler.TextDocumentPrepareRename = s.prepareRename
 	handler.TextDocumentRename = s.rename
 	handler.TextDocumentSemanticTokensFull = s.semanticTokensFull
@@ -181,6 +184,7 @@ func (s *Server) initialize(_ *glsp.Context, params *lsp.InitializeParams) (any,
 				DefinitionProvider:               true,
 				TypeDefinitionProvider:           true,
 				ReferencesProvider:               true,
+				CallHierarchyProvider:            true,
 				RenameProvider:                   rename,
 				DocumentSymbolProvider:           docSymbols,
 				SemanticTokensProvider:           semanticTokens,

@@ -46,6 +46,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 
 	applyRuleSeverity(rulesMap, "duplicateTopLevelDeclaration", &config.DuplicateTopLevelDeclaration)
 	applyRuleSeverity(rulesMap, "unusedDeclaration", &config.UnusedDeclaration)
+	applyRuleSeverity(rulesMap, "unusedImport", &config.UnusedImport)
 	applyRuleSeverity(rulesMap, "undefinedDeclaration", &config.UndefinedDeclaration)
 	applyRuleSeverity(rulesMap, "nestingComplexity", &config.NestingComplexity)
 	applyRuleSeverity(rulesMap, "semicolon", &config.Semicolon)

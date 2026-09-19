@@ -25,6 +25,37 @@ import (
 //
 // sema.Graph is that walk, once. This is the rule that keeps it at once.
 //
+// Three more chains went after those five, and what each one cost is worth
+// keeping, because in every case the editor and the build disagreed about a
+// program that runs:
+//
+//   - builtinCallCollector's chain answered "is this name taken here" and
+//     answered it differently from the compiler, because it wrote struct and
+//     enum names into the same table as lets and parameters. A file declaring
+//     `struct fs { path; }` lost every arity, argument-kind and deprecation
+//     check on `fs.read(...)`, silently, while the build folded the call to
+//     fs_read and ran it. See parity/builtin_lint_parity_test.go.
+//
+//   - duplicateCollector's chain answered the same question by walking PARENT
+//     scopes, so every shadow was a duplicate: a parameter named after a
+//     top-level let was reported as a second declaration of it, and so was a
+//     struct name beside a value of that name. Both compile, both run, and both
+//     declarations do work -- and the complaint carried a preferred quick fix
+//     whose edit deletes one of the two lines. See
+//     parity/duplicate_lint_parity_test.go.
+//
+//   - undefinedCollector's chain decided which names the file had bound, and
+//     said nothing about three programs the compiler refuses: `struct Point
+//     { x }; Point;`, `len{x: 1};` and `let Nope = 1; Nope{x: 1};` -- a type
+//     name looked up in the value table -- and `Colour.Red; enum Colour
+//     { Red };`, where it asked whether the FILE declares the enum rather than
+//     whether it had yet. Silence is the expensive direction for that rule: a
+//     clean file, and a build that fails with nothing pointing at the line.
+//     See parity/undefined_lint_parity_test.go.
+//
+// The graph does not make these agree by being careful. It makes them agree by
+// being the only thing asked.
+//
 // The giveaway is structural and needs no allowlist to be precise: a struct
 // with a field pointing at its own type AND named for an enclosing scope. A
 // recursive type descriptor -- analyzer.Type, whose Elem and Ret point at
@@ -56,38 +87,6 @@ var scopeChainAllowlist = map[string]string{
 		"which is per-snapshot, explicitly heuristic, and something sema refuses to hold -- a " +
 		"graph the compiler reads must not contain a guess. It resolves nothing: infer.go asks " +
 		"what a name is worth, never which declaration it is.",
-
-	"declarationScope": "the last of the duplication, and named here so it is not mistaken " +
-		"for a decision. One collector in diagnostics.go still walks the tree with it -- " +
-		"undefinedCollector -- and re-encodes which nodes bind a VALUE, exactly as the five " +
-		"deleted walks did. Its account of type names has already gone: a struct or enum name " +
-		"used to be filed in this chain beside the file's lets, so `struct Point { x }; " +
-		"Point;` drew no diagnostic while the build refused it with `undefined variable: " +
-		"Point`. The two positions where a type name is legal -- a struct literal and an enum " +
-		"value -- now ask sema.Graph, and parity/undefined_lint_parity_test.go decides every " +
-		"row by compiling it.\n\n" +
-		"What is left needs a decision rather than a translation, which is why it is still " +
-		"here. sema.BuildFile records nothing for a name it cannot resolve, deliberately -- " +
-		"see builder.reference, where inventing a reference is what starts a jump into an " +
-		"unrelated file -- so there is no RefUnresolved to read this rule off, and the plan's " +
-		"Ref.Kind was not built. Absorbing it means either giving the graph a record of what " +
-		"it could not bind, with enough context to tell `hash.blake3` from a bare name, or " +
-		"leaving this walk where it is. Until that is settled, this entry is what stops a " +
-		"second being added quietly.\n\n" +
-		"Two collectors went before it, and what their duplication cost is on the record. " +
-		"builtinCallCollector's chain answered one question -- is this name taken here -- and " +
-		"answered it differently from the compiler, because it wrote struct and enum names " +
-		"into the same table as lets and parameters. A file declaring `struct fs { path; }` " +
-		"lost every arity, argument-kind and deprecation check on `fs.read(...)`, silently, " +
-		"while the build folded the call to fs_read and ran it. See " +
-		"parity/builtin_lint_parity_test.go.\n\n" +
-		"duplicateCollector's chain answered the same question by walking PARENT scopes, so " +
-		"every shadow was a duplicate: a parameter named after a top-level let was reported " +
-		"as a second declaration of it, and so was a struct name beside a value of that name. " +
-		"Both compile, both run, and both declarations do work -- and the complaint carried a " +
-		"preferred quick fix whose edit deletes one of the two lines. It now reads Seq and " +
-		"Scope off the graph, and parity/duplicate_lint_parity_test.go runs every row it is " +
-		"silent about, so the silence is justified by a value rather than by an opinion.",
 }
 
 func TestAScopeChainIsBuiltInExactlyOnePlace(t *testing.T) {

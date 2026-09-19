@@ -55,6 +55,7 @@ type Graph struct {
 	refList []Ref
 	imports []ImportEdge
 	fields  []fieldName
+	unbound []Unbound
 
 	// usesByTarget is the reverse of refList, and declOrder is decls sorted by
 	// position. Both are built once at the end of BuildFile rather than on
@@ -226,6 +227,95 @@ type Ref struct {
 	From *Node
 }
 
+// UnboundKind says what a name's absence means. It is about the position the
+// name was written in rather than about the name, because the position is what
+// decides: `nope` on its own is a variable nobody declared, `nope` in
+// `nope.thing` may be a builtin family with a misspelled member, and `Nope` in
+// `Nope{x: 1}` is a struct type, looked up in a different table from either.
+type UnboundKind uint8
+
+const (
+	// UnboundValue is a name standing on its own: `foo;`, `f(foo)`, `foo + 1`.
+	UnboundValue UnboundKind = iota
+
+	// UnboundReceiver is the left of a field access: `nope` of `nope.thing`.
+	UnboundReceiver
+
+	// UnboundType is the name of a struct literal: `Nope` of `Nope{x: 1}`.
+	//
+	// It is separate from UnboundValue because the two are answered from
+	// different tables -- see typeStatement -- so `let Nope = 1;` does not give
+	// `Nope{x: 1}` a type, and the compiler refuses that program with
+	// "undefined struct type: Nope" while the name is plainly bound.
+	UnboundType
+)
+
+func (k UnboundKind) String() string {
+	switch k {
+	case UnboundValue:
+		return "value"
+	case UnboundReceiver:
+		return "receiver"
+	case UnboundType:
+		return "type"
+	}
+	return "unbound"
+}
+
+// Unbound is a use of a name that this file declares nowhere.
+//
+// This is the plan's RefUnresolved, in the shape the rest of the package forced
+// it into. It is deliberately NOT a Ref in the reference list: every consumer of
+// References and UsesOf assumes Target names a declaration, so a reference with
+// no target would have to be skipped by each of them in turn -- definition,
+// find-references, rename, the export -- and the one that forgot would jump
+// somewhere it had invented. Kept in a list of its own it cannot be reached by
+// any of them, and the caller that wants the misses asks for them by name.
+//
+// "This file declares no such name" is exactly what is recorded, and it is
+// narrower than "this name means nothing". A builtin is declared nowhere, so
+// `len` is in this list, and `len` means something. That is not an oversight:
+// the graph is a fact about the file, whereas which names the runtime provides
+// is the builtin registry's business, and ResolveField already answers it.
+// Deciding it here would put a second copy of the registry's opinion in the
+// walk, which is what this package exists to prevent.
+//
+// Nor does it contradict ScopeCtx.Bound, which reports false for a bare builtin
+// on purpose -- see the a901ce4 note there. Bound answers "is this name TAKEN,
+// so that `rand.int` must be a field access rather than a fold", and a builtin
+// does not take a name. This answers "did the file declare it", and a builtin is
+// not declared. Both are false of `rand` at once, and they are different
+// questions.
+type Unbound struct {
+	// Name is the name that resolved to nothing.
+	Name string
+
+	Kind UnboundKind
+
+	// Use is the identifier and UseRange is its range. For UnboundReceiver that
+	// is the left of the field access -- `nope` of `nope.thing` -- and not the
+	// whole expression.
+	Use      ast.Node
+	UseRange ast.Range
+
+	// Member is the name written after the dot, and WholeRange covers
+	// `nope.thing` entire. Both are set for UnboundReceiver only.
+	//
+	// They are recorded because the two halves are one mistake and a caller
+	// cannot recover the second from the first: the graph holds no map from a
+	// node to its parent, so a caller given `nope` alone cannot see that a dot
+	// follows it. Which matters -- `hash.blake3` is a real builtin and `hash`
+	// alone is not a name at all.
+	Member     string
+	WholeRange ast.Range
+
+	// InCall reports that the name was the function of a call. It is set for
+	// UnboundValue only, and it exists because `quote(x)` and `quote` are not
+	// the same claim: the first is a macro special form the evaluator gives
+	// meaning to, the second is a name the compiler refuses.
+	InCall bool
+}
+
 // ImportEdge is one `import` statement.
 type ImportEdge struct {
 	// From is the importing module's key; To is the imported module's key, and
@@ -362,6 +452,12 @@ func BuildFile(moduleKey string, program *ast.Program, w *Workspace, structOf St
 		return startsBefore(g.refList[i].UseRange, g.refList[j].UseRange)
 	})
 
+	// The misses, for the same reason: a diagnostic list whose order depends on
+	// Go's map iteration reports the same file differently on consecutive runs.
+	sort.SliceStable(g.unbound, func(i, j int) bool {
+		return startsBefore(g.unbound[i].UseRange, g.unbound[j].UseRange)
+	})
+
 	// Scopes, for the same reason and one more: scopeAt finds the scope
 	// covering a position by searching the children, and a search needs what it
 	// searches to be in order. A function literal written inside a hash literal
@@ -482,9 +578,14 @@ func (b *builder) lookup(name string) *Node {
 }
 
 // reference records that ident refers to whatever is bound at this point in the
-// walk. An unbound name records nothing: a name with no declaration has no
-// reference to record, and inventing one is how a jump into an unrelated file
-// starts.
+// walk.
+//
+// A name with no declaration records no REFERENCE -- it has none, and inventing
+// one is how a jump into an unrelated file starts -- but it is not forgotten
+// either. It goes in the unbound list instead, which nothing that jumps can
+// reach. A rule that reports undefined names wants exactly the misses, and
+// before this it had to walk the file again to find them, with its own second
+// account of which nodes declare a name.
 func (b *builder) reference(ident *ast.Identifier, inCall bool) {
 	if ident == nil {
 		return
@@ -495,9 +596,33 @@ func (b *builder) reference(ident *ast.Identifier, inCall bool) {
 	}
 	target := b.lookup(ident.Value)
 	if target == nil {
+		b.noteUnbound(ident, rng, UnboundValue, inCall)
 		return
 	}
 	b.record(ident, rng, target.ID, inCall)
+}
+
+// noteUnbound records a use of a name this file declares nowhere. See Unbound
+// for why it is kept apart from the references.
+func (b *builder) noteUnbound(ident *ast.Identifier, rng ast.Range, kind UnboundKind, inCall bool) {
+	b.g.unbound = append(b.g.unbound, Unbound{
+		Name: ident.Value, Kind: kind, Use: ident, UseRange: rng, InCall: inCall,
+	})
+}
+
+// unboundReceiver records `nope` of `nope.thing` where nope is bound to
+// nothing, keeping the member and the whole expression's range beside it.
+func (b *builder) unboundReceiver(left *ast.Identifier, node *ast.FieldExpression) {
+	rng, ok := b.rangeOf(left)
+	if !ok {
+		return
+	}
+	miss := Unbound{Name: left.Value, Kind: UnboundReceiver, Use: left, UseRange: rng}
+	if node.Field != nil {
+		miss.Member = node.Field.Value
+	}
+	miss.WholeRange, _ = b.rangeOf(node)
+	b.g.unbound = append(b.g.unbound, miss)
 }
 
 // record stores a reference in one flat list and nothing else.

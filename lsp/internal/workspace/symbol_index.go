@@ -65,6 +65,12 @@ type indexedMemberUsage struct {
 	// rng covers the member name alone, not the whole expression: renaming
 	// `mean` must not eat the `stats.` in front of it.
 	rng lsp.Range
+
+	// inCall reports that the whole `a.b` stood in the function position of a
+	// call. A call hierarchy needs it and find-references must not: `stats.mean`
+	// written without calling it is a use of the name and is not an edge in the
+	// call graph.
+	inCall bool
 }
 
 func NewSymbolIndex() *SymbolIndex {
@@ -169,13 +175,75 @@ func (i *SymbolIndex) ReferencesTo(w *sema.Workspace, declModule, name string, i
 			continue
 		}
 
-		for _, alias := range w.AliasesFor(key, declModule) {
-			for _, usage := range doc.member {
-				if usage.left == alias && usage.member == name {
-					add(lsp.Location{URI: uri, Range: usage.rng})
-				}
+		forEachMemberUseLocked(w, key, declModule, name, doc, func(usage indexedMemberUsage) {
+			add(lsp.Location{URI: uri, Range: usage.rng})
+		})
+	}
+
+	sortLocations(locations)
+	if len(locations) == 0 {
+		return nil
+	}
+	return locations
+}
+
+// forEachMemberUseLocked visits every `alias.name` in one document where alias
+// is an import bound to declModule. The caller holds the read lock: taking it
+// again here would be a second RLock on a mutex a writer may be queued behind,
+// which is the documented way to deadlock a sync.RWMutex.
+func forEachMemberUseLocked(w *sema.Workspace, key, declModule, name string, doc indexedDocument, visit func(indexedMemberUsage)) {
+	for _, alias := range w.AliasesFor(key, declModule) {
+		for _, usage := range doc.member {
+			if usage.left == alias && usage.member == name {
+				visit(usage)
 			}
 		}
+	}
+}
+
+// MemberCallSites returns the places in other files where the declaration is
+// CALLED, as against merely named.
+//
+// It is ReferencesTo narrowed twice: to member uses, because a call into
+// another module is always written `alias.name(...)` -- an import binds one
+// namespace and nothing else crosses, so there is no bare spelling to find --
+// and to the ones standing in a call's function position.
+//
+// A type is not here at all. Struct and enum names do cross files bare, and
+// nothing calls them.
+func (i *SymbolIndex) MemberCallSites(w *sema.Workspace, declModule, name string) []lsp.Location {
+	if i == nil || w == nil || declModule == "" || name == "" {
+		return nil
+	}
+
+	locations := make([]lsp.Location, 0, 4)
+	seen := make(map[lsp.Location]struct{}, 8)
+
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	// No Importers walk, deliberately, where ReferencesTo has one. That filter
+	// is what scopes the TYPE branch, which has no alias to go on -- a bare
+	// `Point` looks the same in every file. A member use is already scoped by
+	// the alias: AliasesFor answers about imports bound to this module and
+	// returns nothing for a file that does not import it, so asking twice
+	// narrows nothing and cannot be made to fail.
+	for uri, doc := range i.docs {
+		key, known := w.KeyForURI(string(uri))
+		if !known || key == declModule {
+			continue
+		}
+		forEachMemberUseLocked(w, key, declModule, name, doc, func(usage indexedMemberUsage) {
+			if !usage.inCall {
+				return
+			}
+			location := lsp.Location{URI: uri, Range: usage.rng}
+			if _, already := seen[location]; already {
+				return
+			}
+			seen[location] = struct{}{}
+			locations = append(locations, location)
+		})
 	}
 
 	sortLocations(locations)
@@ -297,10 +365,21 @@ func collectUsages(snapshot *analyzer.Snapshot) ([]indexedUsage, []indexedMember
 	positions := snapshot.Program.NodePositions
 
 	fields := make(map[*mast.Identifier]struct{}, 8)
+	// callees is every expression standing in the function position of a call,
+	// which is how a member use is told from a member call. It is gathered in
+	// the same pass as the field names because both are questions about a
+	// node's PARENT, and the positions map is the only place the parents are.
+	callees := make(map[mast.Expression]struct{}, 8)
 	for node := range positions {
-		field, isField := node.(*mast.FieldExpression)
-		if isField && field != nil && field.Field != nil {
-			fields[field.Field] = struct{}{}
+		switch typed := node.(type) {
+		case *mast.FieldExpression:
+			if typed != nil && typed.Field != nil {
+				fields[typed.Field] = struct{}{}
+			}
+		case *mast.CallExpression:
+			if typed != nil && typed.Function != nil {
+				callees[typed.Function] = struct{}{}
+			}
 		}
 	}
 
@@ -331,10 +410,12 @@ func collectUsages(snapshot *analyzer.Snapshot) ([]indexedUsage, []indexedMember
 			if !known || !fieldRange.IsValid() {
 				continue
 			}
+			_, isCall := callees[mast.Expression(typed)]
 			member = append(member, indexedMemberUsage{
 				left:   left.Value,
 				member: typed.Field.Value,
 				rng:    localprotocol.ToLSPRange(fieldRange),
+				inCall: isCall,
 			})
 		}
 	}

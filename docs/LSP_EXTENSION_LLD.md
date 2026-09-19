@@ -144,6 +144,9 @@ single snapshot.
 | textDocument/definition          | `definition`             | local definition + workspace fallback                        |
 | textDocument/typeDefinition      | `typeDefinition`         | `Snapshot.TypeDefinitionLocation`                            |
 | textDocument/references          | `references`             | local refs + workspace refs + dedupe                         |
+| textDocument/prepareCallHierarchy | `prepareCallHierarchy`  | declaration under the cursor, following a module member      |
+| callHierarchy/incomingCalls      | `callHierarchyIncomingCalls` | graph call edges + `alias.name(` sites in importing files |
+| callHierarchy/outgoingCalls      | `callHierarchyOutgoingCalls` | graph call edges out of the declaration                   |
 | textDocument/prepareRename       | `prepareRename`          | local rename target + workspace fallback                     |
 | textDocument/rename              | `rename`                 | location collection + per-URI sorted text edits              |
 | textDocument/codeAction          | `codeActions`            | diagnostic-driven quick fixes                                |
@@ -233,7 +236,13 @@ Diagnostics sources:
 Current lint rules (rule id -> default severity):
 
 - `duplicateTopLevelDeclaration` -> warning (also nested duplicates)
-- `unusedDeclaration` -> warning (top-level and local; skips `_`)
+- `unusedDeclaration` -> warning (top-level and local; skips `_`. A module-shaped
+  file -- one with no top-level action -- exempts its top-level names, because
+  they exist for whatever imports it; a top-level `_private` name is NOT
+  exempt, because no other file can reach it)
+- `unusedImport` -> information (an import whose namespace is never read;
+  information rather than warning because the imported module's top-level
+  statements run either way and Mutant has no `import _` form)
 - `undefinedDeclaration` -> error (scope-aware; builtins + macro special forms
   count as defined)
 - `nestingComplexity` -> warning (if/for nesting depth > 2 in function bodies)

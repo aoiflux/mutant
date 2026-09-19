@@ -300,8 +300,18 @@ func (b *builder) fieldExpression(node *ast.FieldExpression) {
 		return
 	}
 
-	b.reference(left, false)
-	b.structField(left, node.Field)
+	// The left is an ordinary use, which is what gives an import alias its
+	// reference. Where it names nothing, the miss is recorded with the member
+	// beside it rather than as a bare identifier: `str` alone is not a name in
+	// any Mutant program, and `str.upper` is str_upper.
+	if target := b.lookup(left.Value); target != nil {
+		if rng, ok := b.rangeOf(left); ok {
+			b.record(left, rng, target.ID, false)
+		}
+		b.structField(left, node.Field)
+		return
+	}
+	b.unboundReceiver(left, node)
 }
 
 // structField resolves `p.x` by asking the caller what p holds.
@@ -332,11 +342,27 @@ func (b *builder) noteField(field *ast.Identifier) {
 	}
 }
 
+// structLiteral records what `Point{x: 5}` refers to.
+//
+// The literal's name is a TYPE, so it is looked up in the type table and
+// nowhere else. A file with `let Point = 1;` and no struct Point has the name
+// bound and still cannot write the literal -- the compiler refuses it with
+// "undefined struct type: Point" -- so a miss here is recorded as a miss, and
+// the value table is not consulted to excuse it.
+//
+// A field name is not a use of anything until the struct is known, which is why
+// the miss is recorded for the type name only. `Nope{x: 1}` is one mistake, not
+// two, and reporting `x` as undefined as well would be reporting the half the
+// author got right.
 func (b *builder) structLiteral(node *ast.StructLiteral) {
+	var declared *Node
 	if node.Name != nil {
-		if declared := b.lookupType(node.Name.Value, KindStruct); declared != nil {
-			if rng, ok := b.rangeOf(node.Name); ok {
+		declared = b.lookupType(node.Name.Value, KindStruct)
+		if rng, ok := b.rangeOf(node.Name); ok {
+			if declared != nil {
 				b.record(node.Name, rng, declared.ID, false)
+			} else {
+				b.noteUnbound(node.Name, rng, UnboundType, false)
 			}
 		}
 	}
@@ -344,12 +370,10 @@ func (b *builder) structLiteral(node *ast.StructLiteral) {
 		if field == nil {
 			continue
 		}
-		if node.Name != nil {
-			if declared := b.lookupType(node.Name.Value, KindStruct); declared != nil {
-				if member := b.lookupMember(declared, field.Name); member != nil {
-					if rng, ok := b.rangeOf(field.Name); ok {
-						b.record(field.Name, rng, member.ID, false)
-					}
+		if declared != nil {
+			if member := b.lookupMember(declared, field.Name); member != nil {
+				if rng, ok := b.rangeOf(field.Name); ok {
+					b.record(field.Name, rng, member.ID, false)
 				}
 			}
 		}

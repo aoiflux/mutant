@@ -152,6 +152,20 @@ func (g *Graph) UsesOf(id DeclID) []ast.Range {
 	return g.usesByTarget[id]
 }
 
+// UnboundUses returns every use of a name the file declares nowhere, in source
+// order.
+//
+// It is the whole-file list because that is how the one caller asks: a rule
+// reporting undefined names wants all of them, and nothing wants to ask about
+// one position. See Unbound for what the list does and does not claim -- in
+// particular that a builtin is declared nowhere and so appears here.
+func (g *Graph) UnboundUses() []Unbound {
+	if g == nil {
+		return nil
+	}
+	return g.unbound
+}
+
 // VisibleAt returns the declarations in scope at a position, innermost first
 // where two scopes bind one name.
 //
@@ -197,6 +211,31 @@ func (g *Graph) VisibleAt(line, column int) []*Node {
 	}
 
 	return visible
+}
+
+// EnclosingDeclarationAt returns the declaration whose scope contains the
+// position: the function a call is written inside.
+//
+// There is no answer at the top level of a file, and that is a real answer
+// rather than a missing one -- a call written at the top level is made by the
+// file, not by anything the file declares. A caller that needs to name it has
+// to name it itself; the graph will not invent a declaration that is not
+// there.
+//
+// An anonymous literal is skipped, because it declares nothing: a call inside
+// `map(xs, fn(x) { helper(x); })` belongs to whatever declares the map call.
+// That is Ref.From's rule, and this is the same question asked of a position
+// rather than of a reference -- which is what a use the graph did not record,
+// such as a reach into another module, needs.
+func (g *Graph) EnclosingDeclarationAt(line, column int) (*Node, bool) {
+	if g == nil || g.Root == nil {
+		return nil, false
+	}
+	scope := g.scopeAt(line, column)
+	if scope == nil || scope.enclosing == nil {
+		return nil, false
+	}
+	return scope.enclosing, true
 }
 
 // LocalScopeAt is the file-local half of a name decision at a position.

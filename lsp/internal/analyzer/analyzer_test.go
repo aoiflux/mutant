@@ -43,46 +43,6 @@ func TestSemanticTokensDataHandlesTypedNilStatements(t *testing.T) {
 	_ = s.SemanticTokensData()
 }
 
-func TestUndefinedCollectorMarksMultiNameLetDeclarations(t *testing.T) {
-	collector := &undefinedCollector{snapshot: &Snapshot{}}
-	root := newDeclarationScope(nil, 0)
-
-	collector.collectStatement(&mast.LetStatement{
-		Names: []*mast.Identifier{
-			{Value: "first"},
-			{Value: "err"},
-		},
-	}, root)
-
-	firstInfo, ok := root.find("first")
-	if !ok {
-		t.Fatal("expected declaration for first")
-	}
-	if !firstInfo.fromMultiNameLet {
-		t.Fatal("expected first declaration to be marked as from multi-name let")
-	}
-
-	errInfo, ok := root.find("err")
-	if !ok {
-		t.Fatal("expected declaration for err")
-	}
-	if !errInfo.fromMultiNameLet {
-		t.Fatal("expected err declaration to be marked as from multi-name let")
-	}
-
-	collector.collectStatement(&mast.LetStatement{
-		Names: []*mast.Identifier{{Value: "single"}},
-	}, root)
-
-	singleInfo, ok := root.find("single")
-	if !ok {
-		t.Fatal("expected declaration for single")
-	}
-	if singleInfo.fromMultiNameLet {
-		t.Fatal("expected single-name declaration to not be marked as from multi-name let")
-	}
-}
-
 func TestMacroSpecialFormsAreNotUndefinedInMacros(t *testing.T) {
 	a := New()
 	s := a.Analyze(`let unless = macro(condition, consequence, alternative) {

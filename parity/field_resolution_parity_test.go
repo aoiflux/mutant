@@ -454,3 +454,54 @@ func runViaModules(t *testing.T, root string, searchPaths ...string) (object.Obj
 	}
 	return machine.LastPoppedStackElement(), nil
 }
+
+// TestAnEnumWithoutTheMemberIsRefusedByBothEnginesInTheSameWords is the cell
+// the matrix above cannot hold, because there is no value to compare: both
+// engines must refuse, and they must refuse identically.
+//
+// `enum str { notTheMember }; str.upper("a");` is an enum access to a tag that
+// does not exist. It is NOT the fold -- an enum is decided first, which is what
+// "Colour.Red predates modules" means -- and the evaluator used to think
+// otherwise. It asked whether the VARIANT was in its environment rather than
+// whether the ENUM was, so a missing variant fell through to the fold: the
+// program returned "A" under the engine that expands macros while the VM
+// refused it as an unknown tag. One program, two answers, which is the shape of
+// a901ce4 and the reason this package exists.
+func TestAnEnumWithoutTheMemberIsRefusedByBothEnginesInTheSameWords(t *testing.T) {
+	for _, f := range foldFamilies {
+		t.Run(f.dotted(), func(t *testing.T) {
+			source := "enum " + f.prefix + " { notTheMember };\n" + f.dotted() + "(\"a\");\n"
+			want := "unknown enum tag " + f.dotted()
+
+			evaluated := evalViaEvaluator(source)
+			raised, isError := evaluated.(*object.Error)
+			if !isError {
+				t.Fatalf("the evaluator answered %s for %s under an enum of that "+
+					"name with no such tag; the VM refuses it\n%s",
+					normalize(evaluated), f.dotted(), source)
+			}
+			if !strings.Contains(raised.Message, want) {
+				t.Fatalf("the evaluator said %q, want it to contain %q\n%s",
+					raised.Message, want, source)
+			}
+
+			value, err := evalViaVM(t, source)
+			if err == nil {
+				t.Fatalf("the VM answered %s where the evaluator refused\n%s",
+					normalize(value), source)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the VM said %q, want it to contain %q\n%s",
+					err.Error(), want, source)
+			}
+
+			// And sema, which decided it for both: an enum in front of the dot
+			// is an enum access whether or not the tag is there. Deciding it on
+			// the tag is what let the fold back in.
+			if resolved := editorDecision(t, source, f.prefix, f.member); resolved.Kind != sema.FieldEnumValue {
+				t.Fatalf("sema calls %s a %s under an enum of that name, want an "+
+					"enum value\n%s", f.dotted(), resolved.Kind, source)
+			}
+		})
+	}
+}

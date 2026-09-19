@@ -39,6 +39,7 @@ const DiagnosticSourceFormat = "mutant-format"
 type LintConfig struct {
 	DuplicateTopLevelDeclaration LintSeverity
 	UnusedDeclaration            LintSeverity
+	UnusedImport                 LintSeverity
 	UndefinedDeclaration         LintSeverity
 	NestingComplexity            LintSeverity
 	Semicolon                    LintSeverity
@@ -67,8 +68,15 @@ func DefaultLintConfig() LintConfig {
 	return LintConfig{
 		DuplicateTopLevelDeclaration: LintSeverityWarning,
 		UnusedDeclaration:            LintSeverityWarning,
-		UndefinedDeclaration:         LintSeverityError,
-		NestingComplexity:            LintSeverityWarning,
+		// An import binds a namespace nothing reads -- but in Mutant deleting
+		// the line is not always safe, because an imported module's top-level
+		// statements run whether or not its namespace is used, and there is no
+		// `import _` form to say "I meant that". Information rather than
+		// warning for that reason: the finding is real and acting on it is the
+		// author's call.
+		UnusedImport:         LintSeverityInformation,
+		UndefinedDeclaration: LintSeverityError,
+		NestingComplexity:    LintSeverityWarning,
 		// Mutant mandates semicolons, but a missing one still parses into a
 		// usable tree and the formatter repairs it on save, so this is a
 		// warning rather than an error.
@@ -167,6 +175,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.DuplicateTopLevelDeclaration
 	case "unusedDeclaration":
 		severityName = c.UnusedDeclaration
+	case "unusedImport":
+		severityName = c.UnusedImport
 	case "undefinedDeclaration":
 		severityName = c.UndefinedDeclaration
 	case "nestingComplexity":
@@ -269,6 +279,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	duplicateDiagnostics := lintDuplicateTopLevelDeclarations(snapshot, lintConfig)
 	diagnostics = append(diagnostics, duplicateDiagnostics...)
 	diagnostics = append(diagnostics, lintUnusedDeclarations(snapshot, lintConfig, duplicateNamesFromDiagnostics(duplicateDiagnostics))...)
+	diagnostics = append(diagnostics, lintUnusedImports(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintUndefinedDeclarations(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintNestingComplexity(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSemicolons(snapshot, lintConfig)...)
@@ -679,38 +690,6 @@ func topLevelTypeNames(statements []mast.Statement) map[*mast.Identifier]struct{
 	return named
 }
 
-type declarationScope struct {
-	parent *declarationScope
-	depth  int
-	decls  map[string]declInfo
-}
-
-type declInfo struct {
-	ident            *mast.Identifier
-	fromMultiNameLet bool
-}
-
-func newDeclarationScope(parent *declarationScope, depth int) *declarationScope {
-	return &declarationScope{parent: parent, depth: depth, decls: make(map[string]declInfo)}
-}
-
-func (s *declarationScope) find(name string) (declInfo, bool) {
-	for current := s; current != nil; current = current.parent {
-		info, ok := current.decls[name]
-		if ok {
-			return info, true
-		}
-	}
-	return declInfo{}, false
-}
-
-func (s *declarationScope) define(name string, info declInfo) {
-	if s == nil || name == "" || info.ident == nil {
-		return
-	}
-	s.decls[name] = info
-}
-
 // rebindsAConsumedName reports whether the earlier declaration was part of a
 // multiple binding that was read before it was replaced.
 //
@@ -901,6 +880,18 @@ func lintUnusedDeclarations(snapshot *Snapshot, lintConfig LintConfig, skipNames
 	exports := map[*mast.Identifier]struct{}{}
 	if !hasTopLevelAction(snapshot.Program.Statements) {
 		exports = topLevelDeclaredIdentifiers(snapshot.Program.Statements)
+
+		// ... except the ones that are not exports. A top-level name beginning
+		// with `_` is private to the file that declares it -- the compiler
+		// refuses `ns._total` from anywhere else -- so "nothing outside uses
+		// it" is not a guess about files this rule cannot see. It is the
+		// language, and an unused private name is dead code in the one place
+		// it could ever have been read.
+		for ident := range exports {
+			if ident != nil && sema.IsModulePrivate(ident.Value) {
+				delete(exports, ident)
+			}
+		}
 	}
 
 	for _, ident := range candidates {
@@ -936,6 +927,76 @@ func lintUnusedDeclarations(snapshot *Snapshot, lintConfig LintConfig, skipNames
 	return result
 }
 
+// lintUnusedImports reports an import whose namespace the file never reads.
+//
+// One file answers this completely, which is what makes it safe to report. An
+// import binds a name in THIS file and nowhere else -- `import util "lib/u.mut";`
+// puts `util` in this file's top-level scope, and no other file can see that
+// binding -- so a use of it, if there is one, is in the text in front of us.
+// The graph decides: the alias is an ordinary declaration and UsesOf is keyed
+// by its identity, so this asks about THIS import and not a later one of the
+// same name.
+//
+// The message says more than "unused" on purpose. Deleting the line is not
+// always safe: a module's top-level statements run whether or not its namespace
+// is read -- "Modules run in dependency order ... before any file that imports
+// it runs its own", docs/MODULES.md -- and Mutant has no `import _` form to
+// mark an import kept for that. So the rule reports the fact and declines to
+// offer a quick fix.
+//
+// The obvious companion rule, an unused EXPORT, is deliberately absent. "No
+// module imports this name" cannot be answered for certain in an editor: the
+// workspace holds the files it has scanned, an importer outside the scanned
+// tree is invisible to it, and reporting an export as unused because its only
+// user has not been indexed yet is a warning on working code. sema has a word
+// for that answer -- Provisional -- and the rule for a Provisional answer is to
+// render nothing rather than a wrong one. The certain half of that rule is
+// above, in lintUnusedDeclarations: a private top-level name has no possible
+// user outside its own file, so its being unused is a fact rather than a
+// guess.
+func lintUnusedImports(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil || snapshot.Program == nil {
+		return nil
+	}
+
+	severity, ok := lintConfig.severityForRule("unusedImport")
+	if !ok {
+		return nil
+	}
+
+	graph := snapshot.Graph()
+	if graph == nil {
+		return nil
+	}
+
+	source := "mutant-lint"
+	result := make([]lsp.Diagnostic, 0, 2)
+	for _, node := range graph.TopLevel() {
+		if node == nil || node.Kind != sema.KindNamespace {
+			continue
+		}
+		if len(graph.UsesOf(node.ID)) > 0 {
+			continue
+		}
+		// FullRange rather than the name: an import's alias may not be written
+		// at all -- `import "lib/report.mut";` binds `report` without the word
+		// appearing -- and the statement is what the reader has to look at
+		// either way.
+		if !node.FullRange.IsValid() {
+			continue
+		}
+		result = append(result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(node.FullRange),
+			Severity: severity,
+			Source:   &source,
+			Message: fmt.Sprintf("unused import `%s`: the namespace is never read, "+
+				"though the module's top-level statements still run", node.Name),
+		})
+	}
+
+	return result
+}
+
 func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil {
 		return nil
@@ -947,29 +1008,120 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 	}
 
 	source := "mutant-lint"
-	knownBuiltins := make(map[string]struct{}, len(builtin.Builtins))
-	for _, def := range builtin.Builtins {
-		if def.Name == "" {
+	result := make([]lsp.Diagnostic, 0, 4)
+	for _, miss := range snapshot.Graph().UnboundUses() {
+		message, rng, report := undefinedDiagnosticFor(miss)
+		if !report || !rng.IsValid() {
 			continue
 		}
-		knownBuiltins[def.Name] = struct{}{}
+		result = append(result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: severity,
+			Source:   &source,
+			Message:  message,
+		})
 	}
 
-	collector := &undefinedCollector{
-		snapshot:   snapshot,
-		severity:   severity,
-		source:     &source,
-		builtins:   knownBuiltins,
-		namespaces: importNamespaces(snapshot.Program.Statements),
-		result:     make([]lsp.Diagnostic, 0, 4),
+	return result
+}
+
+// undefinedDiagnosticFor decides what to say about a name the file declares
+// nowhere, and where to say it.
+//
+// The graph finds the misses. What a miss MEANS is decided here, because the
+// two things that can excuse one -- the builtin registry and the macro special
+// forms -- are facts about the runtime rather than about the file, and the
+// graph is deliberately only the second kind. See sema.Unbound.
+func undefinedDiagnosticFor(miss sema.Unbound) (string, mast.Range, bool) {
+	// The discard is deliberately NOT excused here. `_;` and `len(_);` are
+	// refused by the build -- "undefined variable: _" -- and used to draw
+	// nothing, because the rule filtered the name before asking anything about
+	// it. Nothing is lost by dropping the filter: a discard in a binding
+	// position is a declaration, and the graph records uses.
+	if miss.Name == "" {
+		return "", mast.Range{}, false
 	}
 
-	root := newDeclarationScope(nil, 0)
-	for _, stmt := range snapshot.Program.Statements {
-		collector.collectStatement(stmt, root)
+	switch miss.Kind {
+	case sema.UnboundReceiver:
+		return undefinedReceiverDiagnostic(miss)
+
+	case sema.UnboundType:
+		// Neither the builtin registry nor the file's own bindings may excuse
+		// this one, and both used to. `len{x: 1};` and `let Nope = 1;
+		// Nope{x: 1};` are refused by the build -- "undefined struct type" --
+		// and drew nothing here, because the name was looked for in the value
+		// table, where it was duly found. A struct literal names a TYPE, and
+		// type names live in a table of their own.
+		return fmt.Sprintf("undefined struct type `%s`", miss.Name), miss.UseRange, true
 	}
 
-	return collector.result
+	if isBuiltinName(miss.Name) {
+		return "", mast.Range{}, false
+	}
+
+	// `quote(x)` is a macro special form: the evaluator gives the call a
+	// meaning without anything binding the name. A bare `quote` is not -- the
+	// compiler refuses it with "undefined variable: quote" -- so the call form
+	// is excused and the name alone is not.
+	if miss.InCall && isMacroSpecialFormName(miss.Name) {
+		return "", mast.Range{}, false
+	}
+
+	return fmt.Sprintf("undefined identifier `%s`", miss.Name), miss.UseRange, true
+}
+
+// undefinedReceiverDiagnostic decides about the left of a field access.
+func undefinedReceiverDiagnostic(miss sema.Unbound) (string, mast.Range, bool) {
+	// The fold first, which is ResolveField's precedence and not a choice made
+	// here: `str.upper` IS str_upper, so `str` names no variable and reporting
+	// it would be a hard error on a correct program.
+	//
+	// The enum arm needs no ScopeCtx. An enum declared before this point
+	// resolves in the graph and never reaches this list, so a receiver that
+	// does reach it is not one -- which is what makes `Colour.Red; enum Colour
+	// { Red };` report. It is refused by the build, "undefined variable:
+	// Colour", and the rule used to pass it in silence: it asked whether the
+	// FILE declared the enum, and the file does, three lines further down.
+	if semaResolver.ResolveField(sema.ScopeCtx{}, miss.Name, miss.Member).Kind == sema.FieldBuiltinFold {
+		return "", mast.Range{}, false
+	}
+
+	// The family exists and this member does not, which is a typo in the
+	// member. Reporting the receiver instead said `undefined identifier hash`
+	// for `hash.blake3(x)` -- true of the name it checked and useless to the
+	// author, because `hash` is not what they got wrong and the half they did
+	// get wrong never appears. The flat spelling has always named it.
+	if len(builtinFamilyMembers(miss.Name)) > 0 {
+		if !miss.WholeRange.IsValid() {
+			// Without a range for the whole expression the squiggle would
+			// cover only the receiver, which is the half that is correct.
+			return "", mast.Range{}, false
+		}
+		return fmt.Sprintf("undefined identifier `%s_%s`: %s is a builtin family, but it has no %s",
+			miss.Name, miss.Member, miss.Name, miss.Member), miss.WholeRange, true
+	}
+
+	// A receiver that heads no family is someone's value, and its fields are
+	// not this rule's business -- `len.foo` and a shadowed `str.upper` both
+	// compile and both fail at runtime, which is a different complaint. The
+	// receiver itself still has to exist.
+	if isBuiltinName(miss.Name) {
+		return "", mast.Range{}, false
+	}
+
+	return fmt.Sprintf("undefined identifier `%s`", miss.Name), miss.UseRange, true
+}
+
+// isBuiltinName reports whether the runtime provides the name.
+//
+// The graph cannot say: a builtin is declared in no file, so every use of one
+// is a name the file did not declare. Which table answers that question is the
+// registry's business and not the walk's -- see sema.Unbound, and note that
+// this is NOT ScopeCtx.Bound, which reports false for a bare builtin on
+// purpose.
+func isBuiltinName(name string) bool {
+	return builtin.GetBuiltinByName(name) != nil
 }
 
 func lintNestingComplexity(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
@@ -1203,353 +1355,6 @@ func (c *nestingCollector) maybeAddNestingDiagnostic(node mast.Node, depth int) 
 		Source:   c.source,
 		Message:  fmt.Sprintf("nesting depth %d exceeds recommended maximum 2; prefer guard clauses, early returns, or extracting helper functions", depth),
 	})
-}
-
-type undefinedCollector struct {
-	snapshot *Snapshot
-	severity *lsp.DiagnosticSeverity
-	source   *string
-	builtins map[string]struct{}
-	// namespaces holds the name each `import` binds. They are kept as a
-	// file-wide set rather than entries in the scope chain for two reasons: an
-	// import is legal only at the top level, so there is no inner scope for one
-	// to belong to; and an unaliased import derives its namespace from the file
-	// name, so there is no identifier node to hang a declaration on.
-	namespaces map[string]struct{}
-	result     []lsp.Diagnostic
-}
-
-func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || stmt == nil {
-		return
-	}
-
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-
-		if len(names) == 1 {
-			c.defineDeclaration(names[0], current, false)
-		}
-
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-
-		if len(names) > 1 {
-			for _, ident := range names {
-				c.defineDeclaration(ident, current, true)
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			c.collectExpression(expr, current)
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			c.collectExpression(node.ReturnValue, current)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			c.collectExpression(node.Expression, current)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			c.collectStatement(inner, current)
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			c.collectStatement(node.Init, current)
-		}
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Post != nil {
-			c.collectExpression(node.Post, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.ForInStatement:
-		// The loop's own bindings, before the body that reads them. Without
-		// this every `for (v in xs)` body reported `undefined identifier v` at
-		// error severity -- a red squiggle on correct code, and a non-zero exit
-		// from `mutant lint` for any program that uses the loop.
-		if node.Key != nil {
-			c.defineDeclaration(node.Key, current, false)
-		}
-		if node.Value != nil {
-			c.defineDeclaration(node.Value, current, false)
-		}
-		if node.Iterable != nil {
-			c.collectExpression(node.Iterable, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.StructStatement, *mast.EnumStatement:
-		// A type name is deliberately NOT defined here.
-		//
-		// It never enters the compiler's symbol table, so
-		//
-		//	struct Point { x };
-		//	Point;
-		//
-		// does not compile -- "undefined variable: Point" -- while this rule,
-		// which used to file the name beside the file's lets, said nothing at
-		// all. A clean file in the editor and a failed build is the worst
-		// direction for this rule to be wrong in.
-		//
-		// The two positions a type name may legally appear in are handled
-		// where they occur: the name of a struct literal, and the left of a
-		// field access naming an enum. Both ask the graph, which keeps type
-		// names out of the scope chain for exactly this reason.
-	}
-}
-
-// declaresType reports whether the file declares a struct or an enum under the
-// name. It is asked of the graph rather than of the scope chain above, because
-// a type name is in no scope: struct names are program-global in Mutant and
-// live in a table of their own.
-func (c *undefinedCollector) declaresType(name string) bool {
-	if c == nil || c.snapshot == nil || name == "" {
-		return false
-	}
-	_, _, declared := c.snapshot.Graph().TypeNamed(name)
-	return declared
-}
-
-// enumDeclared is declaresType narrowed to enums, in the shape ResolveField
-// asks for.
-func (c *undefinedCollector) enumDeclared(name string) bool {
-	if c == nil || c.snapshot == nil {
-		return false
-	}
-	return c.snapshot.Graph().EnumDeclared(name)
-}
-
-func (c *undefinedCollector) collectExpression(expr mast.Expression, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || expr == nil {
-		return
-	}
-
-	switch node := expr.(type) {
-	case *mast.Identifier:
-		if node.Value == "" || node.Value == "_" {
-			return
-		}
-		if _, ok := c.builtins[node.Value]; ok {
-			return
-		}
-		if _, ok := c.namespaces[node.Value]; ok {
-			return
-		}
-		if _, ok := current.find(node.Value); ok {
-			return
-		}
-		rng, ok := c.snapshot.Program.RangeOf(node)
-		if !ok {
-			return
-		}
-		c.result = append(c.result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
-			Severity: c.severity,
-			Source:   c.source,
-			Message:  fmt.Sprintf("undefined identifier `%s`", node.Value),
-		})
-	case *mast.FunctionLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child, false)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	case *mast.MacroLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child, false)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Consequence != nil {
-			c.collectStatement(node.Consequence, current)
-		}
-		if node.Alternative != nil {
-			c.collectStatement(node.Alternative, current)
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			c.collectExpression(node.Subject, current)
-		}
-		for _, arm := range node.Arms {
-			if arm == nil {
-				continue
-			}
-			// Patterns are walked because an enum variant pattern names its
-			// enum: `Status.Ok` is a real use of `Status`, and skipping it
-			// would make an enum matched but never otherwise mentioned look
-			// unused. FieldExpression walks only its left, so the variant
-			// name itself is never resolved as a standalone binding.
-			for _, pattern := range arm.Patterns {
-				c.collectExpression(pattern, current)
-			}
-			if arm.Body != nil {
-				c.collectStatement(arm.Body, current)
-			}
-		}
-	case *mast.CallExpression:
-		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
-			for _, arg := range node.Arguments {
-				c.collectExpression(arg, current)
-			}
-			return
-		}
-		if node.Function != nil {
-			c.collectExpression(node.Function, current)
-		}
-		for _, arg := range node.Arguments {
-			c.collectExpression(arg, current)
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Index != nil {
-			c.collectExpression(node.Index, current)
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-	case *mast.FieldExpression:
-		if node.Left == nil {
-			return
-		}
-		// The left of a field access is usually a value and has to be checked
-		// like any other. Two shapes are not: a namespace an import bound, and
-		// a builtin family -- `str.upper` is str_upper, so `str` names no
-		// variable and reporting it undefined would be a hard error on a
-		// correct program.
-		if namespace, isIdent := node.Left.(*mast.Identifier); isIdent && namespace != nil && namespace.Value != "" {
-			if _, imported := c.namespaces[namespace.Value]; imported {
-				return
-			}
-			// Guarded on the name being unbound, so a local `let str = "x"`
-			// followed by `str.upper` is still the field access it looks like.
-			if _, shadowed := current.find(namespace.Value); !shadowed && node.Field != nil {
-				// An enum is settled before a fold, which is the precedence
-				// ResolveField fixes and not a choice made here: `Colour.Red`
-				// was namespace-shaped before modules existed. The enum names
-				// come from the graph because a type name is not in this
-				// walk's scope chain at all -- and until they did, `Colour`
-				// was silent only because the walk had filed it as a value.
-				switch semaResolver.ResolveField(
-					sema.ScopeCtx{Enums: c.enumDeclared}, namespace.Value, node.Field.Value,
-				).Kind {
-				case sema.FieldEnumValue, sema.FieldBuiltinFold:
-					return
-				}
-				// The family exists and this member does not, which is a typo
-				// in the member. Walking the left instead reported `undefined
-				// identifier hash` for `hash.blake3(x)` -- true of the name it
-				// checked and useless to the author, because `hash` is not what
-				// they got wrong and the half they did get wrong never appears.
-				// The flat spelling has always named it: `hash_blake3`.
-				//
-				// Gated on the family existing, which is the same gate
-				// builtinCallee applies: a receiver that heads no family is
-				// someone's value and its fields are not this rule's business.
-				if len(builtinFamilyMembers(namespace.Value)) > 0 {
-					c.reportUnknownFamilyMember(node, namespace.Value)
-					return
-				}
-			}
-		}
-		c.collectExpression(node.Left, current)
-	case *mast.StructLiteral:
-		// The name of a struct literal is a TYPE, so it is checked against the
-		// file's type declarations rather than against its bindings. A name
-		// that declares no type is still walked, because `Nope{x: 1}` is as
-		// undefined as a bare `Nope` -- what must not happen is reporting
-		// `Point{x: 1}`, which is the one place the name is certainly right.
-		if node.Name != nil && !c.declaresType(node.Name.Value) {
-			c.collectExpression(node.Name, current)
-		}
-		for _, field := range node.Fields {
-			if field == nil || field.Value == nil {
-				continue
-			}
-			c.collectExpression(field.Value, current)
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			c.collectExpression(element, current)
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			c.collectExpression(element, current)
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			c.collectExpression(key, current)
-			c.collectExpression(value, current)
-		}
-	}
-}
-
-// reportUnknownFamilyMember complains about `hash.blake3` by the name the
-// author would search for -- the flat one, which is the name the registry
-// keys on and the one the capability reference lists.
-func (c *undefinedCollector) reportUnknownFamilyMember(node *mast.FieldExpression, namespace string) {
-	rng, ok := c.snapshot.Program.RangeOf(node)
-	if !ok {
-		// Without a range for the whole expression the squiggle would cover
-		// only the namespace, which is the half that is correct.
-		return
-	}
-	c.result = append(c.result, lsp.Diagnostic{
-		Range:    localprotocol.ToLSPRange(rng),
-		Severity: c.severity,
-		Source:   c.source,
-		Message: fmt.Sprintf("undefined identifier `%s_%s`: %s is a builtin family, but it has no %s",
-			namespace, node.Field.Value, namespace, node.Field.Value),
-	})
-}
-
-func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope, fromMultiNameLet bool) {
-	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
-		return
-	}
-	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet})
 }
 
 // lintBuiltinCalls checks calls to builtins against the two contracts the

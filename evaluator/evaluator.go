@@ -633,9 +633,27 @@ func evalStructStatement(node *ast.StructStatement, env *object.Environment) obj
 	return NULL
 }
 
+// enumDefinitionKey and enumValueKey are the two spellings an enum occupies in
+// the environment: one saying the type exists, one holding each variant's
+// value.
+//
+// They are functions rather than two string concatenations at each site because
+// the sites drifted. evalFieldExpression used to build the second spelling by
+// hand and treat a miss as "not an enum", which is not what a miss means -- it
+// means the enum has no such variant. `enum str { x }; str.upper("a");` then
+// fell through to the builtin fold and returned "A", while the VM refused the
+// same program with "unknown enum tag str.upper".
+func enumDefinitionKey(name string) string {
+	return "__enum_" + name
+}
+
+func enumValueKey(enum, variant string) string {
+	return enum + "." + variant
+}
+
 func evalEnumStatement(node *ast.EnumStatement, env *object.Environment) object.Object {
 	// Store enum definition in environment
-	enumDefKey := "__enum_" + node.Name.Value
+	enumDefKey := enumDefinitionKey(node.Name.Value)
 	defMarker := &object.String{Value: "enum:" + node.Name.Value}
 	env.Set(enumDefKey, defMarker)
 
@@ -645,8 +663,7 @@ func evalEnumStatement(node *ast.EnumStatement, env *object.Environment) object.
 		env.Set(variantKey, &object.String{Value: variant.Value})
 
 		// Also create enum value accessible as EnumName.VariantName
-		enumValKey := node.Name.Value + "." + variant.Value
-		env.Set(enumValKey, &object.EnumValue{
+		env.Set(enumValueKey(node.Name.Value, variant.Value), &object.EnumValue{
 			TypeName: node.Name.Value,
 			Tag:      variant.Value,
 			Value:    &object.Integer{Value: int64(i)},
@@ -807,36 +824,47 @@ func evalSetIndex(container, index, value object.Object) object.Object {
 }
 
 func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) object.Object {
-	// Handle enum variant access without evaluating the left identifier first.
+	// The left identifier is deliberately not evaluated first: `Colour.Red` is
+	// an enum access and `str.upper` is a builtin, and neither is a field of
+	// anything bound to that name.
+	//
+	// What it refers to is sema's decision, made once for every engine. This
+	// one supplies only what is peculiar to it -- that a binding lives in an
+	// environment rather than in a symbol table, and that an enum's variants
+	// live under a second spelling in that same environment.
+	//
+	// Namespace stays nil deliberately: imports are resolved and linked before
+	// evaluation begins, so there are no import namespaces here.
 	if ident, ok := node.Left.(*ast.Identifier); ok {
-		enumValKey := ident.Value + "." + node.Field.Value
-		if val, ok := env.Get(enumValKey); ok {
-			return val
-		}
-
-		// A namespaced builtin: str.upper is str_upper. The fold used to be
-		// derived here as well as in the compiler and in the language server,
-		// and the three did not agree -- each asked "is this name taken?" of a
-		// different thing, so rand.int worked under this engine and failed
-		// under the other. sema now makes that decision once; this engine
-		// supplies only what is peculiar to it, which is that a binding lives
-		// in an environment rather than a symbol table.
-		//
-		// Namespace and Enums stay nil deliberately. Imports are resolved and
-		// linked before evaluation begins, so there are no import namespaces
-		// here, and an enum variant was already answered above out of the
-		// environment.
-		folded := semaResolver.ResolveField(sema.ScopeCtx{
+		resolved := semaResolver.ResolveField(sema.ScopeCtx{
+			Enums: func(name string) bool {
+				_, declared := env.Get(enumDefinitionKey(name))
+				return declared
+			},
 			Bound: func(name string) bool {
 				_, bound := env.Get(name)
 				return bound
 			},
 		}, ident.Value, node.Field.Value)
-		if folded.Kind == sema.FieldBuiltinFold {
+
+		switch resolved.Kind {
+		case sema.FieldEnumValue:
+			// Asked of the enum rather than of the variant, which is the whole
+			// of the fix: a variant that is not there means the enum has no
+			// such tag, and it used to mean "not an enum", which handed
+			// `str.upper` to the fold under an `enum str`. The VM's words,
+			// because they are the same refusal -- see vm.go, "unknown enum
+			// tag %s.%s".
+			if value, found := env.Get(enumValueKey(ident.Value, node.Field.Value)); found {
+				return value
+			}
+			return newError("unknown enum tag %s.%s", ident.Value, node.Field.Value)
+
+		case sema.FieldBuiltinFold:
 			// Looked up in this engine's own table rather than taken on trust,
 			// so a registry entry with no implementation falls through to field
 			// access exactly as it did before.
-			if fn, found := builtins[folded.Builtin]; found {
+			if fn, found := builtins[resolved.Builtin]; found {
 				return fn
 			}
 		}

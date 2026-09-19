@@ -272,6 +272,18 @@
                     ],
                     "description": "Severity for unused top-level declaration lint diagnostics. Set to 'off' to suppress the rule."
                 },
+                "mutant.lint.rules.unusedImport.severity": {
+                    "type": "string",
+                    "default": "information",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for an import whose namespace is never read. Information by default: the imported module's top-level statements run whether or not its namespace is used. Set to 'off' to suppress the rule."
+                },
                 "mutant.lint.rules.undefinedDeclaration.severity": {
                     "type": "string",
                     "default": "error",

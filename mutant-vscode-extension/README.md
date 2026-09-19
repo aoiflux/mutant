@@ -17,7 +17,12 @@ VS Code language support for Mutant.
 - **Hover & completion** showing each builtin's signature, summary, capability
   category, and any platform constraint.
 - **Semantic highlighting**, go-to-definition, references, rename, document and
-  workspace symbols, and signature help.
+  workspace symbols, and signature help. Rename reaches files you have not
+  opened.
+- **Call hierarchy** (Shift+Alt+H, or "Peek Call Hierarchy"): who calls a
+  function and what it calls, across files. A call into another module --
+  `stats.mean(...)` -- is followed to the module that declares it, and a caller
+  in a file nobody has opened still appears.
 - **Debugging** (press F5 on a `.mut`): breakpoints with hit counts, step
   over/into/out, the call stack, and Arguments / Locals / Globals with arrays,
   hashes and structs expandable. The CLI is the debug adapter -- the extension
@@ -36,6 +41,10 @@ VS Code language support for Mutant.
   `off`)
 - `mutant.lint.rules.unusedDeclaration.severity`: severity for the unused
   declaration lint rule (`error`, `warning`, `information`, `hint`, `off`)
+- `mutant.lint.rules.unusedImport.severity`: severity for an import whose
+  namespace is never read (`error`, `warning`, `information`, `hint`, `off`;
+  `information` by default, because an imported module's top-level statements
+  run whether or not its namespace is used)
 - `mutant.lint.rules.undefinedDeclaration.severity`: severity for the undefined
   identifier lint rule (`error`, `warning`, `information`, `hint`, `off`)
 - `mutant.lint.rules.nestingComplexity.severity`: severity for deep nesting
