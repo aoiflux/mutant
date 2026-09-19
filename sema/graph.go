@@ -179,6 +179,17 @@ type Node struct {
 	// An alias with no target is still a binding -- what is unknown is the
 	// module's contents, not the fact that it is a module.
 	Target string
+
+	// Grouped reports whether the statement that made this declaration bound
+	// more than one name: `let text, err = read(path);`.
+	//
+	// That is not a stylistic detail in Mutant, it is the shape of the error
+	// idiom, so rules downstream have to tell it from a plain let. It is
+	// recorded here because a caller cannot recover it afterwards -- the names
+	// of one `let` become separate nodes, and nothing else they carry says they
+	// came from one statement -- and because it is a fact about the
+	// declaration, of the same kind as Kind.
+	Grouped bool
 }
 
 // Ref is one use of a declaration.

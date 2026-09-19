@@ -95,7 +95,11 @@ func (b *builder) letStatement(node *ast.LetStatement) {
 	b.expression(node.Value, nil)
 	for _, name := range names {
 		if rng, ok := b.rangeOf(name); ok {
-			b.declare(name.Value, name, rng, KindValue)
+			// Grouped: this let bound more than one name, which in Mutant means
+			// the (value, err) idiom rather than a convenience.
+			if declared := b.declare(name.Value, name, rng, KindValue); declared != nil {
+				declared.Grouped = true
+			}
 		}
 	}
 }

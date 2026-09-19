@@ -57,20 +57,37 @@ var scopeChainAllowlist = map[string]string{
 		"graph the compiler reads must not contain a guess. It resolves nothing: infer.go asks " +
 		"what a name is worth, never which declaration it is.",
 
-	"declarationScope": "the remaining duplication, and named here so it is not mistaken for " +
-		"a decision. Two collectors in diagnostics.go still walk the tree with it -- " +
-		"duplicateCollector and undefinedCollector -- and each re-encodes which nodes declare " +
-		"a name, exactly as the five deleted walks did. The graph already holds what they " +
-		"need: a duplicate declaration is a second Node with the same Scope and Name, and an " +
-		"undefined identifier is a use the walk recorded no reference for. Until they follow, " +
-		"this entry is what stops a fourth being added quietly.\n\n" +
-		"builtinCallCollector was the third, and what the duplication cost is on the record. " +
-		"Its chain answered one question -- is this name taken here -- and answered it " +
-		"differently from the compiler, because it wrote struct and enum names into the same " +
-		"table as lets and parameters. A file declaring `struct fs { path; }` lost every " +
-		"arity, argument-kind and deprecation check on `fs.read(...)`, silently, while the " +
-		"build folded the call to fs_read and ran it. It now asks sema.Graph at the call's " +
-		"own position, and parity/builtin_lint_parity_test.go holds the two together.",
+	"declarationScope": "the last of the duplication, and named here so it is not mistaken " +
+		"for a decision. One collector in diagnostics.go still walks the tree with it -- " +
+		"undefinedCollector -- and re-encodes which nodes bind a VALUE, exactly as the five " +
+		"deleted walks did. Its account of type names has already gone: a struct or enum name " +
+		"used to be filed in this chain beside the file's lets, so `struct Point { x }; " +
+		"Point;` drew no diagnostic while the build refused it with `undefined variable: " +
+		"Point`. The two positions where a type name is legal -- a struct literal and an enum " +
+		"value -- now ask sema.Graph, and parity/undefined_lint_parity_test.go decides every " +
+		"row by compiling it.\n\n" +
+		"What is left needs a decision rather than a translation, which is why it is still " +
+		"here. sema.BuildFile records nothing for a name it cannot resolve, deliberately -- " +
+		"see builder.reference, where inventing a reference is what starts a jump into an " +
+		"unrelated file -- so there is no RefUnresolved to read this rule off, and the plan's " +
+		"Ref.Kind was not built. Absorbing it means either giving the graph a record of what " +
+		"it could not bind, with enough context to tell `hash.blake3` from a bare name, or " +
+		"leaving this walk where it is. Until that is settled, this entry is what stops a " +
+		"second being added quietly.\n\n" +
+		"Two collectors went before it, and what their duplication cost is on the record. " +
+		"builtinCallCollector's chain answered one question -- is this name taken here -- and " +
+		"answered it differently from the compiler, because it wrote struct and enum names " +
+		"into the same table as lets and parameters. A file declaring `struct fs { path; }` " +
+		"lost every arity, argument-kind and deprecation check on `fs.read(...)`, silently, " +
+		"while the build folded the call to fs_read and ran it. See " +
+		"parity/builtin_lint_parity_test.go.\n\n" +
+		"duplicateCollector's chain answered the same question by walking PARENT scopes, so " +
+		"every shadow was a duplicate: a parameter named after a top-level let was reported " +
+		"as a second declaration of it, and so was a struct name beside a value of that name. " +
+		"Both compile, both run, and both declarations do work -- and the complaint carried a " +
+		"preferred quick fix whose edit deletes one of the two lines. It now reads Seq and " +
+		"Scope off the graph, and parity/duplicate_lint_parity_test.go runs every row it is " +
+		"silent about, so the silence is justified by a value rather than by an opinion.",
 }
 
 func TestAScopeChainIsBuiltInExactlyOnePlace(t *testing.T) {

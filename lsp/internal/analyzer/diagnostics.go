@@ -516,6 +516,35 @@ func widenZeroWidthRange(rng lsp.Range) lsp.Range {
 	return widened
 }
 
+// lintDuplicateTopLevelDeclarations reports a name declared twice in ONE scope.
+//
+// In one scope, which is the whole of what this rule had wrong. It used to walk
+// the file with a scope chain of its own and report a name found anywhere up
+// that chain, so every shadow was a duplicate:
+//
+//	let x = 1;
+//	let f = fn(x) { return x * 10; };
+//	f(2);
+//
+// returns 20, and the parameter -- the thing that made it 20 -- was reported as
+// a duplicate declaration of a top-level x that is still 1 afterwards. Struct
+// and enum names were filed in the same table as values, so
+//
+//	struct Point { x };
+//	let Point = 1;
+//	let p = Point{x: 5};
+//	p.x + Point;
+//
+// returns 6, with both declarations doing work in the last line, and was
+// reported as well -- carrying a preferred quick fix that offers to delete one
+// of the two lines.
+//
+// The rule's premise is that one of the two declarations is pointless. A shadow
+// is not that: both are live, and which one a use means depends on where the
+// use is written. A type name is not that either: it never enters the
+// compiler's symbol table, so it takes nothing from the value of the same name.
+// The graph already draws both lines where the compiler draws them, so the rule
+// asks it rather than deriving scope a second time.
 func lintDuplicateTopLevelDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil {
 		return nil
@@ -525,22 +554,129 @@ func lintDuplicateTopLevelDeclarations(snapshot *Snapshot, lintConfig LintConfig
 	if !ok {
 		return nil
 	}
+
+	graph := snapshot.Graph()
+	if graph == nil {
+		return nil
+	}
+
 	source := "mutant-lint"
-	usageCache := make(map[*mast.Identifier]bool)
-	collector := &duplicateCollector{
-		snapshot:   snapshot,
-		severity:   severity,
-		source:     &source,
-		usageCache: usageCache,
-		result:     make([]lsp.Diagnostic, 0, 2),
+	topLevelTypes := topLevelTypeNames(snapshot.Program.Statements)
+	first := make(map[declarationKey]*sema.Node, 8)
+	result := make([]lsp.Diagnostic, 0, 2)
+
+	for _, node := range graph.Declarations() {
+		if !isRedeclarable(node) {
+			continue
+		}
+
+		key := declarationKey{scope: node.Scope, name: node.Name}
+		previous, seen := first[key]
+		if !seen {
+			first[key] = node
+			continue
+		}
+
+		// previous stays the FIRST declaration rather than the one last
+		// reported: `let x = 1; let x = 2; let x = 3;` is two mistakes against
+		// one original, and the suppression below asks about the original.
+		if rebindsAConsumedName(graph, previous) {
+			continue
+		}
+
+		rng := node.Anchor()
+		if !rng.IsValid() {
+			continue
+		}
+
+		message := fmt.Sprintf("duplicate declaration `%s`", node.Name)
+		if declaredAtTopLevel(node, graph, topLevelTypes) {
+			message = fmt.Sprintf("duplicate top-level declaration `%s`", node.Name)
+		}
+
+		result = append(result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: severity,
+			Source:   &source,
+			Message:  message,
+		})
 	}
 
-	root := newDeclarationScope(nil, 0)
-	for _, stmt := range snapshot.Program.Statements {
-		collector.collectStatement(stmt, root)
-	}
+	return result
+}
 
-	return collector.result
+// declarationKey is a scope and a name: two declarations sharing one are the
+// same binding declared twice. The scope is the pointer the graph built, so
+// nothing has to decide what a scope is a second time.
+type declarationKey struct {
+	scope *sema.Scope
+	name  string
+}
+
+// isRedeclarable reports whether a second declaration of this node's name in
+// its own scope is worth saying anything about.
+//
+// `_` is the discard: `let a, _ = gets(); let b, _ = gets();` binds it twice on
+// purpose. A loop binding is excluded because two loops over one name in one
+// scope -- `for (item in a) {...} for (item in b) {...}` -- is how the language
+// is written, and the walk this replaced never recorded one at all. An import
+// namespace is excluded because `import util` and `let util` are different
+// bindings under Mutant's rules and the compiler tries the namespace first
+// rather than refusing. Fields and variants belong to a type rather than to a
+// scope anyone declares in.
+func isRedeclarable(node *sema.Node) bool {
+	if node == nil || node.Name == "" || node.Name == "_" {
+		return false
+	}
+	switch node.Kind {
+	case sema.KindValue, sema.KindFunction, sema.KindParam, sema.KindStruct, sema.KindEnum:
+		return true
+	}
+	return false
+}
+
+// declaredAtTopLevel reports whether the declaration is one of the file's own
+// top-level statements.
+//
+// That is what the two messages distinguish, and the distinction is load
+// bearing rather than cosmetic: the "Remove duplicate top-level declaration"
+// quick fix is offered for one wording and not the other, and it deletes a
+// whole line.
+//
+// A value is top level exactly when it is in the root scope, because a block
+// opens no scope in Mutant and so there is nothing in between. A type name is
+// in no scope chain at all -- struct and enum names are program-global -- so
+// for one of those the question is put to the statement list instead.
+func declaredAtTopLevel(node *sema.Node, graph *sema.Graph, topLevelTypes map[*mast.Identifier]struct{}) bool {
+	if node == nil || graph == nil {
+		return false
+	}
+	if node.Kind == sema.KindStruct || node.Kind == sema.KindEnum {
+		_, top := topLevelTypes[node.Ident]
+		return top
+	}
+	return node.Scope == graph.Root
+}
+
+// topLevelTypeNames returns the identifiers naming the structs and enums a
+// file's top-level statements declare. It is a scan of one slice rather than a
+// walk: a struct written inside a function is deliberately absent, which is
+// what keeps the quick fix away from a line it cannot safely delete.
+func topLevelTypeNames(statements []mast.Statement) map[*mast.Identifier]struct{} {
+	named := make(map[*mast.Identifier]struct{}, 4)
+	for _, stmt := range statements {
+		switch node := stmt.(type) {
+		case *mast.StructStatement:
+			if node.Name != nil {
+				named[node.Name] = struct{}{}
+			}
+		case *mast.EnumStatement:
+			if node.Name != nil {
+				named[node.Name] = struct{}{}
+			}
+		}
+	}
+	return named
 }
 
 type declarationScope struct {
@@ -552,15 +688,6 @@ type declarationScope struct {
 type declInfo struct {
 	ident            *mast.Identifier
 	fromMultiNameLet bool
-	topLevel         bool
-}
-
-type duplicateCollector struct {
-	snapshot   *Snapshot
-	severity   *lsp.DiagnosticSeverity
-	source     *string
-	usageCache map[*mast.Identifier]bool
-	result     []lsp.Diagnostic
 }
 
 func newDeclarationScope(parent *declarationScope, depth int) *declarationScope {
@@ -584,277 +711,36 @@ func (s *declarationScope) define(name string, info declInfo) {
 	s.decls[name] = info
 }
 
-func (c *duplicateCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil {
-		return
-	}
-
-	switch node := stmt.(type) {
-	case *mast.LetStatement:
-		names := node.Names
-		if len(names) == 0 && node.Name != nil {
-			names = []*mast.Identifier{node.Name}
-		}
-
-		if len(names) == 1 {
-			c.collectDeclaration(names[0], current, false)
-		} else {
-			for _, ident := range names {
-				c.collectDeclaration(ident, current, true)
-			}
-		}
-
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-
-		if len(names) > 1 {
-			for _, ident := range names {
-				if ident == nil || ident.Value == "" || ident.Value == "_" {
-					continue
-				}
-				current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: true, topLevel: current.depth == 0})
-			}
-		}
-	case *mast.ReturnStatement:
-		for _, expr := range node.ReturnValues {
-			c.collectExpression(expr, current)
-		}
-		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			c.collectExpression(node.ReturnValue, current)
-		}
-	case *mast.ExpressionStatement:
-		if node.Expression != nil {
-			c.collectExpression(node.Expression, current)
-		}
-	case *mast.BlockStatement:
-		for _, inner := range node.Statements {
-			c.collectStatement(inner, current)
-		}
-	case *mast.ForStatement:
-		if node.Init != nil {
-			c.collectStatement(node.Init, current)
-		}
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Post != nil {
-			c.collectExpression(node.Post, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.WhileStatement:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.ForInStatement:
-		if node.Iterable != nil {
-			c.collectExpression(node.Iterable, current)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, current)
-		}
-	case *mast.StructStatement:
-		c.collectDeclaration(node.Name, current, false)
-	case *mast.EnumStatement:
-		c.collectDeclaration(node.Name, current, false)
-	}
-}
-
-func (c *duplicateCollector) collectExpression(expr mast.Expression, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || expr == nil {
-		return
-	}
-
-	switch node := expr.(type) {
-	case *mast.FunctionLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.collectDeclaration(param, child, false)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	case *mast.MacroLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.collectDeclaration(param, child, false)
-		}
-		if node.Body != nil {
-			c.collectStatement(node.Body, child)
-		}
-	case *mast.IfExpression:
-		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
-		}
-		if node.Consequence != nil {
-			c.collectStatement(node.Consequence, current)
-		}
-		if node.Alternative != nil {
-			c.collectStatement(node.Alternative, current)
-		}
-	case *mast.MatchExpression:
-		if node.Subject != nil {
-			c.collectExpression(node.Subject, current)
-		}
-		for _, arm := range node.Arms {
-			if arm == nil {
-				continue
-			}
-			// Patterns are walked because an enum variant pattern names its
-			// enum: `Status.Ok` is a real use of `Status`, and skipping it
-			// would make an enum matched but never otherwise mentioned look
-			// unused. FieldExpression walks only its left, so the variant
-			// name itself is never resolved as a standalone binding.
-			for _, pattern := range arm.Patterns {
-				c.collectExpression(pattern, current)
-			}
-			if arm.Body != nil {
-				c.collectStatement(arm.Body, current)
-			}
-		}
-	case *mast.CallExpression:
-		if ident, ok := node.Function.(*mast.Identifier); ok && ident != nil && isMacroSpecialFormName(ident.Value) {
-			for _, arg := range node.Arguments {
-				c.collectExpression(arg, current)
-			}
-			return
-		}
-		if node.Function != nil {
-			c.collectExpression(node.Function, current)
-		}
-		for _, arg := range node.Arguments {
-			c.collectExpression(arg, current)
-		}
-	case *mast.PrefixExpression:
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.InfixExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Right != nil {
-			c.collectExpression(node.Right, current)
-		}
-	case *mast.IndexExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Index != nil {
-			c.collectExpression(node.Index, current)
-		}
-	case *mast.AssignExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-		if node.Value != nil {
-			c.collectExpression(node.Value, current)
-		}
-	case *mast.FieldExpression:
-		if node.Left != nil {
-			c.collectExpression(node.Left, current)
-		}
-	case *mast.StructLiteral:
-		for _, field := range node.Fields {
-			if field == nil {
-				continue
-			}
-			c.collectExpression(field.Value, current)
-		}
-	case *mast.ArrayLiteral:
-		for _, element := range node.Elements {
-			c.collectExpression(element, current)
-		}
-	case *mast.TemplateLiteral:
-		for _, element := range node.Parts {
-			c.collectExpression(element, current)
-		}
-	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			c.collectExpression(key, current)
-			c.collectExpression(value, current)
-		}
-	}
-}
-
-func (c *duplicateCollector) collectDeclaration(ident *mast.Identifier, current *declarationScope, fromMultiNameLet bool) {
-	// `_` is the discard identifier — it may be bound repeatedly (e.g. the error
-	// half of several `let value, _ = ...` bindings), so it is never a duplicate.
-	if ident == nil || ident.Value == "" || ident.Value == "_" || current == nil || c == nil || c.snapshot == nil {
-		return
-	}
-
-	rng, ok := c.snapshot.Program.RangeOf(ident)
-	if !ok {
-		return
-	}
-
-	if previous, exists := current.find(ident.Value); exists {
-		if !shouldSuppressDuplicateDiagnostic(c.snapshot, previous, c.usageCache) {
-			message := fmt.Sprintf("duplicate declaration `%s`", ident.Value)
-			if current.depth == 0 {
-				message = fmt.Sprintf("duplicate top-level declaration `%s`", ident.Value)
-			}
-			c.result = append(c.result, lsp.Diagnostic{
-				Range:    localprotocol.ToLSPRange(rng),
-				Severity: c.severity,
-				Source:   c.source,
-				Message:  message,
-			})
-		}
-		return
-	}
-
-	if !fromMultiNameLet {
-		current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: false, topLevel: current.depth == 0})
-	}
-}
-
-func shouldSuppressDuplicateDiagnostic(snapshot *Snapshot, previous declInfo, usageCache map[*mast.Identifier]bool) bool {
-	if snapshot == nil || previous.ident == nil || !previous.fromMultiNameLet {
+// rebindsAConsumedName reports whether the earlier declaration was part of a
+// multiple binding that was read before it was replaced.
+//
+//	let text, err = read(path);
+//	if (err != null) { return err; }
+//	text;
+//	let text = trim(text);
+//
+// is the error idiom rather than a mistake: the pair is bound, the error half
+// decides whether to go on, the value half is used while it is known good, and
+// the name is then rebound. The rule's premise is that one of two declarations
+// of a name is pointless, and a binding that was read is not that.
+//
+// The question is asked of UsesOf, which is keyed by the declaration's own
+// identity, so every use it returns belongs to THIS binding of the name and not
+// to the one that replaced it -- after the rebinding, a use of the name resolves
+// to the later declaration and is not in this list at all. That is what makes
+// "was it read" a sufficient question.
+//
+// It was not sufficient before. The check used to ask ReferenceLocations for a
+// POSITION, which cannot tell the two bindings apart, so it settled for a use on
+// the line directly below the declaration -- where the second binding does not
+// yet exist. The cost of that approximation was the idiom's own recommended
+// shape: a program that checks err before touching the value never has the use
+// on the line below, and was told it had declared the name twice.
+func rebindsAConsumedName(graph *sema.Graph, previous *sema.Node) bool {
+	if graph == nil || previous == nil || !previous.Grouped {
 		return false
 	}
-
-	if used, ok := usageCache[previous.ident]; ok {
-		return used
-	}
-
-	rng, ok := snapshot.Program.RangeOf(previous.ident)
-	if !ok {
-		usageCache[previous.ident] = false
-		return false
-	}
-
-	pos := lsp.Position{Line: lsp.UInteger(rng.Start.Line - 1), Character: lsp.UInteger(rng.Start.Column - 1)}
-	locations, ok := snapshot.ReferenceLocations("", pos, false)
-	if !ok || len(locations) == 0 {
-		usageCache[previous.ident] = false
-		return false
-	}
-
-	nextLine := lsp.UInteger(rng.Start.Line)
-	for _, location := range locations {
-		if location.Range.Start.Line == nextLine {
-			usageCache[previous.ident] = true
-			return true
-		}
-	}
-
-	usageCache[previous.ident] = false
-	return false
-}
-
-func isMultiNameLet(stmt mast.Statement) bool {
-	letStmt, ok := stmt.(*mast.LetStatement)
-	if !ok || letStmt == nil {
-		return false
-	}
-	return len(letStmt.Names) > 1
+	return len(graph.UsesOf(previous.ID)) > 0
 }
 
 func syntaxBalanceDiagnostics(sourceText string) []lsp.Diagnostic {
@@ -1410,11 +1296,45 @@ func (c *undefinedCollector) collectStatement(stmt mast.Statement, current *decl
 		if node.Body != nil {
 			c.collectStatement(node.Body, current)
 		}
-	case *mast.StructStatement:
-		c.defineDeclaration(node.Name, current, false)
-	case *mast.EnumStatement:
-		c.defineDeclaration(node.Name, current, false)
+	case *mast.StructStatement, *mast.EnumStatement:
+		// A type name is deliberately NOT defined here.
+		//
+		// It never enters the compiler's symbol table, so
+		//
+		//	struct Point { x };
+		//	Point;
+		//
+		// does not compile -- "undefined variable: Point" -- while this rule,
+		// which used to file the name beside the file's lets, said nothing at
+		// all. A clean file in the editor and a failed build is the worst
+		// direction for this rule to be wrong in.
+		//
+		// The two positions a type name may legally appear in are handled
+		// where they occur: the name of a struct literal, and the left of a
+		// field access naming an enum. Both ask the graph, which keeps type
+		// names out of the scope chain for exactly this reason.
 	}
+}
+
+// declaresType reports whether the file declares a struct or an enum under the
+// name. It is asked of the graph rather than of the scope chain above, because
+// a type name is in no scope: struct names are program-global in Mutant and
+// live in a table of their own.
+func (c *undefinedCollector) declaresType(name string) bool {
+	if c == nil || c.snapshot == nil || name == "" {
+		return false
+	}
+	_, _, declared := c.snapshot.Graph().TypeNamed(name)
+	return declared
+}
+
+// enumDeclared is declaresType narrowed to enums, in the shape ResolveField
+// asks for.
+func (c *undefinedCollector) enumDeclared(name string) bool {
+	if c == nil || c.snapshot == nil {
+		return false
+	}
+	return c.snapshot.Graph().EnumDeclared(name)
 }
 
 func (c *undefinedCollector) collectExpression(expr mast.Expression, current *declarationScope) {
@@ -1546,7 +1466,16 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 			// Guarded on the name being unbound, so a local `let str = "x"`
 			// followed by `str.upper` is still the field access it looks like.
 			if _, shadowed := current.find(namespace.Value); !shadowed && node.Field != nil {
-				if semaResolver.ResolveField(sema.ScopeCtx{}, namespace.Value, node.Field.Value).Kind == sema.FieldBuiltinFold {
+				// An enum is settled before a fold, which is the precedence
+				// ResolveField fixes and not a choice made here: `Colour.Red`
+				// was namespace-shaped before modules existed. The enum names
+				// come from the graph because a type name is not in this
+				// walk's scope chain at all -- and until they did, `Colour`
+				// was silent only because the walk had filed it as a value.
+				switch semaResolver.ResolveField(
+					sema.ScopeCtx{Enums: c.enumDeclared}, namespace.Value, node.Field.Value,
+				).Kind {
+				case sema.FieldEnumValue, sema.FieldBuiltinFold:
 					return
 				}
 				// The family exists and this member does not, which is a typo
@@ -1567,7 +1496,12 @@ func (c *undefinedCollector) collectExpression(expr mast.Expression, current *de
 		}
 		c.collectExpression(node.Left, current)
 	case *mast.StructLiteral:
-		if node.Name != nil {
+		// The name of a struct literal is a TYPE, so it is checked against the
+		// file's type declarations rather than against its bindings. A name
+		// that declares no type is still walked, because `Nope{x: 1}` is as
+		// undefined as a bare `Nope` -- what must not happen is reporting
+		// `Point{x: 1}`, which is the one place the name is certainly right.
+		if node.Name != nil && !c.declaresType(node.Name.Value) {
 			c.collectExpression(node.Name, current)
 		}
 		for _, field := range node.Fields {
@@ -1615,7 +1549,7 @@ func (c *undefinedCollector) defineDeclaration(ident *mast.Identifier, current *
 	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
 		return
 	}
-	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet, topLevel: current.depth == 0})
+	current.define(ident.Value, declInfo{ident: ident, fromMultiNameLet: fromMultiNameLet})
 }
 
 // lintBuiltinCalls checks calls to builtins against the two contracts the
