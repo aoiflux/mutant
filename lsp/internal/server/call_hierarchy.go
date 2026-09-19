@@ -106,15 +106,17 @@ func (s *Server) callHierarchyOutgoingCalls(_ *glsp.Context, params *lsp.CallHie
 // crossFileIncomingCalls finds the calls into this declaration written in other
 // files, and names the declaration each one sits inside.
 //
-// A call across a file boundary is always `alias.name(...)`: an import binds
-// one namespace and nothing else crosses, so there is no bare spelling to look
-// for. The index knows where those are written; which declaration contains one
-// is a question about THAT file, so its graph is asked, which means reading it.
-// That is the cost of an explicit action and is paid nowhere else.
+// A call across a file boundary is always `alias.name(...)`. A value is the
+// only thing that can be called at run time and a value crosses only through
+// a namespace, so there is no bare spelling to look for: a struct and an enum
+// are not called, and a macro call is expanded away before any call graph
+// exists. The index knows where those are written; which declaration contains
+// one is a question about THAT file, so its graph is asked, which means
+// reading it. That is the cost of an explicit action and is paid nowhere else.
 func (s *Server) crossFileIncomingCalls(snapshot *analyzer.Snapshot, item lsp.CallHierarchyItem, position lsp.Position) []lsp.CallHierarchyIncomingCall {
 	declared, ok := s.workspaceDeclarationAt(snapshot, item.URI, position)
-	if !ok || declared.isType {
-		// A type is never called, so there is nothing to look for.
+	if !ok || declared.writtenBare {
+		// Nothing written bare is called across a file boundary -- see above.
 		return nil
 	}
 

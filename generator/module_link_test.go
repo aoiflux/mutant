@@ -285,3 +285,70 @@ func TestCompileSharesTypesAcrossModules(t *testing.T) {
 		t.Fatalf("a type declared in an imported module was not usable: %v (%v)", err, details)
 	}
 }
+
+// TestAMacroReachesASiblingItNeverImported is the plan's last open observation,
+// answered by compiling it.
+//
+// macroEnv is one environment for the whole program, filled as modules compile.
+// Post-order guarantees a module compiles after everything it imports, which is
+// the part generate.go's comment described -- but nothing stops a macro also
+// being in scope for a module that imports nothing of the sort and merely
+// happens to compile later.
+//
+// The two halves are one fixture with main's two import lines swapped. beta.mut
+// is byte-identical in both, and its meaning is decided somewhere it does not
+// mention.
+func TestAMacroReachesASiblingItNeverImported(t *testing.T) {
+	const alpha = "let twice = macro(x) {\n\tquote(unquote(x) + unquote(x));\n};\n"
+	const beta = "let betaTotal = twice(21);\n"
+
+	t.Run("alpha first", func(t *testing.T) {
+		root := writeProgram(t, map[string]string{
+			"alpha.mut": alpha,
+			"beta.mut":  beta,
+			"main.mut": "import a \"alpha.mut\";\n" +
+				"import b \"beta.mut\";\n" +
+				"b.betaTotal;\n",
+		})
+		if _, err, _, details := compile(
+			filepath.Join(root, "main.mut"), nil, false, modulePassword, 0, 7, testSigningKey(t)); err != nil {
+			t.Fatalf("compile: %v (%v) -- beta.mut uses a macro it never imported, "+
+				"and one environment filled in link order is what lets it", err, details)
+		}
+	})
+
+	t.Run("beta first", func(t *testing.T) {
+		root := writeProgram(t, map[string]string{
+			"alpha.mut": alpha,
+			"beta.mut":  beta,
+			"main.mut": "import b \"beta.mut\";\n" +
+				"import a \"alpha.mut\";\n" +
+				"b.betaTotal;\n",
+		})
+		_, err, _, _ := compile(
+			filepath.Join(root, "main.mut"), nil, false, modulePassword, 0, 7, testSigningKey(t))
+		if err == nil {
+			t.Fatal("swapping main's two import lines compiled too. If that is now " +
+				"true, macroEnv is no longer order-dependent and the warning in " +
+				"docs/MODULES.md should be rewritten rather than kept")
+		}
+		if !strings.Contains(err.Error(), "twice") {
+			t.Fatalf("failed for some other reason: %v", err)
+		}
+	})
+}
+
+// The half that IS a rule: a module always compiles after everything it
+// imports, so an importer can rely on the macro being there.
+func TestAnImporterAlwaysSeesTheMacrosOfWhatItImports(t *testing.T) {
+	root := writeProgram(t, map[string]string{
+		"deep.mut": "let twice = macro(x) {\n\tquote(unquote(x) + unquote(x));\n};\n",
+		"mid.mut":  "import d \"deep.mut\";\nlet midTotal = twice(10);\n",
+		"main.mut": "import m \"mid.mut\";\nlet mine = twice(21);\nm.midTotal;\n",
+	})
+	if _, err, _, details := compile(
+		filepath.Join(root, "main.mut"), nil, false, modulePassword, 0, 7, testSigningKey(t)); err != nil {
+		t.Fatalf("compile: %v (%v) -- a macro must reach transitively, the way "+
+			"every other thing a module loads does", err, details)
+	}
+}

@@ -240,9 +240,12 @@ Current lint rules (rule id -> default severity):
   file -- one with no top-level action -- exempts its top-level names, because
   they exist for whatever imports it; a top-level `_private` name is NOT
   exempt, because no other file can reach it)
-- `unusedImport` -> information (an import whose namespace is never read;
-  information rather than warning because the imported module's top-level
-  statements run either way and Mutant has no `import _` form)
+- `unusedImport` -> information (an import that brings nothing this file uses:
+  its namespace is never read AND it declares no struct, enum or macro the file
+  names bare -- those three cross a module boundary without a namespace, so the
+  alias not appearing is not the whole question. Information rather than warning
+  because the imported module's top-level statements run either way and Mutant
+  has no `import _` form)
 - `undefinedDeclaration` -> error (scope-aware; builtins + macro special forms
   count as defined)
 - `nestingComplexity` -> warning (if/for nesting depth > 2 in function bodies)

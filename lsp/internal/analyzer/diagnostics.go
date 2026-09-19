@@ -978,6 +978,12 @@ func lintUnusedImports(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnost
 		if len(graph.UsesOf(node.ID)) > 0 {
 			continue
 		}
+		// The alias is not the only thing an import brings. A struct name, an
+		// enum name and a macro name all arrive bare, so `import a "x.mut";`
+		// above `Point{x: 1}` never writes `a` and still cannot be deleted.
+		if importSuppliesABareName(snapshot, node) {
+			continue
+		}
 		// FullRange rather than the name: an import's alias may not be written
 		// at all -- `import "lib/report.mut";` binds `report` without the word
 		// appearing -- and the statement is what the reader has to look at
@@ -1014,6 +1020,12 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 		if !report || !rng.IsValid() {
 			continue
 		}
+		// The graph is one file. A name it could not bind may still be
+		// declared by a module this one imports, and three positions reach
+		// across a boundary written bare.
+		if crossesAModuleBoundary(snapshot, miss) {
+			continue
+		}
 		result = append(result, lsp.Diagnostic{
 			Range:    localprotocol.ToLSPRange(rng),
 			Severity: severity,
@@ -1023,6 +1035,114 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 	}
 
 	return result
+}
+
+// importSuppliesABareName reports whether an import whose alias is never read
+// is nevertheless what brings a name this file uses into scope.
+//
+// The names in question are exactly the graph's unbound uses: a name the file
+// declares nowhere. If one of them is a type or a macro the imported module
+// declares, the import is load-bearing and calling it unused is advice that
+// breaks the build.
+//
+// With no workspace the honest answer is "maybe". The file has an unresolved
+// bare name and there is no way to ask which module supplies it, so the rule
+// says nothing -- the same posture ModuleMemberDiagnostics takes, and for the
+// same reason: a string with no file context cannot know what an import names.
+func importSuppliesABareName(snapshot *Snapshot, namespace *sema.Node) bool {
+	if snapshot == nil || namespace == nil {
+		return false
+	}
+	misses := snapshot.Graph().UnboundUses()
+	if len(misses) == 0 {
+		return false
+	}
+	if snapshot.workspace == nil || snapshot.ModuleKey == "" || namespace.Target == "" {
+		return true
+	}
+
+	used := make(map[string]struct{}, len(misses))
+	for _, miss := range misses {
+		used[miss.Name] = struct{}{}
+	}
+	for _, name := range snapshot.workspace.BareNamesFrom(snapshot.ModuleKey, namespace.Target) {
+		if _, wanted := used[name]; wanted {
+			return true
+		}
+	}
+	return false
+}
+
+// crossesAModuleBoundary reports whether a name this file declares nowhere
+// could be coming from a module it imports.
+//
+// Which positions can is the compiler's answer, not a judgement made here.
+// Compiling one fixture per position gives:
+//
+//	Point{x: 1}   struct literal name   crosses
+//	Colour.Red    variant receiver      crosses
+//	twice(21)     a call                crosses -- a macro is expanded by name
+//	Point         a type as a value     does NOT: "undefined variable: Point"
+//	Colour        an enum as a value    does NOT
+//	twice         a macro as a value    does NOT: expansion needs a call
+//	helper()      a function call       does NOT: values need the namespace
+//
+// So an unbound value that is not in call position is never excused, which
+// keeps the rule's reach over the case it was written for -- a plain typo.
+//
+// With no workspace and an import in the file, the answer is "maybe" and the
+// rule stays quiet. api.Lint and the REPL are handed a string with no file
+// context; a file with no imports at all has nowhere for a name to come from,
+// so the file-local answer is the whole answer and nothing changes there.
+func crossesAModuleBoundary(snapshot *Snapshot, miss sema.Unbound) bool {
+	if snapshot == nil || miss.Name == "" {
+		return false
+	}
+	switch miss.Kind {
+	case sema.UnboundType, sema.UnboundReceiver:
+	default:
+		if !miss.InCall {
+			return false
+		}
+	}
+	if !fileImportsAnything(snapshot) {
+		return false
+	}
+
+	if snapshot.workspace == nil || snapshot.ModuleKey == "" {
+		// No closure to ask, so only a position certain from its own shape is
+		// excused. The name of a struct literal is a type however the rest of
+		// the file reads, and a type crosses.
+		//
+		// A receiver and a call target are NOT certain, and the rule keeps
+		// reporting both: nothing at the use site tells `Colour.Red` from
+		// `nope.f()`, since the compiler accepts `Colour.Red()` too. Going
+		// quiet on them is what TestImportNamespaceDoesNotSilenceOtherNames
+		// exists to refuse -- whitelist the names the imports bind, not every
+		// name in a file that happens to contain an import.
+		//
+		// This costs nothing in the editor, which always has a workspace, and
+		// nothing in `mutant lint`, which builds one over the files it was
+		// given. It leaves the REPL and the playground, where there are no
+		// imports and this branch is never reached.
+		return miss.Kind == sema.UnboundType
+	}
+	return snapshot.workspace.ProvidesBareName(snapshot.ModuleKey, miss.Name)
+}
+
+// fileImportsAnything reads the authored statements rather than the graph's
+// namespace nodes: an import whose alias cannot be derived binds no namespace
+// and still loads the module, so the node list would miss it.
+func fileImportsAnything(snapshot *Snapshot) bool {
+	if snapshot == nil || snapshot.Program == nil {
+		return false
+	}
+	for _, statement := range snapshot.Program.Statements {
+		if _, isImport := statement.(*mast.ImportStatement); isImport {
+			return true
+		}
+	}
+	return false
 }
 
 // undefinedDiagnosticFor decides what to say about a name the file declares

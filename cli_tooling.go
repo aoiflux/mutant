@@ -93,6 +93,12 @@ func handleLintCommand(args []string) int {
 		return 1
 	}
 
+	// Every file at once, so a lint of one knows what the others declare. A
+	// struct name, an enum name and a macro name all cross a module boundary
+	// written bare, and one file at a time cannot tell one of those from a
+	// typo -- it reported both.
+	project := api.NewProject(files)
+
 	failed := false
 	for _, file := range files {
 		src, err := os.ReadFile(file)
@@ -101,7 +107,7 @@ func handleLintCommand(args []string) int {
 			failed = true
 			continue
 		}
-		for _, d := range api.Lint(string(src)) {
+		for _, d := range project.Lint(file, string(src)) {
 			source := ""
 			if d.Source != "" {
 				source = " [" + d.Source + "]"

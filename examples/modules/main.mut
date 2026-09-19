@@ -5,9 +5,20 @@
 //	mutant gen --src examples/modules/main.mut --dev
 //	mutant examples/modules/main.mu --dev
 //
-// An import binds one namespace and nothing else. The imported file's names
-// are NOT visible unqualified -- `sum(...)` below would be an undefined
-// variable, because nothing in this file declares it.
+// An import binds one namespace, and a VALUE is reachable only through it:
+// `sum(...)` below would be an undefined variable, because nothing in this file
+// declares it. Write `numbers.sum(...)`.
+//
+// Three kinds of name are the exception, and they go the other way -- they are
+// reachable ONLY bare, never through the namespace, because neither one is an
+// entry in the module's scope:
+//
+//   - a struct name, and a struct literal written with it
+//   - an enum name, and its variants
+//   - a macro, at a call
+//
+// `Sample` and `doubled` below come from lib/stats.mut without a namespace, and
+// `numbers.Sample` would be an error naming that file. See docs/MODULES.md.
 
 // No alias: the namespace is the file's base name without `.mut`, so this
 // binds `report`.
@@ -27,3 +38,11 @@ putf("%s\n", label);
 putf("%s\n", report.label);
 putf("%s\n", report.line("latencies", latencies));
 putf("largest alone: %d\n", numbers.largest(latencies));
+
+// The three exceptions, all from lib/stats.mut and none through `numbers`.
+// Deleting the import above would take these with it, so it is a used import
+// however plainly the word `numbers` stops appearing.
+let sample = Sample{name: "latencies", values: latencies};
+putf("%s holds %d values\n", sample.name, len(sample.values));
+putf("grade: %s\n", Grade.Fast);
+putf("doubled first: %d\n", doubled(latencies[0]));

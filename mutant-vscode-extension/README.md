@@ -41,10 +41,13 @@ VS Code language support for Mutant.
   `off`)
 - `mutant.lint.rules.unusedDeclaration.severity`: severity for the unused
   declaration lint rule (`error`, `warning`, `information`, `hint`, `off`)
-- `mutant.lint.rules.unusedImport.severity`: severity for an import whose
-  namespace is never read (`error`, `warning`, `information`, `hint`, `off`;
+- `mutant.lint.rules.unusedImport.severity`: severity for an import that brings
+  nothing this file uses (`error`, `warning`, `information`, `hint`, `off`;
   `information` by default, because an imported module's top-level statements
-  run whether or not its namespace is used)
+  run whether or not its namespace is used). An import brings more than its
+  namespace: a struct name, an enum name and a macro all arrive bare, so
+  `import a "shapes.mut";` above `Point{x: 1}` is a used import even though the
+  word `a` never appears again.
 - `mutant.lint.rules.undefinedDeclaration.severity`: severity for the undefined
   identifier lint rule (`error`, `warning`, `information`, `hint`, `off`)
 - `mutant.lint.rules.nestingComplexity.severity`: severity for deep nesting

@@ -933,7 +933,7 @@ func (s *Server) codeLens(_ *glsp.Context, params *lsp.CodeLensParams) ([]lsp.Co
 			locations = append(locations, s.workspaceReferenceLocations(workspaceDeclaration{
 				module:      key,
 				name:        sym.Name,
-				isType:      workspace.IsTypeKind(sym.Kind),
+				writtenBare: workspace.IsTypeKind(sym.Kind),
 				declaration: declaration,
 			}, false)...)
 		}
@@ -1475,11 +1475,14 @@ type workspaceDeclaration struct {
 	module string
 	name   string
 
-	// isType decides how the name can be written elsewhere. A struct or enum
-	// name is program-global and is written bare; everything else crosses a file
-	// boundary only as `alias.name`, because an import binds one namespace and
-	// nothing else comes with it.
-	isType bool
+	// writtenBare decides how the name can be written elsewhere. A struct
+	// name, an enum name and a macro all cross a file boundary with no
+	// namespace -- none of the three is an entry in a module's scope, for
+	// three different reasons. Everything else crosses only as `alias.name`,
+	// because an import binds one namespace and nothing else comes with it.
+	//
+	// It was called isType while only the first two existed.
+	writtenBare bool
 
 	declaration *lsp.Location
 }
@@ -1524,13 +1527,44 @@ func (s *Server) workspaceDeclarationAt(snapshot *analyzer.Snapshot, uri lsp.Doc
 		return workspaceDeclaration{
 			module:      fromKey,
 			name:        name,
-			isType:      workspace.IsTypeKind(kind),
+			writtenBare: workspace.IsTypeKind(kind),
 			declaration: declaration,
 		}, true
 	}
 
 	declared, owner, resolved := s.sema.ResolveTopLevel(fromKey, name)
 	if !resolved || !declared.DeclRange.IsValid() {
+		return s.workspaceMacroDeclaration(fromKey, name)
+	}
+	targetURI, addressable := s.sema.URIOf(owner)
+	if !addressable || targetURI == "" {
+		return workspaceDeclaration{}, false
+	}
+	return workspaceDeclaration{
+		module:      owner,
+		name:        name,
+		writtenBare: true,
+		declaration: &lsp.Location{
+			URI:   lsp.DocumentUri(targetURI),
+			Range: localprotocol.ToLSPRange(declared.DeclRange),
+		},
+	}, true
+}
+
+// workspaceMacroDeclaration is the third kind of bare name, and the only one
+// that is not a type: a macro, which never enters a module's scope because
+// its declaration is deleted from the program before the compiler runs.
+//
+// It is asked after the type table because a bare name's meaning depends on
+// the position it is written in and this does not see the position: `Point`
+// in `Point{x: 1}` is a struct literal's name and `Point` in `Point(1)` would
+// be a macro call. Nothing in the language stops one closure having both, and
+// if that ever matters this is the line to look at. Asking the type table
+// first keeps the answer the same as it was before macros were resolvable at
+// all.
+func (s *Server) workspaceMacroDeclaration(fromKey, name string) (workspaceDeclaration, bool) {
+	macro, owner, resolved := s.sema.ResolveMacro(fromKey, name)
+	if !resolved || !macro.DeclRange.IsValid() {
 		return workspaceDeclaration{}, false
 	}
 	targetURI, addressable := s.sema.URIOf(owner)
@@ -1538,12 +1572,12 @@ func (s *Server) workspaceDeclarationAt(snapshot *analyzer.Snapshot, uri lsp.Doc
 		return workspaceDeclaration{}, false
 	}
 	return workspaceDeclaration{
-		module: owner,
-		name:   name,
-		isType: true,
+		module:      owner,
+		name:        name,
+		writtenBare: true,
 		declaration: &lsp.Location{
 			URI:   lsp.DocumentUri(targetURI),
-			Range: localprotocol.ToLSPRange(declared.DeclRange),
+			Range: localprotocol.ToLSPRange(macro.DeclRange),
 		},
 	}, true
 }
@@ -1552,7 +1586,7 @@ func (s *Server) workspaceDeclarationAt(snapshot *analyzer.Snapshot, uri lsp.Doc
 // files other than its own.
 func (s *Server) workspaceReferenceLocations(declaration workspaceDeclaration, includeDeclaration bool) []lsp.Location {
 	return s.symbols.ReferencesTo(
-		s.sema, declaration.module, declaration.name, declaration.isType,
+		s.sema, declaration.module, declaration.name, declaration.writtenBare,
 		declaration.declaration, includeDeclaration,
 	)
 }

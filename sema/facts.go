@@ -76,6 +76,35 @@ type TypeFact struct {
 	DeclRange ast.Range
 }
 
+// MacroFact is a top-level macro definition.
+//
+// It is kept apart from ExportFact for the reason TypeFact is, and the reason
+// is stronger here. evaluator.DefineMacros DELETES a macro's let statement from
+// program.Statements before the compiler is handed the program, so the module's
+// scope never binds the name at all: `ns.twice` is refused with "that module
+// declares no twice", and a macro filed among the exports was offered behind
+// `ns.` anyway -- the editor resolving a spelling the build refuses, which is
+// the disagreement this package exists to remove.
+//
+// A macro does cross a module boundary, written bare and with no namespace, the
+// way a struct or enum name does. macroEnv in generator.buildByteCode is one
+// environment for the whole program, filled as modules are compiled, so a macro
+// a module defines is in scope for every module compiled after it. The
+// guaranteed subset of that is the closure -- a module always compiles after
+// everything it imports -- and the closure is what this package answers from,
+// for the reason spelled out at the top of toplevel.go.
+type MacroFact struct {
+	Name string
+
+	// Params are the macro's parameter names, in order. A macro's arity is
+	// checked at expansion time ("wrong number of arguments. want=%d, got=%d"),
+	// so the count is the one thing a caller can get wrong before the program
+	// has any values in it.
+	Params []string
+
+	DeclRange ast.Range
+}
+
 // ImportFact is one `import` statement, recorded as written.
 //
 // Spelling is deliberately not resolved here. Resolving it means asking the
@@ -128,6 +157,7 @@ type ModuleFacts struct {
 
 	Exports map[string]ExportFact
 	Types   map[string]TypeFact
+	Macros  map[string]MacroFact
 	Imports []ImportFact
 
 	// Hash covers the names, kinds and import spellings above -- and
@@ -159,6 +189,7 @@ func FactsOf(key, uri, path string, program *ast.Program) *ModuleFacts {
 		Path:    path,
 		Exports: make(map[string]ExportFact, 8),
 		Types:   make(map[string]TypeFact, 2),
+		Macros:  make(map[string]MacroFact, 1),
 	}
 	if program == nil {
 		facts.Hash = facts.computeHash()
@@ -176,6 +207,15 @@ func FactsOf(key, uri, path string, program *ast.Program) *ModuleFacts {
 	for _, statement := range program.Statements {
 		switch node := statement.(type) {
 		case *ast.LetStatement:
+			// Before anything else, because a macro is not an export and the
+			// name must not reach Exports even as a value. See MacroFact.
+			if macro, isMacro := node.Value.(*ast.MacroLiteral); isMacro {
+				if node.Name != nil {
+					facts.addMacro(node.Name.Value, macro.Parameters, rangeOf(node.Name))
+				}
+				continue
+			}
+
 			kind := SymValue
 			var params []string
 			if fn, isFn := node.Value.(*ast.FunctionLiteral); isFn {
@@ -260,6 +300,25 @@ func (f *ModuleFacts) addType(name string, kind SymKind, members []*ast.Identifi
 	f.Types[name] = TypeFact{Name: name, Kind: kind, Members: names, DeclRange: declRange}
 }
 
+func (f *ModuleFacts) addMacro(name string, parameters []*ast.Identifier, declRange ast.Range) {
+	if name == "" {
+		return
+	}
+	// First wins, as everywhere else here. Two macros of one name in one file
+	// is the later one winning at expansion time, but the editor's job at the
+	// point of an earlier use is to name what the reader sees above it.
+	if _, already := f.Macros[name]; already {
+		return
+	}
+	params := make([]string, 0, len(parameters))
+	for _, parameter := range parameters {
+		if parameter != nil {
+			params = append(params, parameter.Value)
+		}
+	}
+	f.Macros[name] = MacroFact{Name: name, Params: params, DeclRange: declRange}
+}
+
 // computeHash folds the facts in a fixed order so that one file's hash depends
 // on what it declares and not on map iteration order, which is randomised.
 func (f *ModuleFacts) computeHash() uint64 {
@@ -291,6 +350,16 @@ func (f *ModuleFacts) computeHash() uint64 {
 		declared := f.Types[name]
 		write("t", name, string(rune(declared.Kind)))
 		write(declared.Members...)
+	}
+
+	names = names[:0]
+	for name := range f.Macros {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		write("m", name)
+		write(f.Macros[name].Params...)
 	}
 
 	// Imports stay in source order: reordering two imports genuinely changes

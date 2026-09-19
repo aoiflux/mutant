@@ -124,7 +124,7 @@ func (i *SymbolIndex) Delete(uri lsp.DocumentUri) {
 // Both are restricted to modules whose closure contains the declaring one. A
 // file that does not import it, directly or transitively, cannot be referring
 // to it however exactly its spelling matches.
-func (i *SymbolIndex) ReferencesTo(w *sema.Workspace, declModule, name string, isType bool, declaration *lsp.Location, includeDeclaration bool) []lsp.Location {
+func (i *SymbolIndex) ReferencesTo(w *sema.Workspace, declModule, name string, writtenBare bool, declaration *lsp.Location, includeDeclaration bool) []lsp.Location {
 	if i == nil || w == nil || declModule == "" || name == "" {
 		return nil
 	}
@@ -159,11 +159,12 @@ func (i *SymbolIndex) ReferencesTo(w *sema.Workspace, declModule, name string, i
 			continue
 		}
 
-		if isType {
+		if writtenBare {
 			// A document that declares the name itself is talking about its own,
 			// whatever the type table says. This cannot happen for two types --
 			// claimTypeName refuses that program -- but a `let Point` shadows in
-			// the value namespace and its uses are not uses of the struct.
+			// the value namespace and its uses are not uses of the struct, and
+			// two modules may both declare a macro of one name.
 			if declaresTopLevel(doc, name) {
 				continue
 			}
@@ -435,6 +436,10 @@ func isWorkspaceResolvableTopLevelKind(kind lsp.SymbolKind) bool {
 // IsTypeKind reports whether a symbol kind is one that is written bare across
 // module boundaries. It is here rather than in the server because it is the
 // same question isWorkspaceResolvableTopLevelKind answers, narrowed.
+//
+// It covers the two kinds the protocol has a name for. A macro is written
+// bare too and is not an lsp.SymbolKind of its own, so it is decided by
+// sema.Workspace.ResolveMacro rather than here.
 func IsTypeKind(kind lsp.SymbolKind) bool {
 	return kind == lsp.SymbolKindStruct || kind == lsp.SymbolKindEnum
 }

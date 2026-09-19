@@ -91,3 +91,46 @@ func TestCollectMutantSourceFilesWalksDirs(t *testing.T) {
 		t.Fatalf("expected 1 file (node_modules pruned), got %d: %v", len(files), files)
 	}
 }
+
+// `mutant lint` lints the files it was given as one program.
+//
+// A struct name, an enum name and a macro name all cross a module boundary
+// written bare, and one file at a time cannot tell one of those from a typo --
+// so it reported all three. The list of files the command already collects is
+// the closure the editor builds by scanning a workspace root.
+func TestHandleLintCommandSeesAcrossFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeInto(t, dir, "alpha.mut", "let twice = macro(x) {\n\tquote(unquote(x) + unquote(x));\n};\n"+
+		"struct Point { x }\n"+
+		"enum Colour { Red }\n")
+	writeInto(t, dir, "main.mut", "import a \"alpha.mut\";\n"+
+		"let p = Point{x: 1};\n"+
+		"let c = Colour.Red;\n"+
+		"let n = twice(21);\n"+
+		"putln(p, c, n);\n")
+
+	if code := handleLintCommand([]string{"mutant", "lint", "--strict", dir}); code != 0 {
+		t.Fatalf("lint exit = %d on a program that compiles; every one of those "+
+			"three names is declared in the file beside it", code)
+	}
+}
+
+// And the other direction, in the same arrangement: a name nothing declares is
+// still reported when the file is linted alongside its imports.
+func TestHandleLintCommandStillReportsRealUndefinedNames(t *testing.T) {
+	dir := t.TempDir()
+	writeInto(t, dir, "alpha.mut", "struct Point { x }\n")
+	writeInto(t, dir, "main.mut", "import a \"alpha.mut\";\nputln(notAThing);\n")
+
+	if code := handleLintCommand([]string{"mutant", "lint", dir}); code != 1 {
+		t.Fatalf("lint exit = %d, want 1 -- the rule must go quiet because an "+
+			"import supplies the name, not because the file has an import", code)
+	}
+}
+
+func writeInto(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

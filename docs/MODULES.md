@@ -189,6 +189,22 @@ before any file that imports it runs its own. The entry file is last.
 One consequence worth knowing: macros are shared program-wide and filled in the
 same order, so a macro a module defines is usable by everything that imports it.
 
+Two details of that are worth spelling out, because neither is what an import
+normally means.
+
+A macro is used **bare**, never through a namespace. `import stats "lib.mut";`
+followed by `stats.unless(...)` is an error -- "lib.mut declares no unless" --
+because a macro definition is removed from the module before it is compiled, so
+the module's scope never binds the name. Write `unless(...)`.
+
+And "everything that imports it" is a floor, not a ceiling. The environment is
+filled in compile order, so a macro is in scope for every module compiled after
+its definition, including one that imports nothing from it. That makes such a
+program depend on the order two `import` lines were written in, so do not rely
+on it: import the module whose macros you use. Editor tooling deliberately
+offers only the guaranteed half -- a module you actually import -- and will not
+resolve a macro that reaches you by accident of ordering.
+
 ## Tracebacks
 
 Modules are linked into one instruction stream, one constant pool and one global

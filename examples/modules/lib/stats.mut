@@ -36,3 +36,20 @@ let largest = fn(values) {
 	}
 	return best;
 };
+
+// Below here are the three names that do NOT come through the namespace.
+//
+// A struct name and an enum name are program-global: they never enter a
+// module's scope at all, so there is no `stats.Sample` to write. A macro is
+// removed from this file before it is compiled -- expansion happens first --
+// so there is no `stats.doubled` either. All three are written bare by any
+// file that loads this one, and the underscore rule does not apply to them,
+// because it is a rule about the module's scope.
+
+struct Sample { name, values }
+
+enum Grade { Fast, Slow }
+
+let doubled = macro(value) {
+	quote(unquote(value) + unquote(value));
+};

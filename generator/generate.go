@@ -210,10 +210,24 @@ func buildByteCode(entrypath string, modulePaths []string, mutationLevel int, mu
 	comp.SetSecurityCheckSeed(resolvePolymorphismSeed(mutationSeed))
 	configureCompilerPolymorphism(comp, mutationLevel, mutationSeed)
 
-	// One macro environment for the whole program, filled in link order, so a
-	// macro a module defines is available to everything that imports it and to
-	// nothing it imports. Expansion runs after linking has already rebased the
-	// positions, which is what puts absolute lines into the macro table.
+	// One macro environment for the whole program, filled in link order.
+	//
+	// Read that literally: a macro is in scope for every module compiled AFTER
+	// the one that defines it, which is a wider rule than "everything that
+	// imports it". Post-order guarantees a module compiles after everything it
+	// imports, so an importer always sees it -- but so does a sibling that
+	// imports nothing of the sort, and swapping two import lines in the entry
+	// file decides which. TestAMacroReachesASiblingItNeverImported pins both
+	// halves of that.
+	//
+	// Nothing here narrows it. Scoping macroEnv per closure would be a language
+	// change, and the deliberate choice is the other way round: sema answers
+	// from the closure -- the order-independent subset -- so the editor offers
+	// only what is true whatever order anything else in the program is written
+	// in. See the header of sema/toplevel.go.
+	//
+	// Expansion runs after linking has already rebased the positions, which is
+	// what puts absolute lines into the macro table.
 	macroEnv := object.NewEnvironment()
 	for _, mod := range linked.Modules {
 		// Each module gets its own top-level scope, so two files may both
