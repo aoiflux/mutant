@@ -58,13 +58,19 @@ var scopeChainAllowlist = map[string]string{
 		"what a name is worth, never which declaration it is.",
 
 	"declarationScope": "the remaining duplication, and named here so it is not mistaken for " +
-		"a decision. Three collectors in diagnostics.go walk the tree with it -- " +
-		"duplicateCollector, undefinedCollector, builtinCallCollector -- and each re-encodes " +
-		"which nodes declare a name, exactly as the five deleted walks did. The graph already " +
-		"holds the answers: a duplicate declaration is a second Node with the same Scope and " +
-		"Name, and an undefined identifier is a use the walk recorded no reference for. " +
-		"Absorbing them was out of scope for the step that absorbed resolver.go and is worth " +
-		"doing; until then this entry is what stops a fourth being added quietly.",
+		"a decision. Two collectors in diagnostics.go still walk the tree with it -- " +
+		"duplicateCollector and undefinedCollector -- and each re-encodes which nodes declare " +
+		"a name, exactly as the five deleted walks did. The graph already holds what they " +
+		"need: a duplicate declaration is a second Node with the same Scope and Name, and an " +
+		"undefined identifier is a use the walk recorded no reference for. Until they follow, " +
+		"this entry is what stops a fourth being added quietly.\n\n" +
+		"builtinCallCollector was the third, and what the duplication cost is on the record. " +
+		"Its chain answered one question -- is this name taken here -- and answered it " +
+		"differently from the compiler, because it wrote struct and enum names into the same " +
+		"table as lets and parameters. A file declaring `struct fs { path; }` lost every " +
+		"arity, argument-kind and deprecation check on `fs.read(...)`, silently, while the " +
+		"build folded the call to fs_read and ran it. It now asks sema.Graph at the call's " +
+		"own position, and parity/builtin_lint_parity_test.go holds the two together.",
 }
 
 func TestAScopeChainIsBuiltInExactlyOnePlace(t *testing.T) {

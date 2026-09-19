@@ -2,6 +2,7 @@ package policy
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -146,6 +147,87 @@ func TestStorageStaysOffTheCompileAndKeystrokePaths(t *testing.T) {
 			"must be a map lookup over state already in memory. The symbol graph is\n"+
 			"exported to storage by `mutant graph export` and read back separately.",
 			strings.Join(offenders, "\n  "))
+	}
+}
+
+// reachesOutsideTheProcess names what sema may not import, and why each one
+// would matter. Stated as a denylist of standard-library packages rather than
+// as an allowlist, because the rule is about capability: these are the ways Go
+// code touches something that is not already in memory.
+var reachesOutsideTheProcess = map[string]string{
+	"os":        "opening, reading, statting or listing a file",
+	"os/exec":   "running a program, which can read anything this process can",
+	"io/ioutil": "the deprecated spelling of the same file reads",
+	"io/fs":     "walking a filesystem, and the interface os.DirFS satisfies",
+	"net":       "a socket is a read the user waits on with no way to see why",
+	"net/http":  "the same, with a longer timeout",
+	"syscall":   "whatever the kernel offers, underneath all of the above",
+	"embed":     "reading at build time is still content sema did not receive",
+	"bufio":     "harmless alone, but it is only ever reached for to wrap a reader",
+	"mutant/module": "the loader, which resolves an import by asking the disk. " +
+		"sema resolves one by asking what is indexed, and the difference is the " +
+		"whole of why PutFile can run on every keystroke",
+}
+
+// TestNameResolutionCannotReadAFile is the keystroke-cost guarantee, proved
+// structurally.
+//
+// PutFile runs on every didChange. Its contract is that it recomputes one
+// file's facts from a Program the server already parsed: no file read, no
+// closure walk, no work proportional to how many modules the workspace holds.
+// The second and third of those are measured in sema/workspace_bench_test.go,
+// which can only report on the runs it watched. This one does not have to
+// measure: a package that imports nothing capable of opening a file cannot open
+// one, on any path, including the ones not written yet.
+//
+// It is also what makes the language server's latency predictable rather than
+// merely good. A file read on the keystroke path does not show up as a slower
+// benchmark -- it shows up as an editor that stutters when the disk is busy,
+// on someone else's machine, in a profile nobody has.
+func TestNameResolutionCannotReadAFile(t *testing.T) {
+	offenders := make([]string, 0, 2)
+
+	forEachGoFile(t, filepath.Join(repositoryRoot, "sema"), func(path string, file *ast.File, _ *token.FileSet) {
+		for _, imported := range file.Imports {
+			unquoted, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				continue
+			}
+			why, denied := reachesOutsideTheProcess[unquoted]
+			if !denied {
+				continue
+			}
+			offenders = append(offenders,
+				filepath.ToSlash(path)+" imports "+unquoted+" -- "+why)
+		}
+	})
+
+	if len(offenders) > 0 {
+		sort.Strings(offenders)
+		t.Fatalf("sema can now reach outside this process:\n  %s\n\n"+
+			"Workspace.PutFile runs on every keystroke and resolves imports against\n"+
+			"what is already indexed. If sema needs something from a file, the caller\n"+
+			"reads it and hands it over -- that is what ProgramFile and PutFile's own\n"+
+			"(uri, path, program) signature are for.",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// An entry that names nothing real is an exemption in reverse: it reads as a
+// live rule while guarding a package that no longer exists, and hides the fact
+// that the list has drifted from the standard library it describes.
+func TestEveryDeniedImportIsAPackageThatExists(t *testing.T) {
+	for path := range reachesOutsideTheProcess {
+		if strings.HasPrefix(path, "mutant/") {
+			dir := filepath.Join(repositoryRoot, strings.TrimPrefix(path, "mutant/"))
+			if _, err := os.Stat(dir); err != nil {
+				t.Errorf("the denylist names %q, which is not a package here: %v", path, err)
+			}
+			continue
+		}
+		if _, err := build.Default.Import(path, repositoryRoot, build.FindOnly); err != nil {
+			t.Errorf("the denylist names %q, which is not a package: %v", path, err)
+		}
 	}
 }
 

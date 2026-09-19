@@ -76,22 +76,23 @@ func (s *Snapshot) scopeCtx(pos lsp.Position) sema.ScopeCtx {
 	return s.workspace.ScopeCtxFor(s.ModuleKey, local)
 }
 
-// isBoundAt reports whether the author bound name at pos -- a let, a parameter,
-// a loop binding, an import namespace, a struct or an enum name.
+// isBoundAt reports whether the author bound name to a value at pos -- a let, a
+// parameter, a loop binding or an import namespace.
 //
-// It must not report true for a bare builtin. That exclusion is commit a901ce4:
-// a caller that counts builtins as bindings breaks exactly the families whose
-// own name is also a registered builtin, and there are four of them.
+// A struct or enum name is not one, however plainly it is visible: a type name
+// never enters the compiler's symbol table, so the compiler does not count one,
+// and an editor that did would decide `rand.int` is a field read in any file
+// that happens to declare `struct rand`. See Graph.LocalScopeAt, which is the
+// one place that rule is applied.
+//
+// It must not report true for a bare builtin either. That exclusion is commit
+// a901ce4: a caller that counts builtins as bindings breaks exactly the
+// families whose own name is also a registered builtin, and there are four.
 func (s *Snapshot) isBoundAt(name string, pos lsp.Position) bool {
 	if s == nil || s.Program == nil || name == "" {
 		return false
 	}
-	for _, binding := range s.VisibleBindingsAt(pos) {
-		if binding.name == name {
-			return true
-		}
-	}
-	return false
+	return s.localScopeAt(pos).Bound(name)
 }
 
 func (s *Snapshot) NodeAt(pos lsp.Position) (mast.Node, mast.Range, bool) {

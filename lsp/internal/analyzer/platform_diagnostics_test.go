@@ -127,6 +127,55 @@ func TestHoverShowsPlatformConstraint(t *testing.T) {
 	}
 }
 
+// The platform rule decides shadowing the way the build does.
+//
+// It used to see only the file's imports, which is not what the rule needed to
+// know: `process.modules(1)` is a call to the builtin only when nothing in the
+// file has bound `process`, and a let or a parameter binds it just as an import
+// does. So a program that never touched process_modules was told it would not
+// run on this machine -- a warning about portability, which is exactly the kind
+// an author acts on, pointing at a function the program does not call.
+//
+// darwin is simulated because the assertion has to mean the same thing wherever
+// the suite runs.
+func TestPlatformSupportIsSilentWhenTheFamilyNameIsBound(t *testing.T) {
+	withHostGOOS(t, "darwin")
+
+	for _, c := range []struct{ name, src string }{
+		{
+			name: "a let holds a struct",
+			src: "struct Holder { modules };\n" +
+				"let process = Holder{modules: 7};\n" +
+				"process.modules(1);\n",
+		},
+		{
+			name: "a parameter holds one",
+			src:  "let take = fn(process) { return process.modules(1); };\n",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if n := messagesContaining(collectMessages(c.src), "not supported on darwin"); n != 0 {
+				t.Fatalf("a field read on a value the file bound was reported as a call to "+
+					"process_modules:\n\n%s", c.src)
+			}
+		})
+	}
+}
+
+// And the other direction, which is the one a filter would get wrong: a struct
+// TYPE named after the family shadows nothing. A type name never enters the
+// compiler's symbol table, so the build folds `process.modules` to the builtin
+// and runs it -- or refuses to, on a platform that does not have it, which is
+// precisely what this rule exists to say first.
+func TestPlatformSupportStillFiresWhenAStructCarriesTheFamilyName(t *testing.T) {
+	withHostGOOS(t, "darwin")
+
+	const src = "struct process { modules };\nprocess.modules(1);\n"
+	if n := messagesContaining(collectMessages(src), "not supported on darwin"); n == 0 {
+		t.Fatalf("no platform warning for a call the build compiles as process_modules:\n\n%s", src)
+	}
+}
+
 func TestCompletionDetailCarriesCategory(t *testing.T) {
 	snapshot := New().Analyze("")
 	items := snapshot.CompletionItemsAt(lsp.Position{Line: 0, Character: 0})

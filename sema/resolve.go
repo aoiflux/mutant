@@ -75,10 +75,20 @@ type ScopeCtx struct {
 	// Namespace reports which module an import bound alias to.
 	Namespace func(alias string) (moduleKey string, bound bool)
 
-	// Bound reports whether name is taken by something the author bound: a let,
-	// a parameter, an import namespace, a struct or enum name.
+	// Bound reports whether name is taken by something the author bound to a
+	// VALUE: a let, a parameter, a loop binding, an import namespace.
 	//
-	// It must NOT report true for a bare builtin. That distinction is the whole
+	// A struct or enum name is not one, however plainly it is visible. A bare
+	// `Point` does have to resolve to the struct that declares it, which is a
+	// different question; a type name never enters the compiler's symbol table,
+	// so it takes nothing. Counting one here is how an editor comes to disagree
+	// with the build about every file that declares a struct named after a
+	// builtin family: `struct rand { x; }; rand.int(1, 5);` compiles and
+	// returns 3 from the builtin, and a resolver that read `rand` as taken
+	// called it a field read on a value. Graph.LocalScopeAt is the one place
+	// that rule is applied, and what every caller in this tree asks.
+	//
+	// It must NOT report true for a bare builtin either. That distinction is the whole
 	// of commit a901ce4: the compiler asked its symbol table, DefineBuiltin
 	// writes every builtin into the very store that lookup reads, so for the
 	// four families whose own name is also a registered builtin -- rand, sort,
@@ -150,6 +160,23 @@ const (
 	// non-nil exactly here.
 	FieldRefused
 )
+
+func (k FieldKind) String() string {
+	switch k {
+	case FieldEnumValue:
+		return "enum value"
+	case FieldModuleMember:
+		return "module member"
+	case FieldBuiltinFold:
+		return "builtin fold"
+	case FieldValueAccess:
+		return "value access"
+	case FieldRefused:
+		return "refused"
+	default:
+		return "unknown field kind"
+	}
+}
 
 // FieldResolution is what a.b means.
 type FieldResolution struct {

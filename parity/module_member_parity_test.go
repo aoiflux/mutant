@@ -55,9 +55,14 @@ func writeTree(t *testing.T, files map[string]string) string {
 
 // workspaceOverTree seeds a sema.Workspace with every .mut file under root, the
 // way the language server's workspace scan does.
-func workspaceOverTree(t *testing.T, root string) *sema.Workspace {
+//
+// searchPaths are the --module-path directories, in the order the flags were
+// given. They are variadic because most cases need none; where a case does pass
+// them, the point is that both walkers were handed the same list and still have
+// to pick the same candidate out of it.
+func workspaceOverTree(t *testing.T, root string, searchPaths ...string) *sema.Workspace {
 	t.Helper()
-	w := sema.NewWorkspace(nil)
+	w := sema.NewWorkspace(searchPaths)
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, module.Extension) {
 			return err
@@ -221,10 +226,19 @@ func TestARefusalReadsTheSameFromBothEngines(t *testing.T) {
 // resolves by asking the filesystem; sema.Workspace resolves by asking what is
 // indexed. They must reach the same set, or the editor is reasoning about a
 // different program than the one that gets built.
+//
+// The rows with a `paths` entry are about candidate ORDER rather than reach.
+// One spelling can name more than one file on disk -- the importer's own
+// directory is tried first, then each --module-path in the order the flags were
+// given -- and that order is the part of import resolution the two walkers
+// spell out separately. Getting it wrong does not make the editor fall silent,
+// which is the failure the other rows would catch. It makes the editor read a
+// real file that the build never opens, and answer confidently out of it.
 func TestTheClosureMatchesWhatTheLoaderLoads(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		files map[string]string
+		paths []string // --module-path directories, relative to the tree's root
 	}{
 		{
 			name: "a chain",
@@ -251,12 +265,39 @@ func TestTheClosureMatchesWhatTheLoaderLoads(t *testing.T) {
 				"spare.mut": "let unused = fn() { return 1; };\n",
 			},
 		},
+		{
+			name:  "a --module-path supplies what the importer's directory does not",
+			paths: []string{"vendor"},
+			files: map[string]string{
+				"main.mut":       "import lib \"lib.mut\";\nlet main = fn() { return lib.f(); };\nmain();\n",
+				"vendor/lib.mut": "let f = fn() { return 1; };\n",
+			},
+		},
+		{
+			name:  "the importer's own directory shadows a --module-path holding the same name",
+			paths: []string{"vendor"},
+			files: map[string]string{
+				"main.mut":       "import lib \"lib.mut\";\nlet main = fn() { return lib.f(); };\nmain();\n",
+				"lib.mut":        "let f = fn() { return 1; };\n",
+				"vendor/lib.mut": "let f = fn() { return 2; };\n",
+			},
+		},
+		{
+			name:  "the first --module-path shadows the second",
+			paths: []string{"first", "second"},
+			files: map[string]string{
+				"main.mut":       "import lib \"lib.mut\";\nlet main = fn() { return lib.f(); };\nmain();\n",
+				"first/lib.mut":  "let f = fn() { return 1; };\n",
+				"second/lib.mut": "let f = fn() { return 2; };\n",
+			},
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := writeTree(t, c.files)
 			entry := filepath.Join(root, "main.mut")
+			paths := absolute(root, c.paths)
 
-			graph, err := module.Load(entry, nil)
+			graph, err := module.Load(entry, paths)
 			if err != nil {
 				t.Fatalf("module.Load: %v", err)
 			}
@@ -266,13 +307,93 @@ func TestTheClosureMatchesWhatTheLoaderLoads(t *testing.T) {
 			}
 			sort.Strings(loaded)
 
-			closure, diags := workspaceOverTree(t, root).Closure(sema.CanonicalKey(entry))
+			closure, diags := workspaceOverTree(t, root, paths...).Closure(sema.CanonicalKey(entry))
 			if len(diags) != 0 {
 				t.Fatalf("a loadable program produced diagnostics: %v", diags)
 			}
 
 			if strings.Join(closure, "\n") != strings.Join(loaded, "\n") {
 				t.Fatalf("the two walkers disagree:\n loader:    %v\n workspace: %v", loaded, closure)
+			}
+		})
+	}
+}
+
+// absolute joins each relative --module-path onto the tree's root. The flags a
+// user types are directories, so both walkers get directories rather than
+// anything the test invented.
+func absolute(root string, relative []string) []string {
+	paths := make([]string, 0, len(relative))
+	for _, rel := range relative {
+		paths = append(paths, filepath.Join(root, rel))
+	}
+	return paths
+}
+
+// TestAShadowedModuleIsTheSameFileToBothEngines asks the shadowing question of
+// a value instead of a set of keys.
+//
+// Shadowing is deliberate and supported -- module.NewResolver's own comment
+// says a caller can put its directory first to take precedence over a library.
+// It is also the one part of resolution where both answers are a real file that
+// really parses, so neither engine has any reason to hesitate. Two copies of
+// shared.mut disagree about what which() returns, and the number that comes
+// back names the copy that ran. The editor has to name the same one.
+func TestAShadowedModuleIsTheSameFileToBothEngines(t *testing.T) {
+	const onTheSearchPath = "let which = fn() { return 2; };\n"
+	const importAndCall = "import shared \"shared.mut\";\nshared.which();\n"
+
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		from  string // the copy of shared.mut both engines must choose
+		value string
+	}{
+		{
+			name: "the importer's own directory wins",
+			files: map[string]string{
+				"main.mut":          importAndCall,
+				"shared.mut":        "let which = fn() { return 1; };\n",
+				"vendor/shared.mut": onTheSearchPath,
+			},
+			from:  "shared.mut",
+			value: "INTEGER(1)",
+		},
+		{
+			name: "with nothing beside the importer, the search path supplies it",
+			files: map[string]string{
+				"main.mut":          importAndCall,
+				"vendor/shared.mut": onTheSearchPath,
+			},
+			from:  "vendor/shared.mut",
+			value: "INTEGER(2)",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := writeTree(t, c.files)
+			paths := absolute(root, []string{"vendor"})
+
+			value, err := runViaModules(t, root, paths...)
+			if err != nil {
+				t.Fatalf("the program did not run: %v", err)
+			}
+			if got := normalize(value); got != c.value {
+				t.Fatalf("shared.which() answered %s, want %s -- the build compiled the "+
+					"other copy of shared.mut", got, c.value)
+			}
+
+			entry := filepath.Join(root, "main.mut")
+			key := sema.CanonicalKey(entry)
+			local := localScopeIn(t, key, c.files["main.mut"], "shared.which")
+
+			_, from, found := workspaceOverTree(t, root, paths...).MemberFact(key, local, "shared", "which")
+			if !found {
+				t.Fatal("the editor does not resolve shared.which at all, and the build ran it")
+			}
+			if want := filepath.Join(root, c.from); sema.CanonicalKey(from) != sema.CanonicalKey(want) {
+				t.Fatalf("the editor reads shared.which out of %s; the build ran the copy "+
+					"in %s. Both files exist and both parse, so nothing else in the editor "+
+					"will contradict it", from, want)
 			}
 		})
 	}

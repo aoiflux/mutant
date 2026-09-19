@@ -30,15 +30,34 @@ import (
 //
 // bound reports whether a name is already taken in the caller's own notion of
 // scope -- a let, a parameter, an import namespace. It decides whether
-// `fs.read` is a builtin call at all, and each rule models scope differently
-// (a declarationScope walk, a file-wide set, nothing), so it is a parameter
-// rather than something this helper works out. A nil bound models no
-// shadowing, which is what the rules with no scope model do today.
+// `fs.read` is a builtin call at all, and the rules model scope differently
+// (the graph at a position, a file-wide set of reassigned names, nothing), so
+// it is a parameter rather than something this helper works out. A nil bound
+// models no shadowing, which is what the rules with no scope model do today.
+//
+// Prefer builtinCalleeIn wherever the caller has a position. A predicate over
+// names cannot say that a name is an enum, and cannot say that a struct name is
+// not a binding -- and those are distinctions the compiler draws.
 //
 // anchor is what a diagnostic should hang its range on: the identifier for the
 // bare form, the whole field expression for the dotted one, so the squiggle
 // covers `fs.read` rather than just `fs`.
 func builtinCallee(fn mast.Expression, bound func(string) bool) (name string, anchor mast.Node, ok bool) {
+	return builtinCalleeIn(fn, sema.LocalScope{Bound: bound})
+}
+
+// builtinCalleeIn is builtinCallee for a caller holding everything this file has
+// bound at a position rather than a set of names.
+//
+// The difference is the enum arm. ResolveField decides an enum before it folds,
+// because `Colour.Red` was namespace-shaped before modules existed, and a caller
+// with only a name predicate cannot say "this name is an enum" -- so an enum
+// called `str` would make `str.upper(...)` fold to the builtin and be held to
+// its contract. Rules whose model of scope genuinely is a set of names, like the
+// security ones asking only whether an opener was reassigned, keep the narrower
+// entry point above.
+func builtinCalleeIn(fn mast.Expression, local sema.LocalScope) (name string, anchor mast.Node, ok bool) {
+	bound := local.Bound
 	switch node := fn.(type) {
 	case *mast.Identifier:
 		if node == nil || node.Value == "" {
@@ -76,7 +95,8 @@ func builtinCallee(fn mast.Expression, bound func(string) bool) (name string, an
 		// call to a builtin named "p_x", and every rule downstream would be
 		// deciding about a name that does not exist. A variable, parameter or
 		// import namespace called `fs` still wins.
-		folded := semaResolver.ResolveField(sema.ScopeCtx{Bound: bound}, namespace.Value, node.Field.Value)
+		folded := semaResolver.ResolveField(
+			sema.ScopeCtx{Bound: local.Bound, Enums: local.Enums}, namespace.Value, node.Field.Value)
 		if folded.Kind != sema.FieldBuiltinFold {
 			return "", nil, false
 		}
@@ -84,28 +104,6 @@ func builtinCallee(fn mast.Expression, bound func(string) bool) (name string, an
 	}
 
 	return "", nil, false
-}
-
-// boundAt is the `bound` predicate for the surfaces that have a Snapshot and a
-// position: a let, a parameter or an import namespace visible there beats the
-// derived builtin, exactly as it does in the compiler.
-func (s *Snapshot) boundAt(pos lsp.Position) func(string) bool {
-	if s == nil {
-		return nil
-	}
-	visible := s.VisibleBindingsAt(pos)
-	if len(visible) == 0 {
-		return nil
-	}
-
-	return func(name string) bool {
-		for _, b := range visible {
-			if b.name == name {
-				return true
-			}
-		}
-		return false
-	}
 }
 
 // namespacedBuiltinAt resolves the builtin named by the dotted expression at
@@ -138,7 +136,7 @@ func (s *Snapshot) namespacedBuiltinAt(pos lsp.Position) (name string, onField b
 		return "", false, false
 	}
 
-	resolved, _, found := builtinCallee(best, s.boundAt(pos))
+	resolved, _, found := builtinCalleeIn(best, s.localScopeAt(pos))
 	if !found {
 		return "", false, false
 	}

@@ -280,6 +280,20 @@ type Scope struct {
 	// rather than the 600us it costs now. The five walks this replaced kept a
 	// map for the same reason.
 	latest map[string]*Node
+
+	// first is the earliest declaration of each name here, and is what makes
+	// "is this name bound at a position" a map lookup.
+	//
+	// The earliest is the one worth keeping, because the question is whether
+	// ANY declaration of the name stands at or before the position and order is
+	// source order: if one does, the earliest does. latest cannot answer it --
+	// `let x = 1; f(); let x = 2;` binds x at the call, and latest names the
+	// declaration below it.
+	//
+	// It is the same bargain latest struck, for the same reason. Without it a
+	// Bound query at a file's top level scans every top-level declaration in
+	// the file, and the builtin-call rules ask one per call site.
+	first map[string]*Node
 }
 
 // BuildFile builds the graph for one parsed file.
@@ -337,6 +351,14 @@ func BuildFile(moduleKey string, program *ast.Program, w *Workspace, structOf St
 		return startsBefore(g.refList[i].UseRange, g.refList[j].UseRange)
 	})
 
+	// Scopes, for the same reason and one more: scopeAt finds the scope
+	// covering a position by searching the children, and a search needs what it
+	// searches to be in order. A function literal written inside a hash literal
+	// is reached whenever the map hands it over, so without this the search
+	// would find the right scope on most runs and a random ancestor on the
+	// rest -- which reads as the editor occasionally forgetting a parameter.
+	sortScopes(g.Root)
+
 	g.usesByTarget = make(map[DeclID][]ast.Range, len(g.decls))
 	for _, ref := range g.refList {
 		g.usesByTarget[ref.Target] = append(g.usesByTarget[ref.Target], ref.UseRange)
@@ -352,6 +374,23 @@ func BuildFile(moduleKey string, program *ast.Program, w *Workspace, structOf St
 		return startsBefore(g.declOrder[i].DeclRange, g.declOrder[j].DeclRange)
 	})
 	return g
+}
+
+// sortScopes puts every scope's children in source order, depth first.
+//
+// Siblings do not overlap -- a scope written inside another is that scope's
+// child, not its sibling -- so source order is also a total order over the
+// positions they cover, which is what lets scopeAt binary-search them.
+func sortScopes(scope *Scope) {
+	if scope == nil || len(scope.Children) == 0 {
+		return
+	}
+	sort.SliceStable(scope.Children, func(i, j int) bool {
+		return startsBefore(scope.Children[i].Range, scope.Children[j].Range)
+	})
+	for _, child := range scope.Children {
+		sortScopes(child)
+	}
 }
 
 type builder struct {
@@ -404,8 +443,12 @@ func (b *builder) declareIn(scope *Scope, name string, ident *ast.Identifier, de
 	scope.order = append(scope.order, node)
 	if scope.latest == nil {
 		scope.latest = make(map[string]*Node, 8)
+		scope.first = make(map[string]*Node, 8)
 	}
 	scope.latest[name] = node
+	if _, seen := scope.first[name]; !seen {
+		scope.first[name] = node
+	}
 	b.g.nodes[node.ID] = node
 	b.g.decls = append(b.g.decls, node)
 	return node

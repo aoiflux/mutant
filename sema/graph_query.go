@@ -199,22 +199,113 @@ func (g *Graph) VisibleAt(line, column int) []*Node {
 	return visible
 }
 
+// LocalScopeAt is the file-local half of a name decision at a position.
+//
+// It exists so that there is one answer to "what has this file bound here",
+// rather than one per caller. The language server used to assemble it from a
+// name match over VisibleAt, and that was wrong in a way no single-package test
+// could show: VisibleAt returns type names, because a bare `Point` has to
+// resolve to the struct that declares it, and counting one as a binding made
+// the editor disagree with the compiler about every program that declares a
+// struct named after a builtin family.
+//
+// A type name is not a value binding, and the split here is structural rather
+// than a filter: values, functions, parameters, loop bindings and import
+// aliases live in the scope tree, struct and enum names live in Types, and only
+// the scope tree is walked. That mirrors the compiler exactly -- a type name
+// never enters the symbol table, which is what its Bound reads -- so
+// `struct rand { int }; rand.int` folds to rand_int in the editor for the same
+// reason it does in a build.
+//
+// Enums are supplied separately because ResolveField asks about them first:
+// `Colour.Red` predates modules and is not a field read on a value.
+func (g *Graph) LocalScopeAt(line, column int) LocalScope {
+	if g == nil {
+		return LocalScope{}
+	}
+	// The covering scope is found once here rather than once per name. The
+	// descent looks at the children of every scope on the way down, and at a
+	// file's top level those are every function in the file; the builtin-call
+	// rules ask about one name per call site, so paying the descent per
+	// question made a keystroke cost grow with the square of the document.
+	scope := g.scopeAt(line, column)
+	return LocalScope{
+		Bound: func(name string) bool { return valueBoundIn(scope, name, line, column) },
+		Enums: g.EnumDeclared,
+	}
+}
+
+// valueBoundIn reports whether name is bound to a value at the position, looking
+// outwards from scope: the ScopeCtx.Bound predicate.
+//
+// It must not report true for a bare builtin, and cannot: builtins are not
+// declarations and never enter a scope. That exclusion is commit a901ce4, and
+// it is now a property of where things are stored rather than a test somebody
+// has to remember to write.
+//
+// The position is part of the question and not a refinement of it. A name
+// declared below the use is not bound at it, which is what a file looks like
+// while it is being written -- and while it is being written is when the editor
+// is asked the most questions.
+func valueBoundIn(scope *Scope, name string, line, column int) bool {
+	if name == "" {
+		return false
+	}
+	for ; scope != nil; scope = scope.Parent {
+		if declared, exists := scope.first[name]; exists &&
+			startsAtOrBefore(declared.Anchor(), line, column) {
+			return true
+		}
+	}
+	return false
+}
+
+// EnumDeclared reports whether this file declares an enum under a name.
+//
+// It is file-local, and deliberately: an enum reached through an import is
+// visible to the compiler, whose enumDefinitions map is program-wide, and not
+// to a single file's graph. parity/bare_name_parity_test.go records that gap as
+// the behaviour it is, rather than closing it here where only half the program
+// is in hand.
+func (g *Graph) EnumDeclared(name string) bool {
+	declared, _, found := g.TypeNamed(name)
+	return found && declared.Kind == KindEnum
+}
+
 // scopeAt returns the innermost scope covering the position.
 func (g *Graph) scopeAt(line, column int) *Scope {
 	scope := g.Root
 	for {
-		next := (*Scope)(nil)
-		for _, child := range scope.Children {
-			if child.Range.IsValid() && rangeContains(child.Range, line, column) {
-				next = child
-				break
-			}
-		}
+		next := childCovering(scope, line, column)
 		if next == nil {
 			return scope
 		}
 		scope = next
 	}
+}
+
+// childCovering is the child of scope that contains the position, or nil.
+//
+// Children are in source order and do not overlap, so there is only ever one
+// candidate: the last one that starts at or before the position. Everything
+// after it starts later, and everything before it ended before it began. The
+// containment check still runs, because the candidate may simply have closed
+// before the position -- a position between two functions is in neither.
+//
+// It is a search rather than a scan because the scan was over every function
+// in the file, once per name any rule asked about.
+func childCovering(scope *Scope, line, column int) *Scope {
+	children := scope.Children
+	at := sort.Search(len(children), func(i int) bool {
+		return !startsAtOrBefore(children[i].Range, line, column)
+	}) - 1
+	if at < 0 {
+		return nil
+	}
+	if child := children[at]; rangeContains(child.Range, line, column) {
+		return child
+	}
+	return nil
 }
 
 func (g *Graph) typeOrder() []*Node {

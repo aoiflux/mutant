@@ -46,11 +46,11 @@ type pairBindingCandidate struct {
 }
 
 // checkSingleNameBinding records `let x = f();` when f is a pair-returning
-// builtin. It shares builtinCallCollector's scope walk, so it inherits the
-// guards that make the other two rules false-positive-free: the callee must not
-// be shadowed by a binding in scope, must be live in builtin.Builtins, and must
-// carry a verified return contract.
-func (c *builtinCallCollector) checkSingleNameBinding(name *mast.Identifier, value mast.Expression, current *declarationScope) {
+// builtin. It shares builtinCallCollector's walk, so it inherits the guards that
+// make the other two rules false-positive-free: the callee must not be shadowed
+// by a binding in scope, must be live in builtin.Builtins, and must carry a
+// verified return contract.
+func (c *builtinCallCollector) checkSingleNameBinding(name *mast.Identifier, value mast.Expression) {
 	if c == nil || c.pairSeverity == nil || name == nil || value == nil {
 		return
 	}
@@ -64,7 +64,7 @@ func (c *builtinCallCollector) checkSingleNameBinding(name *mast.Identifier, val
 	if !ok || call.Function == nil {
 		return
 	}
-	calleeName, _, ok := builtinCallee(call.Function, c.boundIn(current))
+	calleeName, _, ok := c.calleeAt(call.Function)
 	if !ok {
 		return
 	}

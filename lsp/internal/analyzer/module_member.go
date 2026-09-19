@@ -21,17 +21,39 @@ const moduleMemberSource = "mutant-modules"
 // localScopeAt is what the workspace cannot know: which names this file has
 // bound at pos, and which enums it declares.
 //
-// The split is the whole design. Everything file-local comes from the
-// snapshot's own scope walk, everything cross-module from the workspace, and
-// one resolver puts them together with the precedence the compiler uses.
+// The split is the whole design. Everything file-local comes from this file's
+// graph, everything cross-module from the workspace, and one resolver puts them
+// together with the precedence the compiler uses.
+//
+// The graph answers rather than this package, because the question is not an
+// editor question. Assembling it here from a name match over VisibleBindingsAt
+// is what this used to do, and it counted a struct name as a binding -- which
+// VisibleAt is right to return, since a bare `Point` has to resolve to its
+// struct, and which the compiler's Bound has never counted, since a type name
+// is not in the symbol table. The two disagreed about every file that declares
+// a struct named after a builtin family.
 func (s *Snapshot) localScopeAt(pos lsp.Position) sema.LocalScope {
-	return sema.LocalScope{
-		Bound: func(name string) bool { return s.isBoundAt(name, pos) },
-		Enums: func(name string) bool {
-			_, declared := s.enumVariantNames(name)
-			return declared
-		},
+	return s.Graph().LocalScopeAt(tokenPosition(pos))
+}
+
+// localScopeAtNode is localScopeAt for a caller holding a node rather than a
+// cursor: what the file has bound where the node begins.
+//
+// A walker asks this instead of keeping a scope chain of its own. Keeping one
+// means deciding, again and separately, which AST nodes declare a name -- and
+// the walkers that did decided it differently from the compiler, counting a
+// struct name as a binding. A node with no recorded range gets the zero
+// LocalScope, which binds nothing: the same answer the chain gave when it had
+// not reached that part of the file.
+func (s *Snapshot) localScopeAtNode(node mast.Node) sema.LocalScope {
+	if s == nil || s.Program == nil || node == nil {
+		return sema.LocalScope{}
 	}
+	rng, ok := s.Program.RangeOf(node)
+	if !ok {
+		return sema.LocalScope{}
+	}
+	return s.Graph().LocalScopeAt(rng.Start.Line, rng.Start.Column)
 }
 
 // startOf is the LSP position an ast.Range begins at. Ranges are 1-based in the

@@ -311,11 +311,6 @@ func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 	}
 
 	source := "mutant-lint"
-	// This rule has no scope model, so the only shadowing it can see is an
-	// import binding the namespace. A local `let ntfs = ...` still slips
-	// through -- exactly as it did before namespaces existed, and bolting a
-	// scope walk on here is a bigger change than this rule is worth.
-	bound := boundInNamespaces(importNamespaces(snapshot.Program.Statements))
 
 	result := make([]lsp.Diagnostic, 0, 2)
 	for node := range snapshot.Program.NodePositions {
@@ -323,7 +318,15 @@ func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 		if !ok || call == nil {
 			continue
 		}
-		name, anchor, ok := builtinCallee(call.Function, bound)
+		// What the file has bound where the call is written. This rule used to
+		// see only the file's imports, so a local `let ntfs = ...` slipped
+		// through and `ntfs.close(h)` was reported as a call to a builtin
+		// unavailable on this machine -- a warning about a function the program
+		// does not call, on code that runs everywhere. The note here used to
+		// say that bolting a scope walk on was more than the rule was worth,
+		// and it was: a scope walk meant building one. Asking the graph is a
+		// call.
+		name, anchor, ok := builtinCalleeIn(call.Function, snapshot.localScopeAtNode(call.Function))
 		if !ok || !builtin.UnsupportedOn(name, hostGOOS) {
 			continue
 		}
@@ -1683,13 +1686,11 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		source:          &source,
 		builtins:        knownBuiltins,
 		reassigned:      reassignedNames(snapshot),
-		namespaces:      importNamespaces(snapshot.Program.Statements),
 		result:          make([]lsp.Diagnostic, 0, 2),
 	}
 
-	root := newDeclarationScope(nil, 0)
 	for _, stmt := range snapshot.Program.Statements {
-		collector.collectStatement(stmt, root)
+		collector.collectStatement(stmt)
 	}
 
 	// Appended rather than interleaved: a pair binding is only known to be a
@@ -1699,11 +1700,21 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		pairBindingDiagnostics(snapshot, collector.pairSeverity, collector.source, collector.pairCandidates)...)
 }
 
-// builtinCallCollector walks the program tracking lexical scope so it can tell a
-// real builtin call from a shadowed name, then checks each such call against the
-// arity table and the declared parameter kinds. It mirrors undefinedCollector's
-// scope walk; the only leaf action is checkCall at an identifier-callee
-// CallExpression.
+// builtinCallCollector walks the program looking for calls to builtins, in
+// either spelling, and checks each one against the arity table and the declared
+// parameter kinds. The only leaf action is checkCall at a call whose callee
+// names a builtin.
+//
+// It keeps no scope of its own. Whether a call names a builtin at all is a
+// question about what the file has bound at that point, and this used to answer
+// it from a declarationScope threaded through every method here, filled in by a
+// defineDeclaration case per AST node that binds a name. That is a second
+// account of which nodes declare a name, and it did not match the compiler's:
+// it wrote struct and enum names into the same table as lets and parameters, so
+// `struct rand { x; }` made `rand.int(1, 5)` look like a field read on a value
+// and this whole rule went quiet for the file -- while the program compiled and
+// ran the builtin, returning 3. A type name is not a value binding. sema.Graph
+// says so once, and localScopeAtNode is how this walk asks.
 //
 // A nil severity means that rule is switched off. The walk still runs, because
 // the other rule may be on.
@@ -1718,33 +1729,26 @@ type builtinCallCollector struct {
 	builtins        map[string]struct{}
 	reassigned      map[string]struct{}
 
-	// namespaces is the set of names this file's imports bind. An imported
-	// `fs` is a module, so `fs.read(...)` is that module's function and not
-	// the builtin fs_read -- and checking it against fs_read's contract would
-	// be a diagnostic about the wrong function entirely.
-	namespaces map[string]struct{}
-
 	result         []lsp.Diagnostic
 	pairCandidates []pairBindingCandidate
 }
 
-// boundIn returns the shadow predicate builtinCallee needs: a name is taken if
-// some enclosing scope declares it, or if an import bound it as a namespace.
-func (c *builtinCallCollector) boundIn(current *declarationScope) func(string) bool {
-	return func(name string) bool {
-		if _, imported := c.namespaces[name]; imported {
-			return true
-		}
-		if current == nil {
-			return false
-		}
-		_, declared := current.find(name)
-		return declared
+// calleeAt resolves the builtin a call names, at the call's own position.
+//
+// An import namespace is handled by the same lookup rather than by a set kept
+// beside it: an imported `fs` is a module, so `fs.read(...)` is that module's
+// function and not the builtin fs_read, and the alias is a declaration in the
+// graph like any other. So is an enum, which is why the whole LocalScope goes
+// in and not just its Bound.
+func (c *builtinCallCollector) calleeAt(fn mast.Expression) (name string, anchor mast.Node, ok bool) {
+	if c == nil || c.snapshot == nil || fn == nil {
+		return "", nil, false
 	}
+	return builtinCalleeIn(fn, c.snapshot.localScopeAtNode(fn))
 }
 
-func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || stmt == nil {
+func (c *builtinCallCollector) collectStatement(stmt mast.Statement) {
+	if c == nil || c.snapshot == nil || stmt == nil {
 		return
 	}
 
@@ -1756,130 +1760,102 @@ func (c *builtinCallCollector) collectStatement(stmt mast.Statement, current *de
 		}
 
 		if len(names) == 1 {
-			// Checked before defining, so the callee resolves in the scope that
-			// exists where the call is written, not the one this let creates.
-			c.checkSingleNameBinding(names[0], node.Value, current)
-			c.defineDeclaration(names[0], current)
+			c.checkSingleNameBinding(names[0], node.Value)
 		}
 
 		if node.Value != nil {
-			c.collectExpression(node.Value, current)
+			c.collectExpression(node.Value)
 		}
 
 		if len(names) > 1 {
-			c.checkMultiNameBinding(names, node.Value, current)
-			for _, ident := range names {
-				c.defineDeclaration(ident, current)
-			}
+			c.checkMultiNameBinding(names, node.Value)
 		}
 	case *mast.ReturnStatement:
 		for _, expr := range node.ReturnValues {
-			c.collectExpression(expr, current)
+			c.collectExpression(expr)
 		}
 		if len(node.ReturnValues) == 0 && node.ReturnValue != nil {
-			c.collectExpression(node.ReturnValue, current)
+			c.collectExpression(node.ReturnValue)
 		}
 	case *mast.ExpressionStatement:
 		if node.Expression != nil {
-			c.collectExpression(node.Expression, current)
+			c.collectExpression(node.Expression)
 		}
 	case *mast.BlockStatement:
 		for _, inner := range node.Statements {
-			c.collectStatement(inner, current)
+			c.collectStatement(inner)
 		}
 	case *mast.ForStatement:
 		if node.Init != nil {
-			c.collectStatement(node.Init, current)
+			c.collectStatement(node.Init)
 		}
 		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
+			c.collectExpression(node.Condition)
 		}
 		if node.Post != nil {
-			c.collectExpression(node.Post, current)
+			c.collectExpression(node.Post)
 		}
 		if node.Body != nil {
-			c.collectStatement(node.Body, current)
+			c.collectStatement(node.Body)
 		}
 	case *mast.WhileStatement:
 		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
+			c.collectExpression(node.Condition)
 		}
 		if node.Body != nil {
-			c.collectStatement(node.Body, current)
+			c.collectStatement(node.Body)
 		}
 	case *mast.ForInStatement:
-		// This collector's scope answers one question -- is this name a local
-		// binding rather than the builtin of the same name -- so `for (max in
-		// xs) { max(1, 2); }` must not be held to the builtin's contract.
-		if node.Key != nil {
-			c.defineDeclaration(node.Key, current)
-		}
-		if node.Value != nil {
-			c.defineDeclaration(node.Value, current)
-		}
+		// The loop's bindings used to be recorded here, so that `for (max in
+		// xs) { max(1, 2); }` was not held to the builtin's contract. The graph
+		// holds them -- in the enclosing scope, which is where the VM puts them
+		// -- so this walk has nothing to do but descend.
 		if node.Iterable != nil {
-			c.collectExpression(node.Iterable, current)
+			c.collectExpression(node.Iterable)
 		}
 		if node.Body != nil {
-			c.collectStatement(node.Body, current)
+			c.collectStatement(node.Body)
 		}
-	case *mast.StructStatement:
-		c.defineDeclaration(node.Name, current)
-	case *mast.EnumStatement:
-		c.defineDeclaration(node.Name, current)
 	}
 }
 
-func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || expr == nil {
+func (c *builtinCallCollector) collectExpression(expr mast.Expression) {
+	if c == nil || c.snapshot == nil || expr == nil {
 		return
 	}
 
 	switch node := expr.(type) {
 	case *mast.FunctionLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child)
-		}
 		if node.Body != nil {
-			c.collectStatement(node.Body, child)
+			c.collectStatement(node.Body)
 		}
 	case *mast.MacroLiteral:
-		child := newDeclarationScope(current, current.depth+1)
-		for _, param := range node.Parameters {
-			c.defineDeclaration(param, child)
-		}
 		if node.Body != nil {
-			c.collectStatement(node.Body, child)
+			c.collectStatement(node.Body)
 		}
 	case *mast.IfExpression:
 		if node.Condition != nil {
-			c.collectExpression(node.Condition, current)
+			c.collectExpression(node.Condition)
 		}
 		if node.Consequence != nil {
-			c.collectStatement(node.Consequence, current)
+			c.collectStatement(node.Consequence)
 		}
 		if node.Alternative != nil {
-			c.collectStatement(node.Alternative, current)
+			c.collectStatement(node.Alternative)
 		}
 	case *mast.MatchExpression:
 		if node.Subject != nil {
-			c.collectExpression(node.Subject, current)
+			c.collectExpression(node.Subject)
 		}
 		for _, arm := range node.Arms {
 			if arm == nil {
 				continue
 			}
-			// Patterns are walked because an enum variant pattern names its
-			// enum: `Status.Ok` is a real use of `Status`, and skipping it
-			// would make an enum matched but never otherwise mentioned look
-			// unused. FieldExpression walks only its left, so the variant
-			// name itself is never resolved as a standalone binding.
 			for _, pattern := range arm.Patterns {
-				c.collectExpression(pattern, current)
+				c.collectExpression(pattern)
 			}
 			if arm.Body != nil {
-				c.collectStatement(arm.Body, current)
+				c.collectStatement(arm.Body)
 			}
 		}
 	case *mast.CallExpression:
@@ -1889,73 +1865,73 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression, current *
 			// the bare spelling only: there is no namespaced quote.
 			if isMacroSpecialFormName(ident.Value) {
 				for _, arg := range node.Arguments {
-					c.collectExpression(arg, current)
+					c.collectExpression(arg)
 				}
 				return
 			}
 		}
 		// Either spelling: fs_read(p) and fs.read(p) are one call, so both get
 		// checked against one contract.
-		if name, anchor, ok := builtinCallee(node.Function, c.boundIn(current)); ok {
+		if name, anchor, ok := c.calleeAt(node.Function); ok {
 			c.checkCall(name, anchor, node.Arguments)
 		}
 		if node.Function != nil {
-			c.collectExpression(node.Function, current)
+			c.collectExpression(node.Function)
 		}
 		for _, arg := range node.Arguments {
-			c.collectExpression(arg, current)
+			c.collectExpression(arg)
 		}
 	case *mast.PrefixExpression:
 		if node.Right != nil {
-			c.collectExpression(node.Right, current)
+			c.collectExpression(node.Right)
 		}
 	case *mast.InfixExpression:
 		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+			c.collectExpression(node.Left)
 		}
 		if node.Right != nil {
-			c.collectExpression(node.Right, current)
+			c.collectExpression(node.Right)
 		}
 	case *mast.IndexExpression:
 		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+			c.collectExpression(node.Left)
 		}
 		if node.Index != nil {
-			c.collectExpression(node.Index, current)
+			c.collectExpression(node.Index)
 		}
 	case *mast.AssignExpression:
 		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+			c.collectExpression(node.Left)
 		}
 		if node.Value != nil {
-			c.collectExpression(node.Value, current)
+			c.collectExpression(node.Value)
 		}
 	case *mast.FieldExpression:
 		if node.Left != nil {
-			c.collectExpression(node.Left, current)
+			c.collectExpression(node.Left)
 		}
 	case *mast.StructLiteral:
 		if node.Name != nil {
-			c.collectExpression(node.Name, current)
+			c.collectExpression(node.Name)
 		}
 		for _, field := range node.Fields {
 			if field == nil || field.Value == nil {
 				continue
 			}
-			c.collectExpression(field.Value, current)
+			c.collectExpression(field.Value)
 		}
 	case *mast.ArrayLiteral:
 		for _, element := range node.Elements {
-			c.collectExpression(element, current)
+			c.collectExpression(element)
 		}
 	case *mast.TemplateLiteral:
 		for _, element := range node.Parts {
-			c.collectExpression(element, current)
+			c.collectExpression(element)
 		}
 	case *mast.HashLiteral:
 		for key, value := range node.Pairs {
-			c.collectExpression(key, current)
-			c.collectExpression(value, current)
+			c.collectExpression(key)
+			c.collectExpression(value)
 		}
 	}
 }
@@ -2017,7 +1993,7 @@ func (c *builtinCallCollector) checkDeprecated(name string, anchor mast.Node) {
 	})
 }
 
-func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression, current *declarationScope) {
+func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, value mast.Expression) {
 	if c == nil || c.returnSeverity == nil || len(names) < 2 || value == nil {
 		return
 	}
@@ -2026,7 +2002,7 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 	if !ok || call.Function == nil {
 		return
 	}
-	name, anchor, ok := builtinCallee(call.Function, c.boundIn(current))
+	name, anchor, ok := c.calleeAt(call.Function)
 	if !ok {
 		return
 	}
@@ -2206,13 +2182,6 @@ func (c *builtinCallCollector) checkArrayElements(name string, argIndex int, par
 			Data:     ElementTypeDiagnosticData(param, elementKind),
 		})
 	}
-}
-
-func (c *builtinCallCollector) defineDeclaration(ident *mast.Identifier, current *declarationScope) {
-	if c == nil || c.snapshot == nil || current == nil || ident == nil || ident.Value == "" {
-		return
-	}
-	current.define(ident.Value, declInfo{ident: ident, topLevel: current.depth == 0})
 }
 
 func duplicateNamesFromDiagnostics(diagnostics []lsp.Diagnostic) map[string]struct{} {
