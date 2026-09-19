@@ -346,3 +346,40 @@ func TestACallInsideAnAnonymousFunctionIsAttributedToTheDeclarationAroundIt(t *t
 			"declares nothing to navigate to", calls[0].From.Name, calls[0].From.Kind)
 	}
 }
+
+// An item's Range is the declaration; its SelectionRange is the name inside it,
+// which the protocol requires the range to contain. Both come from the graph,
+// and they were the same few characters -- FullRange held the name rather than
+// the statement -- so the peek an editor opens on a call hierarchy entry framed
+// six characters of a function instead of the function.
+func TestACallHierarchyItemCoversTheWholeDeclarationNotJustTheName(t *testing.T) {
+	root := writeModules(t, map[string]string{
+		"main.mut": "let target = fn() {\n\tlet n = 1;\n\treturn n;\n};\n" +
+			"target();\n",
+	})
+	s, uri := serverOver(t, root, "main.mut")
+
+	item := prepareAt(t, s, uri, 0, 4)
+	if item.Name != "target" {
+		t.Fatalf("prepare resolved to %q, want target", item.Name)
+	}
+
+	if item.SelectionRange.Start.Line != 0 || item.SelectionRange.Start.Character != 4 {
+		t.Fatalf("selectionRange should be the name `target`; got %+v", item.SelectionRange)
+	}
+	if item.Range == item.SelectionRange {
+		t.Fatalf("range and selectionRange are both %+v -- an item's range is the "+
+			"declaration the name sits in, and a range equal to the name tells the "+
+			"editor the function is six characters long", item.Range)
+	}
+	// `};` closes the function on the fourth line, which is line 3 to the protocol.
+	if item.Range.End.Line < 3 {
+		t.Fatalf("the declaration ends on line 3 and the item's range ends on line "+
+			"%d, so it stops short of the body", item.Range.End.Line)
+	}
+	if item.Range.Start.Line > item.SelectionRange.Start.Line ||
+		item.Range.End.Line < item.SelectionRange.End.Line {
+		t.Fatalf("selectionRange %+v is not contained by range %+v, which the "+
+			"protocol requires", item.SelectionRange, item.Range)
+	}
+}

@@ -64,10 +64,10 @@ func (b *builder) statement(stmt ast.Statement) {
 		b.block(node.Body)
 
 	case *ast.StructStatement:
-		b.typeStatement(node.Name, node.Fields, KindStruct, KindField)
+		b.typeStatement(node, node.Name, node.Fields, KindStruct, KindField)
 
 	case *ast.EnumStatement:
-		b.typeStatement(node.Name, node.Variants, KindEnum, KindVariant)
+		b.typeStatement(node, node.Name, node.Variants, KindEnum, KindVariant)
 
 	case *ast.BreakStatement, *ast.ContinueStatement:
 		// No names, no children.
@@ -80,11 +80,18 @@ func (b *builder) letStatement(node *ast.LetStatement) {
 		names = []*ast.Identifier{node.Name}
 	}
 
+	// The statement is the declaration, and for `let f = fn() { ... };` that
+	// is the whole function. A call hierarchy item's Range means exactly this
+	// and had the bare name instead, so every item's Range and SelectionRange
+	// were the same few characters.
+	stmtRange, _ := b.rangeOf(node)
+
 	if len(names) == 1 {
 		name := names[0]
 		var bound *Node
 		if rng, ok := b.rangeOf(name); ok {
-			bound = b.declare(name.Value, name, rng, kindForValue(node.Value))
+			bound = b.declareIn(b.scope, name.Value, name, rng,
+				spanning(rng, stmtRange), kindForValue(node.Value))
 		}
 		// Bound before the value is walked, which is what makes a function
 		// literal able to call itself.
@@ -96,8 +103,11 @@ func (b *builder) letStatement(node *ast.LetStatement) {
 	for _, name := range names {
 		if rng, ok := b.rangeOf(name); ok {
 			// Grouped: this let bound more than one name, which in Mutant means
-			// the (value, err) idiom rather than a convenience.
-			if declared := b.declare(name.Value, name, rng, KindValue); declared != nil {
+			// the (value, err) idiom rather than a convenience. Both names reach
+			// over the one statement they were declared by.
+			declared := b.declareIn(b.scope, name.Value, name, rng,
+				spanning(rng, stmtRange), KindValue)
+			if declared != nil {
 				declared.Grouped = true
 			}
 		}
@@ -160,16 +170,19 @@ func (b *builder) importStatement(node *ast.ImportStatement) {
 // and stored in a flat map -- so `struct Point { x }` and `let Point = 1` are
 // two different bindings that do not shadow each other, and a bare `Point` in
 // value position is the let. They live in their own table, under ScopeType.
-func (b *builder) typeStatement(name *ast.Identifier, members []*ast.Identifier, typeKind, memberKind NodeKind) {
+func (b *builder) typeStatement(stmt ast.Statement, name *ast.Identifier, members []*ast.Identifier, typeKind, memberKind NodeKind) {
 	rng, ok := b.rangeOf(name)
 	if !ok {
 		return
 	}
 
-	declared := b.declareIn(b.types(), name.Value, name, rng, rng, typeKind)
+	stmtRange, _ := b.rangeOf(stmt)
+	declared := b.declareIn(b.types(), name.Value, name, rng, spanning(rng, stmtRange), typeKind)
 	memberScope := b.memberScope(segmentFor(declared, name.Value), declared)
 	for _, member := range members {
 		if memberRange, ok := b.rangeOf(member); ok {
+			// A field is its own name and no more. The statement around it
+			// declares every field, so it is not the declaration of this one.
 			b.declareIn(memberScope, member.Value, member, memberRange, memberRange, memberKind)
 		}
 	}

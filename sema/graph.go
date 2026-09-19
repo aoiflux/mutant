@@ -168,8 +168,24 @@ type Node struct {
 	// reads Anchor.
 	DeclRange ast.Range
 
-	// FullRange is the whole declaration -- the statement, not the name. It is
-	// what an editor calls a symbol's range, as against its selectionRange.
+	// FullRange is the statement that declares the name, where a statement
+	// declares it, and the name itself where none does. It is what an editor
+	// calls a symbol's range, as against its selectionRange, and DeclRange is
+	// contained by it whenever both exist.
+	//
+	// Four statements declare: `let`, `struct`, `enum` and `import`. For
+	// those FullRange reaches over the whole statement, including a `let`
+	// that binds several names -- `let value, err = read(p);` is one
+	// declaration of two names, which is what Grouped records.
+	//
+	// It is the name alone in two cases. A parameter and a loop binding are
+	// declared by an expression or a loop header rather than by a statement:
+	// `fn(a, b)` is a value and `for (k, v in xs)` is a loop, and neither is
+	// the declaration of `a` or of `k`. A struct field and an enum variant
+	// are parts of the type their statement declares rather than things it
+	// declares beside it, so the statement is `Point`'s declaration and not
+	// `x`'s. That is the same line the analyzer's own documentSymbol draws
+	// when it gives a child symbol a range equal to its name.
 	FullRange ast.Range
 
 	// Scope is where the declaration lives.
@@ -521,14 +537,32 @@ func (b *builder) rangeOf(node ast.Node) (ast.Range, bool) {
 	return rng, true
 }
 
-// declare records a declaration in the current scope and returns it.
+// declare records a declaration that no statement makes -- a parameter, a
+// loop binding, a struct field, an enum variant -- in the current scope. For
+// those the name is the whole of it.
+//
+// A declaration that reaches further than its name calls declareIn directly
+// with both ranges. Node.FullRange says which are which.
 func (b *builder) declare(name string, ident *ast.Identifier, rng ast.Range, kind NodeKind) *Node {
 	return b.declareIn(b.scope, name, ident, rng, rng, kind)
 }
 
-// declareIn records a declaration. declRange is the name; fullRange is the
-// whole declaration. They are the same range for everything except an import,
-// where the name may not have been written at all.
+// spanning is the range a declaration reaches over: the statement when the
+// walk could find one, and the name when it could not. A declaration always
+// ends up with a FullRange, because something has to be able to point at it.
+func spanning(name, statement ast.Range) ast.Range {
+	if statement.IsValid() {
+		return statement
+	}
+	return name
+}
+
+// declareIn records a declaration. declRange is the name; fullRange is how far
+// the declaration reaches.
+//
+// They are separate parameters rather than one range and a flag because an
+// import can have a fullRange and no declRange at all: `import "lib/report.mut";`
+// binds `report` without the word appearing anywhere.
 func (b *builder) declareIn(scope *Scope, name string, ident *ast.Identifier, declRange, fullRange ast.Range, kind NodeKind) *Node {
 	if scope == nil || name == "" || (!declRange.IsValid() && !fullRange.IsValid()) {
 		return nil
