@@ -71,6 +71,10 @@ type custodyOpen struct {
 	Handle  string
 	At      time.Time
 	Elapsed time.Duration
+	// Region locates the volume inside the source, for an opener that reads a
+	// partition rather than the whole file. Its zero value is the whole file,
+	// which is what every opener outside the filesystem families does.
+	Region fsRegion
 }
 
 // custodyEvidence is one source file under custody, however many handles were
@@ -611,6 +615,17 @@ func openSessionLocked(op string) (*custodySession, *object.Error) {
 // moment at which the program has said what it considers evidence and has not
 // yet done anything with it.
 func custodyRecordOpen(builtinName, handle string, paths ...string) {
+	custodyRecordOpenAt(builtinName, handle, fsRegion{}, paths...)
+}
+
+// custodyRecordOpenAt is custodyRecordOpen for an opener that reads a volume
+// sitting inside its source rather than the whole of it.
+//
+// Two partitions of one disk are two volumes and one path. Without the region
+// the manifest records "fat_open opened disk.raw" twice, word for word, and
+// nothing in the document says which partition either sentence is about -- so a
+// reader cannot tell a second look at one volume from a first look at another.
+func custodyRecordOpenAt(builtinName, handle string, region fsRegion, paths ...string) {
 	if !custodyActive.Load() || len(paths) == 0 {
 		return
 	}
@@ -702,6 +717,7 @@ func custodyRecordOpen(builtinName, handle string, paths ...string) {
 			Handle:  handle,
 			At:      now,
 			Elapsed: now.Sub(session.OpenedAt),
+			Region:  region,
 		})
 	}
 
@@ -933,6 +949,10 @@ func (e *custodyEvidence) render() map[string]any {
 			"handle":     open.Handle,
 			"at":         open.At.UTC().Format(time.RFC3339Nano),
 			"elapsed_ms": open.Elapsed.Milliseconds(),
+			// Always present, never conditional: a field that appears only
+			// sometimes is one a report template learns to leave out.
+			"volume_offset": open.Region.Offset,
+			"volume_length": open.Region.Length,
 		})
 	}
 

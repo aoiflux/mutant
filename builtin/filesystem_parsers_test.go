@@ -13,9 +13,17 @@ import (
 type fakeNTFSBackend struct {
 	session ntfsSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeNTFSBackend) Open(volumePath string) (ntfsSession, error) {
+func (f *fakeNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -33,9 +41,17 @@ type fakeNTFSSession struct {
 type fakeFATBackend struct {
 	session fatSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeFATBackend) Open(volumePath string) (fatSession, error) {
+func (f *fakeFATBackend) Open(volumePath string, region fsRegion) (fatSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -53,9 +69,17 @@ type fakeFATSession struct {
 type fakeXFATBackend struct {
 	session xfatSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeXFATBackend) Open(volumePath string) (xfatSession, error) {
+func (f *fakeXFATBackend) Open(volumePath string, region fsRegion) (xfatSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -73,9 +97,17 @@ type fakeXFATSession struct {
 type fakeEXTBackend struct {
 	session extSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeEXTBackend) Open(volumePath string) (extSession, error) {
+func (f *fakeEXTBackend) Open(volumePath string, region fsRegion) (extSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -93,9 +125,17 @@ type fakeEXTSession struct {
 type fakeHFSBackend struct {
 	session hfsSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeHFSBackend) Open(volumePath string) (hfsSession, error) {
+func (f *fakeHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -113,9 +153,17 @@ type fakeHFSSession struct {
 type fakeXFSBackend struct {
 	session xfsSession
 	err     error
+	opened  *fsRegion
+	path    *string
 }
 
-func (f fakeXFSBackend) Open(volumePath string) (xfsSession, error) {
+func (f *fakeXFSBackend) Open(volumePath string, region fsRegion) (xfsSession, error) {
+	if f.opened != nil {
+		*f.opened = region
+	}
+	if f.path != nil {
+		*f.path = volumePath
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -450,7 +498,7 @@ func TestNTFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeNTFSBackend(t, fakeNTFSBackend{session: fakeSession})
+	installFakeNTFSBackend(t, &fakeNTFSBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, NtfsOpen(stringObj("synthetic.img")))
 	if openErr != nil {
@@ -523,7 +571,7 @@ func TestNTFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestNTFSBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeNTFSBackend(t, fakeNTFSBackend{err: errors.New("boom")})
+	installFakeNTFSBackend(t, &fakeNTFSBackend{err: errors.New("boom")})
 
 	_, errObj := unwrapPair(t, NtfsOpen(stringObj("broken.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "ntfs_open") {
@@ -576,7 +624,7 @@ func TestFATBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeFATBackend(t, fakeFATBackend{session: fakeSession})
+	installFakeFATBackend(t, &fakeFATBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, FatOpen(stringObj("synthetic-fat.img")))
 	if openErr != nil {
@@ -649,7 +697,7 @@ func TestFATBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestFATBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeFATBackend(t, fakeFATBackend{err: errors.New("fat backend failed")})
+	installFakeFATBackend(t, &fakeFATBackend{err: errors.New("fat backend failed")})
 
 	_, errObj := unwrapPair(t, FatOpen(stringObj("broken-fat.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "fat_open") {
@@ -697,7 +745,7 @@ func TestXFATBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeXFATBackend(t, fakeXFATBackend{session: fakeSession})
+	installFakeXFATBackend(t, &fakeXFATBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, XFATOpen(stringObj("synthetic-xfat.img")))
 	if openErr != nil {
@@ -770,7 +818,7 @@ func TestXFATBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestXFATBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeXFATBackend(t, fakeXFATBackend{err: errors.New("xfat backend failed")})
+	installFakeXFATBackend(t, &fakeXFATBackend{err: errors.New("xfat backend failed")})
 
 	_, errObj := unwrapPair(t, XFATOpen(stringObj("broken-xfat.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "xfat_open") {
@@ -824,7 +872,7 @@ func TestEXTBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeEXTBackend(t, fakeEXTBackend{session: fakeSession})
+	installFakeEXTBackend(t, &fakeEXTBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, ExtOpen(stringObj("synthetic-ext.img")))
 	if openErr != nil {
@@ -897,7 +945,7 @@ func TestEXTBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestEXTBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeEXTBackend(t, fakeEXTBackend{err: errors.New("ext backend failed")})
+	installFakeEXTBackend(t, &fakeEXTBackend{err: errors.New("ext backend failed")})
 
 	_, errObj := unwrapPair(t, ExtOpen(stringObj("broken-ext.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "ext_open") {
@@ -947,7 +995,7 @@ func TestHFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeHFSBackend(t, fakeHFSBackend{session: fakeSession})
+	installFakeHFSBackend(t, &fakeHFSBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, HFSOpen(stringObj("synthetic-hfs.img")))
 	if openErr != nil {
@@ -1020,7 +1068,7 @@ func TestHFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestHFSBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeHFSBackend(t, fakeHFSBackend{err: errors.New("hfs backend failed")})
+	installFakeHFSBackend(t, &fakeHFSBackend{err: errors.New("hfs backend failed")})
 
 	_, errObj := unwrapPair(t, HFSOpen(stringObj("broken-hfs.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "hfs_open") {
@@ -1069,7 +1117,7 @@ func TestXFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 			},
 		},
 	}
-	installFakeXFSBackend(t, fakeXFSBackend{session: fakeSession})
+	installFakeXFSBackend(t, &fakeXFSBackend{session: fakeSession})
 
 	openPayload, openErr := unwrapPair(t, XFSOpen(stringObj("synthetic-xfs.img")))
 	if openErr != nil {
@@ -1142,7 +1190,7 @@ func TestXFSBuiltinFlowWithSyntheticDataset(t *testing.T) {
 }
 
 func TestXFSBuiltinArgumentAndHandleErrors(t *testing.T) {
-	installFakeXFSBackend(t, fakeXFSBackend{err: errors.New("xfs backend failed")})
+	installFakeXFSBackend(t, &fakeXFSBackend{err: errors.New("xfs backend failed")})
 
 	_, errObj := unwrapPair(t, XFSOpen(stringObj("broken-xfs.img")))
 	if errObj == nil || !strings.Contains(errObj.Message, "xfs_open") {

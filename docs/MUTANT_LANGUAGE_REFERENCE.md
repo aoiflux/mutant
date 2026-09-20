@@ -1016,6 +1016,75 @@ Almost every builtin is pure-Go and cross-platform — the forensic parsers oper
 - `reg_open` — cross-platform for hive-file/JSON inputs; the live-registry path (`HKLM\...`) is Windows-only
 - `process_kill` — cross-platform; on Windows only SIGKILL semantics apply
 
+### Opening a partition where it lies
+
+A disk image holds partitions; a filesystem parser wants a volume. Those two
+facts used to meet by carving: `table_list_partitions` told you a partition
+began at byte 32256, and you wrote a copy of it out before `ntfs_open` could
+read it. On a 2 TB image that is a second 2 TB and the hours to write it.
+
+The six filesystem families take the partition directly instead:
+
+```mutant
+let disk, err = table_open("/evidence/laptop.dd");
+let parts, err = table_list_partitions(disk["handle"]);
+
+let fs, err = ntfs_open("/evidence/laptop.dd", parts[0]);
+putln(to_string(fs["volume_offset"]));   // 32256 — where the volume begins
+putln(to_string(fs["bounded"]));         // true  — reads stop at its end
+```
+
+The second argument is that partition hash, or an explicit byte offset with an
+optional length:
+
+```mutant
+let fs, err = ntfs_open("/evidence/laptop.dd", 32256, 2147483648);
+```
+
+Four things are worth knowing about it.
+
+**Every offset the handle goes on to report is absolute within the image.** The
+partition's start is handed to the parsing library as a base offset, and the
+library adds it to every offset it reports — a file fragment's location, a
+carved record's position, a slack range. So a byte range from
+`table_list_partitions` and a byte range from `ntfs_metadata` are in the same
+coordinate system, and comparing them needs no arithmetic. This is not a
+convenience. The alternative — reading the partition through a window that
+starts at its first byte — produces offsets relative to the partition that look
+exactly like offsets relative to the image, and intersecting the two succeeds
+and is wrong. Four of the six libraries warn about that failure in their own
+documentation, independently, which is a good sign that it is the one worth
+designing against.
+
+**A partition hash is safer than two integers, and not only shorter.** It
+carries `start_byte` and `length_byte` together, so the two cannot be
+transposed, the length cannot be forgotten, and no line of the script performs
+arithmetic on an offset. Passing a third argument alongside a partition hash is
+an error rather than an override: the partition already said how long it is.
+
+**`bounded` is the difference between a volume and a starting point.** An open
+with no length reports `bounded: false`, and means it — reads can run past the
+end of the partition into whatever follows it on the disk and return those bytes
+as this volume's. With a length, they cannot. A report that quotes a file
+recovered from a filesystem should be able to say which of the two it was.
+
+**A partition the image does not contain is refused, by name.** A zero-length
+entry is a malformed partition table, and opening it unbounded would read the
+rest of the disk and attribute it to that partition; a partition that runs past
+the end of the file is what a truncated acquisition looks like from the inside.
+Both refuse and say both numbers, rather than opening something that fails later
+somewhere less informative.
+
+**The case manifest records which volume, not only which file.** Two
+partitions of one disk are two volumes and one path, so every open record
+carries `volume_offset` and `volume_length` alongside the builtin and the
+handle. Both are zero for an opener that reads a whole file, which is every
+opener outside these six — the fields are always there, so a report template
+that prints them never meets a record that lacks them.
+
+Opening with one argument is unchanged, and is still what a carved partition
+image wants: offset zero, no bound, the file is the volume.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.

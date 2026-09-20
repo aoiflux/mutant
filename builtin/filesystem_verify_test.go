@@ -147,7 +147,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameNtfsVerify,
 			func(t *testing.T) {
-				installFakeNTFSBackend(t, fakeNTFSBackend{session: &fakeNTFSSession{
+				installFakeNTFSBackend(t, &fakeNTFSBackend{session: &fakeNTFSSession{
 					verify: fsVerifyResult{Filesystem: "ntfs"},
 				}})
 			},
@@ -157,7 +157,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameFatVerify,
 			func(t *testing.T) {
-				installFakeFATBackend(t, fakeFATBackend{session: &fakeFATSession{
+				installFakeFATBackend(t, &fakeFATBackend{session: &fakeFATSession{
 					verify: fsVerifyResult{Filesystem: "fat"},
 				}})
 			},
@@ -167,7 +167,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameXfatVerify,
 			func(t *testing.T) {
-				installFakeXFATBackend(t, fakeXFATBackend{session: &fakeXFATSession{
+				installFakeXFATBackend(t, &fakeXFATBackend{session: &fakeXFATSession{
 					verify: fsVerifyResult{Filesystem: "xfat"},
 				}})
 			},
@@ -177,7 +177,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameExtVerify,
 			func(t *testing.T) {
-				installFakeEXTBackend(t, fakeEXTBackend{session: &fakeEXTSession{
+				installFakeEXTBackend(t, &fakeEXTBackend{session: &fakeEXTSession{
 					verify: fsVerifyResult{Filesystem: "ext"},
 				}})
 			},
@@ -187,7 +187,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameHfsVerify,
 			func(t *testing.T) {
-				installFakeHFSBackend(t, fakeHFSBackend{session: &fakeHFSSession{
+				installFakeHFSBackend(t, &fakeHFSBackend{session: &fakeHFSSession{
 					verify: fsVerifyResult{Filesystem: "hfs"},
 				}})
 			},
@@ -197,7 +197,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 		{
 			BuiltinNameXfsVerify,
 			func(t *testing.T) {
-				installFakeXFSBackend(t, fakeXFSBackend{session: &fakeXFSSession{
+				installFakeXFSBackend(t, &fakeXFSBackend{session: &fakeXFSSession{
 					verify: fsVerifyResult{Filesystem: "xfs"},
 				}})
 			},
@@ -258,7 +258,7 @@ func TestVerifyBuiltinsReturnTheDeclaredFields(t *testing.T) {
 // A verify that cannot run is an error, not a result claiming nothing was
 // wrong: a session error means the checks did not happen.
 func TestVerifyPropagatesTheSessionError(t *testing.T) {
-	installFakeEXTBackend(t, fakeEXTBackend{session: &fakeEXTSession{
+	installFakeEXTBackend(t, &fakeEXTBackend{session: &fakeEXTSession{
 		verifyErr: errors.New("volume closed"),
 	}})
 
@@ -281,7 +281,7 @@ func TestVerifyPropagatesTheSessionError(t *testing.T) {
 }
 
 func TestVerifyRejectsBadArguments(t *testing.T) {
-	installFakeEXTBackend(t, fakeEXTBackend{session: &fakeEXTSession{}})
+	installFakeEXTBackend(t, &fakeEXTBackend{session: &fakeEXTSession{}})
 
 	if _, err := unwrapPairNoFatal(ExtVerify()); err == nil {
 		t.Fatal("ext_verify accepted no arguments")
@@ -300,8 +300,8 @@ func TestVerifyRejectsBadArguments(t *testing.T) {
 // The six builtins each resolve handles from their own store, so a handle from
 // one filesystem must not verify against another.
 func TestVerifyRejectsAHandleFromAnotherFilesystem(t *testing.T) {
-	installFakeEXTBackend(t, fakeEXTBackend{session: &fakeEXTSession{}})
-	installFakeXFSBackend(t, fakeXFSBackend{session: &fakeXFSSession{}})
+	installFakeEXTBackend(t, &fakeEXTBackend{session: &fakeEXTSession{}})
+	installFakeXFSBackend(t, &fakeXFSBackend{session: &fakeXFSSession{}})
 
 	openPayload, openErr := unwrapPair(t, ExtOpen(stringObj("synthetic.img")))
 	if openErr != nil {

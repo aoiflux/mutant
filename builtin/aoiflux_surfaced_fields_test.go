@@ -203,7 +203,7 @@ func TestNTFSMetadataReportsAllFourMACTimes(t *testing.T) {
 			},
 		},
 	}
-	installFakeNTFSBackend(t, fakeNTFSBackend{session: session})
+	installFakeNTFSBackend(t, &fakeNTFSBackend{session: session})
 
 	openPayload, errObj := unwrapPair(t, NtfsOpen(stringObj("synthetic.img")))
 	if errObj != nil {
@@ -241,7 +241,7 @@ func TestXFSListFilesReportsUnreadableInodeWithoutAborting(t *testing.T) {
 			},
 		},
 	}
-	installFakeXFSBackend(t, fakeXFSBackend{session: session})
+	installFakeXFSBackend(t, &fakeXFSBackend{session: session})
 
 	openPayload, errObj := unwrapPair(t, XFSOpen(stringObj("synthetic-xfs.img")))
 	if errObj != nil {

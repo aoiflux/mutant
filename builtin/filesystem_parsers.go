@@ -62,7 +62,7 @@ type ntfsSession interface {
 }
 
 type ntfsBackend interface {
-	Open(volumePath string) (ntfsSession, error)
+	Open(volumePath string, region fsRegion) (ntfsSession, error)
 }
 
 type realNTFSBackend struct{}
@@ -74,6 +74,7 @@ type realNTFSSession struct {
 
 type ntfsHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    ntfsSession
 }
 
@@ -124,7 +125,7 @@ type fatSession interface {
 }
 
 type fatBackend interface {
-	Open(volumePath string) (fatSession, error)
+	Open(volumePath string, region fsRegion) (fatSession, error)
 }
 
 type realFATBackend struct{}
@@ -136,6 +137,7 @@ type realFATSession struct {
 
 type fatHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    fatSession
 }
 
@@ -217,7 +219,7 @@ type xfatSession interface {
 }
 
 type xfatBackend interface {
-	Open(volumePath string) (xfatSession, error)
+	Open(volumePath string, region fsRegion) (xfatSession, error)
 }
 
 type realXFATBackend struct{}
@@ -234,6 +236,7 @@ type realXFATSession struct {
 
 type xfatHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    xfatSession
 }
 
@@ -278,7 +281,7 @@ type extSession interface {
 }
 
 type extBackend interface {
-	Open(volumePath string) (extSession, error)
+	Open(volumePath string, region fsRegion) (extSession, error)
 }
 
 type realEXTBackend struct{}
@@ -290,6 +293,7 @@ type realEXTSession struct {
 
 type extHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    extSession
 }
 
@@ -338,7 +342,7 @@ type hfsSession interface {
 }
 
 type hfsBackend interface {
-	Open(volumePath string) (hfsSession, error)
+	Open(volumePath string, region fsRegion) (hfsSession, error)
 }
 
 type realHFSBackend struct{}
@@ -350,6 +354,7 @@ type realHFSSession struct {
 
 type hfsHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    hfsSession
 }
 
@@ -393,17 +398,19 @@ type xfsSession interface {
 }
 
 type xfsBackend interface {
-	Open(volumePath string) (xfsSession, error)
+	Open(volumePath string, region fsRegion) (xfsSession, error)
 }
 
 type realXFSBackend struct{}
 
 type realXFSSession struct {
+	img    *os.File
 	volume *libxfs.Volume
 }
 
 type xfsHandleState struct {
 	VolumePath string
+	Region     fsRegion
 	Session    xfsSession
 }
 
@@ -468,20 +475,16 @@ var xfsStore = struct {
 }
 
 func NtfsOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `ntfs_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameNtfsOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	ntfsStore.RLock()
 	backend := ntfsStore.backend
 	ntfsStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("ntfs_open: %s", err.Error()))
 	}
@@ -491,18 +494,15 @@ func NtfsOpen(args ...object.Object) object.Object {
 
 	ntfsStore.Lock()
 	ntfsStore.handles[handle] = ntfsHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	ntfsStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameNtfsOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameNtfsOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func NtfsListFiles(args ...object.Object) object.Object {
@@ -663,20 +663,16 @@ func NtfsClose(args ...object.Object) object.Object {
 }
 
 func FatOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `fat_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameFatOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	fatStore.RLock()
 	backend := fatStore.backend
 	fatStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("fat_open: %s", err.Error()))
 	}
@@ -686,18 +682,15 @@ func FatOpen(args ...object.Object) object.Object {
 
 	fatStore.Lock()
 	fatStore.handles[handle] = fatHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	fatStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameFatOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameFatOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func FatListFiles(args ...object.Object) object.Object {
@@ -858,20 +851,16 @@ func FatClose(args ...object.Object) object.Object {
 }
 
 func XFATOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `xfat_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameXfatOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	xfatStore.RLock()
 	backend := xfatStore.backend
 	xfatStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("xfat_open: %s", err.Error()))
 	}
@@ -881,18 +870,15 @@ func XFATOpen(args ...object.Object) object.Object {
 
 	xfatStore.Lock()
 	xfatStore.handles[handle] = xfatHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	xfatStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameXfatOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameXfatOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func XFATListFiles(args ...object.Object) object.Object {
@@ -1052,20 +1038,16 @@ func XFATClose(args ...object.Object) object.Object {
 }
 
 func ExtOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `ext_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameExtOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	extStore.RLock()
 	backend := extStore.backend
 	extStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("ext_open: %s", err.Error()))
 	}
@@ -1075,18 +1057,15 @@ func ExtOpen(args ...object.Object) object.Object {
 
 	extStore.Lock()
 	extStore.handles[handle] = extHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	extStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameExtOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameExtOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func ExtListFiles(args ...object.Object) object.Object {
@@ -1239,20 +1218,16 @@ func ExtClose(args ...object.Object) object.Object {
 }
 
 func HFSOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `hfs_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameHfsOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	hfsStore.RLock()
 	backend := hfsStore.backend
 	hfsStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("hfs_open: %s", err.Error()))
 	}
@@ -1262,18 +1237,15 @@ func HFSOpen(args ...object.Object) object.Object {
 
 	hfsStore.Lock()
 	hfsStore.handles[handle] = hfsHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	hfsStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameHfsOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameHfsOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func HFSListFiles(args ...object.Object) object.Object {
@@ -1428,20 +1400,16 @@ func HFSClose(args ...object.Object) object.Object {
 }
 
 func XFSOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
-	}
-
-	volumePathObj, ok := args[0].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 1 to `xfs_open` must be STRING, got %s", args[0].Type()))
+	volumePath, region, errObj := parseFSOpenArgs(BuiltinNameXfsOpen, args)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	xfsStore.RLock()
 	backend := xfsStore.backend
 	xfsStore.RUnlock()
 
-	session, err := backend.Open(volumePathObj.Value)
+	session, err := backend.Open(volumePath, region)
 	if err != nil {
 		return resultAndError(nil, newError("xfs_open: %s", err.Error()))
 	}
@@ -1451,18 +1419,15 @@ func XFSOpen(args ...object.Object) object.Object {
 
 	xfsStore.Lock()
 	xfsStore.handles[handle] = xfsHandleState{
-		VolumePath: volumePathObj.Value,
+		VolumePath: volumePath,
+		Region:     region,
 		Session:    session,
 	}
 	xfsStore.Unlock()
 
-	custodyRecordOpen(BuiltinNameXfsOpen, handle, volumePathObj.Value)
+	custodyRecordOpenAt(BuiltinNameXfsOpen, handle, region, volumePath)
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"handle": stringObj(handle),
-		"path":   stringObj(volumePathObj.Value),
-		"status": stringObj("ok"),
-	}), nil)
+	return resultAndError(makeHashObject(fsOpenResult(handle, volumePath, region)), nil)
 }
 
 func XFSListFiles(args ...object.Object) object.Object {
@@ -1720,13 +1685,22 @@ func resolveXFSHandle(arg object.Object, op string) (xfsHandleState, *object.Err
 	return state, nil
 }
 
-func (realNTFSBackend) Open(volumePath string) (ntfsSession, error) {
-	img, err := os.Open(volumePath)
+func (realNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession, error) {
+	img, reader, _, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
 
-	volume, err := libntfs.Open(img)
+	// OpenReadOnly's setting rather than Open's default. libntfs promotes any
+	// reader that also implements io.WriterAt to a writable volume, and *os.File
+	// implements it whatever mode the file was opened in, so evidence opened the
+	// plain way reports IsWritable. The OS would refuse the write; the point is
+	// that the library should never be in a position to attempt one, which is
+	// what its own documentation says about opening evidence.
+	volume, err := libntfs.OpenWithOptions(reader, libntfs.Options{
+		ReadOnly:   true,
+		BaseOffset: region.Offset,
+	})
 	if err != nil {
 		_ = img.Close()
 		return nil, err
@@ -1735,13 +1709,13 @@ func (realNTFSBackend) Open(volumePath string) (ntfsSession, error) {
 	return &realNTFSSession{img: img, volume: volume}, nil
 }
 
-func (realFATBackend) Open(volumePath string) (fatSession, error) {
-	img, err := os.Open(volumePath)
+func (realFATBackend) Open(volumePath string, region fsRegion) (fatSession, error) {
+	img, reader, _, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
 
-	volume, err := libfat.Open(img)
+	volume, err := libfat.OpenWithOptions(reader, libfat.OpenOptions{BaseOffset: region.Offset})
 	if err != nil {
 		_ = img.Close()
 		return nil, err
@@ -1750,8 +1724,8 @@ func (realFATBackend) Open(volumePath string) (fatSession, error) {
 	return &realFATSession{img: img, volume: volume}, nil
 }
 
-func (realXFATBackend) Open(volumePath string) (xfatSession, error) {
-	img, err := os.Open(volumePath)
+func (realXFATBackend) Open(volumePath string, region fsRegion) (xfatSession, error) {
+	img, reader, size, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
@@ -1759,15 +1733,21 @@ func (realXFATBackend) Open(volumePath string) (xfatSession, error) {
 	// Open is the constructor libxfat directs callers to; New is retained for
 	// compatibility. Size enables bounds checking (a malformed image yields a
 	// clean io.ErrUnexpectedEOF instead of an out-of-range read), and Strict is
-	// the library's recommended setting for evidence processing — it turns on
+	// the library's recommended setting for evidence processing -- it turns on
 	// the partition cross-check and file-name checksum verification.
-	info, err := img.Stat()
-	if err != nil {
-		_ = img.Close()
-		return nil, err
-	}
-
-	fs, err := libxfat.Open(libxfat.Source{Reader: img, Size: info.Size(), Strict: true})
+	//
+	// Base is what gives that cross-check its second operand. exFAT records in
+	// its own boot record the sector it believes it lives at, and opening at a
+	// known offset lets libxfat compare the two: a volume found somewhere other
+	// than where it says it belongs refuses to open rather than being read as
+	// though nothing were unusual. Opening with no offset compares against zero,
+	// which is what this did before and what a partition-relative image needs.
+	fs, err := libxfat.Open(libxfat.Source{
+		Reader: reader,
+		Size:   size,
+		Base:   region.Offset,
+		Strict: true,
+	})
 	if err != nil {
 		_ = img.Close()
 		return nil, err
@@ -1776,13 +1756,20 @@ func (realXFATBackend) Open(volumePath string) (xfatSession, error) {
 	return &realXFATSession{img: img, fs: fs}, nil
 }
 
-func (realEXTBackend) Open(volumePath string) (extSession, error) {
-	img, err := os.Open(volumePath)
+func (realEXTBackend) Open(volumePath string, region fsRegion) (extSession, error) {
+	img, reader, size, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
 
-	fs, err := libext.Open(img)
+	// ImageSize is passed rather than left to libext's probe of the reader. The
+	// probe would find the right answer for both shapes here, but an explicit
+	// bound cannot be lost to a future reader type that answers neither Size nor
+	// Stat, and an unbounded libext performs no range checks at all.
+	fs, err := libext.OpenWithOptions(reader, libext.Options{
+		ImageSize:  uint64(size),
+		BaseOffset: region.Offset,
+	})
 	if err != nil {
 		_ = img.Close()
 		return nil, err
@@ -1791,13 +1778,24 @@ func (realEXTBackend) Open(volumePath string) (extSession, error) {
 	return &realEXTSession{img: img, fs: fs}, nil
 }
 
-func (realHFSBackend) Open(volumePath string) (hfsSession, error) {
-	img, err := os.Open(volumePath)
+func (realHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, error) {
+	img, reader, _, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
 
-	volume, err := libhfs.Open(img)
+	// DefaultConfig is documented as the configuration Open uses, so only the
+	// offset differs from what this did before.
+	//
+	// libhfs composes this offset with one it discovers rather than replacing
+	// it: for an HFS wrapper around an embedded HFS+ volume, Config.BaseOffset
+	// is where the wrapper begins and Volume.BaseOffset reports that plus the
+	// embedded volume's own start. Two different quantities with nearly the same
+	// name; the region Mutant reports is the one it was given.
+	cfg := libhfs.DefaultConfig()
+	cfg.BaseOffset = region.Offset
+
+	volume, err := libhfs.OpenWithConfig(reader, cfg)
 	if err != nil {
 		_ = img.Close()
 		return nil, err
@@ -1806,15 +1804,23 @@ func (realHFSBackend) Open(volumePath string) (hfsSession, error) {
 	return &realHFSSession{img: img, volume: volume}, nil
 }
 
-func (realXFSBackend) Open(volumePath string) (xfsSession, error) {
-	volume, err := libxfs.OpenVolumeFromPath(volumePath)
+func (realXFSBackend) Open(volumePath string, region fsRegion) (xfsSession, error) {
+	img, reader, _, err := openVolumeRegion(volumePath, region)
 	if err != nil {
 		return nil, err
 	}
 
-	return &realXFSSession{volume: volume}, nil
-}
+	// OpenWithOptions rather than OpenVolumeFromPath, which opens the path
+	// itself and so cannot be handed a reader bounded to one partition. The file
+	// belongs to the session now, as it already did in the other five.
+	volume, err := libxfs.OpenWithOptions(reader, libxfs.Options{BaseOffset: region.Offset})
+	if err != nil {
+		_ = img.Close()
+		return nil, err
+	}
 
+	return &realXFSSession{img: img, volume: volume}, nil
+}
 func (s *realNTFSSession) ListFiles(dirPath string) ([]ntfsListEntry, error) {
 	cleanPath := normalizeFSPath(dirPath)
 
@@ -2430,10 +2436,11 @@ func (s *realXFSSession) Close() error {
 	if s == nil {
 		return nil
 	}
+	var volErr error
 	if s.volume != nil {
-		return s.volume.Close()
+		volErr = s.volume.Close()
 	}
-	return nil
+	return closeImage(volErr, s.img)
 }
 
 func (s *realXFATSession) readDirAtPath(dirPath string) ([]libxfat.Entry, error) {
