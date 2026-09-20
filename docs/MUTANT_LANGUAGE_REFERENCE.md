@@ -1226,6 +1226,93 @@ file reads as the whole file to everything downstream.
 custody policy accepts, so a digest in a manifest and a digest from a script are
 never a different shape. An empty string means `sha256`.
 
+### What a filesystem still remembers
+
+Deleting a file destroys different things on different filesystems, and the
+`*_deleted` family reports what survived rather than a verdict on whether the
+file is recoverable.
+
+```mutant
+let fs, err = ntfs_open("/evidence/laptop.dd", parts[2]);
+let gone, err = ntfs_deleted(fs["handle"]);
+
+putln(to_string(gone["entry_count"]) + " records, " +
+      to_string(gone["unreadable"]) + " unreadable");
+
+for (e in gone["entries"]) {
+  if (e["content_state"] == "preserved") {
+    putln(e["path"] + ": " + to_string(e["located_bytes"]) +
+          " of " + to_string(e["size"]) + " bytes located");
+  }
+}
+```
+
+**Two questions, never one.** Whether something was deleted here and whether
+its bytes can be read are independent, and one `recoverable` boolean would
+answer neither. Every entry carries `content_state`, the provenance of its byte
+map, and that is what a script branches on before it reads anything:
+
+| `content_state` | what it means |
+| --- | --- |
+| `resident` | the bytes are inside the metadata record itself |
+| `preserved` | the filesystem's own map survived the unlink |
+| `declared_contiguous` | the volume declared the run contiguous before deletion |
+| `first_cluster_only` | only the starting cluster is known; the chain was freed |
+| `none` | no map survives -- the file is described and cannot be located |
+| `unsupported` | this library offers no content path for this entry |
+
+`preserved` is the NTFS case and it is unusual: NTFS clears the in-use bit on
+an MFT record and nothing else, so the run list is the one the filesystem
+wrote. `none` is the ext4 case, which zeroes the extent tree on unlink.
+`declared_contiguous` happens only on exFAT, where a stream extension carrying
+NoFatChain is the volume stating the layout while the file was live -- freeing
+the chain took nothing away, so it is a fact and not a hypothesis.
+`first_cluster_only` is what FAT and exFAT report otherwise, and `located_bytes`
+beside `size` is how much of the claim it covers.
+
+**The two bits, again.** `allocation_checked` and `reallocated` are separate for
+the reason `checked` and `passed` are separate in `*_verify`: a cross-reference
+that never ran says nothing about the file. NTFS forces the distinction -- it
+reports `allocation_checked` false on every entry, because libntfs exposes no
+cluster-allocation query and there is no answer to give. `reallocated` false
+beside it means nobody looked.
+
+**A name can be partly invented.** `name_source` is `intact`, `reconstructed`,
+`synthetic` or `none`. FAT overwrites the first character of a short name on
+deletion and brute-forces it back out of the name checksum where it can,
+substituting `_` where it cannot; exFAT gives a carved entry with no surviving
+name a placeholder derived from its cluster number. Writing either into a
+report as a filename is fabricating evidence, which is why the grade travels
+with the name.
+
+**An empty warning list is not silence.** `warnings_available` says whether the
+library has a warnings channel at all. libext accumulates warnings, libhfs
+anomalies, libxfs per-listing anomalies -- libntfs and libfat have none, so a
+record they skipped leaves no trace anywhere and their scans report
+`warnings_available` false. `complete` and `incomplete_reason` carry the gaps
+that could be detected; `examined` and `unreadable` are the denominators,
+because a scan that looked at two hundred slots and one that looked at two
+million are not the same evidence for the same empty answer.
+
+**`confidence` is the library's own word, not a common scale.** ext grades
+`none`/`partial`/`likely`, HFS+ and XFS grade `low`/`medium`/`high`, and NTFS
+and FAT grade nothing because they compute nothing to grade. Quoting the parser
+is deliberate -- a single invented scale would read as a measurement. The fields
+that do mean the same thing on every filesystem are `content_state`,
+`allocation_checked`, `reallocated`, `name_source` and `located_bytes`.
+
+**XFS asks two questions and they are different builtins.** `xfs_deleted` takes
+a directory path, because libxfs recovers deleted names out of one directory's
+blocks and has no volume-wide sweep; scanning the root instead would be a claim
+about every directory made from evidence about one. Nothing it finds has
+content: XFS clears `di_mode` when it frees an inode and refuses to open an
+unallocated one. `xfs_unlinked` is the other question, and it is the only
+evidence in any of the six filesystems that the filesystem itself asserts --
+an inode reaches an AGI unlinked bucket because it was unlinked while a process
+still held it open, so it is still allocated, still readable, and its extents
+are live rather than stale. It carries no name, because the directory entry is
+already gone.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.

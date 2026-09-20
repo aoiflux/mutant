@@ -277,12 +277,14 @@ func verifyArgs(args []object.Object, op string,
 }
 
 func runVerify(session fsVerifier, handleArg object.Object, op string) object.Object {
+	// The touch is recorded by the resolve*Handle that verifyArgs went through,
+	// which is also where an unknown handle is refused. Recording it again here
+	// counted one verification as two in the manifest, which is the kind of
+	// number an examiner quotes.
 	handle := ""
 	if handleObj, ok := handleArg.(*object.String); ok {
 		handle = handleObj.Value
 	}
-
-	custodyRecordTouch(op, handle)
 
 	result, err := session.Verify()
 	if err != nil {

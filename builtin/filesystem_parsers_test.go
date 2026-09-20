@@ -59,12 +59,14 @@ func (f *fakeNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession,
 }
 
 type fakeNTFSSession struct {
-	entries   map[string][]ntfsListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]ntfsMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries    map[string][]ntfsListEntry
+	files      map[string][]byte
+	located    map[string]int64
+	meta       map[string]ntfsMetadata
+	verify     fsVerifyResult
+	verifyErr  error
+	deleted    fsDeletedScan
+	deletedErr error
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -92,12 +94,14 @@ func (f *fakeFATBackend) Open(volumePath string, region fsRegion) (fatSession, e
 }
 
 type fakeFATSession struct {
-	entries   map[string][]fatListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]fatMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries    map[string][]fatListEntry
+	files      map[string][]byte
+	located    map[string]int64
+	meta       map[string]fatMetadata
+	verify     fsVerifyResult
+	verifyErr  error
+	deleted    fsDeletedScan
+	deletedErr error
 }
 
 func (f *fakeFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -125,12 +129,14 @@ func (f *fakeXFATBackend) Open(volumePath string, region fsRegion) (xfatSession,
 }
 
 type fakeXFATSession struct {
-	entries   map[string][]xfatListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]xfatMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries    map[string][]xfatListEntry
+	files      map[string][]byte
+	located    map[string]int64
+	meta       map[string]xfatMetadata
+	verify     fsVerifyResult
+	verifyErr  error
+	deleted    fsDeletedScan
+	deletedErr error
 }
 
 func (f *fakeXFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -158,12 +164,14 @@ func (f *fakeEXTBackend) Open(volumePath string, region fsRegion) (extSession, e
 }
 
 type fakeEXTSession struct {
-	entries   map[string][]extListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]extMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries    map[string][]extListEntry
+	files      map[string][]byte
+	located    map[string]int64
+	meta       map[string]extMetadata
+	verify     fsVerifyResult
+	verifyErr  error
+	deleted    fsDeletedScan
+	deletedErr error
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -191,12 +199,14 @@ func (f *fakeHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, e
 }
 
 type fakeHFSSession struct {
-	entries   map[string][]hfsListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]hfsMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries    map[string][]hfsListEntry
+	files      map[string][]byte
+	located    map[string]int64
+	meta       map[string]hfsMetadata
+	verify     fsVerifyResult
+	verifyErr  error
+	deleted    fsDeletedScan
+	deletedErr error
 }
 
 func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -224,12 +234,17 @@ func (f *fakeXFSBackend) Open(volumePath string, region fsRegion) (xfsSession, e
 }
 
 type fakeXFSSession struct {
-	entries   map[string][]xfsListEntry
-	files     map[string][]byte
-	located   map[string]int64
-	meta      map[string]xfsMetadata
-	verify    fsVerifyResult
-	verifyErr error
+	entries     map[string][]xfsListEntry
+	files       map[string][]byte
+	located     map[string]int64
+	meta        map[string]xfsMetadata
+	verify      fsVerifyResult
+	verifyErr   error
+	deleted     fsDeletedScan
+	deletedErr  error
+	deletedDir  string
+	unlinked    fsDeletedScan
+	unlinkedErr error
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1293,4 +1308,33 @@ func (f *fakeHFSSession) Verify() (fsVerifyResult, error) {
 
 func (f *fakeXFSSession) Verify() (fsVerifyResult, error) {
 	return f.verify, f.verifyErr
+}
+
+func (f *fakeNTFSSession) ScanDeleted() (fsDeletedScan, error) {
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeFATSession) ScanDeleted() (fsDeletedScan, error) {
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeXFATSession) ScanDeleted() (fsDeletedScan, error) {
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeEXTSession) ScanDeleted() (fsDeletedScan, error) {
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeHFSSession) ScanDeleted() (fsDeletedScan, error) {
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeXFSSession) ScanDeletedDirectory(dirPath string) (fsDeletedScan, error) {
+	f.deletedDir = dirPath
+	return f.deleted, f.deletedErr
+}
+
+func (f *fakeXFSSession) UnlinkedInodes() (fsDeletedScan, error) {
+	return f.unlinked, f.unlinkedErr
 }

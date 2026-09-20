@@ -58,6 +58,7 @@ type ntfsSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (ntfsMetadata, error)
+	ScanDeleted() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -122,6 +123,7 @@ type fatSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (fatMetadata, error)
+	ScanDeleted() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -217,6 +219,7 @@ type xfatSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (xfatMetadata, error)
+	ScanDeleted() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -280,6 +283,7 @@ type extSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (extMetadata, error)
+	ScanDeleted() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -342,6 +346,7 @@ type hfsSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (hfsMetadata, error)
+	ScanDeleted() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -399,6 +404,8 @@ type xfsSession interface {
 	ReadFile(filePath string) ([]byte, error)
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (xfsMetadata, error)
+	ScanDeletedDirectory(dirPath string) (fsDeletedScan, error)
+	UnlinkedInodes() (fsDeletedScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
