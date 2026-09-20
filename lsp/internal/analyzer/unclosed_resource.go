@@ -77,6 +77,10 @@ var resourceFamilies = []resourceFamily{
 	{openers: []string{builtin.BuiltinNameZipOpen}, closer: builtin.BuiltinNameZipClose, prefixes: []string{"zip_"}},
 	{openers: []string{builtin.BuiltinNameTarOpen}, closer: builtin.BuiltinNameTarClose, prefixes: []string{"tar_"}},
 	{openers: []string{builtin.BuiltinNameDbOpen, builtin.BuiltinNameDbOpenDisk}, closer: builtin.BuiltinNameDbClose, prefixes: []string{"db_"}},
+	// The ledger is its own family rather than part of db_: the handle spaces
+	// are separate, so a ledger_ call on a db_ handle is a bug the rule should
+	// not be taught to read as a use.
+	{openers: []string{builtin.BuiltinNameLedgerOpen}, closer: builtin.BuiltinNameLedgerClose, prefixes: []string{"ledger_"}},
 	{openers: []string{builtin.BuiltinNameHashsetLoad}, closer: builtin.BuiltinNameHashsetClose, prefixes: []string{"hashset_"}},
 	{openers: []string{builtin.BuiltinNameCacheOpen}, closer: builtin.BuiltinNameCacheClose, prefixes: []string{"cache_"}},
 	{openers: []string{builtin.BuiltinNameChanNew}, closer: builtin.BuiltinNameChanClose, prefixes: []string{"chan_"}},

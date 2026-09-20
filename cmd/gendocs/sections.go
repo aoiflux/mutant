@@ -121,6 +121,11 @@ var categorySections = []categorySection{
 		blurb:    "Graph-oriented data modeling: typed nodes/edges, named relations, indexed artifact attributes, BFS traversal, shortest-path, statistics, and timelines. See [GRAPH_DATABASE.md](GRAPH_DATABASE.md).",
 	},
 	{
+		category: "forensic ledger",
+		heading:  "Forensic Ledger",
+		blurb:    "The same graph engine under a posture that cannot be turned off: every commit signed and attributed, a log containing an unsigned commit refused on replay, the image verified before it loads, the redaction ledger on, and every retired segment kept. There is no options hash anywhere in the family, because each setting is a decision about what the resulting document may claim. Ledger handles are their own space -- no `db_` builtin resolves one -- and a ledger directory refuses to open as an ordinary graph.",
+	},
+	{
 		category: "cache",
 		heading:  "Cache",
 		blurb:    "In-memory key/value cache with TTLs and hit/miss statistics.",

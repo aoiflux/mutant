@@ -627,4 +627,12 @@ const (
 	BuiltinNameAuditHead   = "audit_head"
 	BuiltinNameAuditWrite  = "audit_write"
 	BuiltinNameAuditVerify = "audit_verify"
+	// the forensic ledger: the same engine as db_, opened in the one posture
+	// that can carry evidence, in a handle space db_ cannot reach
+	BuiltinNameLedgerOpen    = "ledger_open"
+	BuiltinNameLedgerClose   = "ledger_close"
+	BuiltinNameLedgerStats   = "ledger_stats"
+	BuiltinNameLedgerCompact = "ledger_compact"
+	BuiltinNameLedgerAddNode = "ledger_add_node"
+	BuiltinNameLedgerAddEdge = "ledger_add_edge"
 )

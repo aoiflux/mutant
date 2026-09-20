@@ -127,6 +127,21 @@ func DbOpenDisk(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `db_open_disk` must be STRING, got %s", args[0].Type()))
 	}
 
+	// A forensic ledger is a graphene store too, and opening one here would
+	// open it with no signer. The write that followed would commit unsigned,
+	// and graphene would then refuse to replay the log under the ledger's own
+	// posture -- "commit N carries no signature and signed commits are
+	// required" -- leaving a ledger that no strict open ever accepts again.
+	// That is detection rather than prevention, and what it detects is a store
+	// nobody can open, so the refusal happens here instead.
+	//
+	// It guards Mutant against itself and nothing more: another process is
+	// stopped by graphene's own lock while the ledger is open, and by nothing
+	// once it is closed.
+	if ledgerIsMarked(path.Value) {
+		return resultAndError(nil, newError("db_open_disk: %s is a Mutant forensic ledger; open it with ledger_open, because opening it here would write unsigned commits into a store that requires signed ones", path.Value))
+	}
+
 	opts := disk.Options{}
 	if len(args) == 2 {
 		parsed, errObj := dbOpenOptions(args[1])

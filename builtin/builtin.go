@@ -677,6 +677,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameAuditHead, &BuiltIn{AuditHead}},
 	{BuiltinNameAuditWrite, &BuiltIn{AuditWrite}},
 	{BuiltinNameAuditVerify, &BuiltIn{AuditVerify}},
+	{BuiltinNameLedgerOpen, &BuiltIn{LedgerOpen}},
+	{BuiltinNameLedgerClose, &BuiltIn{LedgerClose}},
+	{BuiltinNameLedgerStats, &BuiltIn{LedgerStats}},
+	{BuiltinNameLedgerCompact, &BuiltIn{LedgerCompact}},
+	{BuiltinNameLedgerAddNode, &BuiltIn{LedgerAddNode}},
+	{BuiltinNameLedgerAddEdge, &BuiltIn{LedgerAddEdge}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
