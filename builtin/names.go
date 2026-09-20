@@ -635,4 +635,11 @@ const (
 	BuiltinNameLedgerCompact = "ledger_compact"
 	BuiltinNameLedgerAddNode = "ledger_add_node"
 	BuiltinNameLedgerAddEdge = "ledger_add_edge"
+	// proofs: what a ledger hands to somebody who does not have it,
+	// and the root that has to reach them by another route
+	BuiltinNameLedgerProveNode     = "ledger_prove_node"
+	BuiltinNameLedgerVerifyProof   = "ledger_verify_proof"
+	BuiltinNameLedgerProofDescribe = "ledger_proof_describe"
+	BuiltinNameLedgerRootExport    = "ledger_root_export"
+	BuiltinNameLedgerVerifyChain   = "ledger_verify_chain"
 )
