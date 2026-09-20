@@ -1,6 +1,6 @@
 # Interchange schemas
 
-Mutant parses thirteen kinds of artifact and each parser hands back its own
+Mutant parses fourteen kinds of artifact and each parser hands back its own
 shape, because each artifact *is* its own shape: an `$MFT` record carries eight
 timestamps, a Prefetch file carries a list of run times, a syslog line carries
 one. That is the right thing for a parser to do and the wrong thing for a
@@ -14,8 +14,8 @@ written against.
 ## Why one vocabulary and not three mappings
 
 The obvious design is a table per (artifact, schema) pair: MFT→ECS, MFT→OCSF,
-MFT→Timesketch, Prefetch→ECS, and so on. Thirteen artifacts and three schemas is
-thirty-nine tables, each of which has to be correct, and each of which drifts
+MFT→Timesketch, Prefetch→ECS, and so on. Fourteen artifacts and three schemas is
+forty-two tables, each of which has to be correct, and each of which drifts
 the moment either side changes.
 
 There is one hop in between instead:
@@ -24,7 +24,7 @@ There is one hop in between instead:
 artifact hash  ──(one source spec per artifact)──▶  event envelope  ──(one emitter per schema)──▶  ECS │ OCSF │ Timesketch
 ```
 
-Thirteen plus three, not thirteen times three. A new parser writes one source
+Fourteen plus three, not fourteen times three. A new parser writes one source
 spec and reaches every schema. A new schema writes one emitter and reaches every
 parser.
 
@@ -138,12 +138,22 @@ machine-readable should use.
 | `browser_history` | web | last visit |
 | `browser_cookies` | web | expiration |
 | `browser_downloads` | web | start and end |
+| `fs_report` | file | the four times every format shares, plus ext's deletion time |
 | `bodyfile` | file | the four MAC times |
 | `mactime` | file | the row's time, described by its own MACB flags |
 
 `$FILE_NAME` times are described separately from `$STANDARD_INFORMATION` ones —
 `Creation Time ($FILE_NAME)` — because the disagreement between the two sets is
 the timestomping tell, and a timeline that merged them would hide it.
+
+`fs_report` is one kind for six filesystems, because the `*_report` builtins
+already render NTFS, FAT, exFAT, ext, HFS and XFS into one row shape. Which
+volume a row came from travels in `dataset`, so a timeline merged from two
+images still says which is which, and `deleted_at` is the only timestamp in this
+tree that carries the `delete` action — it is ext's `dtime`, and ext is the only
+one of the six formats that records when a file was deleted. A row's
+`is_deleted` bit says the record is currently unallocated, which is a different
+claim and not an event, so it travels in `extra` and decides nothing.
 
 `amcache` and `shimcache` are `execution` rather than `process`: both record
 that a program was *present* on the host, which is evidence of execution rather
@@ -265,6 +275,7 @@ Timesketch's analyzers and saved searches key off:
 | `jumplist` | `olecf:dest_list:entry` |
 | `syslog` | `syslog:line` |
 | `bodyfile`, `mactime` | `fs:mactime:line` |
+| `fs_report` | `fs:stat:ntfs` for an NTFS volume, `fs:stat` for the other five |
 | the browser kinds | by the browser in `dataset`: `chrome:history:page_visited`, `firefox:places:page_visited`, and so on |
 
 A kind with no plaso equivalent gets `mutant:<kind>:event` rather than the

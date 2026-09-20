@@ -38,6 +38,11 @@ import (
 // families that open things the analyst owns: db_open_disk is the case notes,
 // cache_open is a working cache, chan_new and net_connect are not files at all.
 // Writing to any of those is ordinary work.
+//
+// Not every entry hands back a handle. vhdi_probe reads an image's headers and
+// returns a description, so nothing else in the analyzer has reason to know it
+// touched a file -- and the file it touched is an exhibit exactly as much as
+// one that was opened.
 var evidenceOpeners = map[string]string{
 	builtin.BuiltinNameRawOpen: "a raw disk image",
 	builtin.BuiltinNameEwfOpen: "an EWF/E01 image",
@@ -45,6 +50,7 @@ var evidenceOpeners = map[string]string{
 	// should be written over: there is less of it left to re-read.
 	builtin.BuiltinNameEwfOpenPartial: "an incomplete EWF/E01 image",
 	builtin.BuiltinNameVhdiOpen:       "a VHD/VHDX image",
+	builtin.BuiltinNameVhdiProbe:      "a VHD/VHDX image",
 	builtin.BuiltinNameTableOpen:      "a partition table",
 	builtin.BuiltinNameNtfsOpen:       "an NTFS filesystem",
 	builtin.BuiltinNameFatOpen:        "a FAT filesystem",

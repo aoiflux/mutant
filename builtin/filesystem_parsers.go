@@ -69,6 +69,8 @@ type ntfsSession interface {
 	Security(filePath string) (fsSecurityScan, error)
 	SecurityIndex() (fsSecurityIndex, error)
 	Reparse(filePath string) (fsReparseScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -142,6 +144,8 @@ type fatSession interface {
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Slack(filePath string) (fsSlackScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -246,6 +250,8 @@ type xfatSession interface {
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Slack(filePath string) (fsSlackScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -323,6 +329,8 @@ type extSession interface {
 	Slack(filePath string) (fsSlackScan, error)
 	DirSlack(dirPath string) (fsDirSlackScan, error)
 	Xattrs(filePath string) (fsXattrScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -394,6 +402,8 @@ type hfsSession interface {
 	Unallocated() (fsFreeSpaceScan, error)
 	Xattrs(filePath string) (fsXattrScan, error)
 	ResourceFork(filePath string) (fsForkScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -462,6 +472,8 @@ type xfsSession interface {
 	ScanLogTransactions() (fsJournalScan, error)
 	Slack(filePath string) (fsSlackScan, error)
 	Xattrs(filePath string) (fsXattrScan, error)
+	Capabilities() (fsCapabilitySet, error)
+	Report() (fsReport, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }

@@ -1016,6 +1016,172 @@ Almost every builtin is pure-Go and cross-platform — the forensic parsers oper
 - `reg_open` — cross-platform for hive-file/JSON inputs; the live-registry path (`HKLM\...`) is Windows-only
 - `process_kill` — cross-platform; on Windows only SIGKILL semantics apply
 
+### A virtual disk is not a file
+
+Under the partition table, before anything is parsed, there is a question about
+what the image file *is*. For a raw image the answer is nothing: the file is the
+device. For VHD and VHDX it is three things at once, and a tool that reads the
+file as a byte stream sees none of them.
+
+**Most of the device may not exist.** A dynamic image stores only the blocks
+something wrote; every other range reads back as zeroes that are nowhere in the
+file. Reading the device end to end moves the whole virtual size through memory,
+most of it zeroes the image never held, and carving those zeroes is carving the
+absence of data. `vhdi_extents` maps a window of the address space to the runs
+that back it, so a script reads what is there and skips what is not.
+
+```mutant
+let disk, err = vhdi_open("evidence/vm/snap.avhdx")
+let meta, metaErr = vhdi_metadata(disk["handle"])
+
+let map, mapErr = vhdi_extents(disk["handle"], 0, meta["virtual_size"])
+putln(to_string(map["mapped_bytes"]) + " of " +
+      to_string(map["virtual_size"]) + " bytes are actually stored")
+
+for (run in map["extents"]) {
+  if (run["kind"] != "mapped") { continue; }
+  // file_offset is a place in run["path"], which on a differencing chain is
+  // not necessarily the file the handle was opened from
+  putln(run["path"] + " +" + to_string(run["file_offset"]) +
+        " backs device offset " + to_string(run["virtual_offset"]))
+}
+```
+
+Four kinds, and the last two are the ones worth reading twice:
+
+| `kind` | What it means | `is_write` | `reads_as_zero` |
+| --- | --- | --- | --- |
+| `mapped` | Bytes exist, at `file_offset` in `path` | yes | no |
+| `zero` | Nothing in the chain ever wrote here | no | yes |
+| `zeroed_by_child` | A differencing disk explicitly cleared this range | **yes** | yes |
+| `unresolved` | This resolves to a parent that is not attached | no | no |
+
+`zero` and `zeroed_by_child` read back identically and are opposite facts. The
+second is a *write*: a deletion that clears its blocks appears only that way, so
+a script filtering on `mapped` alone under-reports deletions and does it
+silently. `file_offset` is `-1` for every kind but `mapped`, because there is no
+place in any file — and `0` is a real offset, the first byte of the file.
+
+A mapped range means bytes exist there, not that the bytes are live data. An
+image whose file parameters say blocks are never returned to the free pool keeps
+them mapped after the guest deleted what was in them, and the answer carries
+`allocated_blocks_never_freed` when that is so.
+
+#### The device is often several files
+
+A differencing disk holds only what was written since its parent. The device an
+examiner sees is the chain read together, and the files that make it up are what
+an evidence record has to name. `vhdi_chain` names them, outwards from the disk
+that was opened, with what produced each link — because the links of a chain are
+routinely made by different tools at different times, and one flattened record
+loses the detail that explains the chain.
+
+```mutant
+let chain, chainErr = vhdi_chain(disk["handle"])
+if (!chain["complete"]) {
+  putln("incomplete: " + chain["incomplete_reason"])
+  putln(chain["parent_resolve_error"])
+}
+for (link in chain["links"]) {
+  putln(to_string(link["index"]) + "  " + link["path"] +
+        "  " + link["disk_type"] +
+        "  made by " + link["creator_application"] +
+        "  footer " + link["footer_source"])
+}
+```
+
+This is also why an extent carries a chain index and a path at all.
+`vhdi_map_offset` resolves one virtual byte to one file offset and documents
+that it cannot answer for a differencing disk: a single file offset cannot
+express an address space assembled from several files, and two links can supply
+two different ranges of the device from the same offset in their own files.
+
+#### What a checkpoint changed
+
+Block-level change tracking needs no filesystem knowledge, which is what makes a
+checkpoint chain worth keeping. Chain indices count outwards from the disk that
+was opened — `0` is that disk, `1` its parent — so `1` is what the leaf alone
+wrote:
+
+```mutant
+let delta, deltaErr = vhdi_changed_extents(disk["handle"], 1)
+putln(to_string(delta["changed_bytes"]) + " bytes written since the checkpoint")
+
+// the same question, naming the checkpoint instead of counting to it
+let since, sinceErr = vhdi_changed_since(disk["handle"], "evidence/vm/base.vhdx")
+```
+
+`vhdi_changed_since` compares paths the way the platform's filesystem compares
+them, so a script does not have to get Windows's case-insensitivity right
+itself, and it reports the index it resolved to. Naming the disk that was opened
+yields nothing — nothing can have been written since the leaf — and that empty
+answer carries `named_disk_is_the_leaf`, so it is not read as a finding. A path
+that names no disk in the chain is an error rather than an empty answer, because
+"nothing changed" and "the disk you named is not part of this device" are
+different claims and only one of them is reassuring.
+
+**`deletions_expressible` is the field to read before trusting the absence of
+one.** VHD has no block state meaning zero: its per-block sector bitmap says
+only whether a sector belongs to the child or is to be read from the parent.
+A region the guest cleared on a VHD chain is therefore recorded as the parent's
+and reads back as the parent's old contents — the clearing is not merely
+invisible to change tracking, at the format level it did not happen. Deletion-
+aware change detection needs VHDX, and every answer that crosses a VHD link says
+so rather than leaving the reader to assume the absence means anything.
+
+An unresolved range is neither changed nor unchanged: the disk that would say is
+the one that is missing. It is returned as itself rather than being counted
+either way.
+
+#### Surveying a machine's folder
+
+`Chain` walks upward from one image to its ancestors, which is the wrong
+direction for checkpoints. Checkpoints branch — applying an earlier one and then
+continuing produces two children of the same parent — and from a leaf the
+sibling branch is invisible. `vhdi_discover` reads the headers of every image in
+a directory and builds the whole tree, parsing no block allocation table and
+replaying no log, which is what makes surveying a folder of terabyte images
+cheap.
+
+```mutant
+let tree, treeErr = vhdi_discover("evidence/vm")
+if (tree["branched"]) {
+  putln("this folder holds " + to_string(len(tree["leaf_paths"])) + " devices")
+}
+for (line in tree["lineages"]) {
+  putln(line["root_path"] + " -> " + line["leaf_path"] +
+        "  " + to_string(line["checkpoint_count"]) + " checkpoint(s)" +
+        "  complete=" + to_string(line["complete"]))
+}
+```
+
+Children are joined to parents by recorded identity alone. Matching on virtual
+size would attach any image of the right size and matching on a recorded
+filename would follow a name that may have been reused; both produce a plausible
+tree that is wrong. A child whose parent is not in the directory stays a root
+and raises `parent_not_in_directory`, with `parent_locators` listing where it
+expected to find one. Which branch a virtual machine is actually using is
+recorded in the machine's configuration and not in the disks, so it is reported
+and not guessed.
+
+Files that could not be probed are kept and named rather than dropped — an
+unreadable file in a checkpoint directory may be the link that would have joined
+two halves of the tree — and files that are not images at all are listed
+separately, since a machine folder holds `.vmcx`, `.vmrs`, `.bin` and `.vsv`
+files beside the disks and reporting those as failures would bury the real one.
+
+`vhdi_probe` asks the same header-only question about a single file.
+
+**One boundary is drawn deliberately.** `vhdi_probe` registers the image it
+reads as evidence and `vhdi_discover` registers nothing, and the difference is
+who named the file. A program that passes a path has said that file is evidence.
+A program that passes a directory has asked what is in it. Registering every
+image a directory happens to hold would put files in the manifest the
+examination never opened, and would hash each of them under the case's policy —
+turning the one call in this family that reads nothing but headers into the most
+expensive call in the language. Use `case_evidence`, or open the images you go
+on to read, to bring them under custody.
+
 ### When more than one partition table is true
 
 `table_open` answers with one table. Several kinds of media have more than one,
@@ -1843,6 +2009,132 @@ are different findings.
 It is **not** followed. A directory carrying a reparse point lists its own
 index, usually empty, rather than the target's, and whether the target exists is
 not checked -- on an image of one volume it frequently cannot be.
+
+### What a filesystem can record, and what it did
+
+Every answer about a file has the same hole under it. A field that comes back
+empty means one of two things and the value cannot tell them apart: the volume
+recorded nothing there, or the format has nowhere to record it. Merge six
+filesystems into one table without that distinction and every FAT file appears
+to have lost permissions it never had, and every ext2 file a birth time that
+never existed.
+
+`*_capabilities` closes it. Each of the six libraries ships a declaration of
+what its format keeps, and this is that declaration, read rather than guessed.
+
+```mutant
+let disk, err = ext_open("evidence/root.img")
+let caps, capsErr = ext_capabilities(disk["handle"])
+
+if (!contains(caps["supported"], "creation_times")) {
+  putln("this volume's inodes are too small to hold a birth time")
+}
+```
+
+Three lists, not two. `supported` and `unsupported` are the questions the
+library answered; **`unanswered` is the questions it did not**, and a name there
+appears in neither of the others. That is not pedantry. `hfs_capabilities`
+declares nine capabilities where `ntfs_capabilities` declares twenty-two, and of
+the eighteen questions asked of every filesystem here it answers eight — yet
+HFS has recorded a creation date since 1985. Rendering libhfs's silence as
+`creation_times: false` would put the opposite of the truth in a document an
+examiner would quote, so nothing here fills a gap from its own knowledge of the
+format.
+
+| Filesystem | Declared | Of the 18 shared questions |
+| --- | --- | --- |
+| `ntfs_capabilities` | 22 | 18 |
+| `fat_capabilities` | 24 | 18 |
+| `xfat_capabilities` | 22 | 18 |
+| `ext_capabilities` | 23 | 17 |
+| `xfs_capabilities` | 25 | 15 |
+| `hfs_capabilities` | 9 | 8 |
+
+The other half of each answer is where it came from. Most are constants of the
+format, but not all, and `volume_specific` is the list that must not be cached:
+ext2, ext3 and ext4 are one on-disk format governed by feature flags, so eleven
+of ext's twenty-three answers are read from the superblock in hand and two ext
+volumes will disagree. On HFS every one of the nine is volume state, because
+"HFS" names three formats and the library decides which it opened before it
+answers anything.
+
+Nothing here describes the contents. A true `access_times` says the record has
+the field, not that any atime on the volume was ever maintained.
+
+#### One document per volume
+
+`*_report` walks the volume once and returns the library's own versioned
+document — every entry, with identity, times and the image-absolute offsets of
+its data. Before it there was no way to list a whole image at all: `*_list_files`
+reads one directory, `*_metadata` one file.
+
+```mutant
+let doc, err = ntfs_report(disk["handle"])
+putln(to_string(doc["file_count"]) + " records, " +
+      to_string(doc["deleted_count"]) + " of them deleted")
+
+for (file in doc["files"]) {
+  if (!file["is_deleted"]) { continue; }
+  for (run in file["fragments"]) {
+    if (!run["located"]) { continue; }
+    putln(file["path"] + " +" + to_string(run["start_offset"]))
+  }
+}
+```
+
+The six documents do not agree with each other, so they are rendered into one
+shape: the fields that mean the same thing everywhere are named the same way,
+and everything a format records that the others do not travels verbatim in each
+row's `extra`. Normalizing is additive here exactly as it is in `events_from`.
+
+**A fragment offset of zero is not a fragment at offset zero.** libntfs leaves
+both offsets at zero on a sparse run, and libxfs leaves them at zero both for a
+hole and for a run whose block number would not resolve against the volume's
+geometry — and zero is the first byte of the image, where a consumer that seeked
+there would read the boot sector and call it file content. Every run with no
+place in the image reports `located: false` and offsets of `-1`.
+
+**The identity column says how to read itself.** `identity_kind` names the
+addressing — an MFT entry with its sequence number, an inode with its
+generation, a catalog node ID, a slot in a directory — and `identity_stable`
+says whether it survives that slot being reused, read out of the same
+capabilities the sibling builtin reports. It carries `identity_stable_answered`
+beside it, because two of the six libraries never say. Diffing two readings of a
+FAT volume on identity reports a deleted file whose slot was reused as a
+modified one, and the field that would have warned you is there.
+
+**`complete` is not a completeness claim.** It says the walk had no known gap.
+Five of the six libraries can report what their walk reached and none of them
+can report what it missed — a directory tree walk cannot find a file no
+directory names. `xfs_report` alone reconciles the listing against every inode
+the allocation groups say exists, from three independently maintained counters,
+so `completeness_checked` says whether anything did that and
+`completeness_proven` means nothing without it.
+
+Nothing is assumed. A deleted entry's cluster chain has been freed, so its
+layout past the first cluster is absent rather than guessed;
+`fat_recover_file_assuming_contiguous` is where that hypothesis is asked for by
+name. The walk is `O(volume)` in time and memory, and the listing is capped at
+50000 rows with every count beside it honest past the cap.
+
+#### Into a supertimeline
+
+A report is not a dead end. One source spec covers all six, because the six
+documents already share a row shape:
+
+```mutant
+let events, err = events_from(ntfs_report(disk["handle"]), "fs_report")
+let rows, rowsErr = timesketch_event(events)
+```
+
+Four events per row, five where the format records a deletion time — ext's
+`dtime` is the only timestamp in this tree that does, and the only one that
+carries the `delete` action. The filesystem travels as the envelope's `dataset`,
+so a timeline merged from an NTFS volume and an ext one still says which row
+came from which, and so the Timesketch emitter can give an NTFS row plaso's
+`fs:stat:ntfs` and everything else the generic `fs:stat` rather than borrowing a
+`data_type` whose analyzers would then run over rows they were never written
+for.
 
 ### Reporting
 

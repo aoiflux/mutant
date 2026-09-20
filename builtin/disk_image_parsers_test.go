@@ -16,6 +16,16 @@ import (
 type fakeVHDIBackend struct {
 	session vhdiSession
 	err     error
+
+	// probePath and discoverDir record what the header-only calls were asked
+	// about, so a test can assert that the path a script named is the path the
+	// library was given rather than one derived from it.
+	probe       vhdiProbeScan
+	probeErr    error
+	probePath   *[]string
+	discover    vhdiDiscoverScan
+	discoverErr error
+	discoverDir *[]string
 }
 
 func (f fakeVHDIBackend) Open(imagePath string) (vhdiSession, error) {
@@ -25,6 +35,26 @@ func (f fakeVHDIBackend) Open(imagePath string) (vhdiSession, error) {
 	return f.session, nil
 }
 
+func (f fakeVHDIBackend) Probe(imagePath string) (vhdiProbeScan, error) {
+	if f.probePath != nil {
+		*f.probePath = append(*f.probePath, imagePath)
+	}
+	if f.probeErr != nil {
+		return vhdiProbeScan{}, f.probeErr
+	}
+	return f.probe, nil
+}
+
+func (f fakeVHDIBackend) Discover(dir string) (vhdiDiscoverScan, error) {
+	if f.discoverDir != nil {
+		*f.discoverDir = append(*f.discoverDir, dir)
+	}
+	if f.discoverErr != nil {
+		return vhdiDiscoverScan{}, f.discoverErr
+	}
+	return f.discover, nil
+}
+
 type fakeVHDISession struct {
 	data   map[int64][]byte
 	meta   vhdiMetadata
@@ -32,6 +62,18 @@ type fakeVHDISession struct {
 		fileOffset int64
 		ok         bool
 	}
+
+	extents          vhdiExtentScan
+	extentsErr       error
+	extentsWindow    *[][2]int64
+	chain            vhdiChainScan
+	chainErr         error
+	changed          vhdiChangedScan
+	changedErr       error
+	changedIndex     *[]int64
+	changedSince     vhdiChangedScan
+	changedSinceErr  error
+	changedSincePath *[]string
 }
 
 type fakeEWFBackend struct {
@@ -188,6 +230,43 @@ func (f *fakeVHDISession) MapOffset(virtualOffset int64) (int64, bool, error) {
 		return v.fileOffset, v.ok, nil
 	}
 	return 0, false, errors.New("map failed")
+}
+
+func (f *fakeVHDISession) Extents(offset, length int64) (vhdiExtentScan, error) {
+	if f.extentsWindow != nil {
+		*f.extentsWindow = append(*f.extentsWindow, [2]int64{offset, length})
+	}
+	if f.extentsErr != nil {
+		return vhdiExtentScan{}, f.extentsErr
+	}
+	return f.extents, nil
+}
+
+func (f *fakeVHDISession) Chain() (vhdiChainScan, error) {
+	if f.chainErr != nil {
+		return vhdiChainScan{}, f.chainErr
+	}
+	return f.chain, nil
+}
+
+func (f *fakeVHDISession) Changed(sinceChainIndex int64) (vhdiChangedScan, error) {
+	if f.changedIndex != nil {
+		*f.changedIndex = append(*f.changedIndex, sinceChainIndex)
+	}
+	if f.changedErr != nil {
+		return vhdiChangedScan{}, f.changedErr
+	}
+	return f.changed, nil
+}
+
+func (f *fakeVHDISession) ChangedSince(path string) (vhdiChangedScan, error) {
+	if f.changedSincePath != nil {
+		*f.changedSincePath = append(*f.changedSincePath, path)
+	}
+	if f.changedSinceErr != nil {
+		return vhdiChangedScan{}, f.changedSinceErr
+	}
+	return f.changedSince, nil
 }
 
 func (f *fakeVHDISession) Close() error { return nil }

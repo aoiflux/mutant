@@ -55,11 +55,28 @@ type vhdiSession interface {
 	ReadAt(offset int64, length int64) ([]byte, error)
 	Metadata() (vhdiMetadata, error)
 	MapOffset(virtualOffset int64) (int64, bool, error)
+
+	// Extents, Chain and the two change methods are the sparse-aware and
+	// differencing half of the format, implemented in disk_image_extents.go.
+	// MapOffset above answers where one byte lives and cannot answer these: it
+	// reports nothing mapped for every differencing disk, because one file
+	// offset cannot express an address space assembled from several files.
+	Extents(offset, length int64) (vhdiExtentScan, error)
+	Chain() (vhdiChainScan, error)
+	Changed(sinceChainIndex int64) (vhdiChangedScan, error)
+	ChangedSince(path string) (vhdiChangedScan, error)
+
 	Close() error
 }
 
 type vhdiBackend interface {
 	Open(imagePath string) (vhdiSession, error)
+
+	// Probe and Discover read headers and hand back no handle, so they sit on
+	// the backend rather than on a session. Neither opens a block allocation
+	// table, which is what makes surveying a directory of terabyte images cheap.
+	Probe(imagePath string) (vhdiProbeScan, error)
+	Discover(dir string) (vhdiDiscoverScan, error)
 }
 
 type realVHDIBackend struct{}

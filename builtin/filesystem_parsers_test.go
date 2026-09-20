@@ -94,6 +94,13 @@ type fakeNTFSSession struct {
 	reparse         fsReparseScan
 	reparseErr      error
 	reparsePath     string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -136,6 +143,13 @@ type fakeFATSession struct {
 	slack           fsSlackScan
 	slackErr        error
 	slackPath       string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -178,6 +192,13 @@ type fakeXFATSession struct {
 	slack           fsSlackScan
 	slackErr        error
 	slackPath       string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeXFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -238,6 +259,13 @@ type fakeEXTSession struct {
 	xattrs            fsXattrScan
 	xattrsErr         error
 	xattrsPath        string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -288,6 +316,13 @@ type fakeHFSSession struct {
 	resourceFork    fsForkScan
 	resourceErr     error
 	resourcePath    string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -340,6 +375,13 @@ type fakeXFSSession struct {
 	xattrs          fsXattrScan
 	xattrsErr       error
 	xattrsPath      string
+
+	// The capability set and the volume report, which the *_capabilities and
+	// *_report builtins read through the session like every other scan here.
+	capabilities    fsCapabilitySet
+	capabilitiesErr error
+	report          fsReport
+	reportErr       error
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1403,6 +1445,54 @@ func (f *fakeHFSSession) Verify() (fsVerifyResult, error) {
 
 func (f *fakeXFSSession) Verify() (fsVerifyResult, error) {
 	return f.verify, f.verifyErr
+}
+
+func (f *fakeNTFSSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeFATSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeXFATSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeEXTSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeHFSSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeXFSSession) Capabilities() (fsCapabilitySet, error) {
+	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeNTFSSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f *fakeFATSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f *fakeXFATSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f *fakeEXTSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f *fakeHFSSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
+}
+
+func (f *fakeXFSSession) Report() (fsReport, error) {
+	return f.report, f.reportErr
 }
 
 func (f *fakeNTFSSession) ScanDeleted() (fsDeletedScan, error) {

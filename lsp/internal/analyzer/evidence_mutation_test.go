@@ -50,6 +50,15 @@ let w, werr = fs_write("damaged.E01", "notes");`,
 			"`fs_write` overwrites the same path `ewf_open_partial` opened as an incomplete EWF/E01 image",
 		},
 		{
+			// vhdi_probe hands back no handle, so nothing else in the analyzer
+			// has reason to know it touched a file. It opens one all the same,
+			// and the file it opens is an exhibit.
+			"a write to an image that was only probed",
+			`let info, err = vhdi_probe("snap.avhdx");
+let w, werr = fs_write("snap.avhdx", "notes");`,
+			"`fs_write` overwrites the same path `vhdi_probe` opened as a VHD/VHDX image",
+		},
+		{
 			"an append to a hive that is being read",
 			`let hive, err = hive_open("SYSTEM");
 let a, aerr = fs_append("SYSTEM", "x");`,

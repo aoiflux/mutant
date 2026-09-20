@@ -662,13 +662,22 @@ var timesketchDataTypes = map[string]string{
 	"jumplist":  "olecf:dest_list:entry",
 	"syslog":    "syslog:line",
 	"bodyfile":  "fs:mactime:line",
+	"fs_report": "fs:stat",
 	"mactime":   "fs:mactime:line",
 }
 
-// timesketchBrowserDataTypes are the kinds whose plaso type depends on which
-// browser the entry came out of. The envelope carries that in `dataset`, which
-// is the whole reason `dataset` exists: the emitters never reach into `extra`.
-var timesketchBrowserDataTypes = map[string]map[string]string{
+// timesketchDataTypesByDataset are the kinds whose plaso type depends on which
+// source the entry came out of -- which browser wrote the history, which
+// filesystem the volume was. The envelope carries that in `dataset`, which is
+// the whole reason `dataset` exists: the emitters never reach into `extra`.
+//
+// A kind listed here still falls through to timesketchDataTypes for a dataset
+// it does not name, which is how one entry covers NTFS and the five
+// filesystems plaso has no separate type for.
+var timesketchDataTypesByDataset = map[string]map[string]string{
+	"fs_report": {
+		"ntfs": "fs:stat:ntfs",
+	},
 	"browser_history": {
 		"chrome":  "chrome:history:page_visited",
 		"firefox": "firefox:places:page_visited",
@@ -684,8 +693,8 @@ var timesketchBrowserDataTypes = map[string]map[string]string{
 }
 
 func timesketchDataType(kind, dataset string) string {
-	if byBrowser, ok := timesketchBrowserDataTypes[kind]; ok {
-		if dataType, ok := byBrowser[strings.ToLower(dataset)]; ok {
+	if byDataset, ok := timesketchDataTypesByDataset[kind]; ok {
+		if dataType, ok := byDataset[strings.ToLower(dataset)]; ok {
 			return dataType
 		}
 	}

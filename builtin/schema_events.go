@@ -178,6 +178,35 @@ var eventSources = map[string]*eventSource{
 		fields:  map[string]string{"url": "url", "path": "target_path", "size": "bytes_total", "dataset": "browser"},
 		message: "{url} -> {target_path}",
 	},
+	"fs_report": {
+		// The *_report family renders six filesystems into one row shape, so one
+		// spec reaches all six of them. `filesystem` becomes the envelope's
+		// dataset, which is what keeps a timeline merged from an NTFS volume and
+		// an ext one able to say which volume each row came from -- and is how the
+		// Timesketch emitter picks a data_type, since plaso has one type for an
+		// NTFS stat row and one generic type for the rest.
+		//
+		// deleted_at is ext's dtime, the only timestamp in this tree that records
+		// a deletion rather than a change, so it is the only one that carries the
+		// delete action. A row's is_deleted bit says the record is currently
+		// unallocated, which is a different claim and not an event: it travels in
+		// `extra` and decides nothing here.
+		kind: "fs_report", entriesKey: "files", category: "file",
+		times: []eventTime{
+			{field: "created", desc: "Creation Time", format: "iso"},
+			{field: "modified", desc: "Content Modification Time", format: "iso"},
+			{field: "metadata_changed", desc: "Metadata Modification Time", format: "iso"},
+			{field: "accessed", desc: "Last Access Time", format: "iso"},
+			{field: "deleted_at", desc: "Deletion Time", format: "iso"},
+		},
+		fields:  map[string]string{"path": "path", "file_name": "name", "size": "size", "dataset": "filesystem"},
+		message: "{path|name}",
+		refine: func(entry *object.Hash, ev map[string]object.Object) {
+			if desc, ok := ev["ts_desc"].(*object.String); ok && desc.Value == "Deletion Time" {
+				ev["action"] = stringObj("delete")
+			}
+		},
+	},
 	"bodyfile": {
 		// bodyfile_parse and mactime both return a bare array, so there is no
 		// entries key to name: the array is the entries.
