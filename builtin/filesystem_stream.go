@@ -198,6 +198,16 @@ func fsReadFileAt(op string, args []object.Object, resolve fsReaderResolver) obj
 		return resultAndError(nil, errObj)
 	}
 
+	return fsReadWindow(op, reader, offset, length)
+}
+
+// fsReadWindow is the windowed read itself, without the argument handling.
+//
+// It is separate because a named stream is addressed by three arguments rather
+// than two -- ntfs_read_stream takes the stream's name as well -- and the rules
+// below are about the file rather than about how it was named. There is no
+// version of them that is right for one builtin and wrong for the other.
+func fsReadWindow(op string, reader fsFileReader, offset, length int64) object.Object {
 	if offset < 0 {
 		return resultAndError(nil, newError("%s: offset must be >= 0", op))
 	}

@@ -80,6 +80,20 @@ type fakeNTFSSession struct {
 	slack           fsSlackScan
 	slackErr        error
 	slackPath       string
+	streams         fsStreamScan
+	streamsErr      error
+	streamsPath     string
+	streamReader    fsFileReader
+	streamErr       error
+	streamName      string
+	security        fsSecurityScan
+	securityErr     error
+	securityPath    string
+	securityIndex   fsSecurityIndex
+	securityIdxErr  error
+	reparse         fsReparseScan
+	reparseErr      error
+	reparsePath     string
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -221,6 +235,9 @@ type fakeEXTSession struct {
 	dirSlack          fsDirSlackScan
 	dirSlackErr       error
 	dirSlackPath      string
+	xattrs            fsXattrScan
+	xattrsErr         error
+	xattrsPath        string
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -265,6 +282,12 @@ type fakeHFSSession struct {
 	slackPath       string
 	freeSpace       fsFreeSpaceScan
 	freeSpaceErr    error
+	xattrs          fsXattrScan
+	xattrsErr       error
+	xattrsPath      string
+	resourceFork    fsForkScan
+	resourceErr     error
+	resourcePath    string
 }
 
 func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -314,6 +337,9 @@ type fakeXFSSession struct {
 	slack           fsSlackScan
 	slackErr        error
 	slackPath       string
+	xattrs          fsXattrScan
+	xattrsErr       error
+	xattrsPath      string
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1525,4 +1551,49 @@ func (f *fakeHFSSession) Unallocated() (fsFreeSpaceScan, error) {
 func (f *fakeXFSSession) Slack(filePath string) (fsSlackScan, error) {
 	f.slackPath = filePath
 	return f.slack, f.slackErr
+}
+
+func (f *fakeNTFSSession) Streams(filePath string) (fsStreamScan, error) {
+	f.streamsPath = filePath
+	return f.streams, f.streamsErr
+}
+
+func (f *fakeNTFSSession) OpenStream(filePath, streamName string) (fsFileReader, error) {
+	f.streamsPath = filePath
+	f.streamName = streamName
+	return f.streamReader, f.streamErr
+}
+
+func (f *fakeNTFSSession) Security(filePath string) (fsSecurityScan, error) {
+	f.securityPath = filePath
+	return f.security, f.securityErr
+}
+
+func (f *fakeNTFSSession) SecurityIndex() (fsSecurityIndex, error) {
+	return f.securityIndex, f.securityIdxErr
+}
+
+func (f *fakeNTFSSession) Reparse(filePath string) (fsReparseScan, error) {
+	f.reparsePath = filePath
+	return f.reparse, f.reparseErr
+}
+
+func (f *fakeEXTSession) Xattrs(filePath string) (fsXattrScan, error) {
+	f.xattrsPath = filePath
+	return f.xattrs, f.xattrsErr
+}
+
+func (f *fakeHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
+	f.xattrsPath = filePath
+	return f.xattrs, f.xattrsErr
+}
+
+func (f *fakeHFSSession) ResourceFork(filePath string) (fsForkScan, error) {
+	f.resourcePath = filePath
+	return f.resourceFork, f.resourceErr
+}
+
+func (f *fakeXFSSession) Xattrs(filePath string) (fsXattrScan, error) {
+	f.xattrsPath = filePath
+	return f.xattrs, f.xattrsErr
 }

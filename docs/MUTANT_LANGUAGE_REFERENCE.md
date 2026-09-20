@@ -1703,6 +1703,147 @@ not a statement that anything was ever written there. Blocks still claimed by a
 deleted file are not free and do not appear -- `hfs_deleted` is what finds
 those.
 
+### The content a path does not name
+
+A file's bytes are not all of a file. Every format here lets one carry content
+and metadata that its path does not address and that a directory listing does
+not show, reached instead by a *pair* -- the path **and** a name. NTFS calls the
+content an alternate data stream; HFS+ calls it a resource fork; ext, XFS and
+HFS+ all carry labelled values called extended attributes; NTFS carries a
+security descriptor and a reparse point besides. A tool that walks a volume by
+path alone sees none of it, which is exactly why things get put there.
+
+Two kinds of thing, and they are not merged:
+
+| | What it is | Where it is |
+| --- | --- | --- |
+| **A named body of bytes** | A second stream of content, with a length and a place on the image. It can be read out and hashed like any file. | `ntfs_streams`, `ntfs_read_stream`, `ntfs_extract_stream`, `hfs_resource_fork` |
+| **A label** | A small value attached to a file that asserts something *about* it. It holds no file content. | `ext_xattrs`, `xfs_xattrs`, `hfs_xattrs`, `ntfs_security`, `ntfs_security_descriptors`, `ntfs_reparse` |
+
+The label is frequently the more useful of the two. A `Zone.Identifier` stream
+on a downloaded executable records the URL it came from and the security zone
+Windows assigned it; `com.apple.quarantine` records the same thing on macOS. No
+amount of reading the executable itself produces either.
+
+```mutant
+let fs, err = ntfs_open("evidence/c.img")
+
+// what the path addresses, and what it does not
+let streams, streamsErr = ntfs_streams(fs["handle"], "/Users/j/Downloads/setup.exe")
+putln(to_string(streams["alternate_count"]) + " alternate stream(s)")
+
+for (s in streams["streams"]) {
+  if (!s["is_alternate"]) { continue; }
+  putln("  " + s["name"] + "  " + to_string(s["size"]) + " bytes")
+
+  // a label is small enough to read in place; a payload is not
+  if (s["size"] < 4096) {
+    let raw, readErr = ntfs_read_stream(fs["handle"],
+      "/Users/j/Downloads/setup.exe", s["name"], 0, s["size"])
+    putln("    " + bytes_to_string(raw))
+  } else {
+    let out, extractErr = ntfs_extract_stream(fs["handle"],
+      "/Users/j/Downloads/setup.exe", s["name"], "case/ads-" + s["name"] + ".bin")
+    putln("    extracted " + to_string(out["bytes_written"]) + " bytes, sha256 " + out["digest"])
+  }
+}
+```
+
+An empty stream name selects the unnamed stream, which makes `ntfs_read_stream`
+a superset of `ntfs_read_file_at`. Names are matched case-insensitively, as NTFS
+matches them. A *directory* has no unnamed stream but can still carry named
+ones, and `ntfs_streams` warns when it finds one: a directory has no content of
+its own, so a stream on one was put there deliberately.
+
+**An access control list is not an access decision.** This is the one place in
+the family where rendering the obvious thing inverts the answer. A security
+descriptor carrying **no DACL at all** grants *everyone* full access. A
+descriptor whose DACL **is present and holds no entries** denies *everyone*.
+Rendered as an empty array those two are the same value and mean opposite
+things, so `ntfs_security` reports `dacl_present` as a field of its own,
+separate from `dacl_ace_count` and from the array, and warns on both cases by
+name.
+
+```mutant
+let sd, sdErr = ntfs_security(fs["handle"], "/Windows/System32/config/SAM")
+if (!sd["dacl_present"]) {
+  putln("no DACL: everyone has full access")
+} else if (sd["dacl_ace_count"] == 0) {
+  putln("empty DACL: nobody has any access")
+}
+putln("owner " + sd["owner_sid"] + " (" + sd["owner_name"] + ")")
+```
+
+No field answers whether a particular account *could* open the file. That needs
+group memberships, privilege assignments and an inheritance walk which a disk
+image does not contain, and a builtin that appeared to answer it would be
+answering something else. `source` says where the descriptor came from, because
+one stored on the entry belongs to that file alone while one resolved through
+the entry's security ID is shared with every other file carrying that ID --
+which matters when the finding is about a single file.
+`ntfs_security_descriptors` reads the volume's whole `$Secure:$SDS` in one pass,
+which is how you ask *which* descriptors on this image grant what, rather than
+asking file by file.
+
+#### Where each format keeps its attributes, and what that costs
+
+`ext_xattrs`, `xfs_xattrs` and `hfs_xattrs` share one envelope, and each
+attribute says which storage it came from, because the storage is evidence:
+an inline value travels with the metadata record, a block or fork value lives in
+allocation blocks and can outlive the record pointing at it.
+
+Reading only one storage is the trap on ext, and libext's own documentation
+names it. `GetXAttrs` follows the inode's external attribute block and nothing
+else, returning an empty list with no error for an inode that has no such block
+-- while `security.selinux` and `system.posix_acl_access` are small enough on a
+typical modern system never to need one. A reader that follows only the block
+reports a file carrying SELinux labels and POSIX ACLs as having no attributes at
+all. `ext_xattrs` consults both and flags a name that appears in each, because
+which one the kernel would return is not recorded on disk.
+
+On XFS, libxfs performs no deduplication and says so: two records carrying the
+same fully-qualified name both come back, which is an inconsistency in the
+attribute fork rather than a rendering artifact, so it is counted and warned on.
+XFS is also the one format here whose attribute values carry no location --
+`offset` is `-1` throughout, because libxfs exposes the attribute fork's extents
+nowhere a per-value offset can be derived from.
+
+On HFS+, `com.apple.decmpfs` and `com.apple.ResourceFork` come back like any
+other attribute and are flagged rather than filtered. That flag is the answer to
+a question the previous section raises: `hfs_slack` reports a decmpfs-compressed
+file's data fork as empty, and `com.apple.decmpfs` is *why*. Where the payload
+actually went is `hfs_resource_fork`'s answer -- either that fork, or, when it
+is small enough, inline in the attribute itself. The two cases are kept apart:
+`holds_compressed_payload` is true only when the file is compressed **and** the
+fork is not empty. The bytes are never decompressed on the way out, which is
+libhfs's rule and the right one, because the compressed payload as stored is the
+artifact.
+
+A value is rendered as hex, capped, with its true length always reported, and
+offered as text beside the hex where it is text -- one trailing NUL is trimmed
+first, because the most common extended attribute on Linux stores a C string and
+refusing to call that text would make the field useless where it is most wanted.
+A value past the cap reports its length and, where the format supplies one, its
+position, so the bytes stay reachable through `raw_read_at_bytes`. `supported`
+is about the volume rather than the file: a filesystem without the attribute
+feature, or a classic HFS volume with no attributes B-tree, can never carry one,
+and that is a different claim from a file that carries none.
+
+#### Two things a reparse point is not
+
+`ntfs_reparse` decodes a target for the three tags that name one -- symbolic
+links, mount points, and WSL symlinks, each with a different layout -- and hands
+back the tag-specific bytes as hex for every other tag, which covers
+deduplication, cloud placeholders, WOF-compressed files and whatever ships next.
+
+It is **not** a file with no reparse point. `is_reparse_point` distinguishes an
+ordinary file from one whose tag names no target this library decodes, and those
+are different findings.
+
+It is **not** followed. A directory carrying a reparse point lists its own
+index, usually empty, rather than the target's, and whether the target exists is
+not checked -- on an image of one volume it frequently cannot be.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.

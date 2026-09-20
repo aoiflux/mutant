@@ -64,6 +64,11 @@ type ntfsSession interface {
 	ScanLogRecords() (fsJournalScan, error)
 	ScanLogTransactions() (fsJournalScan, error)
 	Slack(filePath string) (fsSlackScan, error)
+	Streams(filePath string) (fsStreamScan, error)
+	OpenStream(filePath, streamName string) (fsFileReader, error)
+	Security(filePath string) (fsSecurityScan, error)
+	SecurityIndex() (fsSecurityIndex, error)
+	Reparse(filePath string) (fsReparseScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -317,6 +322,7 @@ type extSession interface {
 	RecoverJournalledFile(inode, version int64) (fsRecovery, error)
 	Slack(filePath string) (fsSlackScan, error)
 	DirSlack(dirPath string) (fsDirSlackScan, error)
+	Xattrs(filePath string) (fsXattrScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -386,6 +392,8 @@ type hfsSession interface {
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Slack(filePath string) (fsSlackScan, error)
 	Unallocated() (fsFreeSpaceScan, error)
+	Xattrs(filePath string) (fsXattrScan, error)
+	ResourceFork(filePath string) (fsForkScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -453,6 +461,7 @@ type xfsSession interface {
 	ScanLogRecords() (fsJournalScan, error)
 	ScanLogTransactions() (fsJournalScan, error)
 	Slack(filePath string) (fsSlackScan, error)
+	Xattrs(filePath string) (fsXattrScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
