@@ -60,6 +60,9 @@ type ntfsSession interface {
 	Metadata(filePath string) (ntfsMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	ScanUSNJournal() (fsJournalScan, error)
+	ScanLogRecords() (fsJournalScan, error)
+	ScanLogTransactions() (fsJournalScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -305,6 +308,10 @@ type extSession interface {
 	Metadata(filePath string) (extMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	ScanJournal() (fsJournalScan, error)
+	JournalBlockCopies(fsBlock int64) (fsJournalScan, error)
+	JournalInodeVersions(inode int64) (fsJournalScan, error)
+	RecoverJournalledFile(inode, version int64) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -436,6 +443,8 @@ type xfsSession interface {
 	ScanDeletedDirectory(dirPath string) (fsDeletedScan, error)
 	UnlinkedInodes() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	ScanLogRecords() (fsJournalScan, error)
+	ScanLogTransactions() (fsJournalScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }

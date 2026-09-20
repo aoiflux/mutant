@@ -453,10 +453,26 @@ func fsRecoverFile(op string, args []object.Object, assumeContiguous bool,
 		handle = handleObj.Value
 	}
 
+	return resultAndError(recoveryResultHash(handle, destination, written, digest, recovery,
+		map[string]object.Object{"index": intObj(index)}), nil)
+}
+
+// recoveryResultHash renders what a recovery wrote and what it does not
+// establish.
+//
+// It is shared between the *_recover_file family, which names an entry by its
+// place in a scan, and ext_recover_journalled_file, which names one by an
+// inode number and a version -- extra carries whichever of those the caller
+// used. Sharing it is the point rather than a convenience: the two families
+// hand back bytes obtained different ways, and a reader comparing them has to
+// be able to read located_bytes, size_matched and caveats as the same claims
+// about the same things, not as two vocabularies that happen to rhyme.
+func recoveryResultHash(handle, destination string, written int64, digest string,
+	recovery fsRecovery, extra map[string]object.Object,
+) *object.Hash {
 	entry := recovery.Entry
-	return resultAndError(makeHashObject(map[string]object.Object{
+	fields := map[string]object.Object{
 		"handle":          stringObj(handle),
-		"index":           intObj(index),
 		"name":            stringObj(entry.Name),
 		"path":            stringObj(entry.Path),
 		"name_source":     stringObj(entry.NameSource),
@@ -486,7 +502,11 @@ func fsRecoverFile(op string, args []object.Object, assumeContiguous bool,
 		"digest":             stringObj(digest),
 		"caveats":            stringArray(recoveryCaveats(recovery, written)),
 		"status":             stringObj("ok"),
-	}), nil)
+	}
+	for key, value := range extra {
+		fields[key] = value
+	}
+	return makeHashObject(fields)
 }
 
 // recoveryCaveats states what this recovery does not establish.

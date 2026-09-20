@@ -945,7 +945,7 @@ language is for.
 ## Where to go next
 
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
-- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 548 builtins,
+- **[CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md)** — all 557 builtins,
   with signatures and return shapes
 - **[MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md)** — syntax and
   semantics

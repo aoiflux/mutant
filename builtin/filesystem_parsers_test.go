@@ -71,6 +71,12 @@ type fakeNTFSSession struct {
 	recoveryErr     error
 	recoveryIndex   int64
 	recoveryAssumed bool
+	usn             fsJournalScan
+	usnErr          error
+	logRecords      fsJournalScan
+	logRecordsErr   error
+	logTxns         fsJournalScan
+	logTxnsErr      error
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -176,18 +182,30 @@ func (f *fakeEXTBackend) Open(volumePath string, region fsRegion) (extSession, e
 }
 
 type fakeEXTSession struct {
-	entries         map[string][]extListEntry
-	files           map[string][]byte
-	located         map[string]int64
-	meta            map[string]extMetadata
-	verify          fsVerifyResult
-	verifyErr       error
-	deleted         fsDeletedScan
-	deletedErr      error
-	recovery        fsRecovery
-	recoveryErr     error
-	recoveryIndex   int64
-	recoveryAssumed bool
+	entries           map[string][]extListEntry
+	files             map[string][]byte
+	located           map[string]int64
+	meta              map[string]extMetadata
+	verify            fsVerifyResult
+	verifyErr         error
+	deleted           fsDeletedScan
+	deletedErr        error
+	recovery          fsRecovery
+	recoveryErr       error
+	recoveryIndex     int64
+	recoveryAssumed   bool
+	journal           fsJournalScan
+	journalErr        error
+	copies            fsJournalScan
+	copiesErr         error
+	copiesBlock       int64
+	versions          fsJournalScan
+	versionsErr       error
+	versionsInode     int64
+	journalled        fsRecovery
+	journalledErr     error
+	journalledInode   int64
+	journalledVersion int64
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -269,6 +287,10 @@ type fakeXFSSession struct {
 	recoveryErr     error
 	recoveryIndex   int64
 	recoveryAssumed bool
+	logRecords      fsJournalScan
+	logRecordsErr   error
+	logTxns         fsJournalScan
+	logTxnsErr      error
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1401,4 +1423,44 @@ func (f *fakeXFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 	f.recoveryIndex = index
 	f.recoveryAssumed = assumeContiguous
 	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeNTFSSession) ScanUSNJournal() (fsJournalScan, error) {
+	return f.usn, f.usnErr
+}
+
+func (f *fakeNTFSSession) ScanLogRecords() (fsJournalScan, error) {
+	return f.logRecords, f.logRecordsErr
+}
+
+func (f *fakeNTFSSession) ScanLogTransactions() (fsJournalScan, error) {
+	return f.logTxns, f.logTxnsErr
+}
+
+func (f *fakeEXTSession) ScanJournal() (fsJournalScan, error) {
+	return f.journal, f.journalErr
+}
+
+func (f *fakeEXTSession) JournalBlockCopies(fsBlock int64) (fsJournalScan, error) {
+	f.copiesBlock = fsBlock
+	return f.copies, f.copiesErr
+}
+
+func (f *fakeEXTSession) JournalInodeVersions(inode int64) (fsJournalScan, error) {
+	f.versionsInode = inode
+	return f.versions, f.versionsErr
+}
+
+func (f *fakeEXTSession) RecoverJournalledFile(inode, version int64) (fsRecovery, error) {
+	f.journalledInode = inode
+	f.journalledVersion = version
+	return f.journalled, f.journalledErr
+}
+
+func (f *fakeXFSSession) ScanLogRecords() (fsJournalScan, error) {
+	return f.logRecords, f.logRecordsErr
+}
+
+func (f *fakeXFSSession) ScanLogTransactions() (fsJournalScan, error) {
+	return f.logTxns, f.logTxnsErr
 }

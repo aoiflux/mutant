@@ -1404,6 +1404,179 @@ one image can carry the same name, and evidence overwritten by accident is not
 recoverable. A write that fails part way has its partial output removed, because
 a prefix left under the name of the whole file reads as the whole file.
 
+### What the filesystem wrote down before it did it
+
+Everything above reads a filesystem as a statement about the present. A journal
+is the one structure that is a statement about the past, and three of the six
+formats keep one.
+
+```mutant
+let fs, err = ntfs_open("/evidence/disk.raw", parts[0]);
+let usn, err = ntfs_usn_journal(fs["handle"]);
+
+if (!usn["present"]) {
+  putln("no change journal on this volume");
+}
+
+for (r in usn["entries"]) {
+  if (!r["has_timestamp"]) { continue; }
+  putln(r["timestamp"] + "  " + r["name"] + "  " + to_string(r["reasons"]));
+}
+```
+
+| builtin | what it reads |
+| --- | --- |
+| `ntfs_usn_journal` | the USN change journal: timestamps, filenames, reason flags |
+| `ntfs_log_records` | `$LogFile`'s operation stream, by LSN |
+| `ntfs_log_transactions` | the same records grouped into transactions |
+| `ext_journal` | JBD2's transactions, its superblock and its feature bits |
+| `ext_journal_block_copies` | every journalled copy of one filesystem block |
+| `ext_journal_inode_versions` | prior on-disk states of one inode |
+| `ext_recover_journalled_file` | the bytes a journalled version points at |
+| `xfs_log_records` | XLOG's records, by log sequence number |
+| `xfs_log_transactions` | the same records grouped into transactions |
+
+FAT, exFAT and HFS+ have none here. libhfs exposes no journal API at all, so
+HFS+'s journal is not read even though the format has one -- which is a gap in
+the library, not a statement about the format.
+
+**Circularity is the fact everything here turns on.** All three journals are
+fixed regions written round and round, so the order records sit in is the order
+they happened in only until the writer laps itself. Every scan therefore reports
+`ordering`:
+
+- `lsn` -- sorted by log sequence number, which is the order of events
+- `stream` -- the order of an append-only stream, which is also the order of
+  events, because nothing was overwritten in place
+- `physical` -- the order records sit in the region, which is **not** the order
+  of events once the region has been written round
+
+and beside it the two bits. `wrap_checked` says whether the scan could look for
+the seam; `wrapped` says whether it found one. They are separate for the same
+reason `allocation_checked` and `reallocated` are separate: a check that never
+ran is not a negative result.
+
+**Where `wrapped` is true and `ordering` is `physical`, the entries array is not
+a timeline.** Mutant does not reorder it. An order the library declined to
+establish is not one this package gets to assert on its behalf; what it does
+instead is say the seam is there and leave the claim unmade.
+
+**libext is where that stops being academic.** Its transaction walk reads the
+journal linearly from the first block to the last, parses the superblock's
+`Start` and `Sequence` and then uses neither, so a wrapped journal interleaves
+stale pre-wrap transactions among new ones. The same wrap creates a second
+trap: a transaction whose commit block sits at a *lower* physical block than its
+descriptor has its commit processed first, matched against nothing, and
+discarded -- so a transaction that did commit is reported as one that never
+did. `ext_journal` raises `commit_state_unreliable` when it sees the seam,
+because `committed: false` is otherwise read as evidence that an operation
+failed to complete.
+
+**`timestamps_available` is per journal, not per format.** USN records carry a
+wall-clock time; JBD2 carries one on the commit block, so a transaction that
+never committed has none rather than a zero one; `$LogFile` carries none; XLOG
+carries none at all. An XFS log can say what happened and in what order, and can
+never say when -- a sequence assembled from it is an ordering, and calling it a
+timeline is the mistake this field exists to prevent.
+
+**What none of the three can report is what it skipped.** libntfs has no
+warnings channel anywhere, and its log page walker drops an entire page -- and
+the partial record carried into it -- when the update-sequence fixups fail. A
+fixup failure is a torn write, which is the most forensically interesting thing
+a log page can hold, and it is discarded with no counter and no error: a
+`$LogFile` whose every page failed and a pristine one both produce zero records
+and no error. libext reports unreadable journal blocks through a channel capped
+at 256 for the life of the handle. libxfs raises a coded anomaly at every
+failure point and is the only one of the three that does.
+`warnings_available` says which of those three a reader is in, and an empty
+warnings list means nothing at all when it is false.
+
+**`ntfs_usn_journal` is the richest timeline artifact on a Windows volume**, and
+its blind spot is worth naming. `$J` is a sparse stream appended to and trimmed
+from the front, so its surviving records are a contiguous window ending at the
+most recent change and `lowest_position`/`highest_position` bound it in USN --
+itself a byte offset into the stream. What it cannot see is a journal deleted
+and recreated, a classic anti-forensic action: the `$Max` stream holding the
+journal's identifier, maximum size and lowest valid USN is one libntfs never
+reads, so a wiped journal looks like a volume with a short history.
+
+Version 4 USN records track extents rather than names and carry neither a
+timestamp nor a filename. They report `has_timestamp` and `has_name` false
+rather than a year-1 date and an empty string, because a zero time rendered into
+a timeline sorts before every real event in it.
+
+**`ntfs_log_transactions` reports `committed` and `forgotten` as two bits**, and
+neither is the negation of the other. NTFS ends almost every transaction with
+`ForgetTransaction` rather than `CommitTransaction`, so a log holding tens of
+thousands of records may contain no commit record at all: `committed: false`
+across a whole volume is the normal reading rather than a finding, and
+`end_state` is the field a report should quote. `start_present` reports whether
+a transaction's earliest surviving record names no previous record of its own --
+where it is false, the beginning was overwritten by the wrap and `first_lsn` is
+merely the oldest surviving part, which the grouping otherwise presents as the
+beginning.
+
+### Getting back what ext4 zeroed
+
+`ext_journal_inode_versions` is the one path in the language that can locate an
+ext4 file the filesystem itself can no longer locate.
+
+Unlink zeroes the extent tree in the live inode and leaves everything else,
+which is why the usual deleted ext4 file comes back from `ext_deleted` fully
+described and entirely unfindable, with `content_state` `none`. A journalled
+copy of the same inode-table block from before the unlink still carries the
+tree.
+
+```mutant
+let fs, err = ext_open("/evidence/disk.raw", parts[1]);
+let gone, err = ext_deleted(fs["handle"]);
+
+for (e in gone["entries"]) {
+  if (e["content_state"] != "none") { continue; }
+
+  let past, err = ext_journal_inode_versions(fs["handle"], e["record_id"]);
+  if (err) { continue; }
+
+  for (v in past["entries"]) {
+    if (v["content_state"] != "preserved") { continue; }
+
+    let out, err = ext_recover_journalled_file(fs["handle"], e["record_id"],
+                                               v["version"], "/out/" + e["name"]);
+    if (err) { putln(err.message); continue; }
+    putln(e["name"] + ": " + to_string(out["bytes_written"]) + " bytes from " +
+          "journal version " + to_string(v["version"]));
+    break;
+  }
+}
+```
+
+Each version reports `content_state` in the same vocabulary `*_deleted` uses and
+`runs` as image-absolute byte ranges, so a version reporting `preserved` can be
+read with `raw_read_at_bytes` or written out with `ext_recover_journalled_file`,
+which returns the same result shape the `*_recover_file` family does -- the same
+three-way split of `bytes_written`, the same `caveats`, the same digest.
+
+**`version` is an index, not a date.** libext orders the versions newest first,
+and that holds only while the journal has not been written round, which is
+exactly why `ext_journal_inode_versions` pays for a second journal walk to
+establish `wrapped`. Where the seam is present, version 0 is the most recent
+*surviving* copy and not necessarily the state just before the deletion, and the
+recovery result echoes the version index so that a report cannot quietly become
+a claim about when.
+
+`deleted_at_raw` is carried beside `deleted_at` because ext4 reuses the
+deletion-time field to hold the next inode number while an inode sits on the
+legacy orphan list. Inode 11, read as a date, is a timestamp eleven seconds
+after the epoch.
+
+Two limits are worth stating before anything is quoted from a journalled copy.
+Revoke records are precisely the statement that a journalled copy must not be
+replayed, and libext identifies them without parsing them, so a copy cannot be
+shown *not* to have been revoked. And the filesystem reallocated those blocks
+freely after the unlink -- nothing here checks whether they still hold the
+file's content, which is why the recovery carries that caveat whether or not
+anyone reads it.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.
