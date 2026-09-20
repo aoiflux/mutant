@@ -2354,10 +2354,51 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameRawClose:       {signature: "raw_close(handle)", summary: "Closes a raw image handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from raw_open.", ParamString)}},
 
 	// partition table parser
-	BuiltinNameTableOpen:           {signature: "table_open(image)", summary: "Opens a disk image and parses its partition table(s) (MBR/GPT). warnings reports suspicious-but-parsable findings (out-of-bounds entries, overlapping extents, hybrid MBR, truncated entry counts); candidates lists every scheme that parsed cleanly, so more than one means the media was ambiguous. Returns (result, err).", params: []builtinParamDoc{param("image", "Path to a disk image.", ParamString)}, returns: pairRet("a handle for the other table_ builtins, plus what the parser found", ParamHash).withFields("block_size", "candidates", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warnings")},
-	BuiltinNameTableListPartitions: {signature: "table_list_partitions(handle)", summary: "Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset.", returns: pairRet("one hash per partition", ParamArray).ofElem(ParamHash).withFields("attributes", "end_lba", "flags", "guid_type", "guid_unique", "index", "length_byte", "length_lba", "name", "slot_number", "start_byte", "start_lba", "table_number", "type_code", "type_name"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)}},
-	BuiltinNameTablePartitionInfo:  {signature: "table_partition_info(handle, index)", summary: "Returns details for a single partition by index, including absolute start_byte/length_byte.", returns: pairRet("details for a single partition by index, including absolute start_byte/length_byte", ParamHash).withFields("attributes", "end_lba", "flags", "guid_type", "guid_unique", "index", "length_byte", "length_lba", "name", "slot_number", "start_byte", "start_lba", "table_number", "type_code", "type_name"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString), param("index", "Zero-based partition index.", ParamInt)}},
-	BuiltinNameTableClose:          {signature: "table_close(handle)", summary: "Closes a partition-table handle.", returns: pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status"), params: []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)}},
+	BuiltinNameTableOpen: {
+		signature: "table_open(image)",
+		summary:   "Opens a disk image and parses its partition table. Each warning carries a stable code -- overlap, out_of_bounds, hybrid_mbr, entry_count_truncated, backup_missing, backup_mismatch, nested -- beside the prose and the LBA it was found at, and warning_codes is the set of them; branch on the code, because the prose is reworded between releases and the code is not. gpt_backup reports the secondary GPT as ok, missing or mismatch, and unknown when the question does not apply -- two copies are written together, so a mismatch means one was rewritten without the other. candidates lists every scheme that parsed cleanly, so ambiguous means this parse picked a winner: table_open_strict refuses to, table_open_as chooses, table_open_all keeps every one. Returns (result, err).",
+		params:    []builtinParamDoc{param("image", "Path to a disk image.", ParamString)},
+		returns:   pairRet("a handle for the other table_ builtins, plus what the parser found", ParamHash).withFields("ambiguous", "block_size", "candidates", "gpt_backup", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warning_codes", "warnings")},
+	BuiltinNameTableOpenAs: {
+		signature: "table_open_as(image, scheme)",
+		summary:   "Parses the image as one named scheme instead of autodetecting, which is how an examiner records having chosen between candidates rather than accepting a default. Returns what table_open returns. A scheme the parser does not have is refused by name rather than attempted.",
+		params:    []builtinParamDoc{param("image", "Path to a disk image.", ParamString), param("scheme", "One of mbr, gpt, bsd, sun, mac.", ParamString)},
+		returns:   pairRet("a handle for the other table_ builtins, plus what the parser found", ParamHash).withFields("ambiguous", "block_size", "candidates", "gpt_backup", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warning_codes", "warnings")},
+	BuiltinNameTableOpenAll: {
+		signature: "table_open_all(image)",
+		summary:   "Returns one handle per scheme that parsed cleanly, rather than one winner. A hybrid MBR -- a disk whose protective MBR also carries real records -- is the case that needs it: table_open reports the GPT, and the MBR entries are reachable by no other route. Each handle owns its own descriptor and is released with its own table_close.",
+		params:    []builtinParamDoc{param("image", "Path to a disk image.", ParamString)},
+		returns:   pairRet("one hash per scheme that parsed, in preference order", ParamArray).ofElem(ParamHash).withFields("ambiguous", "block_size", "candidates", "gpt_backup", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warning_codes", "warnings")},
+	BuiltinNameTableOpenStrict: {
+		signature: "table_open_strict(image)",
+		summary:   "Opens like table_open, but refuses media on which more than one scheme parses cleanly instead of resolving it by preference order. The error names every candidate and the one preference would have returned. Use it where a silent winner is not an acceptable answer.",
+		params:    []builtinParamDoc{param("image", "Path to a disk image.", ParamString)},
+		returns:   pairRet("a handle for the other table_ builtins, plus what the parser found", ParamHash).withFields("ambiguous", "block_size", "candidates", "gpt_backup", "handle", "is_backup", "partition_count", "path", "status", "table_offset", "table_type", "warning_codes", "warnings")},
+	BuiltinNameTableDetect: {
+		signature: "table_detect(image)",
+		summary:   "Names every partition scheme that parses cleanly, in preference order, and issues no handle. It is the question asked before the decision, so a script that only wants to know what an image is has nothing to release afterwards. The read is still recorded against the open case.",
+		params:    []builtinParamDoc{param("image", "Path to a disk image.", ParamString)},
+		returns:   pairRet("what parsed, without opening anything", ParamHash).withFields("ambiguous", "candidate_count", "candidates", "path", "table_type")},
+	BuiltinNameTableListPartitions: {
+		signature: "table_list_partitions(handle)",
+		summary:   "Lists partitions with LBA ranges, absolute start_byte/length_byte, type, name, flags, and hex type_code/attributes. Use start_byte rather than start_lba * block_size, which mislocates every partition on a table parsed at a non-zero offset. The listing maps the whole device, not only its volumes: allocated, unallocated, meta and structure decode flags, occupies_space marks the rows that tile the device exactly once, and has_nested marks a slice holding a partition scheme of its own. A script that hands every entry to fat_open is handing it GPT headers and interior gaps.",
+		params:    []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)},
+		returns:   pairRet("one hash per partition", ParamArray).ofElem(ParamHash).withFields("allocated", "attributes", "end_lba", "flags", "guid_type", "guid_unique", "has_nested", "index", "length_byte", "length_lba", "meta", "name", "nested_type", "occupies_space", "slot_number", "start_byte", "start_lba", "structure", "table_number", "type_code", "type_name", "unallocated")},
+	BuiltinNameTablePartitionInfo: {
+		signature: "table_partition_info(handle, index)",
+		summary:   "Returns details for a single partition by index, including absolute start_byte/length_byte and the decoded allocated/unallocated/meta/structure flags.",
+		params:    []builtinParamDoc{param("handle", "Handle from table_open.", ParamString), param("index", "Zero-based partition index.", ParamInt)},
+		returns:   pairRet("details for a single partition by index", ParamHash).withFields("allocated", "attributes", "end_lba", "flags", "guid_type", "guid_unique", "has_nested", "index", "length_byte", "length_lba", "meta", "name", "nested_type", "occupies_space", "slot_number", "start_byte", "start_lba", "structure", "table_number", "type_code", "type_name", "unallocated")},
+	BuiltinNameTableNested: {
+		signature: "table_nested(handle, index)",
+		summary:   "Returns the partition scheme found inside one partition -- a BSD disklabel in an MBR 0xA5 slice is the case that occurs in practice. Its partitions carry absolute byte offsets computed by the inner table, which is the only thing that knows whether the label was written with container-relative or disk-absolute addresses. A partition holding no nested scheme is an error rather than an empty listing, since an empty listing reads as a container that held nothing; has_nested on the partition is how to ask first.",
+		params:    []builtinParamDoc{param("handle", "Handle from table_open.", ParamString), param("index", "Zero-based index of the partition to look inside.", ParamInt)},
+		returns:   pairRet("the nested table and its partitions", ParamHash).withFields("block_size", "index", "partition_count", "partitions", "table_offset", "table_type", "warning_codes", "warnings")},
+	BuiltinNameTableClose: {
+		signature: "table_close(handle)",
+		summary:   "Closes a partition-table handle.",
+		params:    []builtinParamDoc{param("handle", "Handle from table_open.", ParamString)},
+		returns:   pairRet("confirmation that the handle has been released", ParamHash).withFields("closed", "handle", "status")},
 
 	// archives -- evidence containers, read in place
 	BuiltinNameZipOpen: {

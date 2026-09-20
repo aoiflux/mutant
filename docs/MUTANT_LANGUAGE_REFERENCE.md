@@ -1016,6 +1016,86 @@ Almost every builtin is pure-Go and cross-platform — the forensic parsers oper
 - `reg_open` — cross-platform for hive-file/JSON inputs; the live-registry path (`HKLM\...`) is Windows-only
 - `process_kill` — cross-platform; on Windows only SIGKILL semantics apply
 
+### When more than one partition table is true
+
+`table_open` answers with one table. Several kinds of media have more than one,
+and the difference between them matters enough that the language makes the
+script say which answer it wants.
+
+```mutant
+let seen, err = table_detect("/evidence/laptop.dd");
+putln(seen["table_type"]);                   // "gpt" — what preference order picks
+putln(to_string(seen["ambiguous"]));         // true  — it was a choice, not a reading
+
+let tables, err = table_open_all("/evidence/laptop.dd");
+for (t in tables) {
+  putln(t["table_type"] + ": " + to_string(t["partition_count"]) + " rows");
+}
+```
+
+**Four openers, because there are four defensible answers.** `table_open`
+resolves by a documented preference order and records every candidate it passed
+over. `table_open_strict` refuses instead, naming each candidate and the one
+preference would have returned. `table_open_as(image, scheme)` forces one of
+`mbr`, `gpt`, `bsd`, `sun` or `mac`, which is how an examiner records having
+decided rather than accepted a default. `table_open_all` returns a handle per
+scheme, and is the one a hybrid disk needs: an MBR that carries both the 0xEE
+protective record and real entries describes partitions that GPT does not, and
+`table_open` — which must answer with one table — leaves them reachable by no
+other route. `table_detect` asks the same question without opening anything, so
+a script that only wants to know what an image is has no handle to release.
+
+**A warning is a code, not a sentence.** Every entry in `warnings` carries
+`code`, `message` and the `lba` it was found at, and `warning_codes` is the set
+of codes without the loop. The codes are `overlap`, `out_of_bounds`,
+`block_size_overridden`, `entry_count_truncated`, `hybrid_mbr`, `crc_skipped`,
+`backup_used`, `backup_missing`, `backup_mismatch` and `nested`. Branch on the
+code. The prose beside it is written for a report and is reworded between
+library releases, so a check that matches the prose stops matching without ever
+saying that it has stopped.
+
+**`gpt_backup` is a tamper indicator, not a health check.** The two GPT copies
+are written together, so `mismatch` — both structurally valid, disagreeing on
+the disk GUID, the usable range or the entry-table checksum — means one was
+rewritten without the other, which no ordinary partitioning operation does.
+`missing` is the secondary being absent or failing its own checks, expected on a
+truncated or carved image and not on a full acquisition. `unknown` means the
+question did not apply: the table is not GPT, or was itself recovered from the
+backup.
+
+**The listing maps the device, not only its volumes.** Every row says what it
+is: `allocated` is a partition, `unallocated` is a gap, `meta` and `structure`
+are the table's own sectors — the MBR, each EBR, both GPT headers and entry
+arrays, a disklabel. A script that hands every row to `fat_open` is handing it
+GPT headers and interior gaps. `occupies_space` marks the rows that tile the
+device exactly once, so summing `length_byte` over them accounts for every byte
+of the image and summing the unallocated ones is summing space that is genuinely
+free. Meta rows without `structure` are containers — an MBR extended entry, a
+Sun whole-disk backup slice — which span the extents they hold and would
+double-count.
+
+**A scheme can live inside a partition of another one.** A BSD disklabel in an
+MBR 0xA5 slice is the case that occurs in practice, and it is the partition
+table the examiner is actually after; the MBR entry is only the container. Every
+parse looks for one, the slice that holds it reports `has_nested` and
+`nested_type`, and `table_nested(handle, index)` returns it:
+
+```mutant
+let sub, err = table_nested(disk["handle"], 0);
+for (p in sub["partitions"]) {
+  putln(to_string(p["start_byte"]));   // absolute within the image
+}
+```
+
+Those offsets are computed by the inner table, which is the only thing that
+knows which convention the label was written with: real installers write
+disklabel addresses both relative to the slice and absolute on the disk, and the
+parse reports through `warnings` when it had to fall back to the second.
+Multiplying `start_lba` by `block_size` is correct under neither. A partition
+that holds no nested scheme is an error rather than an empty listing, since an
+empty listing reads as a container that held nothing — `has_nested` is how to
+ask first.
+
 ### Opening a partition where it lies
 
 A disk image holds partitions; a filesystem parser wants a volume. Those two

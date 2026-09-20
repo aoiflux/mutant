@@ -181,8 +181,13 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameRawReadAtBytes, &BuiltIn{RAWReadAtBytes}},
 	{BuiltinNameRawClose, &BuiltIn{RAWClose}},
 	{BuiltinNameTableOpen, &BuiltIn{TableOpen}},
+	{BuiltinNameTableOpenAs, &BuiltIn{TableOpenAs}},
+	{BuiltinNameTableOpenAll, &BuiltIn{TableOpenAll}},
+	{BuiltinNameTableOpenStrict, &BuiltIn{TableOpenStrict}},
+	{BuiltinNameTableDetect, &BuiltIn{TableDetect}},
 	{BuiltinNameTableListPartitions, &BuiltIn{TableListPartitions}},
 	{BuiltinNameTablePartitionInfo, &BuiltIn{TablePartitionInfo}},
+	{BuiltinNameTableNested, &BuiltIn{TableNested}},
 	{BuiltinNameTableClose, &BuiltIn{TableClose}},
 	// binary analysis
 	{BuiltinNameBinPeParse, &BuiltIn{BinPEParse}},

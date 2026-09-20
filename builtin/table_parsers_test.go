@@ -9,21 +9,43 @@ import (
 
 type fakeTableBackend struct {
 	session tableSession
-	err     error
+	// sessions is the multi-table answer. When it is empty the single session
+	// stands in, so a test that does not care about multi-scheme media does not
+	// have to say so.
+	sessions []tableSession
+	err      error
+	// lastOptions records what the builtin asked for, which is the only place
+	// the difference between the four openers is visible.
+	lastOptions *tableParseOptions
 }
 
-func (f fakeTableBackend) Open(imagePath string) (tableSession, error) {
+func (f fakeTableBackend) Open(imagePath string, opts tableParseOptions) ([]tableSession, error) {
+	if f.lastOptions != nil {
+		*f.lastOptions = opts
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.session, nil
+	if len(f.sessions) > 0 {
+		return f.sessions, nil
+	}
+	return []tableSession{f.session}, nil
 }
 
 type fakeTableSession struct {
 	info       tableInfo
 	partitions []tablePartition
+	nested     map[int]tableNestedTable
 	closeErr   error
 	closed     bool
+}
+
+func (f *fakeTableSession) NestedTable(index int) (tableNestedTable, error) {
+	nested, ok := f.nested[index]
+	if !ok {
+		return tableNestedTable{}, errors.New("partition holds no nested partition scheme")
+	}
+	return nested, nil
 }
 
 func (f *fakeTableSession) Info() tableInfo {

@@ -40,7 +40,7 @@ func TestTableSurfacesByteOffsetsWarningsAndCandidates(t *testing.T) {
 			BlockSize:      512,
 			Offset:         1048576, // table parsed inside a container, not at 0
 			PartitionCount: 1,
-			Warnings:       []string{"out-of-bounds: entry past end of device (lba 999)"},
+			Warnings:       []tableWarning{{Code: "out_of_bounds", Message: "entry past end of device", LBA: 999}},
 			Candidates:     []string{"gpt", "mbr"},
 		},
 		partitions: []tablePartition{{
@@ -58,8 +58,25 @@ func TestTableSurfacesByteOffsetsWarningsAndCandidates(t *testing.T) {
 	}
 	openHash := openPayload.(*object.Hash)
 
-	if got := mustHashStringArray(t, openHash, "warnings"); len(got) != 1 || !strings.Contains(got[0], "out-of-bounds") {
-		t.Errorf("warnings = %v, want the out-of-bounds warning", got)
+	// A warning is a code, prose and an LBA. The code is the part a script may
+	// rely on: the prose is reworded between library releases, and a check that
+	// matches it stops matching without ever saying that it has.
+	if got := mustHashStringArray(t, openHash, "warning_codes"); len(got) != 1 || got[0] != "out_of_bounds" {
+		t.Errorf("warning_codes = %v, want [out_of_bounds]", got)
+	}
+	warnings := mustHashArrayValue(t, openHash, "warnings")
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %d entries, want 1", len(warnings))
+	}
+	warning, ok := warnings[0].(*object.Hash)
+	if !ok {
+		t.Fatalf("warning is not a HASH. got=%T", warnings[0])
+	}
+	if got := mustHashStringValue(t, warning, "code"); got != "out_of_bounds" {
+		t.Errorf("warning code = %q, want out_of_bounds", got)
+	}
+	if got := mustHashIntValue(t, warning, "lba"); got != 999 {
+		t.Errorf("warning lba = %d, want 999", got)
 	}
 	if got := mustHashStringArray(t, openHash, "candidates"); len(got) != 2 {
 		t.Errorf("candidates = %v, want two entries (ambiguous media)", got)
