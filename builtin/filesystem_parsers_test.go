@@ -77,6 +77,9 @@ type fakeNTFSSession struct {
 	logRecordsErr   error
 	logTxns         fsJournalScan
 	logTxnsErr      error
+	slack           fsSlackScan
+	slackErr        error
+	slackPath       string
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -116,6 +119,9 @@ type fakeFATSession struct {
 	recoveryErr     error
 	recoveryIndex   int64
 	recoveryAssumed bool
+	slack           fsSlackScan
+	slackErr        error
+	slackPath       string
 }
 
 func (f *fakeFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -155,6 +161,9 @@ type fakeXFATSession struct {
 	recoveryErr     error
 	recoveryIndex   int64
 	recoveryAssumed bool
+	slack           fsSlackScan
+	slackErr        error
+	slackPath       string
 }
 
 func (f *fakeXFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -206,6 +215,12 @@ type fakeEXTSession struct {
 	journalledErr     error
 	journalledInode   int64
 	journalledVersion int64
+	slack             fsSlackScan
+	slackErr          error
+	slackPath         string
+	dirSlack          fsDirSlackScan
+	dirSlackErr       error
+	dirSlackPath      string
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -245,6 +260,11 @@ type fakeHFSSession struct {
 	recoveryErr     error
 	recoveryIndex   int64
 	recoveryAssumed bool
+	slack           fsSlackScan
+	slackErr        error
+	slackPath       string
+	freeSpace       fsFreeSpaceScan
+	freeSpaceErr    error
 }
 
 func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -291,6 +311,9 @@ type fakeXFSSession struct {
 	logRecordsErr   error
 	logTxns         fsJournalScan
 	logTxnsErr      error
+	slack           fsSlackScan
+	slackErr        error
+	slackPath       string
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1463,4 +1486,43 @@ func (f *fakeXFSSession) ScanLogRecords() (fsJournalScan, error) {
 
 func (f *fakeXFSSession) ScanLogTransactions() (fsJournalScan, error) {
 	return f.logTxns, f.logTxnsErr
+}
+
+func (f *fakeNTFSSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
+}
+
+func (f *fakeFATSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
+}
+
+func (f *fakeXFATSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
+}
+
+func (f *fakeEXTSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
+}
+
+func (f *fakeEXTSession) DirSlack(dirPath string) (fsDirSlackScan, error) {
+	f.dirSlackPath = dirPath
+	return f.dirSlack, f.dirSlackErr
+}
+
+func (f *fakeHFSSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
+}
+
+func (f *fakeHFSSession) Unallocated() (fsFreeSpaceScan, error) {
+	return f.freeSpace, f.freeSpaceErr
+}
+
+func (f *fakeXFSSession) Slack(filePath string) (fsSlackScan, error) {
+	f.slackPath = filePath
+	return f.slack, f.slackErr
 }

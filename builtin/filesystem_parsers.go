@@ -63,6 +63,7 @@ type ntfsSession interface {
 	ScanUSNJournal() (fsJournalScan, error)
 	ScanLogRecords() (fsJournalScan, error)
 	ScanLogTransactions() (fsJournalScan, error)
+	Slack(filePath string) (fsSlackScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -135,6 +136,7 @@ type fatSession interface {
 	Metadata(filePath string) (fatMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	Slack(filePath string) (fsSlackScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -238,6 +240,7 @@ type xfatSession interface {
 	Metadata(filePath string) (xfatMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	Slack(filePath string) (fsSlackScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -312,6 +315,8 @@ type extSession interface {
 	JournalBlockCopies(fsBlock int64) (fsJournalScan, error)
 	JournalInodeVersions(inode int64) (fsJournalScan, error)
 	RecoverJournalledFile(inode, version int64) (fsRecovery, error)
+	Slack(filePath string) (fsSlackScan, error)
+	DirSlack(dirPath string) (fsDirSlackScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -379,6 +384,8 @@ type hfsSession interface {
 	Metadata(filePath string) (hfsMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
+	Slack(filePath string) (fsSlackScan, error)
+	Unallocated() (fsFreeSpaceScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -445,6 +452,7 @@ type xfsSession interface {
 	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	ScanLogRecords() (fsJournalScan, error)
 	ScanLogTransactions() (fsJournalScan, error)
+	Slack(filePath string) (fsSlackScan, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }

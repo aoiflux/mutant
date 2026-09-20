@@ -1577,6 +1577,132 @@ freely after the unlink -- nothing here checks whether they still hold the
 file's content, which is why the recovery carries that caveat whether or not
 anyone reads it.
 
+### The bytes a file owns and never wrote
+
+A file rarely fills its own allocation. The filesystem hands out whole clusters
+or blocks, and what the file does not use is still there, still holding what the
+last occupant left. Two different things get called slack in this field and
+Mutant refuses to merge them, because they are found in different places and
+mean different things about what someone did:
+
+| class | where it is | what it means |
+| --- | --- | --- |
+| `file_slack` | past the recorded size, inside the allocation | the tail of the last unit; the classic slack |
+| `unwritten` | inside the recorded size, allocated, never written | space reserved and skipped; reads back as zeros |
+
+```mutant
+let img, err = raw_open("/evidence/disk.raw");
+let fs, err = ntfs_open("/evidence/disk.raw", parts[0]);
+let s, err = ntfs_slack(fs["handle"], "/Users/mal/report.docx");
+
+if (!s["file_slack_checked"]) {
+  putln("slack not established: " + s["incomplete_reason"]);
+}
+
+// Offsets are into the image, not into the file, so the bytes come back
+// through the image handle rather than through the filesystem.
+for (r in s["ranges"]) {
+  if (r["offset"] < 0) { continue; }
+  let bytes, err = raw_read_at_bytes(img["handle"], r["offset"], r["length"]);
+  putln(r["class"] + " @ " + to_string(r["offset"]) + "  " + hex_encode(bytes));
+}
+```
+
+| builtin | what it reports |
+| --- | --- |
+| `ntfs_slack` | the cluster tail, and the `InitializedSize` gap |
+| `fat_slack` | the cluster tail |
+| `xfat_slack` | the cluster tail, and the `ValidDataLength` gap |
+| `ext_slack` | the blocks past the end of the file, and preallocated extents |
+| `hfs_slack` | slack on every extent of the data fork, not only the last |
+| `xfs_slack` | the block tail, and unwritten extents |
+| `ext_dir_slack` | directory records surviving in a directory's own slack |
+| `hfs_unallocated` | the runs of a volume that belong to no live file |
+
+Every range carries its `class`. A valid-data-length gap quoted in a report as
+"slack" is a false statement about where the bytes came from, and `class` is
+what stops a script making it.
+
+**Two levels of "we did not look", and they answer different questions.**
+`classes` and `classes_unavailable` are about the library: FAT records no
+valid-data length at all, so `fat_slack` reports `unwritten` as unavailable on
+every file, for ever. `file_slack_checked` and `unwritten_checked` are about
+*this* file, and where one is false its byte count is `-1` rather than `0`,
+because zero is an answer and this is not one.
+
+That second pair exists because of what FAT does. `SlackRange` returns the same
+empty result and `false` from five different situations -- a directory, an empty
+file, a chain that could not be walked, a file ending exactly on a cluster
+boundary, and a tail falling past the end of the volume -- and only the fourth
+means the file has no slack. So Mutant walks the chain itself and says which of
+the five it is, naming a reallocated first cluster, a broken chain or a loop in
+the warnings.
+
+**What these cannot reach.** They address a live file by its path, and a deleted
+entry cannot be opened by one -- the listers return its name and the openers
+refuse it. The slack of a deleted file is the most valuable slack there is, and
+getting at it needs the scan index the `*_deleted` family hands out, which this
+family does not take. Four of the six libraries could answer for a deleted entry
+if it did: NTFS keeps the whole run list and both sizes through an unlink, exFAT
+keeps the layout of an entry it had declared contiguous, libhfs carries fork
+extents on a carved catalog record, and an XFS inode on an unlinked chain is
+still allocated and still readable. FAT and ext could not -- the chain is freed
+and the extent tree zeroed.
+
+Directories divide the two FAT libraries. libxfat reports directory slack and
+calls its sibling's refusal a deliberate divergence, because directory cluster
+slack is where deleted directory records survive. `fat_slack` therefore reports
+a directory as unchecked rather than as empty.
+
+**Two of the six libraries have no slack API at all and are computed here.**
+NTFS slack comes from `AllocatedSize`, `RealSize` and `InitializedSize` on the
+non-resident `$DATA` attribute, located through its run list -- including the
+whole clusters past the end of the stream that `Fragments` drops and a file
+truncated in place still owns. It is refused rather than guessed on a compressed
+stream, whose runs map compression units rather than stream bytes, and on a
+sparse one, whose allocated size is *smaller* than its recorded size so their
+difference is not a tail. ext slack is the difference between `Extents`, which
+keeps the blocks past the end of the file, and `DataRuns`, which trims to the
+recorded size.
+
+Offsets are image-absolute and carry the base offset of the partition the volume
+was opened at, so a slack range from a FAT volume and one from an ext volume
+elsewhere in the same image are directly comparable. An offset of `-1`, never
+`0`, means the range has no location -- and every counted byte still gets a row,
+so a total never floats free of the ranges behind it.
+
+#### Two things that are not file slack
+
+`ext_dir_slack` reads a different artifact entirely. Unlinking a file does not
+erase its directory record: the preceding record's `rec_len` is extended to
+swallow it, leaving the old record intact in the gap. On ext4 that is frequently
+the only surviving evidence a name existed, because unlink also zeroes the
+inode's extent tree. Each record is reported at two positions -- `dir_offset`
+inside the directory's own data stream, which is all libext gives, and `offset`
+on the image, which Mutant maps through the directory's data runs because
+nothing in libext does and a finding nobody can re-read is not one.
+
+Every name there is a candidate: the record is real, but the inode it names may
+since have been reused. Records that duplicate a live entry are kept and flagged
+through `shadows_live` rather than dropped -- `ext_deleted` filters them out and
+this deliberately does not, because a directory rewrite leaving copies behind is
+itself worth seeing. Two limits libext does not report: a record whose inode
+field was *cleared*, which is the classic ext2 and ext3 unlink marker, is never
+recovered, and a block with an implausible record length is abandoned from that
+point on in silence.
+
+`hfs_unallocated` answers a volume-level question rather than a file-level one,
+and it is the only free-space traversal available anywhere in these six
+libraries -- the others offer a per-cluster or per-block query, a raw bitmap, or
+a count the volume merely claims. It reports `free_blocks`, counted bit by bit,
+beside `free_blocks_claimed`, which is what the volume header records, because
+they are different kinds of statement: `claim_matches` false means the volume
+was not unmounted cleanly or its metadata is inconsistent, and that is worth
+knowing before anything carved out of that space is relied on. A free block is
+not a statement that anything was ever written there. Blocks still claimed by a
+deleted file are not free and do not appear -- `hfs_deleted` is what finds
+those.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.
