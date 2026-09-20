@@ -45,7 +45,7 @@ func TestAnUncheckedAllocationDoesNotReadAsAFreeOne(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hash, ok := tc.entry.toHash().(*object.Hash)
+			hash, ok := tc.entry.toHash(0).(*object.Hash)
 			if !ok {
 				t.Fatalf("an entry did not render as a HASH")
 			}
@@ -479,7 +479,9 @@ func openRealFATDeletedSession(t *testing.T, image []byte, base int64) *realFATS
 	if err != nil {
 		t.Fatalf("libfat could not open the built image: %v", err)
 	}
-	return &realFATSession{volume: volume}
+	// reader as well as volume: a recovery reads the runs libfat reports out
+	// of the image itself, so the session needs the same bytes the library has.
+	return &realFATSession{reader: bytes.NewReader(image), volume: volume}
 }
 
 func scanEntryNamed(t *testing.T, scan fsDeletedScan, suffix string) fsDeletedEntry {

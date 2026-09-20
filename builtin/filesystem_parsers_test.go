@@ -59,14 +59,18 @@ func (f *fakeNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession,
 }
 
 type fakeNTFSSession struct {
-	entries    map[string][]ntfsListEntry
-	files      map[string][]byte
-	located    map[string]int64
-	meta       map[string]ntfsMetadata
-	verify     fsVerifyResult
-	verifyErr  error
-	deleted    fsDeletedScan
-	deletedErr error
+	entries         map[string][]ntfsListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]ntfsMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -94,14 +98,18 @@ func (f *fakeFATBackend) Open(volumePath string, region fsRegion) (fatSession, e
 }
 
 type fakeFATSession struct {
-	entries    map[string][]fatListEntry
-	files      map[string][]byte
-	located    map[string]int64
-	meta       map[string]fatMetadata
-	verify     fsVerifyResult
-	verifyErr  error
-	deleted    fsDeletedScan
-	deletedErr error
+	entries         map[string][]fatListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]fatMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -129,14 +137,18 @@ func (f *fakeXFATBackend) Open(volumePath string, region fsRegion) (xfatSession,
 }
 
 type fakeXFATSession struct {
-	entries    map[string][]xfatListEntry
-	files      map[string][]byte
-	located    map[string]int64
-	meta       map[string]xfatMetadata
-	verify     fsVerifyResult
-	verifyErr  error
-	deleted    fsDeletedScan
-	deletedErr error
+	entries         map[string][]xfatListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]xfatMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeXFATSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -164,14 +176,18 @@ func (f *fakeEXTBackend) Open(volumePath string, region fsRegion) (extSession, e
 }
 
 type fakeEXTSession struct {
-	entries    map[string][]extListEntry
-	files      map[string][]byte
-	located    map[string]int64
-	meta       map[string]extMetadata
-	verify     fsVerifyResult
-	verifyErr  error
-	deleted    fsDeletedScan
-	deletedErr error
+	entries         map[string][]extListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]extMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -199,14 +215,18 @@ func (f *fakeHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, e
 }
 
 type fakeHFSSession struct {
-	entries    map[string][]hfsListEntry
-	files      map[string][]byte
-	located    map[string]int64
-	meta       map[string]hfsMetadata
-	verify     fsVerifyResult
-	verifyErr  error
-	deleted    fsDeletedScan
-	deletedErr error
+	entries         map[string][]hfsListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]hfsMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -234,17 +254,21 @@ func (f *fakeXFSBackend) Open(volumePath string, region fsRegion) (xfsSession, e
 }
 
 type fakeXFSSession struct {
-	entries     map[string][]xfsListEntry
-	files       map[string][]byte
-	located     map[string]int64
-	meta        map[string]xfsMetadata
-	verify      fsVerifyResult
-	verifyErr   error
-	deleted     fsDeletedScan
-	deletedErr  error
-	deletedDir  string
-	unlinked    fsDeletedScan
-	unlinkedErr error
+	entries         map[string][]xfsListEntry
+	files           map[string][]byte
+	located         map[string]int64
+	meta            map[string]xfsMetadata
+	verify          fsVerifyResult
+	verifyErr       error
+	deleted         fsDeletedScan
+	deletedErr      error
+	deletedDir      string
+	unlinked        fsDeletedScan
+	unlinkedErr     error
+	recovery        fsRecovery
+	recoveryErr     error
+	recoveryIndex   int64
+	recoveryAssumed bool
 }
 
 func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
@@ -1337,4 +1361,44 @@ func (f *fakeXFSSession) ScanDeletedDirectory(dirPath string) (fsDeletedScan, er
 
 func (f *fakeXFSSession) UnlinkedInodes() (fsDeletedScan, error) {
 	return f.unlinked, f.unlinkedErr
+}
+
+// The recovery fakes record what they were asked for as well as answering:
+// which index reached the library, and whether the contiguity hypothesis
+// travelled with it, are both things the builtins are responsible for and
+// neither is visible in the result.
+func (f *fakeNTFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeXFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeEXTSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeHFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
+}
+
+func (f *fakeXFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
+	f.recoveryIndex = index
+	f.recoveryAssumed = assumeContiguous
+	return f.recovery, f.recoveryErr
 }

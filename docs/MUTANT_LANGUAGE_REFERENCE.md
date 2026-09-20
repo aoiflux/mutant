@@ -1313,6 +1313,97 @@ still held it open, so it is still allocated, still readable, and its extents
 are live rather than stale. It carries no name, because the directory entry is
 already gone.
 
+### Writing the bytes back out
+
+`*_deleted` enumerates; `*_recover_file` writes. They are separate calls rather
+than one builtin with a destination argument, because `content_state` is what
+decides whether the output is worth anything and a script has to have seen it
+before it produces a file somebody will hash and attach.
+
+```mutant
+let fs, err = fat_open("/evidence/card.dd", parts[0]);
+let gone, err = fat_deleted(fs["handle"]);
+
+for (e in gone["entries"]) {
+  if (e["content_state"] == "none") { continue; }
+
+  let out, err = fat_recover_file(fs["handle"], e["index"],
+                                  "/out/" + e["name"]);
+  if (err) { putln(e["name"] + ": " + err.message); continue; }
+
+  putln(e["name"] + ": " + to_string(out["bytes_written"]) + " of " +
+        to_string(out["size"]) + " bytes, sha256 " + out["digest"]);
+  for (c in out["caveats"]) { putln("  -- " + c); }
+}
+```
+
+**An entry is named by its index, not by an identifier.** Each scanned entry now
+carries `index`, its position in that scan, and that is the only thing the
+recovery builtins take. No identifier these six filesystems keep survives
+deletion uniquely: a CNID repeats across records HFS+ carves out of node slack,
+and FAT and exFAT keep none at all and report their first cluster, which two
+deleted files share the moment it is reused. The index is exactly as stable as
+the scan it came from, which is the honest scope of the claim -- and the result
+echoes `name`, `path` and `record_id` so a script can assert it recovered what
+it meant to.
+
+Recovering before scanning is an error rather than an implicit scan. The
+enumeration is where an entry's provenance is established, and an implicit one
+would leave no record of it in the manifest.
+
+**Three kinds of zero, counted apart.** `bytes_written` splits into
+`located_bytes`, read from the image at a run's offset; `sparse_bytes`, a hole
+the filesystem recorded, where the zeros are the file's own content; and
+`unlocated_bytes`, ranges no locatable run covers. The last are written -- the
+file has to be that long for the offsets after them to land -- and they are
+never evidence that the file held zeros there. A single "could not read" number
+would let a report present a library's failure to place a run as content.
+
+**The contiguity hypothesis has its own builtin.**
+`fat_recover_file_assuming_contiguous` and
+`xfat_recover_file_assuming_contiguous` ask the library to synthesise
+`ceil(size / cluster)` clusters following the first, which is what recovers a
+FAT file whose chain was freed. It is a separate builtin and not a flag so that
+a caller has to say the word at the call site. What comes back in `assumed` is
+the library's own answer, not the argument that was passed: an entry whose
+chain turned out to be walkable, or an exFAT entry that recorded NoFatChain,
+needed no hypothesis and reports `assumed` false. When `assumed` is true,
+nothing in the filesystem connects those bytes to that file beyond their
+position, and `content_state` says `assumed_contiguous` rather than borrowing
+one of the six words a scan uses.
+
+**`caveats` is part of the result, not commentary on it.** Every entry in it is
+derivable from the other fields, and that is the point -- the prose an examiner
+would have to write by hand is the prose that gets left out. It names an
+assumed layout, blocks a live file now owns, an allocation nobody checked, the
+zeros that are not content, a directory recovered as though it were a file, a
+name that was reconstructed or invented, and a write shorter than the size the
+record claimed. A report quoting `digest` without `caveats` is quoting a number
+out of its scope.
+
+`size_matched` rather than `complete`: one builtin away, on the scan the
+entry came from, `complete` says the enumeration was not cut short. A
+recovery made entirely of assumed clusters can write exactly as many bytes
+as the record claimed, and `complete` beside it would read as a verdict on
+the recovery instead of an observation about two numbers.
+
+**What each filesystem can actually give back.** `ntfs_recover_file` reads the
+map NTFS itself wrote; a resident value comes from the parsed MFT record and is
+never re-read from the image, because the record carries update-sequence fixups
+and a resident value crossing a sector boundary read off the disk is quietly
+two bytes wrong. A compressed or EFS-encrypted stream is refused rather than
+written, since its runs describe compression units or ciphertext.
+`ext_recover_file` works only where the extent tree survived, which on ext4
+means files unlinked while still open. `hfs_recover_file` uses the eight
+extents held in the catalog record and nothing that overflowed into the extents
+B-tree. `xfs_recover_file` recovers from an unlinked chain and nothing else --
+an entry from `xfs_deleted` reports `unsupported` and is refused.
+
+A destination that already exists is never written over: two deleted entries in
+one image can carry the same name, and evidence overwritten by accident is not
+recoverable. A write that fails part way has its partial output removed, because
+a prefix left under the name of the whole file reads as the whole file.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.

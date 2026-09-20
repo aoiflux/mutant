@@ -59,6 +59,7 @@ type ntfsSession interface {
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (ntfsMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -71,7 +72,13 @@ type realNTFSBackend struct{}
 
 type realNTFSSession struct {
 	img    *os.File
+	reader io.ReaderAt
 	volume *libntfs.Volume
+
+	// recovery remembers the entries of the last deleted scan on this
+	// handle, which is what ntfs_recover_file names one from. See
+	// filesystem_recover.go.
+	recovery fsRecoveryCache
 }
 
 type ntfsHandleState struct {
@@ -124,6 +131,7 @@ type fatSession interface {
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (fatMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -136,7 +144,13 @@ type realFATBackend struct{}
 
 type realFATSession struct {
 	img    *os.File
+	reader io.ReaderAt
 	volume *libfat.Volume
+
+	// recovery also keeps libfat's own directory entries: the contiguity
+	// hypothesis is derived by the library from the entry, never by
+	// arithmetic here. See filesystem_recover.go.
+	recovery fatRecoveryCache
 }
 
 type fatHandleState struct {
@@ -220,6 +234,7 @@ type xfatSession interface {
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (xfatMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -231,13 +246,18 @@ type xfatBackend interface {
 type realXFATBackend struct{}
 
 type realXFATSession struct {
-	img   *os.File
-	fs    *libxfat.ExFAT
-	cache map[string]libxfat.Entry
+	img    *os.File
+	reader io.ReaderAt
+	fs     *libxfat.ExFAT
+	cache  map[string]libxfat.Entry
 	// mu guards path resolution (the cache map + volume reads within it). XFAT
 	// handles can be shared across concurrent serve goroutines, and an
 	// unsynchronized map write is a fatal "concurrent map writes" crash.
 	mu sync.Mutex
+
+	// recovery carries its own lock and is not guarded by mu; the two
+	// protect different things and a recovery does no path resolution.
+	recovery xfatRecoveryCache
 }
 
 type xfatHandleState struct {
@@ -284,6 +304,7 @@ type extSession interface {
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (extMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -295,8 +316,11 @@ type extBackend interface {
 type realEXTBackend struct{}
 
 type realEXTSession struct {
-	img *os.File
-	fs  *libext.FS
+	img    *os.File
+	reader io.ReaderAt
+	fs     *libext.FS
+
+	recovery fsRecoveryCache
 }
 
 type extHandleState struct {
@@ -347,6 +371,7 @@ type hfsSession interface {
 	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (hfsMetadata, error)
 	ScanDeleted() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -360,6 +385,10 @@ type realHFSBackend struct{}
 type realHFSSession struct {
 	img    *os.File
 	volume *libhfs.Volume
+
+	// recovery keeps libhfs's own DeletedRecord values: OpenDeleted takes
+	// the record, and a CNID is not enough to find it again.
+	recovery hfsRecoveryCache
 }
 
 type hfsHandleState struct {
@@ -406,6 +435,7 @@ type xfsSession interface {
 	Metadata(filePath string) (xfsMetadata, error)
 	ScanDeletedDirectory(dirPath string) (fsDeletedScan, error)
 	UnlinkedInodes() (fsDeletedScan, error)
+	RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
 }
@@ -419,6 +449,8 @@ type realXFSBackend struct{}
 type realXFSSession struct {
 	img    *os.File
 	volume *libxfs.Volume
+
+	recovery fsRecoveryCache
 }
 
 type xfsHandleState struct {
@@ -1719,7 +1751,7 @@ func (realNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession, er
 		return nil, err
 	}
 
-	return &realNTFSSession{img: img, volume: volume}, nil
+	return &realNTFSSession{img: img, reader: reader, volume: volume}, nil
 }
 
 func (realFATBackend) Open(volumePath string, region fsRegion) (fatSession, error) {
@@ -1734,7 +1766,7 @@ func (realFATBackend) Open(volumePath string, region fsRegion) (fatSession, erro
 		return nil, err
 	}
 
-	return &realFATSession{img: img, volume: volume}, nil
+	return &realFATSession{img: img, reader: reader, volume: volume}, nil
 }
 
 func (realXFATBackend) Open(volumePath string, region fsRegion) (xfatSession, error) {
@@ -1766,7 +1798,7 @@ func (realXFATBackend) Open(volumePath string, region fsRegion) (xfatSession, er
 		return nil, err
 	}
 
-	return &realXFATSession{img: img, fs: fs}, nil
+	return &realXFATSession{img: img, reader: reader, fs: fs}, nil
 }
 
 func (realEXTBackend) Open(volumePath string, region fsRegion) (extSession, error) {
@@ -1788,7 +1820,7 @@ func (realEXTBackend) Open(volumePath string, region fsRegion) (extSession, erro
 		return nil, err
 	}
 
-	return &realEXTSession{img: img, fs: fs}, nil
+	return &realEXTSession{img: img, reader: reader, fs: fs}, nil
 }
 
 func (realHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, error) {

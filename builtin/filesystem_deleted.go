@@ -250,11 +250,19 @@ type fsDeletedScan struct {
 }
 
 // add appends an entry, keeping the count honest past the cap.
-func (s *fsDeletedScan) add(entry fsDeletedEntry) {
+//
+// It reports whether the entry was stored. A caller keeping the library's
+// own record beside it -- which the recovery half needs, because a CNID or
+// a freed first cluster is not enough to find the record again -- appends
+// to its own slice only when this says yes, so index i means the same
+// entry in both lists however many were dropped at the cap.
+func (s *fsDeletedScan) add(entry fsDeletedEntry) bool {
 	s.EntryCount++
-	if len(s.Entries) < fsDeletedMaxEntries {
-		s.Entries = append(s.Entries, entry)
+	if len(s.Entries) >= fsDeletedMaxEntries {
+		return false
 	}
+	s.Entries = append(s.Entries, entry)
+	return true
 }
 
 // warn records something the scan could not do.
@@ -274,8 +282,8 @@ func (s *fsDeletedScan) incomplete(reason string) {
 
 func (s fsDeletedScan) toHash(handle string) *object.Hash {
 	entries := make([]object.Object, 0, len(s.Entries))
-	for _, entry := range s.Entries {
-		entries = append(entries, entry.toHash())
+	for i, entry := range s.Entries {
+		entries = append(entries, entry.toHash(int64(i)))
 	}
 
 	warnings := make([]object.Object, 0, len(s.Warnings))
@@ -314,18 +322,14 @@ func (s fsDeletedScan) toHash(handle string) *object.Hash {
 	})
 }
 
-func (e fsDeletedEntry) toHash() object.Object {
-	runs := make([]object.Object, 0, len(e.Runs))
-	for _, run := range e.Runs {
-		runs = append(runs, makeHashObject(map[string]object.Object{
-			"file_offset": intObj(run.FileOffset),
-			"offset":      intObj(run.Offset),
-			"length":      intObj(run.Length),
-			"sparse":      boolObj(run.Sparse),
-		}))
-	}
-
+// toHash renders one entry. index is its position in this scan's entries
+// array, and it is carried in the entry rather than left to the caller to
+// count because it is the argument the *_recover_file family takes. It is
+// not an identifier of the file: record_id is the library's own, and a
+// second scan of the same image renumbers nothing but a shorter one would.
+func (e fsDeletedEntry) toHash(index int64) object.Object {
 	return makeHashObject(map[string]object.Object{
+		"index":              intObj(index),
 		"name":               stringObj(e.Name),
 		"path":               stringObj(e.Path),
 		"name_source":        stringObj(e.NameSource),
@@ -339,7 +343,7 @@ func (e fsDeletedEntry) toHash() object.Object {
 		"confidence":         stringObj(e.Confidence),
 		"reasons":            stringArray(e.Reasons),
 		"content_state":      stringObj(e.ContentState),
-		"runs":               &object.Array{Elements: runs},
+		"runs":               runsArray(e.Runs),
 		"allocation_checked": boolObj(e.AllocationChecked),
 		"reallocated":        boolObj(e.Reallocated),
 		"entry_offset":       intObj(e.EntryOffset),
@@ -348,6 +352,22 @@ func (e fsDeletedEntry) toHash() object.Object {
 		"accessed_at":        stringObj(e.AccessedAt),
 		"deleted_at":         stringObj(e.DeletedAt),
 	})
+}
+
+// runsArray renders a run list. The *_deleted and *_recover_file families
+// both report one and they have to read identically: a run in a recovery
+// result is the same claim about the same bytes as the run the scan showed.
+func runsArray(runs []fsDeletedRun) object.Object {
+	out := make([]object.Object, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, makeHashObject(map[string]object.Object{
+			"file_offset": intObj(run.FileOffset),
+			"offset":      intObj(run.Offset),
+			"length":      intObj(run.Length),
+			"sparse":      boolObj(run.Sparse),
+		}))
+	}
+	return &object.Array{Elements: out}
 }
 
 // stringArray renders a string slice, never nil, so a script can loop over it
@@ -566,6 +586,7 @@ func (s *realNTFSSession) ScanDeleted() (fsDeletedScan, error) {
 		scan.add(ntfsDeletedEntry(row, paths[row.record], content[row.record]))
 	}
 
+	s.recovery.remember(scan.Entries)
 	return scan, nil
 }
 
@@ -708,6 +729,7 @@ func (s *realEXTSession) ScanDeleted() (fsDeletedScan, error) {
 		scan.add(s.extDeletedEntry(deleted))
 	}
 
+	s.recovery.remember(scan.Entries)
 	return scan, nil
 }
 
@@ -811,19 +833,23 @@ func (s *realFATSession) ScanDeleted() (fsDeletedScan, error) {
 		IncludeOrphans:            true,
 	}
 
+	var natives []libfat.DirEntry
 	err := s.volume.WalkWithOptions(context.Background(), opts,
 		func(path string, parentFirstCluster uint32, dirEntry libfat.DirEntry) error {
 			scan.Examined++
 			if !dirEntry.Deleted && !dirEntry.Orphaned {
 				return nil
 			}
-			scan.add(s.fatDeletedEntry(dirEntry))
+			if scan.add(s.fatDeletedEntry(dirEntry)) {
+				natives = append(natives, dirEntry)
+			}
 			return nil
 		})
 	if err != nil {
 		return fsDeletedScan{}, err
 	}
 
+	s.recovery.remember(scan.Entries, natives)
 	return scan, nil
 }
 
@@ -928,6 +954,7 @@ func (s *realXFATSession) ScanDeleted() (fsDeletedScan, error) {
 		IncludeRecovered:          true,
 	}
 
+	var natives []libxfat.Entry
 	err := s.fs.WalkWithOptions(context.Background(), opts,
 		func(path string, parentFirstCluster uint32, xfatEntry libxfat.Entry) error {
 			scan.Examined++
@@ -935,13 +962,16 @@ func (s *realXFATSession) ScanDeleted() (fsDeletedScan, error) {
 			if !xfatEntry.IsDeleted() && !carved {
 				return nil
 			}
-			scan.add(s.xfatDeletedEntry(path, xfatEntry, carved))
+			if scan.add(s.xfatDeletedEntry(path, xfatEntry, carved)) {
+				natives = append(natives, xfatEntry)
+			}
 			return nil
 		})
 	if err != nil {
 		return fsDeletedScan{}, err
 	}
 
+	s.recovery.remember(scan.Entries, natives)
 	return scan, nil
 }
 
@@ -1059,9 +1089,12 @@ func (s *realHFSSession) ScanDeleted() (fsDeletedScan, error) {
 		ScanUnallocated: true,
 	}
 
+	var natives []libhfs.DeletedRecord
 	err := s.volume.WalkDeleted(opts, func(record libhfs.DeletedRecord) error {
 		scan.Examined++
-		scan.add(s.hfsDeletedEntry(record))
+		if scan.add(s.hfsDeletedEntry(record)) {
+			natives = append(natives, record)
+		}
 		return nil
 	})
 	if err != nil {
@@ -1079,6 +1112,7 @@ func (s *realHFSSession) ScanDeleted() (fsDeletedScan, error) {
 		scan.incomplete("the scan recorded anomalies; see warning_codes")
 	}
 
+	s.recovery.remember(scan.Entries, natives)
 	return scan, nil
 }
 
@@ -1199,6 +1233,7 @@ func (s *realXFSSession) ScanDeletedDirectory(dirPath string) (fsDeletedScan, er
 		scan.add(xfsDeletedEntry(dirPath, record))
 	}
 
+	s.recovery.remember(scan.Entries)
 	return scan, nil
 }
 
@@ -1271,6 +1306,11 @@ func (s *realXFSSession) UnlinkedInodes() (fsDeletedScan, error) {
 		scan.add(s.xfsUnlinkedEntry(ctx, &scan, unlinked))
 	}
 
+	// The two XFS scans share one cache, so xfs_recover_file works off
+	// whichever ran last. They answer different questions and only this one
+	// yields content, which is why the recovery refuses an entry from the
+	// other by its content_state rather than by remembering which ran.
+	s.recovery.remember(scan.Entries)
 	return scan, nil
 }
 

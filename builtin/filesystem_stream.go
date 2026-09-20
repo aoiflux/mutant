@@ -1,10 +1,8 @@
 package builtin
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"os"
 
 	"mutant/object"
 )
@@ -116,33 +114,13 @@ func fsExtractFile(op string, args []object.Object, resolve fsReaderResolver) ob
 		return resultAndError(nil, errObj)
 	}
 
-	// O_EXCL: the destination of an extraction is a new piece of evidence, and
-	// writing over an existing one because two files in an image share a name
-	// is not something a forensics tool should be able to do by accident.
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return resultAndError(nil, newError("%s: %s", op, err.Error()))
-	}
-
-	digest := sha256.New()
-	written, copyErr := io.CopyBuffer(
-		io.MultiWriter(out, digest),
-		fsStreamSection(reader),
-		make([]byte, fsStreamChunkBytes),
-	)
-	if closeErr := out.Close(); copyErr == nil {
-		copyErr = closeErr
-	}
-
-	if copyErr != nil {
-		// A prefix left behind under the name of the whole file reads as the
-		// file. Remove it, and say either way what became of it.
-		if removeErr := os.Remove(destination); removeErr != nil {
-			return resultAndError(nil, newError("%s: %s; the partial output at %s could not be removed: %s",
-				op, copyErr.Error(), destination, removeErr.Error()))
-		}
-		return resultAndError(nil, newError("%s: %s; the partial output at %s was removed",
-			op, copyErr.Error(), destination))
+	// The write, the exclusive create and the single-pass digest are shared
+	// with the *_recover_file family: both produce a new piece of evidence
+	// out of an image, and there is no reason for two copies of the rule
+	// about not overwriting one.
+	written, digest, errObj := fsWriteEvidenceFile(op, destination, fsStreamSection(reader))
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -153,7 +131,7 @@ func fsExtractFile(op string, args []object.Object, resolve fsReaderResolver) ob
 		"bytes_written": intObj(written),
 		"truncated":     boolObj(reader.truncated()),
 		"algorithm":     stringObj("sha256"),
-		"digest":        stringObj(hex.EncodeToString(digest.Sum(nil))),
+		"digest":        stringObj(digest),
 	}), nil)
 }
 
