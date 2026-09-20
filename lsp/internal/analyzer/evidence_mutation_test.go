@@ -40,6 +40,16 @@ let d, derr = fs_delete(path);`,
 			"`fs_delete` deletes the same path `ewf_open` opened",
 		},
 		{
+			// A set damaged enough to need ewf_open_partial is the last thing
+			// that should be written over, so the lint has to know the builtin
+			// opens evidence -- it is curated, not derived, and a new opener
+			// that is not added here is simply never covered.
+			"a write to a partially opened image",
+			`let img, err = ewf_open_partial("damaged.E01");
+let w, werr = fs_write("damaged.E01", "notes");`,
+			"`fs_write` overwrites the same path `ewf_open_partial` opened as an incomplete EWF/E01 image",
+		},
+		{
 			"an append to a hive that is being read",
 			`let hive, err = hive_open("SYSTEM");
 let a, aerr = fs_append("SYSTEM", "x");`,

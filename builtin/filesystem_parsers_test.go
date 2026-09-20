@@ -23,9 +23,11 @@ func (f fakeNTFSBackend) Open(volumePath string) (ntfsSession, error) {
 }
 
 type fakeNTFSSession struct {
-	entries map[string][]ntfsListEntry
-	files   map[string][]byte
-	meta    map[string]ntfsMetadata
+	entries   map[string][]ntfsListEntry
+	files     map[string][]byte
+	meta      map[string]ntfsMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 type fakeFATBackend struct {
@@ -41,9 +43,11 @@ func (f fakeFATBackend) Open(volumePath string) (fatSession, error) {
 }
 
 type fakeFATSession struct {
-	entries map[string][]fatListEntry
-	files   map[string][]byte
-	meta    map[string]fatMetadata
+	entries   map[string][]fatListEntry
+	files     map[string][]byte
+	meta      map[string]fatMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 type fakeXFATBackend struct {
@@ -59,9 +63,11 @@ func (f fakeXFATBackend) Open(volumePath string) (xfatSession, error) {
 }
 
 type fakeXFATSession struct {
-	entries map[string][]xfatListEntry
-	files   map[string][]byte
-	meta    map[string]xfatMetadata
+	entries   map[string][]xfatListEntry
+	files     map[string][]byte
+	meta      map[string]xfatMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 type fakeEXTBackend struct {
@@ -77,9 +83,11 @@ func (f fakeEXTBackend) Open(volumePath string) (extSession, error) {
 }
 
 type fakeEXTSession struct {
-	entries map[string][]extListEntry
-	files   map[string][]byte
-	meta    map[string]extMetadata
+	entries   map[string][]extListEntry
+	files     map[string][]byte
+	meta      map[string]extMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 type fakeHFSBackend struct {
@@ -95,9 +103,11 @@ func (f fakeHFSBackend) Open(volumePath string) (hfsSession, error) {
 }
 
 type fakeHFSSession struct {
-	entries map[string][]hfsListEntry
-	files   map[string][]byte
-	meta    map[string]hfsMetadata
+	entries   map[string][]hfsListEntry
+	files     map[string][]byte
+	meta      map[string]hfsMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 type fakeXFSBackend struct {
@@ -113,9 +123,11 @@ func (f fakeXFSBackend) Open(volumePath string) (xfsSession, error) {
 }
 
 type fakeXFSSession struct {
-	entries map[string][]xfsListEntry
-	files   map[string][]byte
-	meta    map[string]xfsMetadata
+	entries   map[string][]xfsListEntry
+	files     map[string][]byte
+	meta      map[string]xfsMetadata
+	verify    fsVerifyResult
+	verifyErr error
 }
 
 func (f *fakeXFSSession) ListFiles(dirPath string) ([]xfsListEntry, error) {
@@ -1151,4 +1163,28 @@ func TestXFSBuiltinArgumentAndHandleErrors(t *testing.T) {
 	if errObj == nil || !strings.Contains(errObj.Message, "wrong number of arguments") {
 		t.Fatalf("expected xfs_metadata arity error, got: %v", errObj)
 	}
+}
+
+func (f *fakeNTFSSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
+}
+
+func (f *fakeFATSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
+}
+
+func (f *fakeXFATSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
+}
+
+func (f *fakeEXTSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
+}
+
+func (f *fakeHFSSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
+}
+
+func (f *fakeXFSSession) Verify() (fsVerifyResult, error) {
+	return f.verify, f.verifyErr
 }

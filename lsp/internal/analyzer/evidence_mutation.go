@@ -39,19 +39,22 @@ import (
 // cache_open is a working cache, chan_new and net_connect are not files at all.
 // Writing to any of those is ordinary work.
 var evidenceOpeners = map[string]string{
-	builtin.BuiltinNameRawOpen:   "a raw disk image",
-	builtin.BuiltinNameEwfOpen:   "an EWF/E01 image",
-	builtin.BuiltinNameVhdiOpen:  "a VHD/VHDX image",
-	builtin.BuiltinNameTableOpen: "a partition table",
-	builtin.BuiltinNameNtfsOpen:  "an NTFS filesystem",
-	builtin.BuiltinNameFatOpen:   "a FAT filesystem",
-	builtin.BuiltinNameXfatOpen:  "an exFAT filesystem",
-	builtin.BuiltinNameExtOpen:   "an ext filesystem",
-	builtin.BuiltinNameHfsOpen:   "an HFS+ filesystem",
-	builtin.BuiltinNameXfsOpen:   "an XFS filesystem",
-	builtin.BuiltinNameHiveOpen:  "a registry hive",
-	builtin.BuiltinNameZipOpen:   "a zip archive",
-	builtin.BuiltinNameTarOpen:   "a tar archive",
+	builtin.BuiltinNameRawOpen: "a raw disk image",
+	builtin.BuiltinNameEwfOpen: "an EWF/E01 image",
+	// A set damaged enough to need ewf_open_partial is the last thing that
+	// should be written over: there is less of it left to re-read.
+	builtin.BuiltinNameEwfOpenPartial: "an incomplete EWF/E01 image",
+	builtin.BuiltinNameVhdiOpen:       "a VHD/VHDX image",
+	builtin.BuiltinNameTableOpen:      "a partition table",
+	builtin.BuiltinNameNtfsOpen:       "an NTFS filesystem",
+	builtin.BuiltinNameFatOpen:        "a FAT filesystem",
+	builtin.BuiltinNameXfatOpen:       "an exFAT filesystem",
+	builtin.BuiltinNameExtOpen:        "an ext filesystem",
+	builtin.BuiltinNameHfsOpen:        "an HFS+ filesystem",
+	builtin.BuiltinNameXfsOpen:        "an XFS filesystem",
+	builtin.BuiltinNameHiveOpen:       "a registry hive",
+	builtin.BuiltinNameZipOpen:        "a zip archive",
+	builtin.BuiltinNameTarOpen:        "a tar archive",
 }
 
 // evidenceMutator is a builtin that changes a file, and which of its arguments

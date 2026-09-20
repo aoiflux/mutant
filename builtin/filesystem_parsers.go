@@ -57,6 +57,7 @@ type ntfsSession interface {
 	ListFiles(dirPath string) ([]ntfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (ntfsMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
@@ -118,6 +119,7 @@ type fatSession interface {
 	ListFiles(dirPath string) ([]fatListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (fatMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
@@ -210,6 +212,7 @@ type xfatSession interface {
 	ListFiles(dirPath string) ([]xfatListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (xfatMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
@@ -270,6 +273,7 @@ type extSession interface {
 	ListFiles(dirPath string) ([]extListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (extMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
@@ -329,6 +333,7 @@ type hfsSession interface {
 	ListFiles(dirPath string) ([]hfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (hfsMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
@@ -383,6 +388,7 @@ type xfsSession interface {
 	ListFiles(dirPath string) ([]xfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
 	Metadata(filePath string) (xfsMetadata, error)
+	Verify() (fsVerifyResult, error)
 	Close() error
 }
 
