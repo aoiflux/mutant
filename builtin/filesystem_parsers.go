@@ -56,6 +56,7 @@ type ntfsMetadata struct {
 type ntfsSession interface {
 	ListFiles(dirPath string) ([]ntfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (ntfsMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -119,6 +120,7 @@ type fatMetadata struct {
 type fatSession interface {
 	ListFiles(dirPath string) ([]fatListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (fatMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -213,6 +215,7 @@ type xfatMetadata struct {
 type xfatSession interface {
 	ListFiles(dirPath string) ([]xfatListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (xfatMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -275,6 +278,7 @@ type extMetadata struct {
 type extSession interface {
 	ListFiles(dirPath string) ([]extListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (extMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -336,6 +340,7 @@ type hfsMetadata struct {
 type hfsSession interface {
 	ListFiles(dirPath string) ([]hfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (hfsMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -392,6 +397,7 @@ type xfsMetadata struct {
 type xfsSession interface {
 	ListFiles(dirPath string) ([]xfsListEntry, error)
 	ReadFile(filePath string) ([]byte, error)
+	OpenReader(filePath string) (fsFileReader, error)
 	Metadata(filePath string) (xfsMetadata, error)
 	Verify() (fsVerifyResult, error)
 	Close() error
@@ -2145,6 +2151,153 @@ func (s *realHFSSession) ReadFile(filePath string) ([]byte, error) {
 func (s *realXFSSession) ReadFile(filePath string) ([]byte, error) {
 	cleanPath := normalizeFSPath(filePath)
 	return s.volume.ReadFileDataByPath(cleanPath)
+}
+
+// OpenReader opens one file for streaming rather than for reading whole.
+//
+// Where ReadFile allocates for the file's recorded length before it has read a
+// byte, this returns random access to it and the two lengths that describe it,
+// so a file larger than memory is reachable and a file whose chain is short
+// says so instead of erroring. See fsFileReader for what Size and Located mean
+// and why the difference is not cosmetic.
+func (s *realNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	f, err := s.volume.OpenPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	if f.IsDirectory() {
+		return fsFileReader{}, errors.New("target path is a directory")
+	}
+
+	// ReadSupport names what blocks a stream before the first byte is asked
+	// for. An encrypted $DATA otherwise fails on the read itself, which during
+	// an extraction is after the destination file has already been created.
+	if support := f.ReadSupport(); !support.Readable && support.BlockingError != nil {
+		return fsFileReader{}, support.BlockingError
+	}
+
+	size := f.Size()
+	return fsFileReader{ReaderAt: f, Size: size, Located: size}, nil
+}
+
+func (s *realFATSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	f, err := s.volume.OpenPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	if f.IsDirectory() {
+		return fsFileReader{}, errors.New("target path is a directory")
+	}
+
+	// ReaderAt resolves the cluster chain once and keeps no cursor of its own.
+	// The run total it carries is how far the chain actually reached, which
+	// falls short of the directory entry's size when a deleted file's clusters
+	// were handed to something else.
+	reader, err := f.ReaderAt()
+	if err != nil {
+		return fsFileReader{}, err
+	}
+
+	size := f.Size()
+	return fsFileReader{ReaderAt: reader, Size: size, Located: locatedSize(reader, size)}, nil
+}
+
+func (s *realXFATSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	entry, err := s.findEntryByPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	if entry.IsDir() {
+		return fsFileReader{}, errors.New("target path is a directory")
+	}
+
+	file, err := s.fs.OpenEntry(entry)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	reader, err := file.ReaderAt()
+	if err != nil {
+		return fsFileReader{}, err
+	}
+
+	// libxfat states how much it located, so this is the one family that does
+	// not have to ask the reader.
+	located, err := file.Located()
+	if err != nil {
+		return fsFileReader{}, err
+	}
+
+	size := file.Size()
+	if located > size {
+		located = size
+	}
+	return fsFileReader{ReaderAt: reader, Size: size, Located: located}, nil
+}
+
+func (s *realEXTSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	f, err := s.fs.OpenPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	if f.IsDirectory() {
+		return fsFileReader{}, errors.New("target path is a directory")
+	}
+
+	// libext's File caches its block map on first read and carries a cursor,
+	// so it is documented as unsafe to share. Every read through this seam is
+	// serial, which is what that requires.
+	size := f.Size()
+	return fsFileReader{ReaderAt: f, Size: size, Located: size}, nil
+}
+
+func (s *realHFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	// OpenFileByPath refuses a record that is not a file, and hands back a
+	// compressed file already decompressed -- so the size here is the size of
+	// what will be read, not of what is stored.
+	f, err := s.volume.OpenFileByPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+
+	size := f.Size()
+	return fsFileReader{ReaderAt: f, Size: size, Located: size}, nil
+}
+
+func (s *realXFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	cleanPath := normalizeFSPath(filePath)
+
+	inodeNumber, err := s.volume.ResolveInodeByPath(cleanPath)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	inode, err := s.volume.OpenInode(inodeNumber)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+	if inode.IsDirectory() {
+		// OpenInodeReader does not refuse one, and a directory streamed as a
+		// file hands back its raw directory blocks as though they were content.
+		return fsFileReader{}, errors.New("target path is a directory")
+	}
+
+	reader, err := s.volume.OpenInodeReader(inodeNumber)
+	if err != nil {
+		return fsFileReader{}, err
+	}
+
+	// Holes and unwritten extents read back as zeros, which is what they are.
+	size := int64(inode.Size)
+	return fsFileReader{ReaderAt: reader, Size: size, Located: size}, nil
 }
 
 func (s *realNTFSSession) Metadata(filePath string) (ntfsMetadata, error) {

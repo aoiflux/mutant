@@ -1085,6 +1085,67 @@ that prints them never meets a record that lacks them.
 Opening with one argument is unchanged, and is still what a carved partition
 image wants: offset zero, no bound, the file is the volume.
 
+### Reading a file that does not fit in memory
+
+`ntfs_read_file_bytes` and its five siblings return the whole file as one
+value, so the size of the file is the size of the allocation. That is the right
+shape for a registry hive or a log, and the wrong shape for a disk image inside
+a disk image. Each of the six families therefore also carries three builtins
+that never hold the file at all.
+
+```mutant
+let fs, fsErr = ntfs_open(disk, parts[2])
+
+// Written to disk a megabyte at a time, and digested on the way past.
+let out, outErr = ntfs_extract_file(fs["handle"], "/Users/j/vault.vhdx", "vault.vhdx")
+putln("wrote " + to_string(out["bytes_written"]) + " bytes, sha256 " + out["digest"])
+
+// Or digested where it lies, with nothing written anywhere.
+let known, knownErr = ntfs_hash_file(fs["handle"], "/Windows/System32/cmd.exe", "sha256")
+
+// Or just the head of it, to find out what it is.
+let magic, magicErr = ntfs_read_file_at(fs["handle"], "/Users/j/vault.vhdx", 0, 512)
+```
+
+**The peak allocation has nothing to do with the size of the file.** All three
+read in fixed chunks through the random-access API every one of the six
+libraries exposes. `*_extract_file` has no size limit at all; `*_read_file_at`
+is capped at 32 MiB because that is what the returned value has to fit into, and
+the refusal names `*_extract_file` as the way to get the rest.
+
+**`size` and `located_bytes` are two different numbers, and all three builtins
+report both.** `size` is what the volume records — the directory entry's field,
+or the inode's. `located_bytes` is how many of those bytes the library could
+actually find. They come apart on a FAT or exFAT entry whose cluster chain was
+broken when the file was deleted: the entry still records the original length,
+and only a prefix of it leads anywhere. The clusters after that prefix still
+hold bytes; those bytes belong to whatever was written there since.
+
+**So a read stops at `located_bytes`, and `truncated` says that it did.** An
+extraction of a broken chain writes the recoverable prefix and reports
+`truncated: true` — writing nothing would throw away evidence, and writing the
+whole recorded length would return one file's content under another file's name.
+A window that begins past what was located is refused, naming both numbers,
+because a short buffer or a run of zeroes there is the same call quietly
+succeeding.
+
+**The digest covers what was read, never what was claimed.** `*_extract_file`
+computes the SHA-256 of the bytes it wrote during the same pass, so nothing has
+to read the extracted copy back to obtain one. For a truncated chain that digest
+is the digest of the prefix, which will not match a hash set entry for the
+intact file. That is the honest answer; `truncated` is what makes it legible
+rather than puzzling.
+
+**An extraction never writes over an existing file.** Two files in one image can
+carry the same name, and evidence written over by accident does not come back,
+so the destination must not exist. A copy that fails part way has its partial
+output removed and says so, because a prefix left under the name of the whole
+file reads as the whole file to everything downstream.
+
+`*_hash_file` takes `md5`, `sha1` or `sha256` — the same set `case_open`'s
+custody policy accepts, so a digest in a manifest and a digest from a script are
+never a different shape. An empty string means `sha256`.
+
 ### Reporting
 
 An investigation ends in a report, not a stdout dump.

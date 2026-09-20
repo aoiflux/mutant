@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,33 @@ import (
 
 	"mutant/object"
 )
+
+// fakeFileReader turns a fake session's byte map into the seam the streaming
+// builtins read through.
+//
+// The reader covers every byte in the map, but located -- where the path
+// appears in it -- says how many of them the library would report as actually
+// found. That is deliberately the shape of a broken FAT chain: the bytes past
+// the chain are still there on the volume, they just belong to something else
+// now. A bound applied to the wrong number therefore returns the wrong content
+// here rather than merely running out of input.
+func fakeFileReader(files map[string][]byte, located map[string]int64, filePath string) (fsFileReader, error) {
+	clean := normalizeFSPath(filePath)
+	data, ok := files[clean]
+	if !ok {
+		return fsFileReader{}, errors.New("path not found")
+	}
+
+	reader := fsFileReader{
+		ReaderAt: bytes.NewReader(data),
+		Size:     int64(len(data)),
+		Located:  int64(len(data)),
+	}
+	if n, ok := located[clean]; ok {
+		reader.Located = n
+	}
+	return reader, nil
+}
 
 type fakeNTFSBackend struct {
 	session ntfsSession
@@ -33,9 +61,14 @@ func (f *fakeNTFSBackend) Open(volumePath string, region fsRegion) (ntfsSession,
 type fakeNTFSSession struct {
 	entries   map[string][]ntfsListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]ntfsMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeNTFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 type fakeFATBackend struct {
@@ -61,9 +94,14 @@ func (f *fakeFATBackend) Open(volumePath string, region fsRegion) (fatSession, e
 type fakeFATSession struct {
 	entries   map[string][]fatListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]fatMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeFATSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 type fakeXFATBackend struct {
@@ -89,9 +127,14 @@ func (f *fakeXFATBackend) Open(volumePath string, region fsRegion) (xfatSession,
 type fakeXFATSession struct {
 	entries   map[string][]xfatListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]xfatMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeXFATSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 type fakeEXTBackend struct {
@@ -117,9 +160,14 @@ func (f *fakeEXTBackend) Open(volumePath string, region fsRegion) (extSession, e
 type fakeEXTSession struct {
 	entries   map[string][]extListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]extMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeEXTSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 type fakeHFSBackend struct {
@@ -145,9 +193,14 @@ func (f *fakeHFSBackend) Open(volumePath string, region fsRegion) (hfsSession, e
 type fakeHFSSession struct {
 	entries   map[string][]hfsListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]hfsMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeHFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 type fakeXFSBackend struct {
@@ -173,9 +226,14 @@ func (f *fakeXFSBackend) Open(volumePath string, region fsRegion) (xfsSession, e
 type fakeXFSSession struct {
 	entries   map[string][]xfsListEntry
 	files     map[string][]byte
+	located   map[string]int64
 	meta      map[string]xfsMetadata
 	verify    fsVerifyResult
 	verifyErr error
+}
+
+func (f *fakeXFSSession) OpenReader(filePath string) (fsFileReader, error) {
+	return fakeFileReader(f.files, f.located, filePath)
 }
 
 func (f *fakeXFSSession) ListFiles(dirPath string) ([]xfsListEntry, error) {

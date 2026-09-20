@@ -41,7 +41,7 @@ func FsHash(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("fs_hash: %s", err.Error()))
 	}
 
-	h, errObj := fsHashAlgorithm(algo)
+	h, errObj := fsHashAlgorithm(BuiltinNameFsHash, algo)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -347,7 +347,13 @@ func FsEntropy(args ...object.Object) object.Object {
 	}), nil)
 }
 
-func fsHashAlgorithm(algo string) (hash.Hash, *object.Error) {
+// fsHashAlgorithm maps a mutant algorithm name onto a hash. The set is the
+// one case_open accepts for its custody policy, so a digest recorded by a
+// manifest and one computed by a script are never a different shape.
+//
+// md5 and sha1 are here because published hash sets are keyed on them, not
+// as security properties; nothing that calls this treats a match as one.
+func fsHashAlgorithm(op, algo string) (hash.Hash, *object.Error) {
 	switch strings.ToLower(algo) {
 	case "md5":
 		return md5.New(), nil
@@ -356,7 +362,7 @@ func fsHashAlgorithm(algo string) (hash.Hash, *object.Error) {
 	case "sha256", "":
 		return sha256.New(), nil
 	default:
-		return nil, newError("fs_hash: unsupported algorithm `%s`", algo)
+		return nil, newError("%s: unsupported algorithm `%s`", op, algo)
 	}
 }
 
