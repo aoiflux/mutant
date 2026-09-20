@@ -146,8 +146,3 @@ func ResetSecurityTelemetry() {
 	atomic.StoreUint64(&telemetryCommandSucceeded, 0)
 	atomic.StoreUint64(&telemetryCommandFailed, 0)
 }
-
-func auditEvent(event, stage string) {
-	_ = event
-	_ = stage
-}

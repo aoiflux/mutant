@@ -1131,7 +1131,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameCaseManifest: {
 		signature: "case_manifest()",
 		summary:   "Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes.",
-		returns:   pairRet("the case manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+		returns:   pairRet("the case manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
 	BuiltinNameCaseWrite: {
 		signature: "case_write(path, options?)",
 		summary:   "Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file.",
@@ -1163,7 +1163,27 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameCaseClose: {
 		signature: "case_close()",
 		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
-		returns:   pairRet("the final manifest", ParamHash).withFields("case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+		returns:   pairRet("the final manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+	BuiltinNameAuditHead: {
+		signature: "audit_head()",
+		summary:   "Returns the head of the security audit chain: the SHA-256 commitment to every security event this run recorded, in order. The counters in `case_manifest` say how many times a check tripped; the chain says in what order and at which stage, which is the question a counter cannot be asked afterwards. The head covers every event ever recorded even when older entries have been dropped from memory, so `entries` and `retained` are different numbers and both are reported.",
+		returns: pairRet("the state of the audit chain", ParamHash).withFields(
+			"chain_complete", "dropped", "entries", "first_retained_seq", "head", "recording", "retained", "status")},
+	BuiltinNameAuditWrite: {
+		signature: "audit_write(path)",
+		summary:   "Writes the audit chain to disk as JSON: every retained entry with its sequence number, timestamp, event, stage, the hash of the entry before it and its own hash. The file is read back and hashed after writing, so a document that is not what was written is an error rather than a digest nobody can reproduce. When a case is open the write is recorded in its timeline, the same way a report is. The log carries no signature of its own -- what ties it to a run is that its head matches the one sealed into that run's manifest.",
+		params:    []builtinParamDoc{param("path", "Where to write the log.", ParamString)},
+		returns: pairRet("what was written", ParamHash).withFields(
+			"bytes", "chain_complete", "dropped", "entries", "head", "path", "retained", "sha256", "status")},
+	BuiltinNameAuditVerify: {
+		signature: "audit_verify(path, head?)",
+		summary:   "Re-walks a written audit log, recomputing every link and the timestamp each entry displays against the one its hash covers, and stops at the first entry that disagrees. Pass the head from the case manifest as the second argument to check the log against a value its own writer did not choose: `anchored` says whether a head was supplied and `anchor_matches` whether it agreed, because a log checked only against the head stored inside it has been checked against itself. A log whose entries were dropped for the memory cap begins at `first_retained_seq`, and the `prev` of that first entry is a claim rather than something the document can check.",
+		params: []builtinParamDoc{
+			param("path", "The log to check.", ParamString),
+			param("head?", "The head to check the log against, from the `audit` block of the case manifest. Omitted, the log is checked only for internal consistency and says so in `anchored`.", ParamString),
+		},
+		returns: pairRet("the verification result", ParamHash).withFields(
+			"anchor_matches", "anchored", "broken_at", "chain_complete", "computed_head", "detail", "does_not_cover", "dropped", "entries", "head", "head_matches", "links_checked", "links_intact", "path", "status")},
 
 	BuiltinNameKeys: {
 		signature: "keys(hash)", summary: "Returns the hash keys as an array (sorted for determinism).",
@@ -2644,6 +2664,10 @@ var capabilityCategories = []capabilityCategory{
 	{"policy_", "policy"},
 	{"report_", "reporting"},
 	{"case_", "chain of custody"},
+	// The audit chain is the log behind the manifest's security counters, and
+	// an examiner reads it beside the case documents rather than apart from
+	// them, so it files under the same heading.
+	{"audit_", "chain of custody"},
 	{"cache_", "cache"},
 	// system / process / memory forensics
 	{"process_", "process forensics"},

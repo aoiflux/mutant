@@ -910,6 +910,11 @@ func (s *custodySession) manifest() map[string]any {
 		"evidence":           evidence,
 		"timeline":           timeline,
 		"security_telemetry": telemetry,
+		// The counters say how many. The audit chain says in what order, and
+		// its head is here because a hash chain nobody kept the head of
+		// proves nothing: the seal below covers this field, so the manifest
+		// is the anchor the log would otherwise lack.
+		"audit": auditManifestRecord(),
 	}
 
 	// The hash is part of every rendering, because a manifest a program looked

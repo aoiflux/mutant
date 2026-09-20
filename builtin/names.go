@@ -540,4 +540,8 @@ const (
 	BuiltinNameCaseReport         = "case_report"
 	BuiltinNameCaseBundle         = "case_bundle"
 	BuiltinNameCaseClose          = "case_close"
+	// the security audit log: the hash chain behind the manifest's counters
+	BuiltinNameAuditHead   = "audit_head"
+	BuiltinNameAuditWrite  = "audit_write"
+	BuiltinNameAuditVerify = "audit_verify"
 )

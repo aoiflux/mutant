@@ -1159,6 +1159,34 @@ purpose: a report quoting the manifest's hash would have to quote it before the
 manifest existed, and would be quoting a document that was about to change.
 `SHA256SUMS` is the convenience on top of that, not the guarantee underneath it.
 
+**The security counters have a log behind them.** Every anti-debug, anti-tamper
+and command-execution check the runtime performs is recorded in an append-only
+hash chain: each entry carries the hash of the one before it, so the chain's
+head is a single commitment to every event in order. The counters say a check
+tripped eleven times; the chain says at which stage, and in what order relative
+to the evidence that was open at the time, which is a question a counter cannot
+be asked after the fact.
+
+```mutant
+let head, err = audit_head();       // the commitment, and how much is readable
+let written, err = audit_write("audit.json");
+
+let manifest, err = case_manifest();
+let checked, err = audit_verify("audit.json", manifest["audit"]["head"]);
+```
+
+The head is written into the manifest, inside the seal, because a hash chain
+nobody kept the head of proves nothing. That is what the second argument to
+`audit_verify` is for: without it the log is checked against the head stored
+inside the same file, which is a check against a value its own writer chose, and
+the result says `anchored: false` rather than quietly passing. What the chain
+cannot show — and says so, in a `does_not_cover` field in every document it
+writes — is a log deleted or truncated as a whole. An edited entry breaks every
+link after it; a missing document breaks nothing, because there is nothing left
+to break. The chain keeps the most recent entries in memory and reports how many
+it dropped, so a capped log is never mistaken for a short one; the head still
+covers the events it can no longer show you.
+
 The manifest also carries a reproducibility record: the tool build, and the path
 and digest of the exact `.mu` that produced the document. And it asserts
 `integrity.evidence_read_only: true` — a claim backed by a guard that fails the

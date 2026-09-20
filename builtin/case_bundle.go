@@ -475,6 +475,42 @@ func caseReportSecurity(b *caseReportBuilder, manifest map[string]any) {
 	b.text("What the runtime counted while this case was open. A number rather than a reassurance, " +
 		"and every counter is listed whether it moved or not.")
 	b.table([]string{"counter", "count"}, rows)
+	caseReportAudit(b, manifest)
+}
+
+// caseReportAudit renders the audit chain beside the counters it belongs to.
+//
+// The head is printed in full rather than abbreviated: it is the value a
+// reader compares against the head of a log handed over with the case, and a
+// truncated digest is a digest nobody can check.
+func caseReportAudit(b *caseReportBuilder, manifest map[string]any) {
+	audit := manifestMap(manifest, "audit")
+	if len(audit) == 0 {
+		return
+	}
+
+	entries := manifestInt(audit, "entries")
+	if entries == 0 {
+		b.text("No security event was recorded while this case was open, so the audit chain is empty " +
+			"and its head is the genesis value.")
+		return
+	}
+
+	b.text(fmt.Sprintf("%s recorded in an append-only hash chain, whose head is %s. That head is "+
+		"inside this manifest's seal, so a log written by `audit_write` whose head differs is not the "+
+		"log this case was examined under.",
+		countOf(entries, "security event", "security events"), stringField(audit, "head")))
+
+	if !manifestBool(audit, "chain_complete") {
+		b.text(fmt.Sprintf("The chain kept the most recent entries only: %d of %d were dropped, and the "+
+			"readable run begins at entry %d. The head still covers every event; the dropped ones "+
+			"cannot be read back.",
+			manifestInt(audit, "dropped"), entries, manifestInt(audit, "first_retained_seq")))
+	}
+
+	if limit := stringField(audit, "does_not_cover"); limit != "" {
+		b.text("What the chain does not cover: " + limit)
+	}
 }
 
 func caseReportProvenance(b *caseReportBuilder, manifest map[string]any) {
@@ -615,6 +651,16 @@ func manifestInt(m map[string]any, key string) int64 {
 		return int64(value)
 	case float64:
 		return int64(value)
+	case json.Number:
+		// A document read back off disk with Decoder.UseNumber, which is how
+		// every verifier in this package reads one: an integer that arrived
+		// as a float64 and went back out as 4096.0 would recompute a
+		// different digest for a document nobody had touched.
+		parsed, err := value.Int64()
+		if err != nil {
+			return 0
+		}
+		return parsed
 	}
 	return 0
 }

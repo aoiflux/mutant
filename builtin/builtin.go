@@ -591,6 +591,9 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameCaseReport, &BuiltIn{CaseReport}},
 	{BuiltinNameCaseBundle, &BuiltIn{CaseBundle}},
 	{BuiltinNameCaseClose, &BuiltIn{CaseClose}},
+	{BuiltinNameAuditHead, &BuiltIn{AuditHead}},
+	{BuiltinNameAuditWrite, &BuiltIn{AuditWrite}},
+	{BuiltinNameAuditVerify, &BuiltIn{AuditVerify}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
