@@ -650,4 +650,16 @@ const (
 	BuiltinNameLedgerCheckpointHistory = "ledger_checkpoint_history"
 	BuiltinNameLedgerVerifyAnchor      = "ledger_verify_anchor"
 	BuiltinNameLedgerVerifyStore       = "ledger_verify_store"
+
+	// attributed redaction: destroying content without destroying the record
+	// that it existed, and saying which copy was destroyed
+	BuiltinNameLedgerRedactNode             = "ledger_redact_node"
+	BuiltinNameLedgerRedactNodeProperties   = "ledger_redact_node_properties"
+	BuiltinNameLedgerRedactEdge             = "ledger_redact_edge"
+	BuiltinNameLedgerRedactEdgeProperties   = "ledger_redact_edge_properties"
+	BuiltinNameLedgerRedactionImpact        = "ledger_redaction_impact"
+	BuiltinNameLedgerRedactions             = "ledger_redactions"
+	BuiltinNameLedgerProveRedaction         = "ledger_prove_redaction"
+	BuiltinNameLedgerProveEdgeRedaction     = "ledger_prove_edge_redaction"
+	BuiltinNameLedgerProvePropertyRedaction = "ledger_prove_property_redaction"
 )

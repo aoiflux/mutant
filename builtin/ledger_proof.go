@@ -302,7 +302,15 @@ func ledgerProveRefusal(session *ledgerSession, nodeID store.NodeID, err error) 
 			// The distinction could not be made, so it is not claimed.
 			return newError("%s: node %d is not in the compacted snapshot, and the live graph could not be consulted to say whether it exists at all: %s", BuiltinNameLedgerProveNode, nodeID, lookupErr.Error())
 		case len(found) == 0:
-			return newError("%s: this ledger has no node %d", BuiltinNameLedgerProveNode, nodeID)
+			// A redacted entity is absent from the live graph exactly as one
+			// that never existed is, and telling an examiner to check the id
+			// sends them looking for a typo that is not there. The redaction
+			// ledger is read on this path only, and is the only thing that
+			// separates a deliberate removal from a mistake.
+			if record, _, ok := ledgerLastRedaction(session, nodeID, 0); ok {
+				return newError("%s: node %d is not here because it was redacted at %s (%s): %q. Its removal is recorded, and ledger_prove_redaction proves it from the image", BuiltinNameLedgerProveNode, nodeID, formatTime(ledgerTime(record.UnixNano)), record.Scope.String(), record.Reason)
+			}
+			return newError("%s: this ledger has no node %d, and no record of ever having had one", BuiltinNameLedgerProveNode, nodeID)
 		default:
 			return newError("%s: node %d is live but was written after the last compaction, so it is in no snapshot yet and nothing can be proved about it; call ledger_compact to bring it into one", BuiltinNameLedgerProveNode, nodeID)
 		}

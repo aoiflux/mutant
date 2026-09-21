@@ -283,11 +283,12 @@ func ledgerTime(unixNano int64) time.Time {
 // knows which of those it is; matching on graphene's prose to find out would
 // break the first time a sentence was reworded.
 type ledgerCustodyState struct {
-	live       bool
-	inSnapshot bool
-	compacted  bool
-	redacted   bool
-	external   string
+	live            bool
+	inSnapshot      bool
+	compacted       bool
+	redacted        bool
+	removalProvable bool
+	external        string
 }
 
 // ledgerRemedy is what to do about one gap, in this language.
@@ -323,6 +324,15 @@ func ledgerRemedy(gap disk.CustodyGap, state ledgerCustodyState) string {
 		return "call ledger_compact. ledger_open already sets the retention policy this gap asks for -- a segment is retired by a compaction, and none has happened"
 	case disk.LayerAudit:
 		return "call ledger_compact. ledger_open already sets the audit option this gap asks for -- the log records operator actions, and a compaction is the first one a ledger performs"
+	case disk.LayerRedaction:
+		// Two gaps land here. One says the removal is in the ledger but not in
+		// the image, which a compaction fixes. The other says the entity is
+		// present but was redacted, which is a statement about what the reader
+		// is looking at rather than something to fix.
+		if !state.removalProvable {
+			return "call ledger_compact; a redaction is bound into the snapshot root by the next compaction, and until then this layer's account of what was destroyed is the ledger's word rather than the image's"
+		}
+		return ""
 	case disk.LayerRoles:
 		return "none, by decision: this posture records no grants. Mutant authenticates nobody, and an empty grant ledger would manufacture the appearance of an authorisation model behind a name somebody typed. See ledger_open"
 	case disk.LayerExternal:
@@ -414,11 +424,12 @@ func ledgerUnwitnessedGap(delta int64, known bool) []ledgerAddedGap {
 func ledgerCustodyReport(session *ledgerSession, report disk.CustodyReport, checkedAgainst string, anchored bool, external string) *object.Hash {
 	_, compactErr := session.store.SnapshotRoots()
 	state := ledgerCustodyState{
-		live:       report.Live,
-		inSnapshot: report.InSnapshot,
-		compacted:  compactErr == nil,
-		redacted:   report.Redacted != nil,
-		external:   external,
+		live:            report.Live,
+		inSnapshot:      report.InSnapshot,
+		compacted:       compactErr == nil,
+		redacted:        report.Redacted != nil,
+		removalProvable: report.RemovalProvable,
+		external:        external,
 	}
 
 	snapshotRoot := ""
@@ -472,7 +483,16 @@ func ledgerCustodyReport(session *ledgerSession, report disk.CustodyReport, chec
 		"delta_records": intObj(delta),
 	}
 
-	ledgerGapsInto(report.Gaps, state, nil, out)
+	// The one finding this file adds to a custody report. graphene reports
+	// whether the image records the removal; it cannot report what the retired
+	// segments still hold, because a library does not know what retention
+	// policy it was opened under. This one does. See ledger_redact.go.
+	var extra []ledgerAddedGap
+	if state.redacted {
+		extra = ledgerRetainedContentGap(ledgerSegmentFacts(session))
+	}
+
+	ledgerGapsInto(report.Gaps, state, extra, out)
 	return makeHashObject(out)
 }
 
