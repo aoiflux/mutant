@@ -206,6 +206,13 @@ type ledgerSession struct {
 	keyID     uint64
 	publicKey ed25519.PublicKey
 
+	// verifier is the keyring this ledger was opened with, held so the custody
+	// report can check the snapshot's attestation. graphene accepts a nil
+	// verifier and downgrades every signature-dependent layer to
+	// "unestablished", which would report an unchecked attestation on a store
+	// whose key is in this process.
+	verifier store.Verifier
+
 	// keyCreatedForThisRun is true when the signing key did not exist until
 	// this process asked for one, which makes every signature under it a
 	// signature by a key born seconds before the evidence it vouches for.
@@ -455,6 +462,7 @@ func LedgerOpen(args ...object.Object) object.Object {
 		actorID:              actorID,
 		keyID:                keyID,
 		publicKey:            publicKey,
+		verifier:             keyring,
 		keyCreatedForThisRun: generated,
 		openedAt:             time.Now(),
 	}

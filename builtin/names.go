@@ -642,4 +642,12 @@ const (
 	BuiltinNameLedgerProofDescribe = "ledger_proof_describe"
 	BuiltinNameLedgerRootExport    = "ledger_root_export"
 	BuiltinNameLedgerVerifyChain   = "ledger_verify_chain"
+	// custody and anchoring: what the ledger can account for, and the one
+	// check that is not the store vouching for itself
+	BuiltinNameLedgerCustody           = "ledger_custody"
+	BuiltinNameLedgerCustodyAnchored   = "ledger_custody_anchored"
+	BuiltinNameLedgerCheckpoint        = "ledger_checkpoint"
+	BuiltinNameLedgerCheckpointHistory = "ledger_checkpoint_history"
+	BuiltinNameLedgerVerifyAnchor      = "ledger_verify_anchor"
+	BuiltinNameLedgerVerifyStore       = "ledger_verify_store"
 )

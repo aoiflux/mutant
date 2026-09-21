@@ -688,6 +688,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameLedgerProofDescribe, &BuiltIn{LedgerProofDescribe}},
 	{BuiltinNameLedgerRootExport, &BuiltIn{LedgerRootExport}},
 	{BuiltinNameLedgerVerifyChain, &BuiltIn{LedgerVerifyChain}},
+	{BuiltinNameLedgerCustody, &BuiltIn{LedgerCustody}},
+	{BuiltinNameLedgerCustodyAnchored, &BuiltIn{LedgerCustodyAnchored}},
+	{BuiltinNameLedgerCheckpoint, &BuiltIn{LedgerCheckpoint}},
+	{BuiltinNameLedgerCheckpointHistory, &BuiltIn{LedgerCheckpointHistory}},
+	{BuiltinNameLedgerVerifyAnchor, &BuiltIn{LedgerVerifyAnchor}},
+	{BuiltinNameLedgerVerifyStore, &BuiltIn{LedgerVerifyStore}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
