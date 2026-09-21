@@ -2120,6 +2120,104 @@ var builtinDocs = map[string]builtinDoc{
 			param("node", "Node ID whose property redaction to prove.", ParamInt),
 		},
 		returns: pairRet("the content-free proof bytes and the roots they resolve against", ParamHash).withFields("body_version", "edge_root", "index_root", "kind", "leaf_index", "node_id", "node_root", "prev_root", "prior_leaf_bytes", "proof", "proof_bytes", "redaction_hash", "redaction_seq", "removal_leaf_bytes", "siblings", "snapshot_root", "subject", "surviving_leaf_bytes", "tombstone_root", "tree_size", "version_hash")},
+	BuiltinNameLedgerNode: {
+		signature: "ledger_node(ledger, node)", summary: "Reads one node record back. Until this family had a read side a ledger Mutant opened was write-only: a script could commit attributed evidence and prove it was there, and could not ask what it said. Properties come back as BYTES rather than STRING because that is what the store holds -- ledger_add_node accepts either and commits bytes, so the two are the same blob afterwards and rendering one as text would invent a distinction the ledger does not keep and lose any value that is not valid UTF-8. bytes_to_string is the conversion for a caller who knows what they wrote, and it is that one rather than to_string, which renders BYTES as hex. labels are the offsets that were written, not graphene internal type numbers, so a label read here can be passed straight back to ledger_add_node; a graphene built-in type, which no Mutant builtin can write, comes back negative so it cannot be mistaken for one. An id the ledger does not hold is refused, and the refusal distinguishes an id that was never written from one a redaction removed by reading the redaction ledger first. Returns (node, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("node", "Node ID, as returned by ledger_add_node.", ParamInt),
+		},
+		returns: pairRet("the record as committed", ParamHash).withFields("id", "labels", "properties", "property_bytes", "property_count", "redactable")},
+	BuiltinNameLedgerEdge: {
+		signature: "ledger_edge(ledger, edge)", summary: "Reads one edge record back, with its endpoints and its weight. weight is graphene's own field and means a similarity score for its SimilarTo type and zero for everything else; it is not a distance, which is why ledger_path takes the reading to make of it as an argument. Properties come back as BYTES for the reason ledger_node gives. An edge a node redaction took as collateral is refused by name, saying which redaction removed it and that it was not the subject of that decision. Returns (edge, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("edge", "Edge ID, as returned by ledger_add_edge.", ParamInt),
+		},
+		returns: pairRet("the relationship as committed", ParamHash).withFields("dst", "id", "labels", "properties", "property_bytes", "property_count", "redactable", "src", "weight")},
+	BuiltinNameLedgerProvenance: {
+		signature: "ledger_provenance(ledger, node, maxDepth)", summary: "Walks inbound edges from one entity back towards the evidence it came from, and says why the walk stopped. stopped_at is the field that matters and it is not graphene's: ProvenanceChain documents that a walk which does not reach a root returns the deepest path it found, so a chain cut short by its depth limit comes back the same shape as one that reached the source. This reads the last node's inbound edges afterwards and reports root, depth or cycle; complete is true for exactly one of the three. branch_points is the second thing graphene does not report: a node with two parents has two ancestries and the walk follows one, so every place the chain had a choice is named along with the parents it did not take -- \"this artefact came from that image\" must not be read off a result that had another answer. maxDepth must be positive; graphene substitutes 64 for a non-positive depth, which would be reported here as the limit the caller chose. Every inbound edge type is followed, deliberately: filtering by type adds a fourth reason a walk can stop early and the ids are opaque offsets. The walk runs under this language's fixed traversal budget and a walk that exceeds it is refused rather than truncated. Returns (provenance, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("node", "Node ID to walk back from.", ParamInt),
+			param("maxDepth", "Maximum hops to follow; must be positive.", ParamInt),
+		},
+		returns: pairRet("the chain, why it stopped, and what it did not follow", ParamHash).withFields("branch_point_count", "branch_points", "chain", "complete", "hops", "length", "max_depth", "origin", "root", "stopped_at")},
+	BuiltinNameLedgerPath: {
+		signature: "ledger_path(ledger, src, dst, costModel)", summary: "Finds the cheapest path between two entities under a named cost model. The model is a name and not a function on purpose. graphene's EdgeCost contract is three obligations -- non-negative, deterministic, cheap -- and a function written in this language satisfies none of them by construction: graphene refuses a negative or NaN cost by edge id, it cannot check determinism, and a probe confirmed that a cost returning a different number each time it is asked about the same edge produces a path with no error that is neither the cheapest nor costed by the number reported beside it. The callback also runs once per incident edge on Dijkstra's inner loop, and builtin/resource.go already records that the VM and the evaluator drive a closure differently, so the same script would cost its evidence differently under the two engines. The three models are hops (every step 1), weight (the edge weight is the distance) and similarity (1 - weight, the reading graphene documents for its SimilarTo type). Two entities that are not connected come back as found false rather than as an error, because \"these are not related\" is a finding and folding it into the error channel would make a script's error branch mean that and \"bad handle\" at once. A src or dst the ledger does not hold is a refusal, and says whether a redaction removed it. Returns (path, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("src", "Node ID to start from.", ParamInt),
+			param("dst", "Node ID to reach.", ParamInt),
+			param("costModel", "One of: hops, similarity, weight.", ParamString),
+		},
+		returns: pairRet("the cheapest path under the named model, or found false", ParamHash).withFields("cost", "cost_model", "dst", "edges", "found", "hops", "nodes", "src")},
+	BuiltinNameLedgerSubgraph: {
+		signature: "ledger_subgraph(ledger, nodeIds)", summary: "Returns the entities named and every relationship among them -- the edges whose two endpoints are both in the set. An id given twice is counted once and reported in duplicates; graphene returns the record once per occurrence, so a list with a repeat in it would otherwise produce a subgraph claiming more entities than were asked about. An id the ledger does not hold refuses the whole call rather than dropping it, because an induced subgraph is the claim that these are all the relationships among these entities, and a missing entity makes that false rather than incomplete -- the refusal names how many were missing and whether a redaction removed the first of them. An empty list is refused too: a subgraph over nothing is a question with no subject, not an empty answer. Returns (subgraph, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("nodeIds", "ARRAY of node IDs to induce the subgraph over.", ParamArray),
+		},
+		returns: pairRet("the entities and every relationship among them", ParamHash).withFields("duplicates", "edge_count", "edges", "node_count", "nodes", "requested")},
+	BuiltinNameLedgerPatterns: {
+		signature: "ledger_patterns(ledger, pattern, scope, maxMatches)", summary: "Finds every subgraph matching a shape. pattern is a HASH with nodes (an ARRAY of {\"id\": <position>, \"labels\": [<label>]}) and edges (an ARRAY of {\"src\": <position>, \"dst\": <position>, \"labels\": [<label>]}). scope is an ARRAY of node IDs to search within, or 0 for the whole graph. Every part of the pattern is validated before graphene sees it, and two of those checks are not politeness: an edge naming a pattern node that does not exist panics inside the matcher and takes the process down, and an unlabelled pattern node with no scope is documented inside graphene as unsupported and produces no matches and no error, so a script asking a question graphene cannot answer would be told the answer is none. A node id must equal its position because graphene matches by position and never reads the id, so ids written in another order would match a shape the script did not describe. capped reports that maxMatches was reached, which is a truncation graphene performs and says nothing about. A pattern is 2 to 20 nodes and must have at least one edge. Returns (matches, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("pattern", "HASH with nodes and edges describing the shape to find.", ParamHash),
+			param("scope", "ARRAY of node IDs to search within, or 0 for the whole graph.", ParamArray, ParamInt),
+			param("maxMatches", "Cap on matches returned; 0 for no cap.", ParamInt),
+		},
+		returns: pairRet("every subgraph matching the shape, and whether the set was capped", ParamHash).withFields("capped", "count", "matches", "max_matches", "pattern_size", "scope_size", "scoped")},
+	BuiltinNameLedgerQueryNodes: {
+		signature: "ledger_query_nodes(ledger, query)", summary: "Answers a node query and says which comparison rule answered it. query is a HASH taking types, ids, filters, mode (all or any), order (asc or desc by id), offset and limit; a filter is {\"key\", \"op\", \"value\"} with op one of eq, prefix, contains, gt, gte, lt, lte, between, and between also needs value_upper. comparison is the field this builtin exists for. A key that has not been declared ordered compares range predicates numerically when both sides parse as numbers and byte-wise otherwise; a declared key compares byte-wise throughout. Those are different questions, and over the values 9, 10, 1x, 100, 2 a between of \"2\" and \"100\" returns four records undeclared and none at all declared. So comparison reports which rule ran -- none, numeric-then-bytes, bytes, or mixed when the query's range filters straddle both -- and range_keys names the keys it applies to. limited says a limit was reached, which means there may be more. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("query", "HASH of types, ids, filters, mode, order, offset and limit.", ParamHash),
+		},
+		returns: pairRet("the matching ids and the rule that compared them", ParamHash).withFields("comparison", "count", "ids", "limit", "limited", "offset", "range_filters", "range_keys")},
+	BuiltinNameLedgerExplainQuery: {
+		signature: "ledger_explain_query(ledger, query)", summary: "Reports how the planner resolved a query: which index drove it, how many candidates that produced, and how each remaining filter was applied. Takes the same query HASH as ledger_query_nodes. This is diagnostic output and graphene says so plainly -- which index the planner picks may change as its cost model improves, and the results a query returns may not -- so a script must not make an evidentiary decision from a plan. scanned is the reading worth acting on: the driver fell back to examining every entity, which happens when no filter can be served (contains can never be served by any index), when a range names a key that was not declared ordered, and whenever two or more filters are combined with mode any. candidates is what the driving step produced and not the size of the driving set, because a limit can be pushed into the driver, and residual cost is a forecast rather than a measurement; graphene documents both and neither is softened here. Returns (plan, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("query", "The same query HASH ledger_query_nodes takes.", ParamHash),
+		},
+		returns: pairRet("how the planner resolved the query, as diagnostics", ParamHash).withFields("candidates", "driver", "driver_filters", "driver_key", "plan", "residual_count", "residuals", "results", "scanned")},
+	BuiltinNameLedgerDeclareOrdered: {
+		signature: "ledger_declare_ordered(ledger, key, target)", summary: "Declares a property key ordered, so range filters and prefix on it are answered by binary search instead of a scan -- and reports what that does to the answers. order_differs is why this returns anything at all. Declaring a key changes how its range predicates compare, from numeric-when-both-sides-parse to byte order, and the two disagree: over 9, 10, 1x, 100, 2 a between of \"2\" and \"100\" goes from four records to none. So the key's existing values are read before the declaration is made and checked for a pair the two rules order differently, which is exact rather than sampled -- the rules can only disagree about two values that both parse as numbers, so sorting those numerically and looking for a byte-order inversion between neighbours finds such a pair if one exists. example carries it. Encode values so byte order matches intent (zero-padded fixed width, or a fixed-width integer encoding) and order_differs comes back false. target is \"node\" or \"edge\": the two index spaces are separate and a key declared on one is not declared on the other. Entries written before the declaration are absorbed, so the change reaches queries already written. Returns (declaration, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("key", "Property key to declare ordered.", ParamString),
+			param("target", "\"node\" or \"edge\".", ParamString),
+		},
+		returns: pairRet("the declaration, and whether it reorders what is already stored", ParamHash).withFields("comparison", "declared", "distinct_values", "example", "key", "order_differs", "target", "was")},
+	BuiltinNameLedgerDeclareUnique: {
+		signature: "ledger_declare_unique(ledger, key, target)", summary: "Enforces that at most one live entity holds any given value under key, which is what turns an indexed value into a name. Unlike the ordered and composite declarations this is checked against what is already written, so it is a statement about the evidence rather than about the schema: a ledger where two nodes already share a value is refused, and graphene's message names the value and every id holding it. After it is declared, writing a duplicate is refused by ledger_add_node rather than by this call. target is \"node\" or \"edge\". Returns (declaration, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("key", "Property key that must hold at most one entity per value.", ParamString),
+			param("target", "\"node\" or \"edge\".", ParamString),
+		},
+		returns: pairRet("the declaration and the check it passed", ParamHash).withFields("checked", "declared", "key", "target")},
+	BuiltinNameLedgerDeclareUniqueEdge: {
+		signature: "ledger_declare_unique_edge(ledger, edgeType)", summary: "Enforces that at most one live edge of the given type joins any ordered pair of entities -- the structural counterpart to ledger_declare_unique, which constrains a value rather than a relationship. Like the property form it validates the graph as it stands, so a ledger that already holds two such edges is refused. Enforcement afterwards happens at commit: the second edge is refused by ledger_add_edge, naming the edge that already exists. edgeType is the same 0..127 offset ledger_add_edge takes. Returns (declaration, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("edgeType", "Edge type offset in 0..127, or an enum value.", ParamInt, ParamEnum),
+		},
+		returns: pairRet("the declaration and where it is enforced", ParamHash).withFields("checked", "declared", "edge_type", "enforced")},
+	BuiltinNameLedgerDeclareComposite: {
+		signature: "ledger_declare_composite(ledger, keys, target)", summary: "Declares one key tuple, so a conjunction of equality filters over exactly those keys is answered from one posting list rather than by intersecting several. It serves that query and no other: a query naming fewer of the keys, or naming them with any comparison other than equality, is driven some other way, and ledger_explain_query is how to tell which. Unlike a unique declaration this checks nothing about the data and cannot fail on it, and unlike an ordered declaration it changes no comparison rule -- equality is byte equality either way. target is \"node\" or \"edge\". Returns (declaration, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("keys", "ARRAY of STRING property keys forming the tuple.", ParamArray),
+			param("target", "\"node\" or \"edge\".", ParamString),
+		},
+		returns: pairRet("the declaration and what it serves", ParamHash).withFields("declared", "keys", "serves", "target")},
+	BuiltinNameLedgerIndexes: {
+		signature: "ledger_indexes(ledger)", summary: "Reports every index declaration in force, on both the node and the edge side: the ordered keys, the unique keys, the composite key tuples, and the edge types under a cardinality constraint. Worth reading before a query and not only after one, because ordered_node_keys is what decides whether a range filter compares numerically or byte-wise -- see ledger_declare_ordered for what that costs. Declarations are recorded in the store and survive both a compaction and a reopen, so a ledger handed over carries the schema decisions that shaped whatever was reported from it. Returns (indexes, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+		},
+		returns: pairRet("every declaration in force on both sides", ParamHash).withFields("composite_edge_keys", "composite_node_keys", "count", "ordered_edge_keys", "ordered_node_keys", "unique_edge_keys", "unique_edge_types", "unique_node_keys")},
 	// A "bytes value" is a BYTES or a STRING: requireBytesStringArg
 	// (builtin/bytes.go) accepts both, and the family is shape-preserving --
 	// bytes_slice of a BYTES is a BYTES, of a STRING a STRING. Both kinds are

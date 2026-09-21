@@ -703,6 +703,19 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameLedgerProveRedaction, &BuiltIn{LedgerProveRedaction}},
 	{BuiltinNameLedgerProveEdgeRedaction, &BuiltIn{LedgerProveEdgeRedaction}},
 	{BuiltinNameLedgerProvePropertyRedaction, &BuiltIn{LedgerProvePropertyRedaction}},
+	{BuiltinNameLedgerNode, &BuiltIn{LedgerNode}},
+	{BuiltinNameLedgerEdge, &BuiltIn{LedgerEdge}},
+	{BuiltinNameLedgerProvenance, &BuiltIn{LedgerProvenance}},
+	{BuiltinNameLedgerPath, &BuiltIn{LedgerPath}},
+	{BuiltinNameLedgerSubgraph, &BuiltIn{LedgerSubgraph}},
+	{BuiltinNameLedgerPatterns, &BuiltIn{LedgerPatterns}},
+	{BuiltinNameLedgerQueryNodes, &BuiltIn{LedgerQueryNodes}},
+	{BuiltinNameLedgerExplainQuery, &BuiltIn{LedgerExplainQuery}},
+	{BuiltinNameLedgerDeclareOrdered, &BuiltIn{LedgerDeclareOrdered}},
+	{BuiltinNameLedgerDeclareUnique, &BuiltIn{LedgerDeclareUnique}},
+	{BuiltinNameLedgerDeclareUniqueEdge, &BuiltIn{LedgerDeclareUniqueEdge}},
+	{BuiltinNameLedgerDeclareComposite, &BuiltIn{LedgerDeclareComposite}},
+	{BuiltinNameLedgerIndexes, &BuiltIn{LedgerIndexes}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

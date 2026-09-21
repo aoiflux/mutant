@@ -11,7 +11,7 @@ Mutant does not.
 
 ## What Mutant actually is
 
-A programming language and toolchain for security and forensic work. 619
+A programming language and toolchain for security and forensic work. 632
 builtins across 39 categories — filesystem and disk-image parsers, registry and
 Windows artifacts, binary analysis, memory, network, email, crypto, timelines
 — in a language with functions, closures, structs, enums, macros and
@@ -210,7 +210,7 @@ program.
 - **[Mutant in 30 minutes](TUTORIAL_30_MIN.md)** — install to standalone binary
 - **[Cookbook](COOKBOOK.md)** — fourteen complete programs, organised by
   investigation
-- **[Capability Reference](CAPABILITY_REFERENCE.md)** — all 619 builtins with
+- **[Capability Reference](CAPABILITY_REFERENCE.md)** — all 632 builtins with
   signatures and return shapes; read this before deciding coverage is enough
 - **[Security model](SECURITY_LLD.md)** — what the signing, encryption, tamper
   detection and mutation actually promise, and what they do not

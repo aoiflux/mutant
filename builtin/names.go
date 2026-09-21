@@ -662,4 +662,21 @@ const (
 	BuiltinNameLedgerProveRedaction         = "ledger_prove_redaction"
 	BuiltinNameLedgerProveEdgeRedaction     = "ledger_prove_edge_redaction"
 	BuiltinNameLedgerProvePropertyRedaction = "ledger_prove_property_redaction"
+
+	// reading the ledger back: the accessors, walks and queries that make a
+	// written ledger answerable, and the declarations that decide how
+	// a query is answered -- and sometimes what it answers
+	BuiltinNameLedgerNode              = "ledger_node"
+	BuiltinNameLedgerEdge              = "ledger_edge"
+	BuiltinNameLedgerProvenance        = "ledger_provenance"
+	BuiltinNameLedgerPath              = "ledger_path"
+	BuiltinNameLedgerSubgraph          = "ledger_subgraph"
+	BuiltinNameLedgerPatterns          = "ledger_patterns"
+	BuiltinNameLedgerQueryNodes        = "ledger_query_nodes"
+	BuiltinNameLedgerExplainQuery      = "ledger_explain_query"
+	BuiltinNameLedgerDeclareOrdered    = "ledger_declare_ordered"
+	BuiltinNameLedgerDeclareUnique     = "ledger_declare_unique"
+	BuiltinNameLedgerDeclareUniqueEdge = "ledger_declare_unique_edge"
+	BuiltinNameLedgerDeclareComposite  = "ledger_declare_composite"
+	BuiltinNameLedgerIndexes           = "ledger_indexes"
 )
