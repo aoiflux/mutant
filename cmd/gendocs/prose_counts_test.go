@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -126,4 +127,95 @@ func TestProseExampleCountsMatchTheTree(t *testing.T) {
 		}
 		checkCount(t, path, string(document), runnablePattern, want, "runnable programs")
 	}
+}
+
+// categoryTableRow matches one row of the category index in
+// docs/MUTANT_LANGUAGE_REFERENCE.md, which is written by hand and links into
+// the generated reference by an anchor that carries the count in it.
+var categoryTableRow = regexp.MustCompile(
+	`\| \[([^\]]+)\]\(CAPABILITY_REFERENCE\.md#([a-z0-9-]+)\) \| (\d+) \| `)
+
+// TestCategoryIndexMatchesTheRegistry guards the per-category table.
+//
+// The two totals above it were guarded and the thirty-nine rows under it were
+// not, which is how the table came to be missing an entire category. On
+// 2026-09-22 it listed 38 rows totalling 493 against a registry of 39 and 632:
+// no row at all for the forensic ledger -- the whole of Phase 4 -- and five
+// counts stale enough that their anchors pointed at headings that no longer
+// existed. A reader following [Filesystem forensics](...#filesystem-forensics-37)
+// landed nowhere, because the heading had said 115 for some time.
+//
+// The count is in the anchor as well as in the cell, so both are checked. An
+// anchor is the half that fails silently: a wrong number in a cell is visibly
+// wrong, and a wrong number in a link is a dead link somebody else discovers.
+func TestCategoryIndexMatchesTheRegistry(t *testing.T) {
+	const path = "docs/MUTANT_LANGUAGE_REFERENCE.md"
+	document, err := os.ReadFile(filepath.FromSlash("../../" + path))
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+
+	// The same grouping renderDocument does, so the table is checked against
+	// the registry rather than against the generated file it links into.
+	byCategory := make(map[string]int, len(categorySections))
+	for _, b := range builtin.Builtins {
+		if b.Name == "" {
+			continue
+		}
+		byCategory[builtin.CapabilityCategory(b.Name)]++
+	}
+
+	listed := make(map[string]bool, len(categorySections))
+	for _, match := range categoryTableRow.FindAllStringSubmatch(string(document), -1) {
+		heading, gotAnchor, gotCount := match[1], match[2], match[3]
+
+		var section *categorySection
+		for i := range categorySections {
+			if strings.EqualFold(categorySections[i].heading, heading) {
+				section = &categorySections[i]
+				break
+			}
+		}
+		if section == nil {
+			t.Errorf("%s: the category index has a row for %q, which is not a section in "+
+				"cmd/gendocs/sections.go", path, heading)
+			continue
+		}
+		listed[section.category] = true
+
+		want := byCategory[section.category]
+		if gotCount != strconv.Itoa(want) {
+			t.Errorf("%s: the category index says %s holds %s builtins; the registry has %d",
+				path, heading, gotCount, want)
+		}
+		if wantAnchor := headingAnchor(section.heading, want); gotAnchor != wantAnchor {
+			t.Errorf("%s: the %s row links to #%s, and the reference's heading is #%s. "+
+				"The link is dead", path, heading, gotAnchor, wantAnchor)
+		}
+	}
+
+	for _, section := range categorySections {
+		if !listed[section.category] {
+			t.Errorf("%s: the category index has no row for %q (%d builtins), so nothing in "+
+				"the reference points a reader at it", path, section.heading,
+				byCategory[section.category])
+		}
+	}
+}
+
+// headingAnchor is GitHub's slug for a generated "## Heading (N)" line:
+// lowercased, anything that is not a letter, digit, space or hyphen dropped,
+// spaces to hyphens. The parenthesised count becomes a trailing -N, which is
+// why a stale count breaks the link rather than just reading wrong.
+func headingAnchor(heading string, count int) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(heading) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('-')
+		}
+	}
+	return fmt.Sprintf("%s-%d", b.String(), count)
 }

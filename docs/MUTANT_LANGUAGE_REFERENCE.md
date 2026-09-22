@@ -962,18 +962,25 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-**Total builtins currently registered: 493**, across 38 capability categories.
+The standard library is **638 builtins** across **39 categories**.
+
+Those two numbers, and every count in the table below, are checked against the
+registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
+sentence here said 493 across 38 and had done for several releases, because it was
+worded "currently registered: 493" and "38 capability categories", and the guard
+looks for "N builtins" and "N categories". A drift gate that a rewording walks
+past is a drift gate for the phrasing, not for the claim.
 
 The complete catalog — every builtin with its typed signature, platform support, and description — lives in the **[Capability Reference](CAPABILITY_REFERENCE.md)**, which is generated directly from `builtin/metadata.go` by `cmd/gendocs` so it never goes stale. Regenerate it with `go run ./cmd/gendocs` after adding or changing a builtin; `go run ./cmd/gendocs -check` (and the `cmd/gendocs` test) fails if it has drifted. The categories are indexed below; each links into that reference.
 
 | Category | Count | What it covers |
 | --- | --- | --- |
-| [Standard library](CAPABILITY_REFERENCE.md#standard-library-59) | 59 | Core primitives, collection/hash ops, higher-order functions (including parallel `pmap`/`peach`), I/O, introspection |
+| [Standard Library](CAPABILITY_REFERENCE.md#standard-library-59) | 59 | Core primitives, collection/hash ops, higher-order functions (including parallel `pmap`/`peach`), I/O, introspection |
 | [Testing](CAPABILITY_REFERENCE.md#testing-10) | 10 | `test`/`before_each`/`after_each` and the assertions `mutant test` reads |
 | [Concurrency](CAPABILITY_REFERENCE.md#concurrency-8) | 8 | Background tasks (`spawn`/`task_wait`) and channels for passing values between them |
 | [Strings](CAPABILITY_REFERENCE.md#strings-18) | 18 | Rune-aware string manipulation |
-| [Text analysis](CAPABILITY_REFERENCE.md#text-analysis-14) | 14 | Search, split/replace, regex, fuzzy matching |
-| [Structured data](CAPABILITY_REFERENCE.md#structured-data-46) | 46 | JSON, encoding, compression, type/base conversion, plist |
+| [Text Analysis](CAPABILITY_REFERENCE.md#text-analysis-14) | 14 | Search, split/replace, regex, fuzzy matching |
+| [Structured Data](CAPABILITY_REFERENCE.md#structured-data-46) | 46 | JSON, encoding, compression, type/base conversion, plist |
 | [Math](CAPABILITY_REFERENCE.md#math-5) | 5 | Constants and random helpers |
 | [Hashing](CAPABILITY_REFERENCE.md#hashing-11) | 11 | Digests, HMAC, UUID/ID generators |
 | [Time](CAPABILITY_REFERENCE.md#time-7) | 7 | Unix timestamps, formatting, parsing, arithmetic |
@@ -982,30 +989,31 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Filesystem](CAPABILITY_REFERENCE.md#filesystem-20) | 20 | Files/dirs plus file-level forensics (hash, entropy, magic, carve, deleted) |
 | [Network](CAPABILITY_REFERENCE.md#network-33) | 33 | Sockets, TLS/CA, HTTP inspection, WebSocket, scanning, pcap |
 | [Http](CAPABILITY_REFERENCE.md#http-11) | 11 | HTTP client + request/response parse/build |
-| [Graph database](CAPABILITY_REFERENCE.md#graph-database-14) | 14 | Nodes/edges/relations, traversal, pathfinding, stats |
+| [Graph Database](CAPABILITY_REFERENCE.md#graph-database-15) | 15 | Nodes/edges/relations, traversal, pathfinding, stats |
+| [Forensic Ledger](CAPABILITY_REFERENCE.md#forensic-ledger-39) | 39 | A graphene-backed signed ledger: strict store, inclusion and redaction proofs, custody and checkpoint anchoring, attributed redaction, indexed reads |
 | [Cache](CAPABILITY_REFERENCE.md#cache-8) | 8 | In-memory key/value cache with TTLs |
 | [Policy](CAPABILITY_REFERENCE.md#policy-5) | 5 | Allow/deny policy evaluation and tracing |
-| [Runtime integration](CAPABILITY_REFERENCE.md#runtime-integration-3) | 3 | Sandboxed Lua execution |
-| [Command execution](CAPABILITY_REFERENCE.md#command-execution-4) | 4 | Guarded external command execution |
+| [Runtime Integration](CAPABILITY_REFERENCE.md#runtime-integration-3) | 3 | Sandboxed Lua execution |
+| [Command Execution](CAPABILITY_REFERENCE.md#command-execution-4) | 4 | Guarded external command execution |
 | [Cryptography](CAPABILITY_REFERENCE.md#cryptography-6) | 6 | X.509, JWT, PEM, AES-GCM |
 | [Fingerprinting](CAPABILITY_REFERENCE.md#fingerprinting-4) | 4 | imphash, JA3, NT/LM hashes |
-| [Network intelligence](CAPABILITY_REFERENCE.md#network-intelligence-11) | 11 | IOC defang/refang, IP/CIDR, domain/eTLD+1, IOC extraction |
-| [Detection](CAPABILITY_REFERENCE.md#detection-5) | 5 | Injection, beaconing, persistence, priv-esc, suspicious files |
-| [Process forensics](CAPABILITY_REFERENCE.md#process-forensics-9) | 9 | Live process inspection, memory scan, modules |
-| [Memory forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
-| [Binary analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
+| [Network Intelligence](CAPABILITY_REFERENCE.md#network-intelligence-11) | 11 | IOC defang/refang, IP/CIDR, domain/eTLD+1, IOC extraction |
+| [Detection](CAPABILITY_REFERENCE.md#detection-9) | 9 | Injection, beaconing, persistence, priv-esc, suspicious files |
+| [Process Forensics](CAPABILITY_REFERENCE.md#process-forensics-9) | 9 | Live process inspection, memory scan, modules |
+| [Memory Forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
+| [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
-| [Chain of custody](CAPABILITY_REFERENCE.md#chain-of-custody-10) | 10 | Case session, evidence record, drift verification, signed manifest, the handover bundle |
-| [Registry forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
-| [Filesystem forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-37) | 37 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
-| [Disk image forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-20) | 20 | Raw/EWF/VHD(X) images, MBR/GPT tables |
-| [Windows artifacts](CAPABILITY_REFERENCE.md#windows-artifacts-5) | 5 | Prefetch, EVTX, LNK, Jump Lists |
-| [Unix artifacts](CAPABILITY_REFERENCE.md#unix-artifacts-1) | 1 | syslog (RFC 5424 / 3164) |
-| [Browser artifacts](CAPABILITY_REFERENCE.md#browser-artifacts-5) | 5 | Chromium/Firefox history/cookies/downloads, SQLite |
-| [Forensic timeline](CAPABILITY_REFERENCE.md#forensic-timeline-5) | 5 | Timestamp normalize, merge/sort, bodyfile/mactime |
-| [Schema interchange](CAPABILITY_REFERENCE.md#schema-interchange-7) | 7 | One event vocabulary for every artifact, written out as ECS, OCSF or Timesketch/plaso; indicators written out as STIX 2.1 |
-| [Email forensics](CAPABILITY_REFERENCE.md#email-forensics-5) | 5 | Header/body/attachment parsing, DKIM verification |
-| [Hash-set forensics](CAPABILITY_REFERENCE.md#hash-set-forensics-3) | 3 | NSRL-style known-file filtering |
+| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-19) | 19 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and the classification labels tagged under it |
+| [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
+| [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
+| [Disk Image Forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-34) | 34 | Raw/EWF/VHD(X) images, MBR/GPT tables |
+| [Windows Artifacts](CAPABILITY_REFERENCE.md#windows-artifacts-5) | 5 | Prefetch, EVTX, LNK, Jump Lists |
+| [Unix Artifacts](CAPABILITY_REFERENCE.md#unix-artifacts-1) | 1 | syslog (RFC 5424 / 3164) |
+| [Browser Artifacts](CAPABILITY_REFERENCE.md#browser-artifacts-5) | 5 | Chromium/Firefox history/cookies/downloads, SQLite |
+| [Forensic Timeline](CAPABILITY_REFERENCE.md#forensic-timeline-5) | 5 | Timestamp normalize, merge/sort, bodyfile/mactime |
+| [Schema Interchange](CAPABILITY_REFERENCE.md#schema-interchange-7) | 7 | One event vocabulary for every artifact, written out as ECS, OCSF or Timesketch/plaso; indicators written out as STIX 2.1 |
+| [Email Forensics](CAPABILITY_REFERENCE.md#email-forensics-5) | 5 | Header/body/attachment parsing, DKIM verification |
+| [Hash-Set Forensics](CAPABILITY_REFERENCE.md#hash-set-forensics-3) | 3 | NSRL-style known-file filtering |
 
 ### Platform support
 
@@ -2461,8 +2469,10 @@ costs the unindexed key at zero and drives the query from it. So no word you
 type ever becomes a property key: the questions above are the shapes the
 export’s index was built for, and anything else is refused with the list.
 
-Two of them read every declaration record rather than an index — `exported`, and
-a `where` whose name matched nothing exactly — and they say so in the answer.
+Two of them read every declaration record rather than an index — `exported`
+always, and `where` when its name matched nothing exactly — and each says so in
+the answer when it does. `mutant help graph` prints that list from the registry
+rather than from prose, so it cannot drift from what the questions actually do.
 
 **Every answer carries its own limits beside it**, because several of them are
 complete only for one module:
@@ -2478,11 +2488,25 @@ complete only for one module:
   **and** its kind, and a `USES_TYPE` edge is a `REFERENCES` edge with a second
   label. Adding them up reports more nodes than the store has.
 
-**The store is not changed by being read.** It is identified by its own label
-table before it is opened — a directory that is not one of these exports is
-refused by name, rather than opened and reported as a program with no
-declarations in it — and then opened read-only. A store on write-protected
-media is opened without a lock instead, and the answer says so.
+**Nothing that carries what the store says is written to.** The store is
+identified by its own label table before it is opened — a directory that is not
+one of these exports is refused by name, rather than opened and reported as a
+program with no declarations in it — and then opened read-only.
+
+That is deliberately narrower than "the store is not changed by being read",
+which is what this section used to claim and which is not true. graphene takes
+its shared lock through `graphene.lock` and opens that file `O_CREATE`, so
+reading a store that has no lock file would create a zero-byte one and move the
+directory's mtime. Stores without a lock file are ordinary: graphene's own
+`Backup` excludes it, so every store recovered through its supported restore
+path arrives without one.
+
+So a store with no `graphene.lock` is read **without** taking a lock, rather
+than given one, and a store whose lock file cannot be written — write-protected
+media — is read the same way. Both cases are named in the answer, separately,
+because they are not equally comfortable: the second is only sound once the
+lock's own owner record says no writer died holding it, and a writer that is
+still running on read-only media is refused rather than read around.
 
 ### What the linter checks for you
 

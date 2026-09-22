@@ -36,7 +36,7 @@ package cli
 //   - A Limit is a silent truncation with no marker, so none is passed. Answers
 //     are whole, and a large one is large.
 //
-// # Reading evidence without changing it
+// # Reading a store without changing what it says
 //
 // graphene.Open takes an exclusive lock, stamps the calling process's pid into
 // graphene.lock on open and again on close, and -- the part that decides this
@@ -46,18 +46,36 @@ package cli
 //
 // So the store is identified before it is opened, by its own label table, and
 // opened read-only afterwards. OpenReadOnly refuses a missing path and a path
-// that is not a directory, admits other readers, and leaves every byte and
-// every mtime alone.
+// that is not a directory, admits other readers, and writes nothing into any
+// file that carries what the store says.
 //
-// It is not the whole answer, because OpenReadOnly needs write permission on
-// graphene.lock to take its shared lock -- and an evidence directory is
-// write-protected on purpose. When that is why it failed, the store is opened
-// live instead, which takes no lock at all, and the answer says so. The
-// fallback is sound in exactly the case that triggers it: nothing can be
-// writing to a store nothing can write to.
+// It does not leave the directory untouched, and saying that it did would be
+// the kind of claim this tool exists not to make. OpenReadOnly takes its shared
+// lock through graphene.lock and opens that file O_CREATE, so reading a store
+// that has no lock file creates a zero-byte one and moves the directory's
+// mtime. That is not an exotic shape: graphene's Store.Backup excludes
+// graphene.lock by design, so every store recovered through its own supported
+// restore path arrives without one and would be modified by its first query.
+//
+// Hence three ways in, chosen by what is on disk before anything is opened.
+//
+//   - graphene.lock is present and writable. OpenReadOnly. A writer holding the
+//     store is refused here rather than read around.
+//
+//   - graphene.lock is absent. No lock can be held through a file that does not
+//     exist, so the store is opened live, which creates nothing, and the answer
+//     says the read was lock-free and why.
+//
+//   - graphene.lock is present and cannot be opened for writing, because the
+//     media or the directory is read-only. OpenReadOnly cannot take its shared
+//     lock. The store is opened live and the answer says so -- but only after
+//     the lock's own owner record has been read, because a permission error is
+//     also what a live writer on read-only media looks like, and that is the
+//     one case where a lock-free read would be reading a store mid-change.
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,21 +121,39 @@ type QueryQuestion struct {
 
 	// Cost says how the answer is found, because the difference is visible:
 	// an index lookup is immediate and a scan reads every declaration record.
+	// One question is both, and says so, rather than being filed under the
+	// cheaper of its two costs.
 	Cost string
 }
+
+// Scans reports whether answering this question can read every declaration
+// record. It is derived from Cost rather than stored beside it, because two
+// fields that have to agree are two fields that eventually will not -- and the
+// one that drifted here put "Two of the questions" above a list of one in the
+// shipped help.
+func (q QueryQuestion) Scans() bool { return q.Cost != costIndex }
+
+// The three costs. `where` is the only question that is both: it is an index
+// lookup, and on a miss it reads every record to find out whether the name was
+// spelled differently rather than absent.
+const (
+	costIndex     = "an index lookup"
+	costScan      = "every declaration record"
+	costIndexThen = "an index lookup, then every declaration record when the name misses"
+)
 
 // QueryQuestions is the fixed set, in the order the help lists them. The CLI
 // builds its usage from this, so a question cannot be added without appearing
 // there.
 func QueryQuestions() []QueryQuestion {
 	return []QueryQuestion{
-		{"summary", "", "What this store holds: the counts, by label.", "index"},
-		{"modules", "", "Every module, what it declares, and what it imports.", "index"},
-		{"where", "<name>", "Every declaration of a name, and where it is.", "index"},
-		{"callers", "<name>", "Every recorded use of a name, and where it is used from.", "index"},
-		{"callees", "<name>", "Every name a declaration uses.", "index"},
-		{"outline", "<module>", "The declarations of one module, nested as they are written.", "index"},
-		{"exported", "", "Every declaration another module could name.", "scan"},
+		{"summary", "", "What this store holds: the counts, by label.", costIndex},
+		{"modules", "", "Every module, what it declares, and what it imports.", costIndex},
+		{"where", "<name>", "Every declaration of a name, and where it is.", costIndexThen},
+		{"callers", "<name>", "Every recorded use of a name, and where it is used from.", costIndex},
+		{"callees", "<name>", "Every name a declaration uses.", costIndex},
+		{"outline", "<module>", "The declarations of one module, nested as they are written.", costIndex},
+		{"exported", "", "Every declaration another module could name.", costScan},
 	}
 }
 
@@ -185,16 +221,13 @@ func QueryGraph(opts QueryOptions) (QueryAnswer, error) {
 				"both versions agree on", extras))
 	}
 
-	g, live, err := openForReading(opts.Store)
+	g, lockFree, err := openForReading(opts.Store)
 	if err != nil {
 		return answer, err
 	}
 	defer func() { _ = g.Close() }()
-	if live {
-		answer.Warnings = append(answer.Warnings,
-			"the store is write-protected, so it was read without taking a lock. Nothing can "+
-				"be writing to it, so the reading is consistent -- but that is an inference from "+
-				"the permissions, not a guarantee from the engine")
+	if lockFree != "" {
+		answer.Warnings = append(answer.Warnings, lockFree)
 	}
 
 	if err := requireWrittenIndex(g); err != nil {
@@ -278,9 +311,15 @@ func requireSymbolGraph(dir string) (int, error) {
 		return 0, fmt.Errorf("graph query: %s is not a symbol graph: %w", dir, err)
 	}
 
+	// Both tables are walked in label order rather than in map order. A store
+	// that disagrees about two labels disagrees about two labels whichever is
+	// named first, but a refusal an examiner might quote should be the same
+	// sentence every time it is produced, and ranging a Go map made it a coin
+	// toss between them.
 	wantNodes, wantEdges := labelNames()
-	for label, name := range wantNodes {
-		got, named := nodes[uint16(label)]
+	for _, label := range sortedLabels(wantNodes) {
+		name := wantNodes[store.NodeType(label)]
+		got, named := nodes[label]
 		if !named {
 			return 0, fmt.Errorf("graph query: %s is not a symbol graph: its labels do not name %s", dir, name)
 		}
@@ -289,8 +328,9 @@ func requireSymbolGraph(dir string) (int, error) {
 				"where this program calls it %q", dir, label, got, name)
 		}
 	}
-	for label, name := range wantEdges {
-		got, named := edges[uint16(label)]
+	for _, label := range sortedLabels(wantEdges) {
+		name := wantEdges[store.EdgeType(label)]
+		got, named := edges[label]
 		if !named {
 			return 0, fmt.Errorf("graph query: %s is not a symbol graph: its labels do not name %s", dir, name)
 		}
@@ -300,6 +340,18 @@ func requireSymbolGraph(dir string) (int, error) {
 		}
 	}
 	return (len(nodes) - len(wantNodes)) + (len(edges) - len(wantEdges)), nil
+}
+
+// sortedLabels is the label numbers of either table, ascending. It is generic
+// over the two label types because they are distinct named integer types and
+// the alternative is this function twice.
+func sortedLabels[T ~uint16](table map[T]string) []uint16 {
+	out := make([]uint16, 0, len(table))
+	for label := range table {
+		out = append(out, uint16(label))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // readLabelTable parses graphene.labels.
@@ -374,23 +426,98 @@ func readLabelTable(path string) (map[uint16]string, map[uint16]string, error) {
 	return nodes, edges, nil
 }
 
-// openForReading opens the store without changing it, and reports whether it
-// had to fall back to a lock-free read. See the file header.
-func openForReading(dir string) (*graphene.Graph, bool, error) {
+// openForReading opens the store without changing what it says, and reports
+// why, when it could not take a lock. See the file header.
+//
+// The empty string means the ordinary locked read. Anything else is the reason
+// the read was lock-free, and it is carried to the answer verbatim rather than
+// reduced to a boolean, because the two reasons are not equally comfortable and
+// a reader is entitled to know which one they got.
+func openForReading(dir string) (*graphene.Graph, string, error) {
+	// A store with no lock file cannot be held by anybody, and OpenReadOnly
+	// would create one. Open live: it takes no lock and creates nothing.
+	if _, err := os.Stat(filepath.Join(dir, "graphene.lock")); errors.Is(err, fs.ErrNotExist) {
+		live, liveErr := graphene.OpenLive(dir)
+		if liveErr != nil {
+			return nil, "", fmt.Errorf("graph query: %w", liveErr)
+		}
+		return live, "this store has no graphene.lock, so it was read without taking one rather " +
+			"than have one created for it. graphene's own Backup excludes that file, so a store " +
+			"restored from a backup looks exactly like this -- but so does a store somebody " +
+			"deleted it from, and the two are not distinguishable from here", nil
+	}
+
 	g, err := graphene.OpenReadOnly(dir)
 	if err == nil {
-		return g, false, nil
+		return g, "", nil
 	}
 	// A writer holding the store is the one case where reading without a lock
 	// would be reading a store mid-change. Refuse rather than fall back.
 	if errors.Is(err, disk.ErrStoreLocked) {
-		return nil, false, fmt.Errorf("graph query: %w", err)
+		return nil, "", fmt.Errorf("graph query: %w", err)
+	}
+	// Everything else is a candidate for the lock-free read, but only two
+	// things make it sound: the failure has to be about permission, and the
+	// lock's owner record has to say nobody is holding it. A live writer on
+	// read-only media fails with a permission error too, so the first test
+	// alone would read a store mid-change and call it write-protected.
+	if !errors.Is(err, fs.ErrPermission) {
+		return nil, "", fmt.Errorf("graph query: %w", err)
+	}
+	if owner, readable := readLockOwner(filepath.Join(dir, "graphene.lock")); readable &&
+		owner.present && !owner.clean && owner.pid != 0 {
+		return nil, "", fmt.Errorf("graph query: %s could not be locked for reading, and its "+
+			"graphene.lock records process %d as holding it without having closed it. Reading "+
+			"without a lock would read a store that is being written: %w", dir, owner.pid, err)
 	}
 	live, liveErr := graphene.OpenLive(dir)
 	if liveErr != nil {
-		return nil, false, fmt.Errorf("graph query: %w", err)
+		// Both attempts failed, and it is the second that decided the outcome:
+		// the lock-free read is the one this tool exists to be able to do, so
+		// blaming the lock here would name as fatal the exact condition the
+		// fallback was written to survive.
+		return nil, "", fmt.Errorf("graph query: %s could not be read with a lock (%v) and could "+
+			"not be read without one either: %w", dir, err, liveErr)
 	}
-	return live, true, nil
+	return live, "the store is write-protected, so it was read without taking a lock. Its " +
+		"graphene.lock records no unclosed writer, so the reading is consistent -- but that is " +
+		"an inference from a record the last writer left, not a guarantee from the engine", nil
+}
+
+// lockOwner is what graphene's last exclusive holder recorded about itself.
+//
+// graphene writes a 32-byte record at offset 0 of graphene.lock -- magic
+// "GLK1", a version byte, the pid, and a clean flag Close sets before it
+// releases -- and keeps every reader of it unexported. Reading it here is the
+// same decision readLabelTable already makes for graphene.labels: the engine is
+// deciding what to do about the file, and this is deciding whether to believe a
+// directory at all, which has to happen before the engine is involved.
+//
+// It is deliberately read without a lock. The record sits outside the locked
+// byte range and is written in one 32-byte WriteAt, so a concurrent reader sees
+// the old record or the new one and never a mixture.
+type lockOwner struct {
+	present bool
+	pid     uint64
+	clean   bool
+}
+
+// readLockOwner returns the record and whether the file could be read at all.
+// An unreadable or foreign file yields a zero owner and false, which callers
+// must treat as "nothing is known" rather than as "nobody is holding it".
+func readLockOwner(path string) (lockOwner, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) < 32 {
+		return lockOwner{}, false
+	}
+	if string(raw[0:4]) != "GLK1" || raw[4] != 1 {
+		return lockOwner{}, false
+	}
+	return lockOwner{
+		present: true,
+		pid:     binary.LittleEndian.Uint64(raw[8:16]),
+		clean:   raw[16] == 1,
+	}, true
 }
 
 // requireWrittenIndex refuses a store this program cannot read the way it
@@ -406,6 +533,16 @@ func openForReading(dir string) (*graphene.Graph, bool, error) {
 // no error. NodePropKeys is an upper bound rather than an exact set, so a key
 // it names may still project nothing -- refusing on absence and never on
 // presence is the direction that cannot produce a false refusal.
+//
+// Which keys are required depends on what the store holds, and getting that
+// wrong produced the worst kind of refusal this file can make. A module node
+// writes `key` and `name`; `id`, `kind` and `module` come from declaration
+// nodes alone. Demanding all five unconditionally refused every store written
+// for a program that declares nothing -- a hello-world, an empty file, a file
+// of comments -- and refused it with a message blaming a different version of
+// `mutant graph export` for a store this same build had written seconds
+// earlier. So the three declaration keys are required only once a declaration
+// exists to have written them.
 func requireWrittenIndex(g *graphene.Graph) error {
 	stats, err := g.Stats()
 	if err != nil {
@@ -425,11 +562,19 @@ func requireWrittenIndex(g *graphene.Graph) error {
 	for _, key := range keys {
 		have[key] = true
 	}
-	for _, need := range []string{"name", "module", "key", "kind", "id"} {
-		if !have[need] {
+	need := []string{"key", "name"}
+	declarations, err := g.QueryNodeIDs(store.NodeQuery{Types: []store.NodeType{nodeDeclaration}})
+	if err != nil {
+		return fmt.Errorf("graph query: %w", err)
+	}
+	if len(declarations) > 0 {
+		need = append(need, "id", "kind", "module")
+	}
+	for _, key := range need {
+		if !have[key] {
 			return fmt.Errorf("graph query: this store does not index %q, so a lookup by it would "+
 				"match nothing and report no error. It was written by a different version of "+
-				"`mutant graph export`", need)
+				"`mutant graph export`", key)
 		}
 	}
 	return nil
@@ -501,6 +646,15 @@ func loadModules(g *graphene.Graph) (*moduleIndex, error) {
 //
 // Empty when the modules share no directory -- separate drives on Windows, say
 // -- in which case the full path is what there is.
+//
+// Segments are compared byte for byte and not folded. Folding looks like the
+// friendly choice on Windows and is the wrong one here: the store may have been
+// written on a filesystem where Lib and lib are two directories, the reader's
+// platform does not decide what the exporter's filesystem did, and a root that
+// matches neither spelling exactly makes shortPath give up and print both
+// modules in full. Worse, two files with the same basename under directories
+// differing only in case then render as the same row, and `outline` refuses
+// them by printing one name twice.
 func commonRoot(modules []moduleProps) string {
 	if len(modules) == 0 {
 		return ""
@@ -516,7 +670,7 @@ func commonRoot(modules []moduleProps) string {
 			limit = len(segments)
 		}
 		cut := 0
-		for cut < limit && strings.EqualFold(shared[cut], segments[cut]) {
+		for cut < limit && shared[cut] == segments[cut] {
 			cut++
 		}
 		shared = shared[:cut]
@@ -524,16 +678,28 @@ func commonRoot(modules []moduleProps) string {
 	if len(shared) == 0 || (len(shared) == 1 && shared[0] == "") {
 		return ""
 	}
-	return strings.Join(shared, "/")
+	// A volume root already ends in a separator -- "X:\", "//server/share/",
+	// and "/" all do -- so filepath.Dir returns it with one and the Join leaves
+	// a doubled separator that matches no module's path. Trim it, and give up
+	// on a root that is nothing but separator.
+	root := strings.TrimRight(strings.Join(shared, "/"), "/")
+	if root == "" {
+		return ""
+	}
+	return root
 }
 
 // shortPath is a module's path relative to the store's common root.
+//
+// Byte-exact, for the reason commonRoot is: the root was computed from these
+// same paths, so an exact match is what a correct root produces, and a folded
+// one would strip a prefix the path does not actually carry.
 func (m *moduleIndex) shortPath(props moduleProps) string {
 	full := filepath.ToSlash(props.Path)
 	if m.root == "" {
 		return full
 	}
-	if len(full) > len(m.root)+1 && strings.EqualFold(full[:len(m.root)], m.root) &&
+	if len(full) > len(m.root)+1 && full[:len(m.root)] == m.root &&
 		full[len(m.root)] == '/' {
 		return full[len(m.root)+1:]
 	}
@@ -559,14 +725,21 @@ func (m *moduleIndex) name(key string) string {
 // files -- and matches on the whole key, then on a path-boundary suffix. A
 // suffix that matches more than one module is refused by name, because picking
 // one would be picking which file the answer is about.
+//
+// It returns the key and the name to print. Both branches print the short path,
+// which is what the sibling questions print: the first returned nothing at all,
+// so `outline` typed as a path that filepath.Abs happened to resolve -- which
+// includes an ordinary relative name typed from the store's own root -- printed
+// a headline with no module in it. The second returned the absolute Path, which
+// no other answer here does.
 func (m *moduleIndex) resolve(argument string) (string, string, error) {
 	if len(m.ordered) == 0 {
 		return "", "", errors.New("graph query: this store holds no modules")
 	}
 
 	if absolute, err := filepath.Abs(argument); err == nil {
-		if _, known := m.byKey[sema.CanonicalKey(absolute)]; known {
-			return sema.CanonicalKey(absolute), "", nil
+		if props, known := m.byKey[sema.CanonicalKey(absolute)]; known {
+			return props.Key, m.shortPath(props), nil
 		}
 	}
 
@@ -584,7 +757,7 @@ func (m *moduleIndex) resolve(argument string) (string, string, error) {
 
 	switch len(matched) {
 	case 1:
-		return matched[0].Key, matched[0].Path, nil
+		return matched[0].Key, m.shortPath(matched[0]), nil
 	case 0:
 		names := make([]string, 0, len(m.ordered))
 		for _, props := range m.ordered {
@@ -851,12 +1024,14 @@ func answerWhere(g *graphene.Graph, name string, answer *QueryAnswer) error {
 			answer.Headline = fmt.Sprintf("nothing is called %q, but %d declaration(s) differ from it only in case",
 				name, len(folded))
 			answer.Sections = append(answer.Sections, section)
+			answer.Notes = append(answer.Notes, whereScanned)
 			return nil
 		}
 		answer.Headline = fmt.Sprintf("nothing in this store is called %q", name)
 		answer.Notes = append(answer.Notes,
 			"a name is matched exactly, as the source spells it. This store was searched for "+
-				"other casings too, and there are none")
+				"other casings too, and there are none",
+			whereScanned)
 		return nil
 	}
 
@@ -880,6 +1055,13 @@ func answerWhere(g *graphene.Graph, name string, answer *QueryAnswer) error {
 	return nil
 }
 
+// whereScanned is what `where` owes a reader when the index missed. The help
+// lists `where` among the questions that can read every record, and an answer
+// that did not repeat it would leave the one place a reader is actually looking
+// -- the answer in front of them -- silent about what it cost.
+const whereScanned = "the index held no declaration under this exact name, so this answer read " +
+	"every declaration record in the store rather than an index"
+
 // --- callers and callees ---
 
 // answerUses renders the REFERENCES edges on either side of a name.
@@ -898,7 +1080,33 @@ func answerUses(g *graphene.Graph, name string, direction store.Direction, answe
 		return err
 	}
 	if len(decls) == 0 {
+		// The only questions whose empty answer said nothing about why. `where`
+		// names the declarations that differ only in case and `outline` lists
+		// the modules it holds, so `callers Mean` answering a flat nothing
+		// while `where Mean` finds `mean` was this file disagreeing with
+		// itself about the same store.
 		answer.Headline = fmt.Sprintf("nothing in this store is called %q", name)
+		all, scanErr := allDeclarations(g)
+		if scanErr != nil {
+			return scanErr
+		}
+		var folded []string
+		for _, decl := range all {
+			if strings.EqualFold(decl.props.Name, name) && decl.props.Name != name {
+				folded = append(folded, fmt.Sprintf("%s at %s", decl.props.Name, at(modules, decl.props)))
+			}
+		}
+		if len(folded) > 0 {
+			sort.Strings(folded)
+			answer.Notes = append(answer.Notes, fmt.Sprintf(
+				"a name is matched exactly, as the source spells it, and %d declaration(s) differ "+
+					"from this one only in case: %s. Ask about one of those to see its uses",
+				len(folded), strings.Join(folded, ", ")))
+			return nil
+		}
+		answer.Notes = append(answer.Notes,
+			"nothing is declared under this name in any casing either, so the question is about "+
+				"a name this store does not hold rather than about one spelled differently")
 		return nil
 	}
 	sortDeclarations(decls, modules)
@@ -969,27 +1177,65 @@ func renderUses(g *graphene.Graph, modules *moduleIndex, anchor declaration,
 		byID[node.ID] = node
 	}
 
-	rows := make([]string, 0, len(edges))
+	// Sorted on the position, not on the rendered row. Sorting the strings put
+	// line 10 and line 11 before line 2, which is the one ordering a reader of
+	// a file will not expect.
+	type use struct {
+		module string
+		line   int
+		column int
+		text   string
+	}
+	uses := make([]use, 0, len(edges))
 	for _, edge := range edges {
-		var use refProps
-		_ = json.Unmarshal(edge.Properties, &use)
+		var props refProps
+		_ = json.Unmarshal(edge.Properties, &props)
 
 		other := edge.Src
 		if !inbound {
 			other = edge.Dst
 		}
 
-		where := fmt.Sprintf("%s:%d:%d", modules.name(moduleOf(g, modules, other)), use.Line, use.Column)
+		// The position on a REFERENCES edge is where the use is written, which
+		// is in the module the edge runs FROM. Inbound, that is the far end;
+		// outbound, it is the anchor -- and taking it from the far end there
+		// named the wrong file for any reference that crossed one.
+		site := anchor.props.Module
+		if inbound {
+			site = moduleOf(g, modules, other)
+		}
+
 		what := describeCounterpart(modules, byID[other])
 		if other == anchor.id {
 			what += "  (itself -- recursive)"
 		}
-		if use.Call {
+		if props.Call {
 			what += "  called"
 		}
-		rows = append(rows, fmt.Sprintf("  %-34s %s", where, what))
+		name := modules.name(site)
+		uses = append(uses, use{
+			module: name,
+			line:   props.Line,
+			column: props.Column,
+			text:   fmt.Sprintf("  %-34s %s", fmt.Sprintf("%s:%d:%d", name, props.Line, props.Column), what),
+		})
 	}
-	sort.Strings(rows)
+	sort.Slice(uses, func(i, j int) bool {
+		if uses[i].module != uses[j].module {
+			return uses[i].module < uses[j].module
+		}
+		if uses[i].line != uses[j].line {
+			return uses[i].line < uses[j].line
+		}
+		if uses[i].column != uses[j].column {
+			return uses[i].column < uses[j].column
+		}
+		return uses[i].text < uses[j].text
+	})
+	rows := make([]string, 0, len(uses))
+	for _, u := range uses {
+		rows = append(rows, u.text)
+	}
 	return rows, nil
 }
 
@@ -1088,7 +1334,7 @@ func answerOutline(g *graphene.Graph, argument string, answer *QueryAnswer) erro
 	section := AnswerSection{Title: "Declarations", Empty: "  this module declares nothing"}
 	sortByPosition(roots, byID)
 	for _, root := range roots {
-		section.Rows = append(section.Rows, outlineRows(root, byID, children, 1)...)
+		section.Rows = append(section.Rows, outlineRows(root, byID, children, 1, map[store.NodeID]bool{})...)
 	}
 
 	answer.Headline = fmt.Sprintf("%s -- %d declaration(s)", path, len(decls))
@@ -1099,22 +1345,48 @@ func answerOutline(g *graphene.Graph, argument string, answer *QueryAnswer) erro
 	return nil
 }
 
+// outlineRows renders one declaration and everything written inside it.
+//
+// onPath carries the declarations between the root and here, and it is the
+// difference between an answer and a hang. The nesting in a store this program
+// wrote is a tree, but nothing on the read side can know that: a single
+// ENCLOSES edge from a node to itself -- one byte's worth of damage, or a
+// future exporter with a different idea of what encloses what -- made this
+// recurse without end, and because every frame keeps a row string that grows
+// with its own depth, it did so in quadratic memory rather than in a stack
+// overflow. Measured on one self-loop: 9,226 MB in 17.9 seconds, still
+// climbing. A cycle is reported where it is found and not followed.
 func outlineRows(id store.NodeID, byID map[store.NodeID]declProps,
-	children map[store.NodeID][]store.NodeID, depth int) []string {
+	children map[store.NodeID][]store.NodeID, depth int, onPath map[store.NodeID]bool) []string {
 
 	props := byID[id]
+	indent := strings.Repeat("  ", depth)
+	if onPath[id] {
+		return []string{fmt.Sprintf("%s  %s  (encloses itself -- the nesting in this store is a "+
+			"cycle, so it is reported here and not followed)", indent, props.Name)}
+	}
+
+	// The star width is clamped because fmt reads a negative one as a left
+	// flag and a positive width, so past depth 15 the name column grew by two
+	// per level instead of shrinking and the kind column marched right.
+	width := 30 - 2*depth
+	if width < 8 {
+		width = 8
+	}
 	row := fmt.Sprintf("  %s%-*s %-10s %d:%d",
-		strings.Repeat("  ", depth), 30-2*depth, props.Name, props.Kind, props.Line, props.Column)
+		indent, width, props.Name, props.Kind, props.Line, props.Column)
 	if props.Exported {
 		row += "  exported"
 	}
 	rows := []string{row}
 
+	onPath[id] = true
 	kids := append([]store.NodeID(nil), children[id]...)
 	sortByPosition(kids, byID)
 	for _, kid := range kids {
-		rows = append(rows, outlineRows(kid, byID, children, depth+1)...)
+		rows = append(rows, outlineRows(kid, byID, children, depth+1, onPath)...)
 	}
+	delete(onPath, id)
 	return rows
 }
 

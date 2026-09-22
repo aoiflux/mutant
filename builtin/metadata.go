@@ -1131,7 +1131,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameCaseManifest: {
 		signature: "case_manifest()",
 		summary:   "Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes.",
-		returns:   pairRet("the case manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+		returns:   pairRet("the case manifest", ParamHash).withFields("audit", "case", "classification", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
 	BuiltinNameCaseWrite: {
 		signature: "case_write(path, options?)",
 		summary:   "Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file.",
@@ -1164,6 +1164,49 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "case_close()",
 		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
 		returns:   pairRet("the final manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+	BuiltinNameCaseKeyCreate: {
+		signature: "case_key_create(path, options?)",
+		summary:   "Mints the case key a classified record is sealed under and writes it to a file that must not already exist. The passphrase is asked for at the terminal and never appears in an argument: key material in program text is key material a traceback can print, and a Go string holding a secret cannot be wiped. Refuses an existing path, because writing a key over a key makes every record sealed under the old one unopenable.",
+		params: []builtinParamDoc{
+			param("path", "Where to write the key file. Keep it out of the directory `case_bundle` writes: the key is the one thing that must not travel with the handover.", ParamString),
+			param("options?", "`{\"case_id\": \"IR-2026-0031\"}` names the case the key belongs to, defaulting to the open case. `{\"sign\": false}` writes the file with no Ed25519 signature, for a machine with no key store.", ParamHash),
+		},
+		returns: pairRet("what was minted", ParamHash).withFields("case_id", "case_uid", "fingerprint", "generation", "kdf", "key_id", "path", "signature_detail", "signed", "status")},
+	BuiltinNameCaseKeyOpen: {
+		signature: "case_key_open(path, options?)",
+		summary:   "Unwraps a case key and holds it for the life of the open case. Returns no handle and has no closer: the key's lifetime is the case's, and `case_close` zeroes it. Refuses a key whose case id is not the open case's, and refuses a second key while one is open.",
+		params: []builtinParamDoc{
+			param("path", "The key file `case_key_create` wrote.", ParamString),
+			param("options?", "`{\"generation\": 2}` opens an earlier generation, for a record sealed before the key was rotated. Defaults to the file's current generation.", ParamHash),
+		},
+		returns: pairRet("what was opened", ParamHash).withFields("case_id", "case_uid", "fingerprint", "generation", "key_id", "path", "signature_detail", "signature_valid", "signed", "status")},
+	BuiltinNameCaseKeyRotate: {
+		signature: "case_key_rotate(path, options)",
+		summary:   "Changes the passphrase, or mints a new case key. `mode` is required and has no default because the two do different things. Neither reaches a disclosure already issued: a grant is bytes in someone else's hands, and rotation is not revocation.",
+		params: []builtinParamDoc{
+			param("path", "The key file to rotate.", ParamString),
+			param("options", "`{\"mode\": \"passphrase\"}` rewraps every generation under a new passphrase and a new salt, leaving every case key byte-identical so no record is touched. `{\"mode\": \"case_key\"}` appends a new generation and makes it current, leaving earlier ones in place so records sealed under them still open.", ParamHash),
+		},
+		returns: pairRet("what the rotation did", ParamHash).withFields("case_id", "fingerprint", "generation", "key_id", "mode", "path", "previous_fingerprint", "previous_generation", "records_rewrapped", "signature_detail", "signed", "status")},
+	BuiltinNameCaseKeyFingerprint: {
+		signature: "case_key_fingerprint(path)",
+		summary:   "Reads what a key file says about itself, with no passphrase and no unwrapping. `authenticated` is always false and says so: without the passphrase the file's own MAC cannot be checked, so every field returned is a claim. The signature narrows that to a claim by the holder of a signing key, which is better and is not proof.",
+		params: []builtinParamDoc{
+			param("path", "The key file to read.", ParamString),
+		},
+		returns: pairRet("what the file claims", ParamHash).withFields("authenticated", "case_id", "case_uid", "current", "generations", "path", "previous_file_mac", "signature_detail", "signature_valid", "signed", "status")},
+	BuiltinNameClassDefine: {
+		signature: "class_define(label, options?)",
+		summary:   "Declares one classification label and returns the tag its segments will carry. Labels are declared before use so that a typo is an error rather than a new secret class nobody recognises. The tag is keyed to the case key, so two investigations that both declare \"restricted\" produce different tags and neither can be linked to the other.",
+		params: []builtinParamDoc{
+			param("label", "The label as it should read in a report. Normalised to NFC, trimmed, internal spacing collapsed and lowercased before tagging, so `Restricted` and ` restricted ` are one class; a control or formatting character is refused.", ParamString),
+			param("options?", "`{\"description\": \"...\"}` is prose for the manifest and is never part of the tag.", ParamHash),
+		},
+		returns: pairRet("the declared label", ParamHash).withFields("canonical", "description", "index", "label", "status", "tag")},
+	BuiltinNameClassList: {
+		signature: "class_list()",
+		summary:   "Returns the classification scheme in force, in declaration order. Answers with the same keys whether or not a case is open, so a program branches on a field rather than on an error: `open` says a case is open, `tagged` says a case key is open, which is what makes a tag possible at all. The order is presentation order and carries no authority; nothing here enforces a lattice.",
+		returns:   pairRet("the scheme in force", ParamHash).withFields("case_id", "classes", "count", "open", "tagged")},
 	BuiltinNameAuditHead: {
 		signature: "audit_head()",
 		summary:   "Returns the head of the security audit chain: the SHA-256 commitment to every security event this run recorded, in order. The counters in `case_manifest` say how many times a check tripped; the chain says in what order and at which stage, which is the question a counter cannot be asked afterwards. The head covers every event ever recorded even when older entries have been dropped from memory, so `entries` and `retained` are different numbers and both are reported.",
@@ -3064,6 +3107,17 @@ var capabilityCategories = []capabilityCategory{
 	{"policy_", "policy"},
 	{"report_", "reporting"},
 	{"case_", "chain of custody"},
+	// class_ files with case_ because a classification label is a property of
+	// the case rather than a type in the language. Position is free: of the
+	// c-prefixes here (cidr_, csv_, cbor_, chan_, cmd_, crc32, case_, cache_)
+	// none is a prefix of class_ and class_ is a prefix of none, so this is
+	// adjacency for the reader -- the same reason the comment above gives.
+	//
+	// There is deliberately NO {"case_key_", ...} entry. CapabilityCategory
+	// returns on the first prefix match, so "case_" above already claims all
+	// four case_key_ builtins; an entry here would be a second line producing
+	// the identical string, and one placed any later would be dead code.
+	{"class_", "chain of custody"},
 	// The audit chain is the log behind the manifest's security counters, and
 	// an examiner reads it beside the case documents rather than apart from
 	// them, so it files under the same heading.

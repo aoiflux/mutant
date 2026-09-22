@@ -355,6 +355,26 @@ func secretVerdict(name, value string) (issuer string, named string, report bool
 	if name == "" || !secretNamePattern.MatchString(name) {
 		return "", "", false
 	}
+	// A name ending in _file, _path or _dir names a LOCATION, not a secret.
+	//
+	// This rule's own advice is "read it from a file the program opens at run
+	// time", and a name given to doing exactly that must not be the thing it
+	// flags. The combination is not hypothetical: secretNamePattern matches
+	// `pass(word|wd|phrase)?` followed by a non-letter, so `passphrase_file`
+	// matches, and looksIssued fires on any value containing a symbol -- which
+	// every real path does, through its separators or its dot. The rule was
+	// therefore certain to fire on every correct use of the idiom it
+	// recommends, and to tell the author to do what they had just done.
+	//
+	// The exemption is narrow on purpose. It is about what the value is FOR,
+	// which is the question the rest of this function already asks, and it
+	// leaves a literal assigned to a name like `api_key_file` unflagged -- a
+	// blind spot worth accepting against a rule that was otherwise wrong every
+	// time it spoke.
+	if strings.HasSuffix(name, "_file") || strings.HasSuffix(name, "_path") ||
+		strings.HasSuffix(name, "_dir") {
+		return "", "", false
+	}
 	if !looksIssued(value) {
 		return "", "", false
 	}

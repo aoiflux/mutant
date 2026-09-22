@@ -7,8 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aoiflux/graphene/store"
 )
 
 // The read side is tested against stores the write side actually wrote.
@@ -510,5 +514,338 @@ func TestAQuestionThatIsNotOnTheListIsRefusedWithTheList(t *testing.T) {
 		Store: dir, Question: "summary", Argument: "extra",
 	}); err == nil || !strings.Contains(err.Error(), "takes no argument") {
 		t.Fatalf("an argument was accepted where none is taken: %v", err)
+	}
+}
+
+// --- what the first review of this file found ---
+//
+// Every test below stands for one defect the read side shipped with. They are
+// grouped here rather than filed beside their neighbours because the thing
+// worth keeping is the list: these are the shapes a store can take that the
+// first pass did not imagine, and the next question added to this file will be
+// wrong in one of the same ways.
+
+// A store with no lock file is the ordinary output of graphene's own backup
+// and restore, and reading one used to create the lock file it was missing.
+//
+// The fingerprint test above cannot catch this, because the export leaves a
+// graphene.lock behind and the read then finds one. The store that matters is
+// the one that arrives without it.
+func TestAStoreWithNoLockFileIsReadWithoutBeingGivenOne(t *testing.T) {
+	_, dir, _ := exportFixtureTo(t, exportFixture, "main.mut")
+	lock := filepath.Join(dir, "graphene.lock")
+	if err := os.Remove(lock); err != nil {
+		t.Fatalf("removing the lock file the export left: %v", err)
+	}
+	before := fingerprint(t, dir)
+
+	answer := ask(t, dir, "summary", "")
+
+	if _, err := os.Stat(lock); err == nil {
+		t.Fatal("reading the store created a graphene.lock; a question is not a write")
+	}
+	if after := fingerprint(t, dir); strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Fatalf("the store changed:\nbefore:\n%s\nafter:\n%s",
+			strings.Join(before, "\n"), strings.Join(after, "\n"))
+	}
+	if len(answer.Warnings) == 0 {
+		t.Fatal("a lock-free read answered with no warning saying so")
+	}
+	if !strings.Contains(strings.Join(answer.Warnings, " "), "graphene.lock") {
+		t.Fatalf("the warning does not name the file that was missing: %q", answer.Warnings)
+	}
+}
+
+// A program that declares nothing is a program, and its store is a store.
+//
+// A module node writes `key` and `name`; `id`, `kind` and `module` come from
+// declaration nodes. Requiring all five refused every store written for a
+// hello-world -- and refused it by blaming a different version of the exporter
+// for a store this same build had just written.
+func TestAProgramThatDeclaresNothingCanStillBeAsked(t *testing.T) {
+	_, dir, _ := exportFixtureTo(t, map[string]string{"main.mut": "// this file declares nothing\n"}, "main.mut")
+
+	arguments := map[string]string{
+		"where":   "anything",
+		"callers": "anything",
+		"callees": "anything",
+		"outline": "main.mut",
+	}
+	for _, question := range QueryQuestions() {
+		answer, err := QueryGraph(QueryOptions{
+			Store: dir, Question: question.Name, Argument: arguments[question.Name],
+		})
+		if err != nil {
+			t.Fatalf("%s refused a store this build wrote: %v", question.Name, err)
+		}
+		if answer.Headline == "" {
+			t.Fatalf("%s answered with no headline", question.Name)
+		}
+	}
+}
+
+// Uses are listed where they are written, and line 2 comes before line 10.
+//
+// The rows were sorted as strings, so a file with more than nine lines of uses
+// reported them in the one order a reader of that file will not expect.
+func TestUsesAreListedInSourceOrderAndNotStringOrder(t *testing.T) {
+	var src strings.Builder
+	src.WriteString("let target = fn() { return 1; };\n")
+	for i := 0; i < 11; i++ {
+		src.WriteString("target();\n")
+	}
+	_, dir, _ := exportFixtureTo(t, map[string]string{"main.mut": src.String()}, "main.mut")
+
+	answer := ask(t, dir, "callers", "target")
+	var lines []int
+	for _, row := range rows(answer, "Used by") {
+		fields := strings.Split(strings.Fields(row)[0], ":")
+		if len(fields) < 3 {
+			t.Fatalf("a use row does not carry a position: %q", row)
+		}
+		line, err := strconv.Atoi(fields[len(fields)-2])
+		if err != nil {
+			t.Fatalf("a use row's line is not a number: %q", row)
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) < 10 {
+		t.Fatalf("expected the uses of target, got %d row(s): %s", len(lines), allRows(answer))
+	}
+	for i := 1; i < len(lines); i++ {
+		if lines[i] < lines[i-1] {
+			t.Fatalf("uses are out of source order: %v", lines)
+		}
+	}
+}
+
+// The headline names the module, whichever way the module was named.
+//
+// resolve had two branches and they disagreed: the one that filepath.Abs
+// happened to hit returned no name at all, so `outline lib/stats.mut` typed
+// from the tree's own root printed " -- 20 declaration(s)".
+func TestOutlineNamesTheModuleWhicheverWayItWasTyped(t *testing.T) {
+	root := writeTree(t, exportFixture)
+	out := filepath.Join(t.TempDir(), "store")
+	if _, err := ExportGraph(ExportOptions{Entry: filepath.Join(root, "main.mut"), Out: out}); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	was, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(was) })
+
+	for _, typed := range []string{
+		"lib/stats.mut",
+		filepath.Join(root, "lib", "stats.mut"),
+		"stats.mut",
+	} {
+		answer := ask(t, out, "outline", typed)
+		if !strings.Contains(answer.Headline, "stats.mut") {
+			t.Fatalf("outline %q answered with a headline that does not name the module: %q",
+				typed, answer.Headline)
+		}
+		if strings.HasPrefix(answer.Headline, " ") {
+			t.Fatalf("outline %q answered with an empty name: %q", typed, answer.Headline)
+		}
+	}
+}
+
+// outlineRows is exercised directly, because the two shapes that broke it
+// cannot be written in Mutant: a nesting sixteen deep, and a declaration that
+// encloses itself. The second is one edge's worth of damage to a store, and it
+// used to recurse until the machine ran out of memory.
+func TestOutlineSurvivesADepthAndACycleTheExporterWouldNeverWrite(t *testing.T) {
+	t.Run("a deep nesting keeps its columns", func(t *testing.T) {
+		byID := map[store.NodeID]declProps{}
+		children := map[store.NodeID][]store.NodeID{}
+		for i := 1; i <= 22; i++ {
+			byID[store.NodeID(i)] = declProps{Name: "n", Kind: "value", Line: i, Column: 1}
+			if i > 1 {
+				children[store.NodeID(i-1)] = []store.NodeID{store.NodeID(i)}
+			}
+		}
+		out := outlineRows(1, byID, children, 1, map[store.NodeID]bool{})
+		if len(out) != 22 {
+			t.Fatalf("expected 22 rows, got %d", len(out))
+		}
+		// Past the floor the kind column does move, because the indent grows
+		// by two a level and nothing absorbs that. What must never happen is
+		// the negative star width, which added the field's own growth on top
+		// and marched the column by four a level while claiming to shrink it.
+		previous := strings.Index(out[0], "value")
+		for depth, row := range out[1:] {
+			at := strings.Index(row, "value")
+			if at < previous {
+				t.Fatalf("the kind column moved left at depth %d:\n%s",
+					depth+2, strings.Join(out, "\n"))
+			}
+			if at-previous > 2 {
+				t.Fatalf("the kind column moved right by %d at depth %d, and the indent grows by 2:\n%s",
+					at-previous, depth+2, strings.Join(out, "\n"))
+			}
+			previous = at
+		}
+	})
+
+	t.Run("a cycle is reported and not followed", func(t *testing.T) {
+		byID := map[store.NodeID]declProps{
+			1: {Name: "a", Kind: "function", Line: 1, Column: 1},
+			2: {Name: "b", Kind: "value", Line: 2, Column: 1},
+		}
+		children := map[store.NodeID][]store.NodeID{
+			1: {2},
+			2: {1},
+		}
+		done := make(chan []string, 1)
+		go func() { done <- outlineRows(1, byID, children, 1, map[store.NodeID]bool{}) }()
+		select {
+		case out := <-done:
+			if len(out) != 3 {
+				t.Fatalf("expected the cycle to stop after three rows, got %d:\n%s",
+					len(out), strings.Join(out, "\n"))
+			}
+			if !strings.Contains(out[2], "cycle") {
+				t.Fatalf("the repeated declaration does not say why it stopped: %q", out[2])
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("outlineRows did not return: the cycle guard is not holding")
+		}
+	})
+
+	t.Run("a self-loop is a cycle too", func(t *testing.T) {
+		byID := map[store.NodeID]declProps{1: {Name: "a", Kind: "function", Line: 1, Column: 1}}
+		children := map[store.NodeID][]store.NodeID{1: {1}}
+		done := make(chan []string, 1)
+		go func() { done <- outlineRows(1, byID, children, 1, map[store.NodeID]bool{}) }()
+		select {
+		case out := <-done:
+			if len(out) != 2 || !strings.Contains(out[1], "cycle") {
+				t.Fatalf("a self-loop was not reported as a cycle: %#v", out)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("outlineRows did not return on a single self-loop")
+		}
+	})
+}
+
+// The two questions that took a name and answered a flat nothing now say the
+// same thing `where` says, because a store that holds `mean` answering
+// "nothing is called Mean" and nothing else is this file disagreeing with
+// itself about one store.
+func TestCallersAndCalleesSayWhenTheNameExistsInAnotherCasing(t *testing.T) {
+	_, dir, _ := exportFixtureTo(t, exportFixture, "main.mut")
+
+	for _, question := range []string{"callers", "callees"} {
+		answer := ask(t, dir, question, "Mean")
+		notes := strings.Join(answer.Notes, " ")
+		if !strings.Contains(notes, "mean") {
+			t.Fatalf("%s Mean did not mention the declaration that differs only in case: %s",
+				question, allRows(answer))
+		}
+	}
+
+	for _, question := range []string{"callers", "callees"} {
+		answer := ask(t, dir, question, "nothingIsCalledThis")
+		if len(answer.Notes) == 0 {
+			t.Fatalf("%s of an absent name answered with no caveat at all", question)
+		}
+	}
+}
+
+// A question that reads every record says so where the reader is looking: in
+// the answer. The help lists which questions can, and the two have to agree.
+func TestEveryQuestionThatCanScanSaysSoWhenItDoes(t *testing.T) {
+	_, dir, _ := exportFixtureTo(t, exportFixture, "main.mut")
+
+	scanning := map[string]string{}
+	for _, question := range QueryQuestions() {
+		if question.Scans() {
+			scanning[question.Name] = question.Cost
+		}
+	}
+	if len(scanning) != 2 {
+		t.Fatalf("expected `where` and `exported` to be the scanning questions, got %v", scanning)
+	}
+	if _, listed := scanning["where"]; !listed {
+		t.Fatal("`where` reads every record on a miss and is not declared as doing so")
+	}
+	if _, listed := scanning["exported"]; !listed {
+		t.Fatal("`exported` reads every record and is not declared as doing so")
+	}
+
+	// `where` on a name the index holds must NOT claim to have scanned.
+	hit := ask(t, dir, "where", "mean")
+	if strings.Contains(strings.Join(hit.Notes, " "), "every declaration record") {
+		t.Fatalf("`where` on an indexed name claimed to have scanned: %s", allRows(hit))
+	}
+	for _, name := range []string{"Mean", "nothingIsCalledThis"} {
+		miss := ask(t, dir, "where", name)
+		if !strings.Contains(strings.Join(miss.Notes, " "), "every declaration record") {
+			t.Fatalf("`where %s` scanned and did not say so: %s", name, allRows(miss))
+		}
+	}
+	exported := ask(t, dir, "exported", "")
+	if !strings.Contains(strings.Join(exported.Notes, " "), "every declaration record") {
+		t.Fatalf("`exported` scanned and did not say so: %s", allRows(exported))
+	}
+}
+
+// commonRoot decides what every path in every answer is printed relative to,
+// and two of its shapes were wrong in a way no fixture tree would show.
+func TestTheCommonRootIsExactAndNeverBareSeparator(t *testing.T) {
+	cases := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{
+			// Folding the comparison made Lib and lib one directory, so the
+			// root matched neither path exactly and shortPath gave up on both.
+			name:  "directories differing only in case are two directories",
+			paths: []string{"/p/Lib/a.mut", "/p/lib/b.mut"},
+			want:  "/p",
+		},
+		{
+			// filepath.Dir returns a volume root WITH its separator, and the
+			// Join then produced "X://" which matches no path.
+			name:  "a drive root keeps no trailing separator",
+			paths: []string{`X:\a.mut`, `X:\b.mut`},
+			want:  "X:",
+		},
+		{
+			name:  "one module is its own directory",
+			paths: []string{"/p/q/a.mut"},
+			want:  "/p/q",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			modules := make([]moduleProps, 0, len(tc.paths))
+			for _, path := range tc.paths {
+				modules = append(modules, moduleProps{Path: path})
+			}
+			if got := commonRoot(modules); got != tc.want {
+				t.Fatalf("commonRoot = %q, want %q", got, tc.want)
+			}
+			index := &moduleIndex{root: commonRoot(modules)}
+			seen := map[string]bool{}
+			for _, props := range modules {
+				short := index.shortPath(props)
+				if strings.HasPrefix(short, "/") || strings.Contains(short, "//") {
+					t.Fatalf("shortPath(%q) = %q, which is not relative to %q",
+						props.Path, short, index.root)
+				}
+				if seen[short] {
+					t.Fatalf("two modules share the short path %q", short)
+				}
+				seen[short] = true
+			}
+		})
 	}
 }

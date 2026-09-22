@@ -193,3 +193,63 @@ func TestGraphHelpNamesTheEdgesTheExportActuallyWrites(t *testing.T) {
 		t.Fatal("the help names an edge called CONTAINS, which no store holds")
 	}
 }
+
+// The help said "Two of the questions read every declaration record" above a
+// list it generated from the same registry, and the list had one entry in it.
+// Both halves come from the registry now, so the sentence cannot be wrong about
+// the list printed under it -- and the test asserts the counting words are gone
+// rather than that the count is right, because a count written in prose beside
+// generated data is the defect, not the number it happened to hold.
+func TestGraphHelpDoesNotCountTheScanningQuestionsInProse(t *testing.T) {
+	output := captureStdout(t, printGraphHelp)
+
+	for _, question := range cli.QueryQuestions() {
+		if !question.Scans() {
+			continue
+		}
+		assertContains(t, output, question.Cost)
+	}
+
+	for _, counted := range []string{
+		"Two of the questions",
+		"One of the questions",
+		"Three of the questions",
+	} {
+		if strings.Contains(output, counted) {
+			t.Fatalf("the help counts the scanning questions in prose (%q) instead of "+
+				"printing the list", counted)
+		}
+	}
+}
+
+// `where` is an index lookup that reads every record when the name misses, and
+// for a while it was filed under the cheaper of its two costs -- which is how
+// the help came to promise a list of two and print a list of one.
+func TestWhereIsDeclaredAsBothOfItsCosts(t *testing.T) {
+	var where cli.QueryQuestion
+	for _, question := range cli.QueryQuestions() {
+		if question.Name == "where" {
+			where = question
+		}
+	}
+	if where.Name == "" {
+		t.Fatal("there is no question called where")
+	}
+	if !where.Scans() {
+		t.Fatal("`where` reads every declaration record on a miss and is not declared as doing so")
+	}
+	if !strings.Contains(where.Cost, "index") {
+		t.Fatalf("`where` is an index lookup first and its cost does not say so: %q", where.Cost)
+	}
+}
+
+// The store is read without being given a lock file it did not have, and the
+// help has to say the narrower true thing rather than the wider false one.
+func TestGraphHelpDoesNotClaimTheStoreIsUntouched(t *testing.T) {
+	output := captureStdout(t, printGraphHelp)
+	if strings.Contains(output, "nothing is written to it") {
+		t.Fatal("the help claims nothing is written to the store; reading one that has no " +
+			"graphene.lock would create it, which is why the read is lock-free instead")
+	}
+	assertContains(t, output, "graphene.lock")
+}

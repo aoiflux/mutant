@@ -287,15 +287,17 @@ a property that was never indexed matches nothing and reports no error, and one
 ANDed onto a correct filter empties it -- which is why no word you type here
 ever becomes a property key.
 
-Two of the questions read every declaration record rather than an index, and
-say so when they answer: `)
-	scanning := []string{}
+Not every question is an index lookup. These read declaration records, and each
+says so in the answer when it does:
+`)
+	// Counted from the list rather than written into the prose beside it. The
+	// sentence here used to begin "Two of the questions" above a list built
+	// from the same data, and the list had one entry in it.
 	for _, question := range cli.QueryQuestions() {
-		if question.Cost == "scan" {
-			scanning = append(scanning, question.Name)
+		if question.Scans() {
+			fmt.Printf("  %-20s %s\n", question.Name, question.Cost)
 		}
 	}
-	fmt.Printf("%s.\n", strings.Join(scanning, ", "))
 	fmt.Print(`
 Every answer is complete only as far as the export got. A name the export could
 not resolve leaves no node and no edge, and a use written through an import
@@ -305,8 +307,12 @@ so `)
 	fmt.Print(` is complete within a module and a floor across one. Each answer
 carries the limits of its own question beside it.
 
-The store is opened read-only and nothing is written to it. A store on
-write-protected media is opened without a lock instead, and the answer says so.
+The store is opened read-only, and nothing that carries what the store says is
+written to. That is not the same as leaving the directory alone: graphene takes
+its shared lock through graphene.lock, and opening a store that has none would
+create one -- so a store with no lock file is read without a lock instead of
+being given one, and so is a store on write-protected media. Either way the
+answer says which it was, and why.
 
 Note:
   example_graph_data*/ is already in .gitignore, which makes it a convenient

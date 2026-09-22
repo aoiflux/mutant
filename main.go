@@ -86,6 +86,11 @@ func main() {
 }
 
 func run(args []string) int {
+	// The case-key passphrase seam is filled here and nowhere else, so that a
+	// program reaches a terminal only when it was started by this command line.
+	// See case_key_passphrase.go for why this is not an init().
+	installCaseKeyPassphraseSource()
+
 	// Flag validation runs before anything else, including the embedded-payload
 	// branch, so a contradictory command line is rejected identically whichever
 	// entry point would have served it. (M-5)

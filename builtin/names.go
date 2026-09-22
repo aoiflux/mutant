@@ -623,6 +623,15 @@ const (
 	BuiltinNameCaseReport         = "case_report"
 	BuiltinNameCaseBundle         = "case_bundle"
 	BuiltinNameCaseClose          = "case_close"
+	// the case key: what a classified record is sealed under, and the labels
+	// its segments are classified with. A path is passed, never key material;
+	// the passphrase is asked for at the terminal.
+	BuiltinNameCaseKeyCreate      = "case_key_create"
+	BuiltinNameCaseKeyOpen        = "case_key_open"
+	BuiltinNameCaseKeyRotate      = "case_key_rotate"
+	BuiltinNameCaseKeyFingerprint = "case_key_fingerprint"
+	BuiltinNameClassDefine        = "class_define"
+	BuiltinNameClassList          = "class_list"
 	// the security audit log: the hash chain behind the manifest's counters
 	BuiltinNameAuditHead   = "audit_head"
 	BuiltinNameAuditWrite  = "audit_write"

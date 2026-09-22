@@ -135,6 +135,55 @@ type custodySession struct {
 	// takes a list of segments, which is why this is a slice.
 	handles  map[string][]string
 	timeline []custodyEvent
+
+	// The case key and what is derived from it live for exactly as long as the
+	// case does, which is the whole reason `case_key_open` requires an open
+	// case and returns no handle. There is nothing for a program to hold and
+	// nothing for it to forget to close: CaseClose zeroes both of these inside
+	// the lock it already takes.
+	//
+	// caseKey is K_case itself; classTagKey is HKDF'd from it once, at open, so
+	// that tagging a label never touches the case key again.
+	caseKey        []byte
+	classTagKey    []byte
+	keyPath        string
+	keyFingerprint string
+	keyGeneration  uint32
+
+	// classes is the classification scheme, in the order it was declared.
+	// Order is presentation order and carries no authority: nothing here
+	// enforces a lattice, and a segment tagged `unclassified` is treated
+	// exactly like one tagged `secret`.
+	classes []caseClass
+}
+
+// caseClass is one classification label and the tag its segments carry.
+//
+// Tag is keyed to the case key, so two investigations that both declare
+// "restricted" produce different tags and neither can be linked to the other
+// by an observer holding both records. The cost of that is stated where it
+// belongs, in docs/DISCLOSURE_POLICY.md: a `.mrec` separated from its case
+// manifest holds tags whose meaning is not recoverable from anything its
+// holder has.
+type caseClass struct {
+	Label       string
+	Canonical   string
+	Description string
+	Tag         string
+	Index       int
+	DefinedAt   time.Time
+}
+
+// render is one row of the manifest's classification block.
+func (c caseClass) render() map[string]any {
+	return map[string]any{
+		"label":       c.Label,
+		"canonical":   c.Canonical,
+		"description": c.Description,
+		"tag":         c.Tag,
+		"index":       int64(c.Index),
+		"defined_at":  c.DefinedAt.UTC().Format(time.RFC3339Nano),
+	}
 }
 
 // custodyStore holds the one open case. A case is process-wide on purpose: a
@@ -574,6 +623,21 @@ func CaseClose(args ...object.Object) object.Object {
 		Detail:  fmt.Sprintf("case %s closed after %s", session.ID, now.Sub(session.OpenedAt).Round(time.Millisecond)),
 	})
 	manifest := session.manifest()
+
+	// The one place K_case dies. It is done here, under the lock the close
+	// already holds and before the manifest leaves, because this is the only
+	// path out of an open case: `case_key_open` deliberately returns no handle,
+	// so there is no `case_key_close` a program could forget to call and no
+	// second lifetime nested inside this one.
+	//
+	// Zeroing is best-effort and shallower than it looks. It cannot reach the
+	// copy chacha20poly1305 keeps inside its own struct, and SecureZero honours
+	// len rather than cap. Both are windows on a machine that is already
+	// compromised, which is the machine this policy does not defend.
+	security.SecureZero(session.caseKey)
+	security.SecureZero(session.classTagKey)
+	session.caseKey, session.classTagKey = nil, nil
+
 	custodyStore.Unlock()
 	custodyActive.Store(false)
 
@@ -851,6 +915,50 @@ func custodyHashFile(path, algo string) (string, error) {
 // a program reads and the document written to disk cannot drift apart.
 //
 // The caller must hold at least a read lock, or own the session outright.
+// classificationRecord is what the manifest says about the case key and the
+// labels declared under it.
+//
+// It is never omitted. A manifest with no classification block would leave a
+// reader to infer, from an absence, whether the investigation declined to
+// classify anything or simply never opened a key -- and those are different
+// statements. `keyed` false with an empty list says the first; `keyed` true
+// with an empty list says the second.
+//
+// The key's PATH is deliberately not here. The whole point of a case key being
+// a file the examiner names is that it does not travel with the handover, and
+// a manifest that recorded where it lives would partly undo that. The
+// fingerprint identifies it; the path locates it, and only one of those
+// belongs in a document that is meant to be handed over.
+func (s *custodySession) classificationRecord() map[string]any {
+	classes := make([]any, 0, len(s.classes))
+	for _, class := range s.classes {
+		classes = append(classes, class.render())
+	}
+	record := map[string]any{
+		"keyed":   s.caseKey != nil,
+		"classes": classes,
+		"count":   int64(len(s.classes)),
+	}
+	if s.caseKey != nil {
+		record["key_fingerprint"] = s.keyFingerprint
+		record["key_id"] = custodyKeyID(s.keyFingerprint)
+		record["key_generation"] = int64(s.keyGeneration)
+	}
+	return record
+}
+
+// custodyKeyID is the short form a record header names: the first 16 hex
+// characters of the fingerprint. It is an identifier and not a secret -- the
+// fingerprint is already derived from the case key through HKDF and cannot be
+// walked back -- but it is short enough to read in a hex dump, which is what a
+// record header needs.
+func custodyKeyID(fingerprint string) string {
+	if len(fingerprint) < 16 {
+		return fingerprint
+	}
+	return fingerprint[:16]
+}
+
 func (s *custodySession) manifest() map[string]any {
 	now := custodyNow()
 	end := now
@@ -922,8 +1030,12 @@ func (s *custodySession) manifest() map[string]any {
 			"evidence_read_only": true,
 			"read_only_policy":   "docs/EVIDENCE_HANDLING_POLICY.md",
 		},
-		"program":            custodyProgramRecord(),
-		"evidence":           evidence,
+		"program":  custodyProgramRecord(),
+		"evidence": evidence,
+		// Emitted whether or not a key was opened, because "no classification
+		// scheme was in force" is a fact about the investigation and an absent
+		// key reads as an oversight. See classificationRecord.
+		"classification":     s.classificationRecord(),
 		"timeline":           timeline,
 		"security_telemetry": telemetry,
 		// The counters say how many. The audit chain says in what order, and
