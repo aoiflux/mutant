@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mutant/cli"
 )
 
 // `graph` has to be a command everywhere the CLI decides what a word is.
@@ -89,5 +91,105 @@ func TestGraphExportWritesAStoreAndSaysWhatItWrote(t *testing.T) {
 	assertContains(t, output, "nodes")
 	if entries, err := os.ReadDir(out); err != nil || len(entries) == 0 {
 		t.Fatalf("nothing was written to %s: %v", out, err)
+	}
+}
+
+// The loop the export left open: a store is written, and then read back through
+// the same command that wrote it.
+func TestGraphQueryReadsBackWhatGraphExportWrote(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "main.mut")
+	if err := os.WriteFile(source,
+		[]byte("let helper = fn(value) { return value; };\nhelper(1);\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(root, "store")
+
+	captureStdout(t, func() {
+		if code := handleGraphCommand([]string{"mutant", "graph", "export", "--out", out, source}); code != 0 {
+			t.Fatalf("export exit code %d, want 0", code)
+		}
+	})
+
+	answered := captureStdout(t, func() {
+		if code := handleGraphCommand([]string{
+			"mutant", "graph", "query", "--store", out, "where", "helper",
+		}); code != 0 {
+			t.Fatalf("query exit code %d, want 0", code)
+		}
+	})
+	assertContains(t, answered, "helper")
+	assertContains(t, answered, "main.mut:1:5")
+}
+
+// A bad command line is exit 2 and a store that could not be answered about is
+// exit 1. They are different failures and a script has to be able to tell them
+// apart: the first means "you typed it wrong", the second means "that is not a
+// graph store".
+func TestGraphQuerySeparatesABadCommandLineFromAnUnreadableStore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stderr := captureStderr(t, func() {
+		if code := handleGraphCommand([]string{"mutant", "graph", "query", "summary"}); code != 2 {
+			t.Fatal("a query with no --store did not report a command-line error")
+		}
+	})
+	if !strings.Contains(stderr, "--store is required") {
+		t.Fatalf("the error does not say what is missing: %s", stderr)
+	}
+
+	stderr = captureStderr(t, func() {
+		if code := handleGraphCommand([]string{
+			"mutant", "graph", "query", "--store", root, "summary",
+		}); code != 1 {
+			t.Fatal("a directory that is not a store was not reported as a work failure")
+		}
+	})
+	if !strings.Contains(stderr, "not a symbol graph") {
+		t.Fatalf("the error does not say what is wrong with the directory: %s", stderr)
+	}
+}
+
+// There is no query language, so a question that is not on the list has to be
+// refused with the list rather than guessed at.
+func TestAnUnknownQuestionIsRefusedWithTheOnesThatExist(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		if code := handleGraphCommand([]string{
+			"mutant", "graph", "query", "--store", t.TempDir(), "unused",
+		}); code != 2 {
+			t.Fatal("an unknown question was not a command-line error")
+		}
+	})
+	assertContains(t, stderr, "not a question")
+	for _, question := range cli.QueryQuestions() {
+		assertContains(t, stderr, question.Name)
+	}
+}
+
+// The help is built from the question list rather than written beside it, so a
+// question cannot exist in one and not the other.
+func TestGraphHelpListsEveryQuestionThatCanBeAsked(t *testing.T) {
+	output := captureStdout(t, printGraphHelp)
+	for _, question := range cli.QueryQuestions() {
+		assertContains(t, output, question.Name)
+	}
+	assertContains(t, output, "mutant graph query --store")
+}
+
+// The help used to name an edge called CONTAINS. The export has never written
+// one: the label is ENCLOSES, because "contains" is one of graphene's own
+// built-in edge names and registering it would make one selector mean two
+// things. A reader who took the help at its word and queried for CONTAINS would
+// have got a parse error from a store that was perfectly fine.
+func TestGraphHelpNamesTheEdgesTheExportActuallyWrites(t *testing.T) {
+	output := captureStdout(t, printGraphHelp)
+	for _, label := range []string{"DECLARES", "ENCLOSES", "REFERENCES", "IMPORTS", "USES_TYPE"} {
+		assertContains(t, output, label)
+	}
+	if strings.Contains(output, "CONTAINS") {
+		t.Fatal("the help names an edge called CONTAINS, which no store holds")
 	}
 }

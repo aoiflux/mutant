@@ -2373,6 +2373,9 @@ analyzer the language server uses, so editor and command-line results agree:
 - `mutant graph export --out <dir> [--module-path DIR] <entry.mut>` — write the
   symbol graph of a whole program to a graph store, for asking questions across
   a codebase that no single file can answer.
+- `mutant graph query --store <dir> <question> [argument]` — ask that store one
+  of a fixed set of questions: `summary`, `modules`, `where`, `callers`,
+  `callees`, `outline`, `exported`.
 
 Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
 `vendor`).
@@ -2429,6 +2432,57 @@ Three things are worth knowing before relying on it:
 The target directory must be empty or absent: a store is written in one pass so
 that what is in it describes one program at one moment. `example_graph_data*/`
 is already in `.gitignore`, which makes it a convenient place to look around.
+
+### Reading a symbol graph back
+
+`mutant graph query` asks a store one of a fixed set of questions.
+
+```
+mutant graph query --store ./example_graph_data_symbols summary
+mutant graph query --store ./example_graph_data_symbols where mean
+mutant graph query --store ./example_graph_data_symbols callers report
+```
+
+| Question | Takes | Answers |
+| --- | --- | --- |
+| `summary` | | what the store holds, broken down by label |
+| `modules` | | every module, what it declares, what it imports, and which one nothing imports |
+| `where` | `<name>` | every declaration of a name, with its kind, scope and position |
+| `callers` | `<name>` | every recorded use of a name, and where it is used from |
+| `callees` | `<name>` | every name a declaration uses |
+| `outline` | `<module>` | the declarations of one module, nested as they are written |
+| `exported` | | every declaration another module could name |
+
+**There is no query language, and the fixed list is why.** graphene has none,
+so what makes a store answerable is what was indexed when it was written — and a
+filter on a property that was not indexed matches nothing and reports no error.
+Worse, one ANDed onto a correct filter empties that too, because the planner
+costs the unindexed key at zero and drives the query from it. So no word you
+type ever becomes a property key: the questions above are the shapes the
+export’s index was built for, and anything else is refused with the list.
+
+Two of them read every declaration record rather than an index — `exported`, and
+a `where` whose name matched nothing exactly — and they say so in the answer.
+
+**Every answer carries its own limits beside it**, because several of them are
+complete only for one module:
+
+- A use written `stats.mean(...)` is recorded against the import alias `stats`,
+  which is a declaration of the *calling* file, and never reaches `mean`. So
+  `callers` is complete within a module and a floor across one, and a zero from
+  it is not "nothing calls this".
+- A name the export could not resolve leaves no node and no edge at all, so an
+  answer derived from an edge being absent is "complete as far as the export
+  got", never "complete".
+- The label counts in `summary` overlap: every declaration carries `Declaration`
+  **and** its kind, and a `USES_TYPE` edge is a `REFERENCES` edge with a second
+  label. Adding them up reports more nodes than the store has.
+
+**The store is not changed by being read.** It is identified by its own label
+table before it is opened — a directory that is not one of these exports is
+refused by name, rather than opened and reported as a program with no
+declarations in it — and then opened read-only. A store on write-protected
+media is opened without a lock instead, and the answer says so.
 
 ### What the linter checks for you
 

@@ -707,6 +707,7 @@ Usage:
   mutant test [options] [file-or-dir]...
   mutant debug [--port N] [file.mut]
   mutant graph export --out <dir> <entry.mut>
+  mutant graph query --store <dir> <question> [argument]
   mutant help [command]
 
 Commands:
@@ -719,7 +720,8 @@ Commands:
   debug      Serve the Debug Adapter Protocol for an editor (breakpoints,
              stepping, variables). Started by the editor, not by hand.
   graph      Export a program's symbol graph -- declarations, references and
-             imports across the whole module closure -- to a graph store.
+             imports across the whole module closure -- to a graph store, and
+             ask it a fixed set of questions.
   help       Show general or command-specific help.
 
 Global options:
