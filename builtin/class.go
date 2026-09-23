@@ -199,15 +199,30 @@ func ClassList(args ...object.Object) object.Object {
 // human mitigation and it is the only one available -- a tool cannot decide
 // that Cyrillic "с" was meant to be Latin "c".
 func canonicalClassLabel(op, label string) (string, *object.Error) {
+	return canonicalLabel(op, "classification label", label)
+}
+
+// canonicalLabel is the rule above with the noun as a parameter, so that a view
+// name and a classification label are the same name under two headings rather
+// than two normalisations that drift.
+//
+// They must not drift. A view names the classes it grants, so `view_define`
+// resolves its arguments through exactly the rule `class_define` tagged them
+// under; a second normalisation that trimmed differently or folded a different
+// pair would make a view silently grant nothing, and "granted nothing" is the
+// one failure this family must never produce quietly. Parameterising the noun
+// is the whole change -- every check below is the classification rule, applied
+// unchanged.
+func canonicalLabel(op, kind, label string) (string, *object.Error) {
 	// Checked before anything normalises it: norm.NFC passes invalid bytes
 	// through unchanged, so a label that is not valid UTF-8 reaches TagForClass
 	// intact and is HMAC'd over bytes no JSON document can carry back.
-	if errObj := custodyDocumentName(op, "classification label", label); errObj != nil {
+	if errObj := custodyDocumentName(op, kind, label); errObj != nil {
 		return "", errObj
 	}
 	trimmed := strings.TrimSpace(norm.NFC.String(label))
 	if trimmed == "" {
-		return "", newError("%s: a classification label must not be empty", op)
+		return "", newError("%s: a %s must not be empty", op, kind)
 	}
 	if len([]rune(trimmed)) > maxClassLabel {
 		return "", newError("%s: %q is longer than %d characters. A label is read in a table and "+
@@ -216,7 +231,7 @@ func canonicalClassLabel(op, label string) (string, *object.Error) {
 	for _, r := range trimmed {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return "", newError("%s: %q contains a control or formatting character. Two labels "+
-				"that look identical and tag differently would be two classes nobody could tell "+
+				"that look identical and tag differently would be two names nobody could tell "+
 				"apart in a report", op, label)
 		}
 	}

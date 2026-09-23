@@ -227,7 +227,7 @@ Intentionally unsupported:
 
 ## 5) Builtin Support (Current)
 
-The full standard library is **648 builtins across 40 categories** — see the
+The full standard library is **651 builtins across 41 categories** — see the
 [Capability Reference](CAPABILITY_REFERENCE.md) for the complete catalog. In the
 browser WASM REPL, the **pure-compute** families run unchanged; the **host-facing**
 families (section 6) are unavailable because the WASM sandbox has no filesystem,

@@ -962,7 +962,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **648 builtins** across **40 categories**.
+The standard library is **651 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1005,6 +1005,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
 | [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-19) | 19 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and the classification labels tagged under it |
 | [Classified Records](CAPABILITY_REFERENCE.md#classified-records-10) | 10 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, and verifying with no key at all |
+| [Disclosure](CAPABILITY_REFERENCE.md#disclosure-3) | 3 | Named disclosure postures, and what one would release from a record -- and hold back -- before anything is handed over |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
 | [Disk Image Forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-34) | 34 | Raw/EWF/VHD(X) images, MBR/GPT tables |
@@ -2363,6 +2364,24 @@ the property a recipient who was granted nothing still has, and it reports in a
 `does_not_prove` field what a valid signature does not establish. `record_read`
 refuses a span it cannot fully decrypt and names the segments that stood in the
 way; `record_read_partial` is the separate contract that returns those as data.
+
+Who may open which part of a record is decided by the `view_*` family.
+`view_define(label, classes)` declares a named posture -- the set of
+classifications a grant issued under that name will open -- and `view_list`
+reports the postures in force. A view names the classes it grants and cannot
+negate: an "everything except" posture would widen by itself every time a class
+was declared after it, changing what it releases with nothing edited and nothing
+recorded. `view_preview(record, view)` says exactly what a view would release
+from a particular record and exactly what it would hold back, as byte ranges on
+both sides, and it is arithmetic over the record's public header -- it opens no
+segment and needs no plaintext. Where the record was quantised, the preview
+states the rounding in the terms of the view in front of it, because rounding
+moves bytes into one named class and therefore releases more or withholds more
+depending on whether that view grants it: the same twelve bytes read as released
+to one posture and held back to another. A class whose tag this case cannot name
+is counted in `unnamed_classes` rather than passed off as unclassified, and a
+`does_not_say` field records that a preview establishes what would be disclosed
+and not whether the classification behind it was right.
 
 ## Quick Example
 

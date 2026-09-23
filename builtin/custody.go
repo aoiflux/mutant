@@ -198,6 +198,56 @@ type custodySession struct {
 	// enforces a lattice, and a segment tagged `unclassified` is treated
 	// exactly like one tagged `secret`.
 	classes []caseClass
+
+	// views are the disclosure postures declared for this case: each one a
+	// name and the set of classes it grants. They sit beside the scheme rather
+	// than inside a record because a view is reusable -- the same posture goes
+	// to every record bound for one recipient -- and because a posture that
+	// lived inside a record could not be reviewed before a record existed.
+	views []caseView
+}
+
+// caseView is one named disclosure posture: the classes a grant issued under
+// this name will open, and nothing else.
+//
+// It holds tags as well as labels, and that is not redundancy. A record's
+// segments carry tags; a person reviewing a disclosure reads labels. Resolving
+// the label once, at the line that declared the view, is what makes
+// `view_preview` a lookup rather than a second canonicalisation with its own
+// opportunity to disagree with the first.
+//
+// There is no negation and no "everything else". A view granting "all classes
+// except X" would silently widen every time a class was declared after it,
+// which is the one way a disclosure posture can change without anybody editing
+// it -- and the change would be invisible in exactly the document meant to
+// record it.
+type caseView struct {
+	Label       string
+	Canonical   string
+	Description string
+	// Classes are the declared labels this view grants, in the order given.
+	Classes []string
+	// Tags are those labels' tags, index for index with Classes.
+	Tags      []string
+	Index     int
+	DefinedAt time.Time
+}
+
+// render is one row of the manifest's view block.
+func (v caseView) render() map[string]any {
+	grants := make([]any, 0, len(v.Classes))
+	for i, label := range v.Classes {
+		grants = append(grants, map[string]any{"label": label, "tag": v.Tags[i]})
+	}
+	return map[string]any{
+		"label":       v.Label,
+		"canonical":   v.Canonical,
+		"description": v.Description,
+		"grants":      grants,
+		"grant_count": int64(len(v.Classes)),
+		"index":       int64(v.Index),
+		"defined_at":  v.DefinedAt.UTC().Format(time.RFC3339Nano),
+	}
 }
 
 // caseClass is one classification label and the tag its segments carry.
@@ -990,10 +1040,20 @@ func (s *custodySession) classificationRecord() map[string]any {
 	for _, class := range s.classes {
 		classes = append(classes, class.render())
 	}
+	views := make([]any, 0, len(s.views))
+	for _, view := range s.views {
+		views = append(views, view.render())
+	}
 	record := map[string]any{
 		"keyed":   s.keyed,
 		"classes": classes,
 		"count":   int64(len(s.classes)),
+		// Views live in the classification block rather than one of their own
+		// because a disclosure posture only means anything against the scheme
+		// it selects from, and a reader who has to turn a page to find out
+		// what "counsel" grants is a reader who will not turn it.
+		"views":      views,
+		"view_count": int64(len(s.views)),
 	}
 	if s.keyed {
 		record["key_fingerprint"] = s.keyFingerprint

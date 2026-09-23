@@ -686,6 +686,9 @@ func ParseRecordHeader(data []byte) (*RecordHeader, error) {
 		return nil, fmt.Errorf("%w: generations are numbered from 1 and this record names %d and %d",
 			ErrRecordFormat, header.SealedUnderGeneration, header.WrappedUnderGeneration)
 	}
+	if err := header.validateQuantisation(); err != nil {
+		return nil, err
+	}
 	// The span list is validated here as well as by the caller, so that a
 	// header which cannot describe a coherent record is refused at the parse
 	// and not at the first read. Counted and not built: parsing is the first
@@ -695,6 +698,53 @@ func ParseRecordHeader(data []byte) (*RecordHeader, error) {
 		return nil, err
 	}
 	return header, nil
+}
+
+// validateQuantisation refuses the shapes of the rounding triple that cannot be
+// read.
+//
+// Quantum, QuantisedExtra and RoundsTo are three fields describing one event,
+// and only some combinations of them describe anything. A record claiming a
+// rounding but naming no class it rounded into states a count with no
+// direction, which the field comment above says cannot be read -- and a reader
+// who cannot read it is a reader who will guess, in one of the two directions,
+// with even odds of concluding that bytes were withheld when they were
+// released. A record naming a direction for a rounding that did not happen
+// invites the same guess from the other side.
+//
+// None of this is reachable from `record_seal_quantised`, which requires the
+// option and writes all three together. It is reachable from a file, and a
+// header is the part of a record that is authenticated by nothing at the point
+// it is parsed. The point of checking here is that every later reader -- the
+// loader, `record_verify`, `view_preview` -- may then treat the triple as
+// coherent rather than each re-deriving what to do about a header that is not.
+func (h *RecordHeader) validateQuantisation() error {
+	if h.RoundsTo != "" {
+		if _, err := classTagFromHex(h.RoundsTo); err != nil {
+			return fmt.Errorf("%w: the class this record says its rounding grew is not a class tag", ErrRecordFormat)
+		}
+	}
+	if h.Quantum == 0 {
+		if h.QuantisedExtra != 0 || h.RoundsTo != "" {
+			return fmt.Errorf("%w: this record says it was sealed at the boundaries it was given and "+
+				"also describes a rounding, which cannot both be true", ErrRecordFormat)
+		}
+		return nil
+	}
+	if h.RoundsTo == "" {
+		return fmt.Errorf("%w: this record says its boundaries were rounded to %d bytes and does not "+
+			"name the class the rounding grew. Every byte a rounding grows over changes class, so a "+
+			"count with no direction does not say whether those bytes were withheld or released",
+			ErrRecordFormat, h.Quantum)
+	}
+	// Bounded against the record's own length rather than against anything
+	// derived, because this runs before the segment table is counted and must
+	// not depend on it. A rounding cannot move bytes a record does not hold.
+	if h.QuantisedExtra > h.PlaintextLength {
+		return fmt.Errorf("%w: this record says its rounding moved %d bytes between classes and holds "+
+			"%d bytes in total", ErrRecordFormat, h.QuantisedExtra, h.PlaintextLength)
+	}
+	return nil
 }
 
 // ParseRecordFooter reads a footer under the same rule.

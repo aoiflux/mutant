@@ -566,3 +566,109 @@ func TestAHostileHeaderCannotAskForAnUnboundedSegmentTable(t *testing.T) {
 		t.Logf("the same plaintext at %d-byte segments is %d segments", DefaultSegmentSize, count)
 	}
 }
+
+// A rounding is three fields describing one event, and only some combinations
+// of them describe anything.
+//
+// The claim that matters is the direction. Rounding moves bytes INTO one named
+// class, so the same widening withholds more or releases more depending on
+// which class that is -- and a header stating the count without the class
+// leaves a reader to supply the direction, with even odds. record_seal_quantised
+// cannot produce that shape because the option is required; a file can, and a
+// header is the part of a record that nothing has vouched for when it is parsed.
+func TestAQuantisedHeaderMustSayWhichWayItRounded(t *testing.T) {
+	var tag ClassTag
+	var cuid CaseUID
+	var ruid RecordUID
+	tag[0] = 0x11
+
+	base := func() *RecordHeader {
+		return &RecordHeader{
+			Format:                 RecordFileFormat,
+			Version:                RecordFileVersion,
+			RecordUID:              hex.EncodeToString(ruid[:]),
+			CaseUID:                hex.EncodeToString(cuid[:]),
+			SealedUnderGeneration:  1,
+			WrappedUnderGeneration: 1,
+			SealSalt:               hex.EncodeToString(make([]byte, SealSaltSize)),
+			PlaintextLength:        256,
+			SegmentSize:            64,
+			Spans:                  []RecordSpan{{Offset: 0, Length: 256, Class: hex.EncodeToString(tag[:])}},
+		}
+	}
+
+	for _, probe := range []struct {
+		name  string
+		build func(*RecordHeader)
+		want  string
+	}{
+		{
+			name:  "a rounding with no class named",
+			build: func(h *RecordHeader) { h.Quantum = 16; h.QuantisedExtra = 12 },
+			want:  "does not say whether those bytes were withheld or released",
+		},
+		{
+			name:  "bytes moved by a rounding that did not happen",
+			build: func(h *RecordHeader) { h.QuantisedExtra = 12 },
+			want:  "cannot both be true",
+		},
+		{
+			name:  "a direction for a rounding that did not happen",
+			build: func(h *RecordHeader) { h.RoundsTo = hex.EncodeToString(tag[:]) },
+			want:  "cannot both be true",
+		},
+		{
+			name:  "a class that is not a class tag",
+			build: func(h *RecordHeader) { h.Quantum = 16; h.RoundsTo = "not a tag" },
+			want:  "is not a class tag",
+		},
+		{
+			name: "more bytes moved than the record holds",
+			build: func(h *RecordHeader) {
+				h.Quantum = 16
+				h.RoundsTo = hex.EncodeToString(tag[:])
+				h.QuantisedExtra = 257
+			},
+			want: "holds",
+		},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			h := base()
+			probe.build(h)
+			raw, err := MarshalRecordHeader(h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = ParseRecordHeader(raw)
+			if err == nil {
+				t.Fatal("the parser accepted a rounding it cannot read")
+			}
+			if !strings.Contains(err.Error(), probe.want) {
+				t.Fatalf("the refusal does not explain itself: %v", err)
+			}
+			t.Logf("refused: %v", err)
+		})
+	}
+
+	// The coherent shapes both parse: no rounding at all, and a rounding that
+	// names its direction.
+	if _, err := ParseRecordHeader(mustMarshalHeader(t, base())); err != nil {
+		t.Fatalf("an unrounded record was refused: %v", err)
+	}
+	rounded := base()
+	rounded.Quantum = 16
+	rounded.QuantisedExtra = 12
+	rounded.RoundsTo = hex.EncodeToString(tag[:])
+	if _, err := ParseRecordHeader(mustMarshalHeader(t, rounded)); err != nil {
+		t.Fatalf("a rounding that names its direction was refused: %v", err)
+	}
+}
+
+func mustMarshalHeader(t *testing.T, h *RecordHeader) []byte {
+	t.Helper()
+	raw, err := MarshalRecordHeader(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}

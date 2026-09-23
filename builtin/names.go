@@ -645,6 +645,12 @@ const (
 	BuiltinNameRecordVerify        = "record_verify"
 	BuiltinNameRecordProveSegment  = "record_prove_segment"
 	BuiltinNameRecordClose         = "record_close"
+	// disclosure: a view is a named set of classes, declared once and reviewed
+	// as a row in the manifest rather than assembled at each call site. There
+	// is no negation, so a posture cannot widen without somebody editing it.
+	BuiltinNameViewDefine  = "view_define"
+	BuiltinNameViewList    = "view_list"
+	BuiltinNameViewPreview = "view_preview"
 	// the security audit log: the hash chain behind the manifest's counters
 	BuiltinNameAuditHead   = "audit_head"
 	BuiltinNameAuditWrite  = "audit_write"

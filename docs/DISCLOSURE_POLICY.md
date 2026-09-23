@@ -30,7 +30,8 @@ to the rule it exists to enforce, so the split is stated first and plainly.
 | `case_key_create`, `case_key_open`, `case_key_rotate`, `case_key_fingerprint` | **In force.** [`builtin/case_key.go`](../builtin/case_key.go) |
 | `class_define`, `class_list`, and the manifest's classification block | **In force.** [`builtin/class.go`](../builtin/class.go), [`builtin/custody.go`](../builtin/custody.go) |
 | The `.mrec` container, its header, its footer signature, and the `record_*` family | **In force.** [`security/record_file.go`](../security/record_file.go), [`builtin/record.go`](../builtin/record.go) |
-| `view_*`, `disclose_*`, and the disclosure package | Designed, not yet built |
+| `view_define`, `view_list`, `view_preview`, and the manifest's view block | **In force.** [`builtin/view.go`](../builtin/view.go), [`builtin/custody.go`](../builtin/custody.go) |
+| `disclose_*` and the disclosure package | Designed, not yet built |
 | The graphene disclosure ledger | Designed, not yet built |
 | `object.Bytes.Classified` and the sink checks | Designed, not yet built |
 | The machine guard, [Section 10](#10-the-guard) | Designed, not yet built |
@@ -198,6 +199,58 @@ class they changed into; both are in the record header, so `record_verify` repor
 them to a recipient holding no key. A count without a direction cannot be read,
 and a tool that picked the direction itself would be answering the question the
 rest of this document exists to refuse.
+
+### A view is a positive set, and a preview is arithmetic
+
+A **view** is a name and a set of classifications: `view_define(label, classes)`
+declares one, and a grant issued under that name opens those classes and nothing
+else. It exists so that a disclosure review asks what a *name* grants, once,
+instead of reading the fourth argument of the sixth call in a script — and so
+that the posture is a labelled row in the signed manifest rather than a list
+assembled at the call site.
+
+**A view cannot negate.** There is no "everything except `restricted`". A negated
+posture widens by itself every time a class is declared after it: the script does
+not change, the manifest row does not change, and the set of bytes it releases
+grows. That is the one way a disclosure can change with nobody editing it, and
+the document meant to record the change would record nothing. The omission is the
+feature.
+
+A view granting *no* class is legal and reports `grants_nothing`. It discloses
+the record, its signature and its shape, and no content — which is a real
+posture, not a mistake.
+
+**`view_preview(record, view)` says what a view would release and what it would
+hold back, before anything is handed over.** It is arithmetic over the record
+header, which is public by construction, and the case's class table: it opens no
+segment, needs no plaintext, and returns `reads_no_plaintext` as a field saying
+so. Both sides are reported as byte ranges, because "what am I holding back" is
+the question a disclosure review actually asks and a tool that answered only the
+other half would be answering the easier one.
+
+Three things the preview is careful about, each of them a claim it refuses to
+make:
+
+- **The rounding direction is a property of the view, not of the record.** The
+  passage above establishes that `quantised_extra` cannot be read without
+  `rounds_to`. The same pair cannot be read without knowing whether *this*
+  recipient is granted that class. So the preview states it in the terms of the
+  view in front of it: the same twelve rounded bytes are reported as *released*
+  to a view that grants the rounded class and as *held back* to one that does
+  not. One record, one rounding, two correct and opposite readings.
+- **A class it cannot name is counted, not guessed.** The class table lives on
+  the case session, so a record opened in a later session whose labels were never
+  re-declared carries tags with no names. Those rows report the tag, `declared:
+  false`, and an empty label, and are counted in `unnamed_classes` — rather than
+  passed off as unclassified, which is the one reading that would be actively
+  wrong. This is [Section 6](#6-a-record-without-its-case-is-evidentially-mute)
+  arriving in a return value.
+- **It does not say the classification was correct.** A `does_not_say` field
+  carries that, along with the fact that a disclosure hands over the *whole*
+  record file: the recipient holds every ciphertext and learns every boundary and
+  length whether or not they can open it. A reviewer reading only
+  `granted_bytes` would otherwise have every reason to think the rest was not
+  handed over at all.
 
 ## 6. A record without its case is evidentially mute
 
