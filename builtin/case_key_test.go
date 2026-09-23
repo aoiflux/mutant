@@ -332,6 +332,20 @@ func TestTwoLabelsThatReadTheSameAreOneLabel(t *testing.T) {
 	if keyFieldString(t, second, "tag") == tag {
 		t.Fatal("two labels share a tag")
 	}
+
+	// One letter in two cases, where lowering it produces a form that only a
+	// second normalising pass makes equal. Capital J with a combining caron has
+	// no precomposed form, so it is already NFC; its lowercase is U+01F0, which
+	// does have one. Normalising only before lowering left the canonical form
+	// un-normalised, so these were two classes carrying two tags and neither was
+	// refused as a duplicate of the other.
+	decomposed := mustHash(t, ClassDefine(stringObj("J\u030ceyes-only")))
+	if got := keyFieldString(t, decomposed, "canonical"); got != "\u01f0eyes-only" {
+		t.Fatalf("the canonical form of a decomposed capital is %+q, want the precomposed lowercase", got)
+	}
+	if _, errObj := unwrapPairNoFatal(ClassDefine(stringObj("\u01f0eyes-only"))); errObj == nil {
+		t.Fatal("the same letter written precomposed was accepted as a second label")
+	}
 }
 
 // A label that could be mistaken for another in a report is refused outright.
@@ -413,6 +427,59 @@ func TestTheManifestAlwaysSaysWhetherItWasKeyed(t *testing.T) {
 			t.Fatalf("the manifest records the key's %q, which is the one thing that must not "+
 				"travel with the handover", key)
 		}
+	}
+
+	// And it still says so once the case is closed. `keyed` is a statement about
+	// the investigation and not a probe of what is still in memory: case_close
+	// zeroes the key, so a manifest that asked whether the key was live reported
+	// a case that had never been keyed -- in the same block that listed the class
+	// tagged under that key. Worse, the close renders its own manifest BEFORE it
+	// zeroes, so the two documents disagreed about one case.
+	closing := mustHash(t, CaseClose())
+	for _, after := range []struct {
+		name    string
+		section *object.Hash
+	}{
+		{"case_close", manifestSection(t, closing, "classification")},
+		{"case_manifest after the close", manifestSection(t, mustHash(t, CaseManifest()), "classification")},
+	} {
+		flag, _ := mustHashValue(t, after.section, "keyed").(*object.Boolean)
+		if flag == nil || !flag.Value {
+			t.Errorf("%s reports a closed case as never keyed, while listing the classes "+
+				"tagged under its key", after.name)
+		}
+		if _, present := hashLookup(after.section, "key_fingerprint"); !present {
+			t.Errorf("%s drops the key fingerprint, so nothing identifies the key the "+
+				"listed tags were derived under", after.name)
+		}
+	}
+}
+
+// A generation number that cannot exist is refused, not narrowed into one that
+// can.
+//
+// The option is read as an int64 and the key file numbers its generations with
+// a uint32, and uint32(1 << 32) is 0 -- which is this option's sentinel for
+// "whichever generation is current". So asking for a generation far past the
+// end quietly opened the live key and reported success, and every number
+// congruent to a real generation modulo 2^32 opened that generation.
+func TestAGenerationThatCannotExistIsRefusedNotTruncated(t *testing.T) {
+	openTestCase(t, "IR-TRUNC", "examiner")
+	stubPassphrase(t, "correct horse battery staple")
+	path := filepath.Join(t.TempDir(), "case.mkey")
+	mustHash(t, CaseKeyCreate(stringObj(path)))
+
+	for _, n := range []int64{1 << 32, (1 << 32) + 1, (1 << 33) + 7} {
+		opts := makeHashObject(map[string]object.Object{"generation": &object.Integer{Value: n}})
+		value, errObj := unwrapPairNoFatal(CaseKeyOpen(stringObj(path), opts))
+		if errObj == nil {
+			t.Fatalf("generation %d was accepted and opened %v; it was narrowed to %d",
+				n, value, uint32(n))
+		}
+		if !strings.Contains(errObj.Message, "does not exist") {
+			t.Fatalf("generation %d was refused for the wrong reason: %s", n, errObj.Message)
+		}
+		t.Logf("generation %d refused: %s", n, errObj.Message)
 	}
 }
 

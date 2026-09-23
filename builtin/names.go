@@ -632,6 +632,19 @@ const (
 	BuiltinNameCaseKeyFingerprint = "case_key_fingerprint"
 	BuiltinNameClassDefine        = "class_define"
 	BuiltinNameClassList          = "class_list"
+	// classified records: the `.mrec` container. A segment is at once the AEAD
+	// unit, the key-derivation unit and the smallest disclosable unit, so a
+	// segment key can never open bytes of two classifications.
+	BuiltinNameRecordClassifyRange = "record_classify_range"
+	BuiltinNameRecordSeal          = "record_seal"
+	BuiltinNameRecordSealQuantised = "record_seal_quantised"
+	BuiltinNameRecordOpen          = "record_open"
+	BuiltinNameRecordLayout        = "record_layout"
+	BuiltinNameRecordRead          = "record_read"
+	BuiltinNameRecordReadPartial   = "record_read_partial"
+	BuiltinNameRecordVerify        = "record_verify"
+	BuiltinNameRecordProveSegment  = "record_prove_segment"
+	BuiltinNameRecordClose         = "record_close"
 	// the security audit log: the hash chain behind the manifest's counters
 	BuiltinNameAuditHead   = "audit_head"
 	BuiltinNameAuditWrite  = "audit_write"

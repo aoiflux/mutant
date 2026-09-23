@@ -181,8 +181,12 @@ func ClassList(args ...object.Object) object.Object {
 
 // canonicalClassLabel is what the tag is computed over.
 //
-// NFC, then trim, then fold. The order matters: folding before normalising
-// would make two labels that normalise together fold apart. The tag is over
+// NFC, trim, collapse internal spaces, lower, then NFC again. The order
+// matters in both directions. Lowering before normalising would make two
+// labels that normalise together lower apart; normalising only before lowering
+// leaves the result not normalised at all, because lowering a decomposed
+// capital can produce a letter that does have a precomposed form. The tag is
+// over
 // the canonical form so that "Restricted", "restricted" and " restricted "
 // are one class rather than three, which is the mistake an examiner actually
 // makes at two in the morning.
@@ -212,5 +216,22 @@ func canonicalClassLabel(op, label string) (string, *object.Error) {
 	}
 	// Internal whitespace is collapsed so that "top secret" and "top  secret"
 	// are one label. strings.Fields splits on any Unicode space.
-	return strings.ToLower(strings.Join(strings.Fields(trimmed), " ")), nil
+	//
+	// Normalised a second time, after lowering, because lowering can undo the
+	// first pass. Capital J followed by a combining caron is already NFC --
+	// there is no precomposed capital J-with-caron to compose it into -- but
+	// its lowercase is precomposed, U+01F0, so lower(NFC(x)) is not NFC. One
+	// label written in two cases would canonicalise to two different strings,
+	// carry two different tags, and be refused as a duplicate neither time,
+	// which is the failure this function exists to prevent. The second pass is
+	// idempotent on everything else.
+	//
+	// What it does not do: ToLower is case lowering and not Unicode case
+	// folding, so "Restricted" and "restricted" become one label while the few
+	// pairs only full folding unifies -- German sharp s against "ss" is the one
+	// anybody meets -- stay two. That is deliberate. Those two do not look
+	// alike in a report, which is the standard the rest of this function is
+	// held to, and folding would also map Turkish dotted capital I onto a
+	// sequence no examiner typed.
+	return norm.NFC.String(strings.ToLower(strings.Join(strings.Fields(trimmed), " "))), nil
 }

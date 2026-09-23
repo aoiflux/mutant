@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,9 +41,29 @@ func mustKeys(t *testing.T, total uint64) (*RecordKeys, CaseUID, RecordUID, []by
 	return keys, cuid, ruid, rk, salt
 }
 
+// sealUpTo seals every segment below index, so that a test wanting to exercise
+// one segment in the middle of a record can get to it.
+//
+// A record is sealed in order and every segment exactly once -- see
+// TestARecordIsSealedInOrderAndCompletely for why -- so "just seal segment 17"
+// is not a thing a caller can do, and a test that did it was testing a handle
+// no real record ever has. The filler is distinct per index so that a segment
+// opened by mistake reads as obviously the wrong one.
+func sealUpTo(t *testing.T, keys *RecordKeys, index uint64) {
+	t.Helper()
+	for i := uint64(0); i < index; i++ {
+		filler := []byte(fmt.Sprintf("filler-%04d", i))
+		aad := keys.SegmentAAD(i, i*64, uint32(len(filler)), UnclassifiedTag)
+		if _, _, err := keys.SealSegment(aad, filler); err != nil {
+			t.Fatalf("filling segment %d: %v", i, err)
+		}
+	}
+}
+
 func TestSegmentRoundTrip(t *testing.T) {
 	keys, _, _, _, _ := mustKeys(t, 4)
 	defer keys.Zero()
+	sealUpTo(t, keys, 2)
 	aad := keys.SegmentAAD(2, 128, 11, UnclassifiedTag)
 	ct, digest, err := keys.SealSegment(aad, []byte("hello world"))
 	if err != nil {
@@ -109,6 +130,7 @@ func TestSegmentAttacksAreRefused(t *testing.T) {
 	pii, _ := TagForClass(tagKey, "pii")
 	public, _ := TagForClass(tagKey, "public")
 
+	sealUpTo(t, keys, 3)
 	good := keys.SegmentAAD(3, 3*64, 9, pii)
 	ct, _, err := keys.SealSegment(good, []byte("informant"))
 	if err != nil {
@@ -189,6 +211,96 @@ func TestASealHandleCannotBeRebuiltFromStoredMaterial(t *testing.T) {
 		t.Fatal("re-sealing from stored material was ACCEPTED; a two-time pad is reachable")
 	}
 	t.Logf("re-seal refused: %v", err)
+}
+
+// The same defence one level down: a handle that CAN seal must still refuse to
+// seal a position twice.
+//
+// The test above proves a second handle cannot seal over a first. It proves
+// nothing about one handle, and for a while nothing did. Sealing index 0 twice
+// produced two ciphertexts under one keystream, because a segment's key and
+// nonce are derived from its descriptor and a descriptor names the position
+// rather than the content -- so XOR returned both plaintexts with no key.
+//
+// The assertion is that the second message is UNRECOVERABLE and not merely
+// that the API declined, which is why the failure path does the XOR and prints
+// what it got.
+func TestSealingAPositionTwiceIsRefused(t *testing.T) {
+	keys, _, _, _, _ := mustKeys(t, 4)
+	defer keys.Zero()
+
+	first := []byte("informant A")
+	second := []byte("[REDACTED!]")
+	if len(first) != len(second) {
+		t.Fatal("this test needs two messages of one length to XOR them")
+	}
+	aad := keys.SegmentAAD(0, 0, uint32(len(first)), UnclassifiedTag)
+
+	c1, _, err := keys.SealSegment(aad, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, _, err := keys.SealSegment(aad, second)
+	if err == nil {
+		recovered := make([]byte, len(first))
+		for i := range recovered {
+			recovered[i] = c1[i] ^ c2[i] ^ first[i]
+		}
+		t.Fatalf("sealing index 0 twice was accepted, and c1^c2^p1 recovers %q with no key at all",
+			recovered)
+	}
+	t.Logf("refused: %v", err)
+
+	// The refusal must not have consumed the index either: the record still has
+	// segment 1 to seal next and has not lost a slot to a rejected call.
+	if got := keys.SealedCount(); got != 1 {
+		t.Fatalf("a refused seal moved the count to %d", got)
+	}
+}
+
+// A record is sealed in order and completely, and both are checkable where the
+// sealing happens.
+//
+// Per-segment authentication cannot see a segment that is missing: the ones
+// that exist are each individually valid, which is the blind spot that makes
+// the count worth keeping. SealComplete is what item 2's footer has to ask
+// before it signs a claim about a whole record.
+func TestARecordIsSealedInOrderAndCompletely(t *testing.T) {
+	const total = 3
+	keys, cuid, ruid, rk, salt := mustKeys(t, total)
+	defer keys.Zero()
+
+	if keys.SealComplete() {
+		t.Fatal("a record with nothing sealed reports a complete seal")
+	}
+	if _, _, err := keys.SealSegment(keys.SegmentAAD(1, 0, 1, UnclassifiedTag), []byte("b")); err == nil {
+		t.Fatal("segment 1 was sealed before segment 0, which leaves a record with a gap in it")
+	}
+
+	for i := uint64(0); i < total; i++ {
+		aad := keys.SegmentAAD(i, i, 1, UnclassifiedTag)
+		if _, _, err := keys.SealSegment(aad, []byte{byte('a' + i)}); err != nil {
+			t.Fatalf("segment %d: %v", i, err)
+		}
+		if got := keys.SealedCount(); got != i+1 {
+			t.Fatalf("after sealing segment %d the count is %d", i, got)
+		}
+		if keys.SealComplete() != (i+1 == total) {
+			t.Fatalf("after sealing segment %d complete=%t", i, keys.SealComplete())
+		}
+	}
+
+	// A handle that cannot seal has sealed nothing, and says so rather than
+	// reporting the record it was rebuilt from as complete.
+	reopened, err := OpenRecordKeys(cuid, ruid, 1, total, rk, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Zero()
+	if reopened.SealComplete() || reopened.SealedCount() != 0 {
+		t.Fatalf("an opening handle reports complete=%t count=%d",
+			reopened.SealComplete(), reopened.SealedCount())
+	}
 }
 
 // TestNoSegmentCap is the 145-segment cap, gone.
@@ -362,6 +474,7 @@ func TestCaseKeyFileLifecycle(t *testing.T) {
 func TestRotationInvalidatesNoGrant(t *testing.T) {
 	keys, cuid, ruid, rk, salt := mustKeys(t, 32)
 	defer keys.Zero()
+	sealUpTo(t, keys, 17)
 	aad := keys.SegmentAAD(17, 17*64, 12, UnclassifiedTag)
 	ct, _, err := keys.SealSegment(aad, []byte("grant target"))
 	if err != nil {

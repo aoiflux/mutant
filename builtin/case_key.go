@@ -46,6 +46,7 @@ package builtin
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,6 +310,10 @@ func CaseKeyOpen(args ...object.Object) object.Object {
 	session.keyPath = path
 	session.keyFingerprint = generation.Fingerprint
 	session.keyGeneration = generationNumber
+	session.caseUID = file.CaseUID
+	// Set here and cleared nowhere. case_close zeroes the key; the fact that
+	// this case had one is part of what the manifest reports about it.
+	session.keyed = true
 	custodyStore.Unlock()
 
 	custodyRecordArtifact(BuiltinNameCaseKeyOpen,
@@ -577,6 +582,17 @@ func caseKeyGenerationOption(op string, opts *formatOptions) (uint32, *object.Er
 	if number.Value < 1 {
 		return 0, newError("%s: generation %d does not exist; generations are numbered from 1",
 			op, number.Value)
+	}
+	// Bounded before the narrowing and not after. A key file numbers its
+	// generations with a uint32, and uint32(1 << 32) is 0 -- which is this
+	// option's sentinel for "whichever generation is current". Without this
+	// check, asking for a generation that cannot exist quietly opened the live
+	// one instead of refusing, and every number congruent to a real generation
+	// modulo 2^32 opened that generation.
+	if number.Value > math.MaxUint32 {
+		return 0, newError("%s: generation %d does not exist; a key file numbers its generations with "+
+			"a 32-bit counter, so %d is the highest there could ever be",
+			op, number.Value, int64(math.MaxUint32))
 	}
 	return uint32(number.Value), nil
 }

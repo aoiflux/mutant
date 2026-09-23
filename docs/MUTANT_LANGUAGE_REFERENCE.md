@@ -962,7 +962,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **638 builtins** across **39 categories**.
+The standard library is **648 builtins** across **40 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1004,6 +1004,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
 | [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-19) | 19 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and the classification labels tagged under it |
+| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-10) | 10 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, and verifying with no key at all |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
 | [Disk Image Forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-34) | 34 | Raw/EWF/VHD(X) images, MBR/GPT tables |
@@ -2323,6 +2324,40 @@ See [EVIDENCE_HANDLING_POLICY.md](EVIDENCE_HANDLING_POLICY.md) for the rule and
 its two reviewed exceptions, and
 [`examples/forensics/chain_of_custody.mut`](../examples/forensics/chain_of_custody.mut)
 for a program that runs the whole cycle.
+
+The case key is a separate object from the manifest, and the separation is
+the point: the manifest is the case document and it is signed, while the key
+is the thing an examiner keeps away from the handover. `case_key_create`
+writes a key file, `case_key_open` unlocks the session, `case_key_rotate`
+re-wraps it under a new passphrase or a new generation, and
+`case_key_fingerprint` identifies one without opening it. All four take a
+path; none takes, returns or prints key material, and the passphrase is read
+from the terminal rather than from an argument, from a file named in program
+text, or from an environment variable. `class_define` and `class_list`
+declare the classification labels a record may carry, so a typo is an error
+at the line that made it rather than a new secret class nobody recognises.
+Each label's tag is an HMAC keyed to the case key, so two investigations that
+both declare `restricted` produce different tags and neither can be linked to
+the other by an observer holding both. What that costs -- a record separated
+from its case manifest holds tags whose meaning is not recoverable from
+anything its holder has -- is stated along with everything else a disclosure
+refuses to promise in [DISCLOSURE_POLICY.md](DISCLOSURE_POLICY.md).
+
+A classification becomes bytes through the `record_*` family.
+`record_classify_range(offset, length, label)` names a run and resolves the
+label to its tag; `record_seal(source, record, ranges, options)` writes a
+`.mrec` in which each classification span is split into segments of at most
+`segment_size`, and a segment never straddles a span -- so holding one segment's
+key can never open bytes of two classifications. The `default` option is
+required and covers every byte no range names, because a record with an
+unlabelled remainder discloses that remainder to everyone who is disclosed
+anything. `record_seal_quantised` rounds boundaries outward where a short secret
+must not advertise its length, and reports how many extra bytes that withheld.
+`record_open` needs the case key; `record_verify` needs none at all, which is
+the property a recipient who was granted nothing still has, and it reports in a
+`does_not_prove` field what a valid signature does not establish. `record_read`
+refuses a span it cannot fully decrypt and names the segments that stood in the
+way; `record_read_partial` is the separate contract that returns those as data.
 
 ## Quick Example
 

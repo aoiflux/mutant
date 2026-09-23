@@ -638,6 +638,24 @@ func (a SegmentAAD) ClassTag() ClassTag { return a.classTag }
 // at every index, and the tree's own idiom -- six ledger_redact_* builtins --
 // is "re-seal this position with the content removed", which is precisely the
 // case where the original plaintext must be unrecoverable.
+//
+// sealable alone was not enough, and the gap is worth recording because the
+// defence was written for exactly the case it missed. It stops a SECOND handle
+// sealing over a first. It stopped nothing inside one: a sealable handle would
+// seal index 3 twice, and since the key and the nonce are derived from the
+// descriptor -- which names the position and not the plaintext -- the two
+// ciphertexts were one keystream over two messages, from which XOR returns both
+// with no key at all. The redaction idiom named above reaches that in a single
+// step, because re-sealing a position with the content removed IS one index
+// sealed twice.
+//
+// nextIndex closes it. A sealable handle seals segment 0, then 1, then 2, and
+// any other index is refused. Refusing is the only fix available: OpenSegment
+// has to re-derive a segment's material from its descriptor alone, so the
+// keystream cannot be varied per seal without making the record unopenable.
+// Eight bytes also make two other shapes unrepresentable that nothing here was
+// checking -- a record with a gap in it, and a record whose segments were
+// sealed out of order.
 type RecordKeys struct {
 	caseUID    CaseUID
 	uid        RecordUID
@@ -645,6 +663,10 @@ type RecordKeys struct {
 	total      uint64
 	prk        []byte
 	sealable   bool
+	// nextIndex is the only index SealSegment will accept. It advances on a
+	// successful seal and never rewinds, so a handle that reaches total has
+	// sealed every segment of the record exactly once.
+	nextIndex uint64
 }
 
 // NewRecordKeysForSeal mints a record key and a seal salt and returns a handle
@@ -757,6 +779,28 @@ func (r *RecordKeys) SealedUnderGeneration() uint32 { return r.generation }
 func (r *RecordKeys) Total() uint64                 { return r.total }
 func (r *RecordKeys) CanSeal() bool                 { return r != nil && r.sealable }
 
+// SealedCount reports how many segments have been sealed through this handle
+// and SealComplete whether that was all of them.
+//
+// Item 2's record footer needs both. A signature over the segment digests is a
+// claim about a whole record, and a record with an unsealed segment is one this
+// package will never refuse to open -- the segments that do exist are each
+// individually valid, which is the point of per-segment authentication and also
+// its blind spot. Nothing downstream can notice the absence, so the check has
+// to happen where the sealing did.
+func (r *RecordKeys) SealedCount() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.nextIndex
+}
+
+// SealComplete is false for a handle that cannot seal at all, which is the
+// honest answer: an opening handle has sealed nothing.
+func (r *RecordKeys) SealComplete() bool {
+	return r != nil && r.sealable && r.nextIndex == r.total
+}
+
 // SegmentAAD describes one segment of this record.
 //
 // The caller chooses the index, the offset in the plaintext, the length and the
@@ -817,6 +861,19 @@ func (r *RecordKeys) SealSegment(aad SegmentAAD, plaintext []byte) (ciphertext [
 	if aad.index >= aad.total {
 		return nil, digest, fmt.Errorf("segment %d is out of range for a record of %d segments", aad.index, aad.total)
 	}
+	// In order, and each index exactly once. Sealing an index twice would put
+	// two plaintexts under one keystream, because the descriptor this material
+	// is derived from names the position and not the content; the second
+	// ciphertext XORed against the first returns both messages without a key.
+	// A caller that wants to change what a position holds mints a new record.
+	if aad.index != r.nextIndex {
+		return nil, digest, fmt.Errorf(
+			"segment %d cannot be sealed here: this record has sealed %d of its %d segments and the next "+
+				"one it will accept is %d. A record is sealed once, in order, and every segment exactly "+
+				"once -- sealing a position twice would put two plaintexts under one keystream. To change "+
+				"what a position holds, mint a new record",
+			aad.index, r.nextIndex, r.total, r.nextIndex)
+	}
 	if int(aad.length) != len(plaintext) {
 		return nil, digest, fmt.Errorf("the segment says it is %d bytes and the buffer is %d", aad.length, len(plaintext))
 	}
@@ -835,6 +892,11 @@ func (r *RecordKeys) SealSegment(aad SegmentAAD, plaintext []byte) (ciphertext [
 	h.Write(encoded[:])
 	h.Write(ciphertext)
 	copy(digest[:], h.Sum(nil))
+
+	// Advanced only now, so a seal that failed before emitting anything can be
+	// retried at the same index. There is no ciphertext from the failed attempt
+	// for a retry to collide with.
+	r.nextIndex++
 	return ciphertext, digest, nil
 }
 

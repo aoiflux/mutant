@@ -1207,6 +1207,89 @@ var builtinDocs = map[string]builtinDoc{
 		signature: "class_list()",
 		summary:   "Returns the classification scheme in force, in declaration order. Answers with the same keys whether or not a case is open, so a program branches on a field rather than on an error: `open` says a case is open, `tagged` says a case key is open, which is what makes a tag possible at all. The order is presentation order and carries no authority; nothing here enforces a lattice.",
 		returns:   pairRet("the scheme in force", ParamHash).withFields("case_id", "classes", "count", "open", "tagged")},
+	BuiltinNameRecordClassifyRange: {
+		signature: "record_classify_range(offset, length, label)",
+		summary:   "Describes one run of bytes and the class it carries, resolving the label to the tag its segments will actually be bound to. It is a builtin rather than a hash you write out so that a label which was never declared is refused at the line that named it, rather than at the seal -- by which point a program has usually built a list and lost track of which entry was wrong. Ranges do not have to be given in order and must not overlap: which label wins where two ranges disagree is a legal question, not one this tool may answer for you. Returns (range, err).",
+		params: []builtinParamDoc{
+			param("offset", "Where the run starts in the plaintext.", ParamInt),
+			param("length", "How many bytes it covers. A range of zero bytes classifies nothing and is refused.", ParamInt),
+			param("label", "A label already declared with `class_define`.", ParamString),
+		},
+		returns: pairRet("the range and the tag it carries", ParamHash).withFields("class", "label", "length", "offset")},
+	BuiltinNameRecordSeal: {
+		signature: "record_seal(source, record, ranges, options)",
+		summary:   "Encrypts a file into a `.mrec` at the classification boundaries it was given. The `default` option is required and names the class every byte no range covers will carry: there is no implicit unclassified, because a record with an unlabelled remainder discloses that remainder to everyone who is disclosed anything, and \"the examiner decided this is open\" and \"the examiner did not think about this\" are different statements. Each span splits into segments of at most segment_size, and a segment never straddles a span, so a segment key can never open bytes of two classifications. Range boundaries and lengths are public by construction -- a redaction nobody can see is a redaction nobody can challenge -- and `record_seal_quantised` is the answer where a short secret must not advertise its length. The destination must not already exist. Returns (record, err).",
+		params: []builtinParamDoc{
+			param("source", "The file to seal. An empty file is refused: sealing nothing protects nothing, since a record's length is public anyway.", ParamString),
+			param("record", "Where to write the `.mrec`. Refused if it already exists, because the record it would replace may be the only copy of what it held.", ParamString),
+			param("ranges", "An array of `record_classify_range` results. May be empty, in which case the whole record carries the default class.", ParamArray),
+			param("options", "`{\"default\": \"open\"}` is required. `{\"sign\": false}` writes no Ed25519 signature, for a machine with no key store. `{\"segment_size\": 65536}` sets the disclosure granularity. `{\"source\": \"...\"}` is a note about provenance and is never checked.", ParamHash),
+		},
+		returns: pairRet("what was sealed", ParamHash).withFields("case_key_id", "case_uid", "file_length", "generation", "key_created_for_this_run", "path", "plaintext_length", "public_key", "quantised_extra", "quantum", "record_uid", "segment_size", "segments", "segments_root", "signed", "spans")},
+	BuiltinNameRecordSealQuantised: {
+		signature: "record_seal_quantised(source, record, ranges, options)",
+		summary:   "Seals with span boundaries rounded OUTWARD to a quantum, so that a four-byte secret is indistinguishable from anything else inside its rounded span. The cost is symmetrical and is recorded rather than hidden: the record withholds MORE than the classification called for, and `quantised_extra` says by how many bytes. Rounding that makes two ranges of different classes collide is refused, because merging two classifications is a legal decision; use a smaller quantum or separate the ranges. Everything else matches `record_seal`. Returns (record, err).",
+		params: []builtinParamDoc{
+			param("source", "The file to seal.", ParamString),
+			param("record", "Where to write the `.mrec`. Refused if it already exists.", ParamString),
+			param("ranges", "An array of `record_classify_range` results.", ParamArray),
+			param("options", "`{\"quantum\": 4096}` and `{\"default\": \"open\"}` are both required; `sign`, `segment_size` and `source` are as for `record_seal`.", ParamHash),
+		},
+		returns: pairRet("what was sealed, and how much the rounding withheld", ParamHash).withFields("case_key_id", "case_uid", "file_length", "generation", "key_created_for_this_run", "path", "plaintext_length", "public_key", "quantised_extra", "quantum", "record_uid", "segment_size", "segments", "segments_root", "signed", "spans")},
+	BuiltinNameRecordOpen: {
+		signature: "record_open(path)",
+		summary:   "Opens a record for reading and returns a handle. Needs the case key the record was sealed under: the record key is wrapped under it, and a record sealed by another case is refused by its case uid before any unwrapping is attempted. The handle it returns can only ever open -- there is no path from here to sealing, which is what stops a program re-sealing a position and putting two plaintexts under one keystream. Record handles are their own space and are not ledger or database handles. Close it with `record_close`. Returns (record, err).",
+		params: []builtinParamDoc{
+			param("path", "The `.mrec` to open.", ParamString),
+		},
+		returns: pairRet("the handle and what the record says about itself", ParamHash).withFields("case_uid", "generation", "handle", "key_created_for_this_run", "path", "plaintext_length", "record_uid", "segment_size", "segments", "signature_note", "signature_valid", "signed")},
+	BuiltinNameRecordLayout: {
+		signature: "record_layout(record)",
+		summary:   "Reports the record's public structure -- every span, every segment, where each one sits and which class it carries -- and reads no plaintext to do it. `boundaries_are_public` is returned as a field rather than left to a document, because a reader of a layout is exactly the reader who might otherwise conclude the opposite: offsets and lengths are visible to everyone holding the record, with no key at all. Returns (layout, err).",
+		params: []builtinParamDoc{
+			param("record", "Handle from record_open.", ParamInt),
+		},
+		returns: pairRet("the public structure", ParamHash).withFields("boundaries_are_public", "plaintext_length", "record_uid", "segment_size", "segments", "spans")},
+	BuiltinNameRecordRead: {
+		signature: "record_read(record, offset, length)",
+		summary:   "Returns a span of plaintext, or refuses and names the segments that stood in the way. It is an error and not a short read: a caller who wrote `record_read(r, 0, n)` believes they are getting n bytes of evidence, and a buffer with zeros where the withheld spans were would look exactly like evidence and not be it. Use `record_read_partial` for the bytes that are readable, which returns the holes as data instead. The result is BYTES and never a STRING, because a Go string cannot be zeroed and the runtime copies one at will. Returns (bytes, err).",
+		params: []builtinParamDoc{
+			param("record", "Handle from record_open.", ParamInt),
+			param("offset", "Where to start in the plaintext.", ParamInt),
+			param("length", "How many bytes to read. Running past the end of the record is refused.", ParamInt),
+		},
+		returns: pairRet("the plaintext span", ParamBytes)},
+	BuiltinNameRecordReadPartial: {
+		signature: "record_read_partial(record, offset, length)",
+		summary:   "Returns what is readable plus exactly what is not. The unreadable spans are zero-filled rather than removed, so offsets still line up with the record's own numbering -- the same reason the format refuses to pad, since a recipient who cannot place their fragments at their true positions cannot reconstruct the document they were given. `holes_are_zero_filled` is a field because zeros are also a thing evidence contains. `length` and `withheld` are both reported so a caller does not have to subtract. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("record", "Handle from record_open.", ParamInt),
+			param("offset", "Where to start in the plaintext.", ParamInt),
+			param("length", "How many bytes to attempt.", ParamInt),
+		},
+		returns: pairRet("the bytes, and the spans that are missing from them", ParamHash).withFields("bytes", "complete", "holes", "holes_are_zero_filled", "length", "withheld")},
+	BuiltinNameRecordVerify: {
+		signature: "record_verify(path)",
+		summary:   "Checks a record holding no key at all, which is the property the whole format is arranged around: a recipient who was granted nothing can still establish that the file they hold is the file that was sealed. It rebuilds every segment descriptor from the public header, recomputes every segment digest from the stored ciphertext, folds the root and checks the signature. `signed` and `signature_valid` are two bits and never one, because an unsigned record is a normal record written on a machine with no key store and a forged one is not. `does_not_prove` is a returned field and not a footnote: a signature authenticates the document, not the names in it. Returns (result, err).",
+		params: []builtinParamDoc{
+			param("path", "The `.mrec` to check. No case key is needed and none is used.", ParamString),
+		},
+		returns: pairRet("what the record is, and what checking it did not establish", ParamHash).withFields("case_key_id", "case_uid", "created", "does_not_prove", "examiner", "generation", "key_created_for_this_run", "path", "plaintext_length", "public_key", "quantised_extra", "quantum", "record_uid", "segments", "segments_root", "signature_note", "signature_valid", "signed", "spans", "verified_without_key")},
+	BuiltinNameRecordProveSegment: {
+		signature: "record_prove_segment(record, index)",
+		summary:   "Cites one segment in a form a third party can check against the copy they hold: which segment, at which offset, under which class, with which digest, folding into which signed root. It is deliberately not a Merkle inclusion proof -- a tree buys a compact path to the root, and compactness is worth having only when the verifier does not have the data, but a disclosure hands over a record byte-identical to the one under custody, so every recipient already holds every segment and can recompute the whole fold. The root is recomputed from the bytes on disk rather than read from the footer, so `root_matches` is about the file and not about what the file says of itself. `content_free` is true: nothing here reveals plaintext. Returns (citation, err).",
+		params: []builtinParamDoc{
+			param("record", "Handle from record_open.", ParamInt),
+			param("index", "The segment to cite, numbered from 0. `record_layout` lists them.", ParamInt),
+		},
+		returns: pairRet("the citation, and what it does not establish", ParamHash).withFields("class", "content_free", "digest", "does_not_prove", "length", "offset", "proves", "record_uid", "root_matches", "segment", "segments_root", "signature_valid", "signed")},
+	BuiltinNameRecordClose: {
+		signature: "record_close(record)",
+		summary:   "Closes a record handle, zeroing its key schedule and releasing the file. The handle comes from record_open and is not a ledger or database handle; the three handle spaces are separate so that no builtin of one family can resolve a handle of another.",
+		params: []builtinParamDoc{
+			param("record", "Handle from record_open.", ParamInt),
+		},
+		returns: pairRet("true once the handle has been closed", ParamBool)},
 	BuiltinNameAuditHead: {
 		signature: "audit_head()",
 		summary:   "Returns the head of the security audit chain: the SHA-256 commitment to every security event this run recorded, in order. The counters in `case_manifest` say how many times a check tripped; the chain says in what order and at which stage, which is the question a counter cannot be asked afterwards. The head covers every event ever recorded even when older entries have been dropped from memory, so `entries` and `retained` are different numbers and both are reported.",
@@ -3118,6 +3201,11 @@ var capabilityCategories = []capabilityCategory{
 	// four case_key_ builtins; an entry here would be a second line producing
 	// the identical string, and one placed any later would be dead code.
 	{"class_", "chain of custody"},
+	// record_ is its own category and not "chain of custody". The custody
+	// family documents what happened to evidence; this one encrypts it, and a
+	// reader looking for what a classification costs should not have to find it
+	// inside a section about manifests.
+	{"record_", "classified records"},
 	// The audit chain is the log behind the manifest's security counters, and
 	// an examiner reads it beside the case documents rather than apart from
 	// them, so it files under the same heading.

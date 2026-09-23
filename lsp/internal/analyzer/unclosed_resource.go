@@ -77,6 +77,10 @@ var resourceFamilies = []resourceFamily{
 	{openers: []string{builtin.BuiltinNameZipOpen}, closer: builtin.BuiltinNameZipClose, prefixes: []string{"zip_"}},
 	{openers: []string{builtin.BuiltinNameTarOpen}, closer: builtin.BuiltinNameTarClose, prefixes: []string{"tar_"}},
 	{openers: []string{builtin.BuiltinNameDbOpen, builtin.BuiltinNameDbOpenDisk}, closer: builtin.BuiltinNameDbClose, prefixes: []string{"db_"}},
+	// A record is its own family for the same reason the ledger is: the handle
+	// spaces are separate, so a record handle passed to db_close is a mistake
+	// the rule should see rather than one it should excuse.
+	{openers: []string{builtin.BuiltinNameRecordOpen}, closer: builtin.BuiltinNameRecordClose, prefixes: []string{"record_"}},
 	// The ledger is its own family rather than part of db_: the handle spaces
 	// are separate, so a ledger_ call on a db_ handle is a bug the rule should
 	// not be taught to read as a use.

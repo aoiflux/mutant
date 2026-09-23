@@ -149,6 +149,18 @@ type custodySession struct {
 	keyPath        string
 	keyFingerprint string
 	keyGeneration  uint32
+	// caseUID is the case identity bound into every segment of every record
+	// sealed under this key. It comes from the key file rather than from the
+	// case id, because the case id is a free-text label an examiner types and
+	// two investigations may well pick the same one.
+	caseUID string
+	// keyed records that a key was opened. Unlike caseKey it is never cleared,
+	// and the difference is the difference between a document and a probe. A
+	// manifest states what happened during the investigation; case_close zeroes
+	// the key, so a manifest that asked whether the key is still in memory said
+	// the case had never been keyed -- while listing, in the same block, the
+	// labels tagged under it.
+	keyed bool
 
 	// classes is the classification scheme, in the order it was declared.
 	// Order is presentation order and carries no authority: nothing here
@@ -924,6 +936,13 @@ func custodyHashFile(path, algo string) (string, error) {
 // statements. `keyed` false with an empty list says the first; `keyed` true
 // with an empty list says the second.
 //
+// `keyed` is historical and not a liveness check. A closed case reports true,
+// because it was keyed, and `status` a few lines up already tells a reader the
+// key is gone. Deriving it from the live key instead made case_close's own
+// manifest disagree with every manifest rendered afterwards about the same
+// case -- the close renders before it zeroes -- which is the drift this
+// document is supposed to be proof against.
+//
 // The key's PATH is deliberately not here. The whole point of a case key being
 // a file the examiner names is that it does not travel with the handover, and
 // a manifest that recorded where it lives would partly undo that. The
@@ -935,11 +954,11 @@ func (s *custodySession) classificationRecord() map[string]any {
 		classes = append(classes, class.render())
 	}
 	record := map[string]any{
-		"keyed":   s.caseKey != nil,
+		"keyed":   s.keyed,
 		"classes": classes,
 		"count":   int64(len(s.classes)),
 	}
-	if s.caseKey != nil {
+	if s.keyed {
 		record["key_fingerprint"] = s.keyFingerprint
 		record["key_id"] = custodyKeyID(s.keyFingerprint)
 		record["key_generation"] = int64(s.keyGeneration)
