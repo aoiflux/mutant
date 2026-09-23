@@ -2352,7 +2352,12 @@ key can never open bytes of two classifications. The `default` option is
 required and covers every byte no range names, because a record with an
 unlabelled remainder discloses that remainder to everyone who is disclosed
 anything. `record_seal_quantised` rounds boundaries outward where a short secret
-must not advertise its length, and reports how many extra bytes that withheld.
+must not advertise its length; its `rounds_to` option is required and names the
+one class rounding may grow, because a range that is widened takes the bytes it
+grows over into its own class, and whether that withholds them or releases them
+depends on which class is the more sensitive -- which nothing here knows.
+`quantised_extra` is how many bytes changed class and `rounds_to` is which class
+they changed into, both in the header and both reported by `record_verify`.
 `record_open` needs the case key; `record_verify` needs none at all, which is
 the property a recipient who was granted nothing still has, and it reports in a
 `does_not_prove` field what a valid signature does not establish. `record_read`

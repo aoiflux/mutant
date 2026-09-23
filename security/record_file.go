@@ -120,9 +120,26 @@ const (
 
 	// MaxRecordSpans bounds the classification ranges one record may carry. A
 	// span list is read by a person deciding whether a disclosure is fair, and
-	// past a few thousand rows nobody is reading it. It also bounds the work a
-	// hostile header can ask a parser to do before anything is authenticated.
+	// past a few thousand rows nobody is reading it.
 	MaxRecordSpans = 4096
+
+	// MaxRecordSegments bounds the DERIVED segment table, which is the number
+	// MaxRecordSpans does not bound and the one a hostile header controls.
+	//
+	// Spans are few, but a span's segment count is its length divided by the
+	// segment size, and both of those are header fields. A 499-byte header
+	// declaring one span of 40 MiB at a segment size of 1 derives 41,943,040
+	// segments: seconds of work and gigabytes of table, asked for by a file
+	// that is smaller than this comment and authenticated by nothing. Every
+	// other length this tree reads off a wire or a disk is bounded before it is
+	// allocated against -- ws_read_frame against maxHTTPBodyBytes, the debug
+	// adapter against maxMessageBytes -- and a derived count needs the same
+	// treatment as a stored one.
+	//
+	// A million segments is 64 GiB of plaintext at the default segment size and
+	// 1 TiB at the largest, so a record that hits this is a record that should
+	// raise its segment size rather than one this format cannot hold.
+	MaxRecordSegments = 1 << 20
 
 	// MaxRecordHeader and MaxRecordFooter bound what is read and parsed before
 	// a signature has been checked. Neither is a limit an honest record meets.
@@ -197,12 +214,26 @@ type RecordHeader struct {
 	SegmentSize     uint32 `json:"segment_size"`
 	// Quantum is 0 for a record sealed at the classification boundaries the
 	// examiner gave, and the rounding unit for one sealed by
-	// record_seal_quantised. QuantisedExtra is how many bytes that rounding
-	// withheld beyond what the classification called for -- recorded because a
-	// quantised record withholds MORE than was asked, and a recipient is
-	// entitled to know by how much.
+	// record_seal_quantised.
+	//
+	// QuantisedExtra is how many bytes that rounding MOVED between classes, and
+	// RoundsTo is the class tag they moved into -- the class the examiner named
+	// as the one rounding was permitted to grow. Two fields and not one,
+	// because a count with no direction cannot be read: rounding takes bytes
+	// out of the default class and puts them in RoundsTo, which withholds more
+	// only when RoundsTo is the more sensitive of the two, and nothing in this
+	// format orders classes. A recipient reading this learns that spans tagged
+	// RoundsTo may be up to Quantum-1 bytes wider at each end than the
+	// classification the examiner actually drew, and how many bytes that came
+	// to in total. What that means for them is theirs to judge.
+	//
+	// An earlier version of this comment said a quantised record "withholds
+	// MORE than was asked". That is true when the rounded class is the
+	// sensitive one and false when it is the released one, and a record that
+	// asserts it unconditionally is a record making a claim it cannot back.
 	Quantum        uint32 `json:"quantum"`
 	QuantisedExtra uint64 `json:"quantised_extra"`
+	RoundsTo       string `json:"rounds_to"`
 
 	Created string `json:"created"`
 	// Examiner is asserted and recorded. Nothing authenticates it.
@@ -272,51 +303,104 @@ type RecordMeta struct {
 // Deriving the segment table
 // ---------------------------------------------------------------------------
 
-// Segments derives the whole segment table from the spans, validating as it
-// goes.
+// SegmentCount validates the span list and reports how many segments it
+// derives, in time proportional to the number of SPANS and with no allocation.
 //
-// Validation is here and not in the parser because these are the same checks a
-// sealer needs before it writes, and one implementation of "what is a valid
-// span list" is the only way the writer and the reader agree.
-func (h *RecordHeader) Segments() ([]RecordSegment, error) {
+// It exists apart from Segments because validating a header and materialising
+// its table are two different needs, and conflating them is what let a header
+// smaller than a paragraph ask a parser for a table of tens of millions of
+// rows. Every caller that only wants to know whether a header is coherent --
+// ParseRecordHeader, and any future one -- asks this; only a caller that is
+// about to read or write the segments builds them.
+func (h *RecordHeader) SegmentCount() (uint64, error) {
 	if h.SegmentSize == 0 || h.SegmentSize > MaxSegmentPlaintext {
-		return nil, fmt.Errorf("a segment size of %d is outside 1..%d", h.SegmentSize, MaxSegmentPlaintext)
+		return 0, fmt.Errorf("a segment size of %d is outside 1..%d", h.SegmentSize, MaxSegmentPlaintext)
 	}
 	if len(h.Spans) == 0 {
-		return nil, errors.New("a record has at least one classification span")
+		return 0, errors.New("a record has at least one classification span")
 	}
 	if len(h.Spans) > MaxRecordSpans {
-		return nil, fmt.Errorf("a record carries at most %d classification spans, this one declares %d",
+		return 0, fmt.Errorf("a record carries at most %d classification spans, this one declares %d",
 			MaxRecordSpans, len(h.Spans))
 	}
 
-	segments := make([]RecordSegment, 0, len(h.Spans))
-	var (
-		nextOffset uint64
-		stored     uint64
-		index      uint64
-	)
+	size := uint64(h.SegmentSize)
+	var nextOffset, count uint64
 	for i, span := range h.Spans {
 		if span.Offset != nextOffset {
-			return nil, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"span %d starts at %d and the span before it ended at %d; spans partition the plaintext "+
 					"with no gap and no overlap, because which label wins where two ranges disagree is not "+
 					"a question this tool may answer for you",
 				i, span.Offset, nextOffset)
 		}
 		if span.Length == 0 {
-			return nil, fmt.Errorf("span %d is empty; a classification that covers nothing is a mistake, "+
+			return 0, fmt.Errorf("span %d is empty; a classification that covers nothing is a mistake, "+
 				"not a range", i)
 		}
-		tag, err := classTagFromHex(span.Class)
-		if err != nil {
-			return nil, fmt.Errorf("span %d: %w", i, err)
+		if _, err := classTagFromHex(span.Class); err != nil {
+			return 0, fmt.Errorf("span %d: %w", i, err)
 		}
 		end := span.Offset + span.Length
 		if end < span.Offset || end > h.PlaintextLength {
-			return nil, fmt.Errorf("span %d runs to %d, past the %d bytes the record says it holds",
+			return 0, fmt.Errorf("span %d runs to %d, past the %d bytes the record says it holds",
 				i, end, h.PlaintextLength)
 		}
+		// Divide-then-adjust rather than (length + size - 1) / size: the
+		// rounding form overflows for a length near the top of a uint64, which
+		// is exactly the length a hostile header would choose.
+		n := span.Length / size
+		if span.Length%size != 0 {
+			n++
+		}
+		// Accumulated inside the loop so that the refusal happens on the span
+		// that crosses the line, and so the sum itself cannot wrap on the way
+		// to being checked.
+		count += n
+		if count > MaxRecordSegments {
+			return 0, fmt.Errorf(
+				"this header describes at least %d segments and a record holds at most %d. Its %d bytes at "+
+					"a segment size of %d is more segments than a record can have; seal it with a larger "+
+					"segment_size, up to %d",
+				count, uint64(MaxRecordSegments), h.PlaintextLength, h.SegmentSize, MaxSegmentPlaintext)
+		}
+		nextOffset = end
+	}
+	if nextOffset != h.PlaintextLength {
+		return 0, fmt.Errorf("the spans cover %d bytes and the record says it holds %d; a record with an "+
+			"unclassified tail would disclose that tail to everyone", nextOffset, h.PlaintextLength)
+	}
+	return count, nil
+}
+
+// Segments derives the whole segment table from the spans.
+//
+// Validation is here and not in the parser because these are the same checks a
+// sealer needs before it writes, and one implementation of "what is a valid
+// span list" is the only way the writer and the reader agree.
+func (h *RecordHeader) Segments() ([]RecordSegment, error) {
+	count, err := h.SegmentCount()
+	if err != nil {
+		return nil, err
+	}
+
+	// Allocated once, to the count that was just bounded. The old form grew
+	// from len(spans), so the size of the allocation was decided by the loop
+	// rather than before it.
+	segments := make([]RecordSegment, 0, count)
+	var (
+		stored uint64
+		index  uint64
+	)
+	for _, span := range h.Spans {
+		// Re-derived rather than carried out of SegmentCount: this loop runs
+		// only on a span list that has already been validated whole, so there
+		// is nothing left here to check and nothing to get out of step.
+		tag, err := classTagFromHex(span.Class)
+		if err != nil {
+			return nil, err
+		}
+		end := span.Offset + span.Length
 		for offset := span.Offset; offset < end; {
 			length := uint64(h.SegmentSize)
 			if remaining := end - offset; remaining < length {
@@ -334,11 +418,6 @@ func (h *RecordHeader) Segments() ([]RecordSegment, error) {
 			offset += length
 			index++
 		}
-		nextOffset = end
-	}
-	if nextOffset != h.PlaintextLength {
-		return nil, fmt.Errorf("the spans cover %d bytes and the record says it holds %d; a record with an "+
-			"unclassified tail would disclose that tail to everyone", nextOffset, h.PlaintextLength)
 	}
 	return segments, nil
 }
@@ -607,10 +686,12 @@ func ParseRecordHeader(data []byte) (*RecordHeader, error) {
 		return nil, fmt.Errorf("%w: generations are numbered from 1 and this record names %d and %d",
 			ErrRecordFormat, header.SealedUnderGeneration, header.WrappedUnderGeneration)
 	}
-	// Segments are derived here as well as by the caller, so that a header that
-	// cannot describe a coherent record is refused at the parse and not at the
-	// first read.
-	if _, err := header.Segments(); err != nil {
+	// The span list is validated here as well as by the caller, so that a
+	// header which cannot describe a coherent record is refused at the parse
+	// and not at the first read. Counted and not built: parsing is the first
+	// thing done to bytes that have been authenticated by nothing, and it must
+	// not be the place that allocates on their say-so.
+	if _, err := header.SegmentCount(); err != nil {
 		return nil, err
 	}
 	return header, nil

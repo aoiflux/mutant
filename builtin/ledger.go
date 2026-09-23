@@ -413,6 +413,12 @@ func LedgerOpen(args ...object.Object) object.Object {
 		// commit made by a script that forgot to say who was running it.
 		return resultAndError(nil, newError("%s: the actor must not be empty; a ledger records who wrote it and there is no default", BuiltinNameLedgerOpen))
 	}
+	// actor_id is a hash of these exact bytes and the name is also stored as
+	// JSON, so an actor that is not valid UTF-8 attributes commits to an id
+	// nobody can rederive from the name the ledger reports.
+	if errObj := custodyDocumentName(BuiltinNameLedgerOpen, "actor name", actor); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	privateKey, publicKey, generated, _, err := security.EnsureLocalSigningKeyPair()
 	if err != nil {

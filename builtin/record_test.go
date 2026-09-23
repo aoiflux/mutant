@@ -298,11 +298,21 @@ func TestQuantisingRoundsOutwardAndSaysByHowMuch(t *testing.T) {
 	// 4 bytes at offset 34, rounded to a 16-byte quantum, becomes 32..48.
 	short := mustHash(t, RecordClassifyRange(intObj(34), intObj(4), stringObj("restricted")))
 	sealed := mustHash(t, RecordSealQuantised(stringObj(source), stringObj(dest),
-		recordArray(short), recordSealOpts(map[string]object.Object{"quantum": intObj(16)})))
+		recordArray(short), recordSealOpts(map[string]object.Object{
+			"quantum": intObj(16),
+			// The default here is `open`, so growing `restricted` over it
+			// withholds more. That is the direction quantising was designed
+			// for, and naming it is what makes the direction a decision rather
+			// than an accident -- see TestQuantisingWillNotGrowAClassNobodyNamed.
+			"rounds_to": stringObj("restricted"),
+		})))
 
 	extra := mustHashValue(t, sealed, "quantised_extra").(*object.Integer).Value
 	if extra != 12 {
-		t.Fatalf("rounding 34+4 out to a 16-byte quantum withholds 12 extra bytes, reported %d", extra)
+		t.Fatalf("rounding 34+4 out to a 16-byte quantum moves 12 extra bytes, reported %d", extra)
+	}
+	if got := mustHashStringValue(t, sealed, "rounds_to"); got != "restricted" {
+		t.Fatalf("the record says rounding grew %q, want restricted", got)
 	}
 	spans, _ := mustHashValue(t, sealed, "spans").(*object.Array)
 	var found bool
@@ -327,12 +337,16 @@ func TestQuantisingWillNotMergeTwoClasses(t *testing.T) {
 	first := mustHash(t, RecordClassifyRange(intObj(10), intObj(4), stringObj("restricted")))
 	second := mustHash(t, RecordClassifyRange(intObj(20), intObj(4), stringObj("open")))
 	_, errObj := unwrapPairNoFatal(RecordSealQuantised(stringObj(source), stringObj(dest),
-		recordArray(first, second), recordSealOpts(map[string]object.Object{"quantum": intObj(64)})))
+		recordArray(first, second), recordSealOpts(map[string]object.Object{
+			"quantum": intObj(64), "rounds_to": stringObj("restricted"),
+		})))
 	if errObj == nil {
 		t.Fatal("rounding merged two classifications without asking")
 	}
-	if !strings.Contains(errObj.Message, "legal decision") {
-		t.Fatalf("the refusal does not say why: %s", errObj.Message)
+	// Both ranges fall inside one 64-byte quantum, so both would be widened,
+	// and only one class was named. The refusal names the range that was not.
+	if !strings.Contains(errObj.Message, "would widen the range at 20+4") {
+		t.Fatalf("the refusal does not say which range it would not round: %s", errObj.Message)
 	}
 	t.Logf("refused: %s", errObj.Message)
 }
@@ -502,4 +516,72 @@ func TestTheLayoutIsPublicAndSegmentsStayInsideTheirSpan(t *testing.T) {
 	}
 	t.Logf("%d segments across %d spans, none straddling a boundary",
 		len(segments.Elements), len(spans.Elements))
+}
+
+// Rounding grows exactly one class, and the examiner names which.
+//
+// Quantising rounds a range's boundaries outward, and every byte it grows over
+// stops carrying the class it had and starts carrying the range's. Whether
+// that withholds those bytes or releases them depends on which of the two
+// classes is the more sensitive -- and nothing in this tree orders classes, so
+// nothing here can work it out. With default `restricted` and a four-byte
+// `open` passage, rounding to sixteen used to hand out twelve bytes nobody
+// cleared, and report them in a field documented as bytes WITHHELD.
+func TestQuantisingWillNotGrowAClassNobodyNamed(t *testing.T) {
+	recordTestCase(t)
+	source, dest, _ := recordFixture(t)
+	ranges := recordArray(mustHash(t, RecordClassifyRange(intObj(20), intObj(4), stringObj("open"))))
+
+	// The shape of a disclosure review: everything withheld except what has
+	// been read and released.
+	opts := func(extra map[string]object.Object) object.Object {
+		base := map[string]object.Object{
+			"default": stringObj("restricted"), "segment_size": intObj(16),
+			"quantum": intObj(16), "sign": boolObj(false),
+		}
+		for key, value := range extra {
+			base[key] = value
+		}
+		return makeHashObject(base)
+	}
+
+	_, errObj := unwrapPairNoFatal(RecordSealQuantised(stringObj(source), stringObj(dest), ranges, opts(nil)))
+	if errObj == nil {
+		t.Fatal("rounding with no class named was accepted, and it grows a class silently")
+	}
+	if !strings.Contains(errObj.Message, "rounds_to") {
+		t.Fatalf("the refusal does not name the option that fixes it: %s", errObj.Message)
+	}
+
+	// Naming a class that is not the one being widened is refused too, so the
+	// option cannot be satisfied by writing down any declared label.
+	_, errObj = unwrapPairNoFatal(RecordSealQuantised(stringObj(source), stringObj(dest), ranges,
+		opts(map[string]object.Object{"rounds_to": stringObj("restricted")})))
+	if errObj == nil {
+		t.Fatal("a range whose class was not named was rounded anyway")
+	}
+	if !strings.Contains(errObj.Message, "would widen the range at 20+4") {
+		t.Fatalf("the refusal does not say which range it would not round: %s", errObj.Message)
+	}
+
+	// Named: the widening happens, and the record records which way it went.
+	sealed := mustHash(t, RecordSealQuantised(stringObj(source), stringObj(dest), ranges,
+		opts(map[string]object.Object{"rounds_to": stringObj("open")})))
+	if got := mustHashStringValue(t, sealed, "rounds_to"); got != "open" {
+		t.Fatalf("the record says rounding grew %q, want open", got)
+	}
+	if extra := mustHashIntValue(t, sealed, "quantised_extra"); extra != 12 {
+		t.Fatalf("12 bytes moved out of restricted and the record reports %d", extra)
+	}
+
+	// And a recipient holding no key reads the direction, not only the count.
+	verified := mustHash(t, RecordVerify(stringObj(dest)))
+	openTag, errObj := recordLookupClass("test", "open")
+	if errObj != nil {
+		t.Fatal(errObj.Message)
+	}
+	if got := mustHashStringValue(t, verified, "rounds_to"); got != openTag.Tag {
+		t.Fatalf("record_verify reports rounds_to %q, want the tag of open", got)
+	}
+	t.Logf("rounding grew `open` by 12 bytes, and the record says so with no key")
 }

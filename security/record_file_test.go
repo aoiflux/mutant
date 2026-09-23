@@ -511,3 +511,58 @@ func TestTheFilePrefixRefusesWhatItCannotBe(t *testing.T) {
 		})
 	}
 }
+
+// A header is counted before it is believed.
+//
+// The segment table is DERIVED, so its size is chosen by two header fields and
+// not by the length of the file that carries them. A few hundred bytes of JSON
+// declaring a large plaintext at a one-byte segment size used to produce tens
+// of millions of rows -- seconds of work and gigabytes of memory, spent on a
+// file smaller than this comment, before a signature had been looked at. Every
+// other length this tree reads off a wire is bounded before it is allocated
+// against, and a derived count needs the same treatment as a stored one.
+func TestAHostileHeaderCannotAskForAnUnboundedSegmentTable(t *testing.T) {
+	var tag ClassTag
+	var cuid CaseUID
+	var ruid RecordUID
+
+	h := &RecordHeader{
+		Format:                 RecordFileFormat,
+		Version:                RecordFileVersion,
+		RecordUID:              hex.EncodeToString(ruid[:]),
+		CaseUID:                hex.EncodeToString(cuid[:]),
+		SealedUnderGeneration:  1,
+		WrappedUnderGeneration: 1,
+		SealSalt:               hex.EncodeToString(make([]byte, SealSaltSize)),
+		PlaintextLength:        40 << 20,
+		SegmentSize:            1,
+		Spans:                  []RecordSpan{{Offset: 0, Length: 40 << 20, Class: hex.EncodeToString(tag[:])}},
+	}
+	raw, err := MarshalRecordHeader(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > 4096 {
+		t.Fatalf("this test is about a SMALL header and this one is %d bytes", len(raw))
+	}
+
+	if _, err := h.SegmentCount(); err == nil {
+		t.Fatalf("a %d-byte header was allowed to describe %d segments", len(raw), h.PlaintextLength)
+	} else {
+		t.Logf("counted and refused: %v", err)
+	}
+	// And the parser refuses it too, rather than refusing only at the first
+	// read -- parsing is the first thing done to bytes nothing has vouched for.
+	if _, err := ParseRecordHeader(raw); err == nil {
+		t.Fatal("the parser accepted a header it cannot hold")
+	}
+
+	// The same header at a sane segment size is a record this build can hold,
+	// so the bound refuses the shape and not the size.
+	h.SegmentSize = DefaultSegmentSize
+	if count, err := h.SegmentCount(); err != nil {
+		t.Fatalf("a 40 MiB record at the default segment size was refused: %v", err)
+	} else {
+		t.Logf("the same plaintext at %d-byte segments is %d segments", DefaultSegmentSize, count)
+	}
+}

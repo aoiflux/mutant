@@ -41,11 +41,42 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"mutant/global"
 	"mutant/object"
 	"mutant/security"
 )
+
+// custodyDocumentName refuses a name that cannot survive the round trip through
+// the documents this tree writes.
+//
+// Every name this is applied to is used TWICE: once as raw bytes -- inside an
+// HMAC, inside an AEAD's additional data, or inside a length-prefixed canonical
+// form -- and once as a field in a JSON document. encoding/json replaces a byte
+// that cannot appear in valid UTF-8 with U+FFFD, and an HMAC does not, so the
+// two uses stop agreeing the moment a name is not valid UTF-8.
+//
+// A class label tagged over one byte string and printed as another is a tag
+// nobody can recompute from the manifest. A case id is worse: it is bound into
+// the additional data the case key is wrapped under, so `case_key_create` would
+// write a key file that `case_key_open` could never read back, and every record
+// sealed under that key would be gone. The create SUCCEEDED, which is the part
+// that makes it worth refusing here rather than reporting there.
+//
+// Refused at the entry point and not repaired. Substituting the replacement
+// character ourselves would be this tool deciding what an examiner's case is
+// called.
+func custodyDocumentName(op, field, value string) *object.Error {
+	if utf8.ValidString(value) {
+		return nil
+	}
+	return newError("%s: the %s contains bytes that are not valid UTF-8. A name like this is written "+
+		"into documents as JSON, where a byte that cannot appear in valid UTF-8 becomes U+FFFD, and is "+
+		"also used as raw bytes inside a keyed hash, which substitutes nothing -- so the two stop "+
+		"describing the same name and nothing downstream can be recomputed from what the document says",
+		op, field)
+}
 
 // custodyHashPolicies are the values `case_open`'s `hash` option accepts. They
 // are the algorithms fsHashAlgorithm knows, plus "none".
@@ -238,6 +269,12 @@ func CaseOpen(args ...object.Object) object.Object {
 	}
 	if examiner == "" {
 		return resultAndError(nil, newError("case_open: the examiner must not be empty; a manifest nobody signed for is not a chain of custody"))
+	}
+	if errObj := custodyDocumentName(BuiltinNameCaseOpen, "case id", id); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if errObj := custodyDocumentName(BuiltinNameCaseOpen, "examiner name", examiner); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	policy := "none"

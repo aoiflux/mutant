@@ -175,9 +175,29 @@ are four-byte secrets.
 
 `record_seal_quantised` is the answer where that matters. It rounds span
 boundaries **outward** to a quantum, so a short secret is indistinguishable from
-anything else inside its rounded span. The cost is symmetrical and is recorded: a
-quantised record withholds **more** than the classification called for, and the
-manifest says by how much.
+anything else inside its rounded span.
+
+**Rounding is a reclassification, and it has a direction.** Every byte a range
+grows over stops carrying the class it had and starts carrying that range's.
+Whether that withholds those bytes or releases them depends on which of the two
+classes is the more sensitive — and nothing in this tree knows, because a class
+is a label and a tag and [Section 6](#6-a-record-without-its-case-is-evidentially-mute)
+is the whole of what one means. Nothing orders them.
+
+An earlier version of this document said a quantised record "withholds **more**
+than the classification called for". That is true in one direction and false in
+the other, and the false direction is the ordinary shape of a disclosure review:
+default `restricted`, with short passages cleared for release. There, rounding a
+four-byte `open` passage to a sixteen-byte quantum releases twelve bytes nobody
+read — silently, and reported in a field documented as bytes withheld.
+
+So the examiner names the one class rounding may grow, in a required `rounds_to`
+option, and a range carrying any other class is sealed at the boundary it was
+given. `quantised_extra` is how many bytes changed class and `rounds_to` is which
+class they changed into; both are in the record header, so `record_verify` reports
+them to a recipient holding no key. A count without a direction cannot be read,
+and a tool that picked the direction itself would be answering the question the
+rest of this document exists to refuse.
 
 ## 6. A record without its case is evidentially mute
 

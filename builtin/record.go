@@ -96,12 +96,14 @@ const (
 	recordSegmentOption  = "segment_size"
 	recordSourceOption   = "source"
 	recordQuantumOption  = "quantum"
+	recordRoundsToOption = "rounds_to"
 	recordMaxRangesInArg = security.MaxRecordSpans
 )
 
 var (
 	recordSealOptions          = []string{recordDefaultOption, recordSignOption, recordSegmentOption, recordSourceOption}
-	recordSealQuantisedOptions = append([]string{recordQuantumOption}, recordSealOptions...)
+	recordSealQuantisedOptions = append([]string{recordQuantumOption, recordRoundsToOption},
+		recordSealOptions...)
 )
 
 // ---------------------------------------------------------------------------
@@ -267,6 +269,7 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 		return resultAndError(nil, errObj)
 	}
 	var quantum uint64
+	var roundsTo caseClass
 	if quantised {
 		quantum, errObj = recordSizeOption(op, opts, recordQuantumOption, 0, 1, security.MaxSegmentPlaintext)
 		if errObj != nil {
@@ -276,6 +279,27 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 			return resultAndError(nil, newError("%s: option %q is required and is the unit span boundaries "+
 				"are rounded outward to. Use `%s` for a record sealed at the boundaries you gave",
 				op, recordQuantumOption, BuiltinNameRecordSeal))
+		}
+		// Required for the same reason `default` is: rounding moves bytes
+		// between classes, and there is no implicit answer to which class they
+		// should land in. Naming it is what makes the examiner look at the
+		// direction, because the tool cannot -- a class is a label and a tag,
+		// and nothing here orders one above another.
+		roundsToLabel, errObj := opts.str(recordRoundsToOption, "")
+		if errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		if strings.TrimSpace(roundsToLabel) == "" {
+			return resultAndError(nil, newError("%s: option %q is required and names the one class rounding "+
+				"may grow. A range that is widened takes the bytes it grows over out of %q and into its own "+
+				"class, which withholds more only if its class is the more sensitive of the two -- and "+
+				"nothing here knows which that is. Name the class you are rounding, or use `%s` to seal at "+
+				"the boundaries you gave",
+				op, recordRoundsToOption, defaultLabel, BuiltinNameRecordSeal))
+		}
+		roundsTo, errObj = recordLookupClass(op, roundsToLabel)
+		if errObj != nil {
+			return resultAndError(nil, errObj)
 		}
 	}
 
@@ -298,13 +322,13 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 			op, source))
 	}
 
-	spans, extra, errObj := recordAssembleSpans(op, ranges, total, defaultClass, quantum)
+	spans, extra, errObj := recordAssembleSpans(op, ranges, total, defaultClass, quantum, roundsTo)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	header, segments, keys, errObj := recordBuildHeader(op, identity, spans, total,
-		uint32(segmentSize), uint32(quantum), extra, sourceNote)
+		uint32(segmentSize), uint32(quantum), extra, roundsTo.Tag, sourceNote)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -328,6 +352,7 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 			"signed":           footer.Signed,
 			"quantum":          int64(quantum),
 			"quantised_extra":  int64(extra),
+			"rounds_to":        roundsTo.Label,
 		})
 
 	result := map[string]object.Object{
@@ -348,10 +373,15 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 		// for is not the same thing as one under a key an organisation holds.
 		"key_created_for_this_run": boolObj(footer.KeyCreatedForThisRun),
 		"quantum":                  intObj(int64(quantum)),
-		// How many bytes the rounding withheld beyond what was classified. Zero
-		// for record_seal, and reported anyway so one field answers the question
-		// for both builtins.
+		// How many bytes rounding moved out of the default class and into the
+		// class named by rounds_to. NOT "how many bytes were withheld": whether
+		// moving them withholds or releases depends on which of the two classes
+		// is the more sensitive, and nothing in this tree orders classes. The
+		// field says what happened; what it means is the examiner's to read.
+		// Zero for record_seal, and reported anyway so one field answers the
+		// question for both builtins.
 		"quantised_extra": intObj(int64(extra)),
+		"rounds_to":       stringObj(roundsTo.Label),
 	}
 	return resultAndError(makeHashObject(result), nil)
 }
@@ -470,7 +500,8 @@ func recordRangeShapeError(op string, index int, field string) *object.Error {
 // refuse overlaps the rounding created. Checking only once, after rounding,
 // would report a conflict the program did not write; checking only before would
 // let the rounding silently merge two classes.
-func recordAssembleSpans(op string, ranges []recordRange, total uint64, def caseClass, quantum uint64) (
+func recordAssembleSpans(op string, ranges []recordRange, total uint64, def caseClass, quantum uint64,
+	roundsTo caseClass) (
 	[]security.RecordSpan, uint64, *object.Error,
 ) {
 	sorted := append([]recordRange(nil), ranges...)
@@ -503,6 +534,33 @@ func recordAssembleSpans(op string, ranges []recordRange, total uint64, def case
 			}
 			if end > total {
 				end = total
+			}
+			// Widening a span means the bytes it grows over stop carrying the
+			// default class and start carrying this one. That is the same
+			// reclassification this function refuses to perform a few lines
+			// below when it would merge two NAMED classes -- the default is a
+			// class the examiner declared too, and rounding was quietly
+			// merging into it on every call.
+			//
+			// Which direction that moves a byte in is not knowable here: a
+			// class is a label and a tag and nothing orders them, so "wider
+			// means more withheld" is true when the rounded class is the
+			// sensitive one and false when it is the released one. With
+			// default `restricted` and a four-byte `open` passage, rounding to
+			// 16 hands out twelve bytes nobody cleared. So the examiner names
+			// the class rounding may grow, and a span of any other class is
+			// sealed at the boundary they gave it.
+			if start != sorted[i].offset || end != sorted[i].offset+sorted[i].length {
+				if sorted[i].tag != roundsTo.Tag {
+					return nil, 0, newError("%s: rounding to %d bytes would widen the range at %d+%d, which "+
+						"carries %q, and option %q names %q as the one class rounding may grow. Widening a "+
+						"range moves every byte it grows over into that range's class, and whether that "+
+						"withholds those bytes or releases them depends on which class is the more "+
+						"sensitive -- which nothing here knows, because a class is a label and a tag and "+
+						"nothing orders them. Seal this range at the boundary you gave it, or name %q in %q",
+						op, quantum, sorted[i].offset, sorted[i].length, sorted[i].label,
+						recordRoundsToOption, roundsTo.Label, sorted[i].label, recordRoundsToOption)
+				}
 			}
 			sorted[i].offset, sorted[i].length = start, end-start
 		}
@@ -589,7 +647,7 @@ func recordSizeOption(op string, opts *formatOptions, key string, def, low, high
 // recordBuildHeader mints the record's key schedule and the header that
 // describes it. The returned handle can seal and the caller must zero it.
 func recordBuildHeader(op string, identity recordIdentity, spans []security.RecordSpan, total uint64,
-	segmentSize, quantum uint32, extra uint64, sourceNote string) (
+	segmentSize, quantum uint32, extra uint64, roundsTo, sourceNote string) (
 	*security.RecordHeader, []security.RecordSegment, *security.RecordKeys, *object.Error,
 ) {
 	defer security.SecureZero(identity.caseKey)
@@ -619,6 +677,7 @@ func recordBuildHeader(op string, identity recordIdentity, spans []security.Reco
 		SegmentSize:            segmentSize,
 		Quantum:                quantum,
 		QuantisedExtra:         extra,
+		RoundsTo:               roundsTo,
 		Created:                custodyNow().UTC().Format(time.RFC3339Nano),
 		Examiner:               identity.examiner,
 		Source:                 sourceNote,
@@ -707,6 +766,12 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 	plaintextDigest := sha256.New()
 	digests := make([][sha256.Size]byte, 0, len(segments))
 	buffer := make([]byte, header.SegmentSize)
+	// Deferred rather than called after the loop: every `abandon` below is a
+	// return out of the middle of this function with a segment of evidence
+	// plaintext still sitting in the buffer. Zeroing only on the happy path
+	// means the one case where plaintext is left in a discarded buffer is the
+	// case where something already went wrong.
+	defer security.SecureZero(buffer)
 	for _, segment := range segments {
 		chunk := buffer[:segment.Length]
 		if _, err := io.ReadFull(in, chunk); err != nil {
@@ -726,7 +791,6 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 		}
 		digests = append(digests, digest)
 	}
-	security.SecureZero(buffer)
 	if !keys.SealComplete() {
 		return nil, 0, abandon("%s: the record sealed %d of its %d segments", op,
 			keys.SealedCount(), keys.Total())
@@ -808,6 +872,16 @@ func recordLoad(op, path string) (*recordSession, *object.Error) {
 	header, err := security.ParseRecordHeader(headerRaw)
 	if err != nil {
 		return nil, fail("%s: %s", op, err.Error())
+	}
+	// Checked before the segment table is built, not after. A record's segment
+	// data is its plaintext plus a tag per segment, so a file can never hold
+	// more plaintext than it has bytes -- and the table costs one row per
+	// segment, which is a number this header chose. Doing the cheap
+	// impossibility check first is what stops a hand-written header being a way
+	// to spend an examiner's memory on a file that is a few hundred bytes long.
+	if header.PlaintextLength > size {
+		return nil, fail("%s: %s says it holds %d bytes of plaintext and the whole file is %d bytes",
+			op, path, header.PlaintextLength, size)
 	}
 	segments, err := header.Segments()
 	if err != nil {
@@ -922,6 +996,11 @@ func RecordVerify(args ...object.Object) object.Object {
 		"created":          stringObj(session.header.Created),
 		"quantum":          intObj(int64(session.header.Quantum)),
 		"quantised_extra":  intObj(int64(session.header.QuantisedExtra)),
+		// The class rounding grew, as a tag. Reported beside the count because
+		// the count alone does not say which way the bytes went, and "12 bytes
+		// moved" reads as "12 more bytes withheld" to anyone who does not know
+		// that nothing here orders one class above another.
+		"rounds_to": stringObj(session.header.RoundsTo),
 		// Two bits and never one: an unsigned record is not a forged one.
 		"signed":                   boolObj(session.signed),
 		"signature_valid":          boolObj(session.signatureValid),

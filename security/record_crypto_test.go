@@ -622,3 +622,41 @@ func TestParseRefusesHostileCostAndUnknownFields(t *testing.T) {
 		}
 	}
 }
+
+// A record is sealed forward only, and a refused seal does not cost a slot.
+//
+// Two shapes the in-order rule has to get right, and they pull in opposite
+// directions. Coming BACK to an index already sealed must be refused, because
+// that is the two-time pad under another name. Retrying an index whose seal
+// FAILED must be allowed, because the failure emitted no ciphertext for a
+// retry to collide with -- and a rule that consumed the slot anyway would turn
+// a recoverable error into a record that can never be completed.
+func TestASealCannotRewindAndAFailedSealCanBeRetried(t *testing.T) {
+	keys, _, _, _, _ := mustKeys(t, 4)
+	defer keys.Zero()
+
+	chunk := []byte("12345678")
+	for i := uint64(0); i < 3; i++ {
+		if _, _, err := keys.SealSegment(keys.SegmentAAD(i, i*8, 8, UnclassifiedTag), chunk); err != nil {
+			t.Fatalf("sealing segment %d: %v", i, err)
+		}
+	}
+	// Back to an index this handle has already sealed.
+	if _, _, err := keys.SealSegment(keys.SegmentAAD(1, 8, 8, UnclassifiedTag), []byte("87654321")); err == nil {
+		t.Fatal("a seal rewound to segment 1, which is a second plaintext under segment 1's keystream")
+	}
+	if got := keys.SealedCount(); got != 3 {
+		t.Fatalf("the refused rewind moved the count to %d", got)
+	}
+
+	// A seal that fails on its own arguments leaves the index available.
+	if _, _, err := keys.SealSegment(keys.SegmentAAD(3, 24, 99, UnclassifiedTag), chunk); err == nil {
+		t.Fatal("a segment whose declared length disagrees with its buffer was sealed")
+	}
+	if _, _, err := keys.SealSegment(keys.SegmentAAD(3, 24, 8, UnclassifiedTag), chunk); err != nil {
+		t.Fatalf("a failed seal poisoned segment 3, so this record can never be completed: %v", err)
+	}
+	if !keys.SealComplete() {
+		t.Fatalf("the record sealed %d of its %d segments", keys.SealedCount(), keys.Total())
+	}
+}

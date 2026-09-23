@@ -199,6 +199,12 @@ func ClassList(args ...object.Object) object.Object {
 // human mitigation and it is the only one available -- a tool cannot decide
 // that Cyrillic "с" was meant to be Latin "c".
 func canonicalClassLabel(op, label string) (string, *object.Error) {
+	// Checked before anything normalises it: norm.NFC passes invalid bytes
+	// through unchanged, so a label that is not valid UTF-8 reaches TagForClass
+	// intact and is HMAC'd over bytes no JSON document can carry back.
+	if errObj := custodyDocumentName(op, "classification label", label); errObj != nil {
+		return "", errObj
+	}
 	trimmed := strings.TrimSpace(norm.NFC.String(label))
 	if trimmed == "" {
 		return "", newError("%s: a classification label must not be empty", op)

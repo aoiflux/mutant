@@ -1,8 +1,10 @@
 package builtin
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"mutant/object"
 )
@@ -276,5 +278,48 @@ func TestCustodyBuiltinsAreRegistered(t *testing.T) {
 		if got := CapabilityCategory(name); got != "chain of custody" {
 			t.Fatalf("CapabilityCategory(%q) = %q", name, got)
 		}
+	}
+}
+
+// A name that is not valid UTF-8 is refused where it enters, not where it
+// breaks.
+//
+// Each of these names is used twice: as raw bytes inside a keyed hash or an
+// AEAD's additional data, and as a JSON field in a document. encoding/json
+// turns a byte that cannot appear in valid UTF-8 into U+FFFD and a hash does
+// not, so the two uses stop describing the same name.
+//
+// The case id was the one that mattered. It is bound into the additional data
+// the case key is wrapped under, so `case_key_create` succeeded, wrote the key
+// file, and `case_key_open` then refused it forever -- every record sealed
+// under that key gone, with the failure surfacing one builtin after the one
+// that caused it.
+func TestANameThatIsNotValidTextIsRefusedWhereItEnters(t *testing.T) {
+	bad := "IR-2026" + string([]byte{0xff, 0xfe}) + "-A"
+	if utf8.ValidString(bad) {
+		t.Fatal("this test needs a string that is not valid UTF-8")
+	}
+
+	_, errObj := unwrapPairNoFatal(CaseOpen(stringObj(bad), stringObj("examiner")))
+	if errObj == nil {
+		t.Fatal("a case id that is not valid UTF-8 was accepted")
+	}
+	if !strings.Contains(errObj.Message, "case id") {
+		t.Fatalf("the refusal does not name the field: %s", errObj.Message)
+	}
+
+	_, errObj = unwrapPairNoFatal(CaseOpen(stringObj("IR-2026"), stringObj(bad)))
+	if errObj == nil {
+		t.Fatal("an examiner name that is not valid UTF-8 was accepted")
+	}
+
+	// And a class label, whose tag is an HMAC over exactly these bytes.
+	openTestCase(t, "IR-UTF8", "examiner")
+	stubPassphrase(t, "correct horse battery staple")
+	key := filepath.Join(t.TempDir(), "case.mkey")
+	mustHash(t, CaseKeyCreate(stringObj(key)))
+	mustHash(t, CaseKeyOpen(stringObj(key)))
+	if _, errObj := unwrapPairNoFatal(ClassDefine(stringObj("restricted" + string([]byte{0xff})))); errObj == nil {
+		t.Fatal("a classification label that is not valid UTF-8 was accepted")
 	}
 }
