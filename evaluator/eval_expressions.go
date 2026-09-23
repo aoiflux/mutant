@@ -234,7 +234,10 @@ func evalBytesInfixExpression(operator string, left, right object.Object) object
 	joined := make([]byte, 0, len(leftBytes.Value)+len(rightBytes.Value))
 	joined = append(joined, leftBytes.Value...)
 	joined = append(joined, rightBytes.Value...)
-	return &object.Bytes{Value: joined}
+	// As in the VM: classified plaintext joined to anything is still
+	// classified plaintext.
+	return &object.Bytes{Value: joined,
+		Classified: object.JoinClassification(leftBytes.Classified, rightBytes.Classified)}
 }
 
 func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Object {

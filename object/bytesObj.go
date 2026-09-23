@@ -22,7 +22,77 @@ import (
 //
 // The type is what lets a builtin declare which one it wants, and the analyzer
 // warn when the two are mixed.
-type Bytes struct{ Value []byte }
+type Bytes struct {
+	Value []byte
+
+	// Classified is set on plaintext read out of a classified record, and nil
+	// on every other buffer. It is checked where a value leaves the process --
+	// printing, writing a file, sending on a socket, writing a report, a note,
+	// a cache entry or a ledger node -- and nowhere else.
+	//
+	// It is deliberately NOT consulted by Inspect. Inspect is the identity
+	// function for equality, dedup, containment and hash ordering (see below),
+	// and a classification-aware Inspect would make two different buffers
+	// compare equal in all of those at once.
+	//
+	// It survives being held: a variable is stored encrypted at rest, and
+	// Encrypted.Classified carries the mark beside the ciphertext so that
+	// reading the variable back returns a buffer that still has it.
+	//
+	// Its limits, stated as loudly as its existence: it travels through
+	// bytes_slice and concatenation (`a + b` of two buffers) and nothing else,
+	// so any conversion -- to a string, to hex, to JSON, a loop that rebuilds
+	// the buffer byte by byte -- produces a value without it. It catches
+	// accidents, not adversaries.
+	Classified *Classification
+}
+
+// Classification says where classified plaintext came from: the record it was
+// read out of, and the classes of the segments the read touched. It names the
+// classes by tag and, where the reading case could, by label; it never holds
+// any of the plaintext.
+type Classification struct {
+	RecordUID string
+	Tags      []string
+	Labels    []string
+}
+
+// JoinClassification is the mark of a buffer built from two others: nil when
+// neither was marked, the one mark when only one was, and when both were, one
+// mark naming every record and every class either came from. Classified
+// plaintext joined to anything is classified plaintext, whichever side it was
+// on, and a later release must record all of what it let go.
+//
+// A class is identified by its tag, so a class both sides carry is named
+// once. Neither mark is modified: a Classification is shared, never mutated.
+func JoinClassification(a, b *Classification) *Classification {
+	switch {
+	case a == nil:
+		return b
+	case b == nil || a == b:
+		return a
+	}
+	joined := &Classification{RecordUID: a.RecordUID}
+	if b.RecordUID != a.RecordUID {
+		joined.RecordUID = a.RecordUID + " and " + b.RecordUID
+	}
+	seen := map[string]bool{}
+	for _, c := range []*Classification{a, b} {
+		for i, tag := range c.Tags {
+			if seen[tag] {
+				continue
+			}
+			seen[tag] = true
+			label := ""
+			if i < len(c.Labels) {
+				label = c.Labels[i]
+			}
+			joined.Tags = append(joined.Tags, tag)
+			joined.Labels = append(joined.Labels, label)
+		}
+	}
+	return joined
+}
 
 func (b *Bytes) Type() ObjectType { return BYTES_OBJ }
 

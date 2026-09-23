@@ -40,19 +40,42 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"mutant/credential"
 	"mutant/security"
 )
 
-// caseKeyPassphraseSource reads a case-key passphrase from the terminal.
+// caseKeyPassphraseSource reads a passphrase from the terminal.
 //
-// Answers are cached per key file for the life of the process, so a program
-// that opens the same key twice -- or rotates it and reads it back -- asks the
-// examiner once. The cache is keyed by path AND by whether confirmation was
-// required, because a create and an open of the same path are different
-// questions: one is "choose a passphrase", the other is "prove you know it".
+// It remembers, per path, the last passphrase typed or chosen for it, so a
+// program that opens one key twice -- or rotates it and reads it back -- asks
+// the examiner once. Three rules keep remembering from becoming the wrong
+// answer, and each one is here because its absence was a defect:
+//
+//   - A request to CHOOSE a passphrase is always asked and never answered from
+//     memory. The cache used to be keyed by path and by whether confirmation
+//     was required, which made "choose one for this path" a question it could
+//     answer from a previous choice: `case_key_create` and then
+//     `case_key_rotate` in one run answered the rotation's replacement with the
+//     create-time passphrase, without asking, and the rotation reported done
+//     while leaving the file under the passphrase it already had.
+//   - What was chosen becomes what is remembered for that path. Once the
+//     builtin that asked has written it, it is the passphrase the file is
+//     under, and the one remembered from before is not.
+//   - An answer is remembered when it is typed, before anything has checked
+//     it, so an answer that failed to open anything is forgotten when the
+//     builtin says so through security.ForgetPassphrase. Without that, one
+//     typo was the answer to every later request for that path in the run,
+//     and the examiner was never asked again.
+//
+// Every prompt is preceded by a line naming the builtin and what it unlocks.
+// The prompt itself only ever says "Password:", and a run that asks for a
+// case-key passphrase and a disclosure passphrase must not ask for both in
+// words that cannot be told apart -- typing the first where the second was
+// meant hands a recipient the key to the whole case.
 type caseKeyPassphraseSource struct {
 	resolver *credential.Resolver
 
@@ -73,15 +96,17 @@ func newCaseKeyPassphraseSource() *caseKeyPassphraseSource {
 // what it is given -- every builtin in the case-key family does so in a defer --
 // and handing out the cache would leave the second caller with a wiped secret.
 func (s *caseKeyPassphraseSource) Passphrase(req security.PassphraseRequest) ([]byte, error) {
-	key := fmt.Sprintf("%t\x00%s", req.Confirm, req.Path)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if held, ok := s.cached[key]; ok {
-		return append([]byte(nil), held...), nil
+	key := passphraseCacheKey(req.Path)
+	if !req.Confirm {
+		if held, ok := s.cached[key]; ok {
+			return append([]byte(nil), held...), nil
+		}
 	}
 
+	s.announce(req)
 	secret, _, err := s.resolver.Resolve(credential.Request{Confirm: req.Confirm})
 	if err != nil {
 		return nil, s.explain(req, err)
@@ -89,8 +114,46 @@ func (s *caseKeyPassphraseSource) Passphrase(req security.PassphraseRequest) ([]
 	if len(secret) == 0 {
 		return nil, security.ErrEmptyPassphrase
 	}
+	if old, ok := s.cached[key]; ok {
+		credential.Zero(old)
+	}
 	s.cached[key] = secret
 	return append([]byte(nil), secret...), nil
+}
+
+// Forget implements security.PassphraseForgetter: the answer remembered for
+// this path did not open what it was asked for, so the next request asks.
+func (s *caseKeyPassphraseSource) Forget(req security.PassphraseRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := passphraseCacheKey(req.Path)
+	if old, ok := s.cached[key]; ok {
+		credential.Zero(old)
+		delete(s.cached, key)
+	}
+}
+
+// passphraseCacheKey is the path as the cache knows it. Two spellings of one
+// file are one entry: disclose_verify joins a package directory with the
+// grant's name using the platform separator, and a script names the same file
+// with forward slashes, and without this the recipient was asked twice for one
+// passphrase. The prompt still shows the path as it was given.
+func passphraseCacheKey(path string) string {
+	return filepath.Clean(path)
+}
+
+// announce says which builtin is asking and for what, on the same stream the
+// prompt goes to, immediately before it.
+func (s *caseKeyPassphraseSource) announce(req security.PassphraseRequest) {
+	out := s.resolver.Stderr
+	if out == nil {
+		out = os.Stderr
+	}
+	verb := "enter the passphrase for"
+	if req.Confirm {
+		verb = "choose a passphrase for"
+	}
+	fmt.Fprintf(out, "%s: %s %s\n", req.Purpose, verb, req.Path)
 }
 
 // explain turns credential's failure into one a reader can act on, naming the

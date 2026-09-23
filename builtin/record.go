@@ -82,12 +82,43 @@ type recordSession struct {
 	// open: OpenRecordKeys returns a handle that cannot seal, which is what
 	// stops a program re-sealing a position and putting two plaintexts under
 	// one keystream.
-	keys *security.RecordKeys
+	//
+	// Exactly one of keys and grant is set. A record opened with the case key
+	// holds the schedule and can issue a disclosure; a record opened under a
+	// grant holds the granted material and nothing else, and can issue
+	// nothing -- a recipient cannot re-disclose, because there is no schedule
+	// on their side of the disclosure to derive a grant from.
+	keys  *security.RecordKeys
+	grant *security.RecordGrant
+	// disclosureUID names the disclosure a grant-opened record came from.
+	disclosureUID string
 
 	signed         bool
 	signatureValid bool
 	signatureNote  string
 	openedAt       time.Time
+}
+
+// openSegment decrypts one segment under whatever this record was opened with.
+func (s *recordSession) openSegment(aad security.SegmentAAD, ciphertext []byte) ([]byte, error) {
+	if s.grant != nil {
+		return s.grant.OpenSegment(aad, ciphertext)
+	}
+	return s.keys.OpenSegment(aad, ciphertext)
+}
+
+// zero releases the key material, whichever kind it is. Both are nil-safe.
+func (s *recordSession) zero() {
+	s.keys.Zero()
+	s.grant.Zero()
+}
+
+// openedWith names the material, for a reader deciding what a hole means.
+func (s *recordSession) openedWith() string {
+	if s.grant != nil {
+		return "grant"
+	}
+	return "case_key"
 }
 
 const (
@@ -1022,15 +1053,37 @@ func RecordVerify(args ...object.Object) object.Object {
 // record_open, record_layout, record_close
 // ---------------------------------------------------------------------------
 
+// recordOpenOptions is the whole option surface of record_open.
+var recordOpenOptions = []string{"grant"}
+
 // RecordOpen opens a record for reading and returns a handle.
+//
+// Under the case key by default. With `{"grant": path}` it opens under a
+// disclosure grant instead -- the recipient's side of a disclosure -- which
+// needs no case and no case key, and opens exactly the segments the grant
+// carries material for.
 func RecordOpen(args ...object.Object) object.Object {
 	op := BuiltinNameRecordOpen
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	path, errObj := requireStringArg(op, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	opts, errObj := formatOptionsArg(op, args, 2, recordOpenOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	grantPath, errObj := opts.str("grant", "")
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if _, given := opts.pairs["grant"]; given {
+		if strings.TrimSpace(grantPath) == "" {
+			return resultAndError(nil, newError("%s: the grant path must not be empty", op))
+		}
+		return recordOpenUnderGrant(op, path, grantPath)
 	}
 	identity, errObj := recordCaseIdentity(op)
 	if errObj != nil {
@@ -1083,17 +1136,27 @@ func RecordOpen(args ...object.Object) object.Object {
 		return fail("%s: %s", op, err.Error())
 	}
 	session.keys = keys
+	return recordRegister(op, path, session, len(session.segments))
+}
 
+// recordRegister stores an opened record under a new handle, records it, and
+// renders what record_open returns -- one shape for both kinds of opening, so
+// a program reads `opened_with` rather than guessing from which fields exist.
+func recordRegister(op, path string, session *recordSession, granted int) object.Object {
 	handle := atomic.AddInt64(&recordHandleCounter, 1)
 	recordHandles.Store(handle, session)
 
-	custodyRecordArtifact(op, fmt.Sprintf("opened record %s (%d segments)", path, len(session.segments)),
+	custodyRecordArtifact(op, fmt.Sprintf("opened record %s (%d segments, under a %s)",
+		path, len(session.segments), strings.ReplaceAll(session.openedWith(), "_", " ")),
 		map[string]any{
-			"record_uid":      session.header.RecordUID,
-			"path":            path,
-			"segments":        int64(len(session.segments)),
-			"signed":          session.signed,
-			"signature_valid": session.signatureValid,
+			"record_uid":       session.header.RecordUID,
+			"path":             path,
+			"segments":         int64(len(session.segments)),
+			"signed":           session.signed,
+			"signature_valid":  session.signatureValid,
+			"opened_with":      session.openedWith(),
+			"granted_segments": int64(granted),
+			"disclosure_uid":   session.disclosureUID,
 		})
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -1109,7 +1172,78 @@ func RecordOpen(args ...object.Object) object.Object {
 		"signature_valid":          boolObj(session.signatureValid),
 		"signature_note":           stringObj(session.signatureNote),
 		"key_created_for_this_run": boolObj(session.footer.KeyCreatedForThisRun),
+		// What the segments open under, and how many of them that is. Under
+		// the case key it is all of them; under a grant it is the ones the
+		// grant carries, and a read that touches any other is refused by
+		// record_read and reported as a hole by record_read_partial.
+		"opened_with":      stringObj(session.openedWith()),
+		"granted_segments": intObj(int64(granted)),
+		"disclosure_uid":   stringObj(session.disclosureUID),
 	}), nil)
+}
+
+// recordOpenUnderGrant is the recipient's side of a disclosure.
+//
+// Everything that needs no passphrase is checked first: that the grant file is
+// one, that the record is one, and that the grant names this record -- its
+// uid, its case, the generation it was sealed under and its segment count. A
+// grant for another record is refused by name before the examiner is asked
+// for anything, because a passphrase typed for the wrong file is a passphrase
+// typed for nothing.
+//
+// Then the grant is opened and checked against the header once more, this
+// time over every granted segment's full descriptor. A header that describes a
+// granted segment differently from the one the grant was issued against is
+// refused as that, here, rather than surfacing later as segments that do not
+// open.
+func recordOpenUnderGrant(op, path, grantPath string) object.Object {
+	file, errObj := disclosureReadGrantFile(op, grantPath)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	session, errObj := recordLoad(op, path)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	fail := func(errObj *object.Error) object.Object {
+		session.file.Close()
+		return resultAndError(nil, errObj)
+	}
+	if errObj := disclosureGrantNamesRecord(op, file, session); errObj != nil {
+		return fail(errObj)
+	}
+
+	request := security.PassphraseRequest{Purpose: op, Path: grantPath, Confirm: false}
+	passphrase, err := security.RequestPassphrase(request)
+	if err != nil {
+		return fail(passphraseError(op, err))
+	}
+	grant, err := security.OpenGrantFile(file, passphrase)
+	security.SecureZero(passphrase)
+	if err != nil {
+		security.ForgetPassphrase(request)
+		return fail(newError("%s: %s: %s", op, grantPath, err.Error()))
+	}
+	if err := grant.MatchesRecord(recordDescriber(session)); err != nil {
+		grant.Zero()
+		return fail(newError("%s: %s does not describe the segments %s grants: %s",
+			op, path, grantPath, err.Error()))
+	}
+	session.grant = grant
+	session.disclosureUID = file.DisclosureUID
+	return recordRegister(op, path, session, grant.Count())
+}
+
+// recordDescriber returns the descriptor the record's own header gives for a
+// segment index, which is what a grant is checked against.
+func recordDescriber(session *recordSession) func(uint64) (security.SegmentAAD, error) {
+	total := uint64(len(session.segments))
+	return func(index uint64) (security.SegmentAAD, error) {
+		if index >= total {
+			return security.SegmentAAD{}, fmt.Errorf("this record has %d segments and no segment %d", total, index)
+		}
+		return session.header.SegmentAAD(session.segments[index], total)
+	}
 }
 
 // RecordLayout reports the record's public structure: what is where, and under
@@ -1163,7 +1297,7 @@ func RecordClose(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("%s: unknown record handle %d", op, handle.Value))
 	}
-	session.keys.Zero()
+	session.zero()
 	if err := session.file.Close(); err != nil {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
 	}
@@ -1212,7 +1346,7 @@ func recordHandleArg(op string, args []object.Object, want int) (*recordSession,
 func resetRecordsForTesting() {
 	recordHandles.Range(func(key, value any) bool {
 		if session, ok := value.(*recordSession); ok {
-			session.keys.Zero()
+			session.zero()
 			_ = session.file.Close()
 		}
 		recordHandles.Delete(key)

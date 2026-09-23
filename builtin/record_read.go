@@ -17,7 +17,9 @@ package builtin
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 
 	"mutant/object"
 	"mutant/security"
@@ -37,14 +39,20 @@ type recordHole struct {
 // It always produces the full buffer and the full hole list; the two builtins
 // differ only in what they do with a non-empty hole list. One implementation,
 // so the two contracts can never disagree about what was readable.
-func recordReadSpan(op string, session *recordSession, offset, length uint64) ([]byte, []recordHole, *object.Error) {
+//
+// It also returns the class tags of the segments it actually decrypted, in
+// the order it met them, which is what the returned buffer is marked with. A
+// hole contributes no class: there is no plaintext of it in the buffer.
+func recordReadSpan(op string, session *recordSession, offset, length uint64) ([]byte, []recordHole, []string, *object.Error) {
 	end := offset + length
 	if end < offset || end > session.header.PlaintextLength {
-		return nil, nil, newError("%s: %d+%d runs past the %d bytes this record holds",
+		return nil, nil, nil, newError("%s: %d+%d runs past the %d bytes this record holds",
 			op, offset, length, session.header.PlaintextLength)
 	}
 	out := make([]byte, length)
 	var holes []recordHole
+	var tags []string
+	seenTag := map[string]bool{}
 
 	ciphertext := make([]byte, 0, session.header.SegmentSize+64)
 	for _, segment := range session.segments {
@@ -83,20 +91,56 @@ func recordReadSpan(op string, session *recordSession, offset, length uint64) ([
 		}
 		aad, err := session.header.SegmentAAD(segment, uint64(len(session.segments)))
 		if err != nil {
-			return nil, nil, newError("%s: %s", op, err.Error())
+			return nil, nil, nil, newError("%s: %s", op, err.Error())
 		}
-		plaintext, err := session.keys.OpenSegment(aad, chunk)
+		plaintext, err := session.openSegment(aad, chunk)
 		if err != nil {
 			// "does not open" and not "is not authentic": after any disclosure a
 			// segment key is held by its recipient too, so a segment that opens
 			// proves only that somebody holding that key wrote it.
-			hole("the segment does not open under this record's key")
+			//
+			// A segment the grant does not cover is said as that. It is the
+			// ordinary case for a recipient and the reason is public -- the
+			// granted set is in the grant file and the manifest -- whereas a
+			// granted segment that fails its tag is a different finding and
+			// must not read like one.
+			switch {
+			case errors.Is(err, security.ErrSegmentNotGranted):
+				hole("this record was opened under a grant that does not include this segment")
+			case session.grant != nil:
+				hole("the segment does not open under the material granted for it")
+			default:
+				hole("the segment does not open under this record's key")
+			}
 			continue
 		}
 		copy(out[from-offset:to-offset], plaintext[from-segment.Offset:to-segment.Offset])
 		security.SecureZero(plaintext)
+		if tag := hex.EncodeToString(segment.Class[:]); !seenTag[tag] {
+			seenTag[tag] = true
+			tags = append(tags, tag)
+		}
 	}
-	return out, holes, nil
+	return out, holes, tags, nil
+}
+
+// recordClassification is the mark a read's output carries: the record, and
+// the classes of the segments that went into it, named where the open case
+// can name them. It holds no plaintext.
+func recordClassification(session *recordSession, tags []string) *object.Classification {
+	labels := make([]string, len(tags))
+	custodyStore.RLock()
+	if open := custodyStore.session; open != nil {
+		for i, tag := range tags {
+			for _, class := range open.classes {
+				if strings.EqualFold(class.Tag, tag) {
+					labels[i] = class.Label
+				}
+			}
+		}
+	}
+	custodyStore.RUnlock()
+	return &object.Classification{RecordUID: session.header.RecordUID, Tags: tags, Labels: labels}
 }
 
 func recordReadArgs(op string, args []object.Object) (*recordSession, uint64, uint64, *object.Error) {
@@ -132,7 +176,7 @@ func RecordRead(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	out, holes, errObj := recordReadSpan(op, session, offset, length)
+	out, holes, tags, errObj := recordReadSpan(op, session, offset, length)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -145,8 +189,10 @@ func RecordRead(args ...object.Object) object.Object {
 			recordHoleSummary(holes), BuiltinNameRecordReadPartial))
 	}
 	// A *object.Bytes and never a STRING: a Go string cannot be zeroed and the
-	// runtime copies one at will. See object/bytesObj.go.
-	return resultAndError(&object.Bytes{Value: out}, nil)
+	// runtime copies one at will. See object/bytesObj.go. Marked, so that the
+	// builtins that send a value out of the process refuse it; see
+	// builtin/classified.go.
+	return resultAndError(&object.Bytes{Value: out, Classified: recordClassification(session, tags)}, nil)
 }
 
 // RecordReadPartial returns what is readable, plus exactly what is not.
@@ -156,7 +202,7 @@ func RecordReadPartial(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	out, holes, errObj := recordReadSpan(op, session, offset, length)
+	out, holes, tags, errObj := recordReadSpan(op, session, offset, length)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -173,7 +219,7 @@ func RecordReadPartial(args ...object.Object) object.Object {
 		}))
 	}
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"bytes": &object.Bytes{Value: out},
+		"bytes": &object.Bytes{Value: out, Classified: recordClassification(session, tags)},
 		"holes": &object.Array{Elements: rows},
 		// Both numbers, because "how much did I get" and "how much is missing"
 		// are different questions and a caller should not have to subtract.

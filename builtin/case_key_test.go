@@ -3,6 +3,7 @@ package builtin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -545,5 +546,115 @@ func keyFieldString(t *testing.T, hash *object.Hash, key string) string {
 	default:
 		t.Fatalf("field %q is %T, want STRING", key, value)
 		return ""
+	}
+}
+
+// forgettingSource answers from a script and records what it was told to
+// forget, which is the half of the seam the terminal source depends on.
+type forgettingSource struct {
+	answers   []string
+	next      int
+	forgotten []string
+}
+
+func (s *forgettingSource) Passphrase(security.PassphraseRequest) ([]byte, error) {
+	answer := s.answers[len(s.answers)-1]
+	if s.next < len(s.answers) {
+		answer = s.answers[s.next]
+		s.next++
+	}
+	return []byte(answer), nil
+}
+
+func (s *forgettingSource) Forget(req security.PassphraseRequest) {
+	s.forgotten = append(s.forgotten, req.Purpose+" "+req.Path)
+}
+
+func installForgetting(t *testing.T, answers ...string) *forgettingSource {
+	t.Helper()
+	source := &forgettingSource{answers: answers}
+	previous := security.SetPassphraseSource(source)
+	t.Cleanup(func() { security.SetPassphraseSource(previous) })
+	return source
+}
+
+// A passphrase that did not open the key is forgotten, so that trying again
+// asks again. The terminal source remembers an answer when it is typed; before
+// this, one typo at case_key_open answered every later open of that file for
+// the rest of the run.
+func TestAPassphraseThatDidNotOpenTheKeyIsForgotten(t *testing.T) {
+	openTestCase(t, "IR-FORGET", "examiner")
+	path := filepath.Join(t.TempDir(), "case.mkey")
+	stubPassphrase(t, "the real one")
+	mustHash(t, CaseKeyCreate(stringObj(path)))
+
+	source := installForgetting(t, "a typo")
+	if _, errObj := unwrapPairNoFatal(CaseKeyOpen(stringObj(path))); errObj == nil {
+		t.Fatal("the wrong passphrase opened the key")
+	}
+	if len(source.forgotten) != 1 || source.forgotten[0] != BuiltinNameCaseKeyOpen+" "+path {
+		t.Fatalf("a failed open told the source to forget %v", source.forgotten)
+	}
+
+	// A rotation whose current passphrase is wrong forgets it too.
+	source = installForgetting(t, "another typo", "a replacement")
+	if _, errObj := unwrapPairNoFatal(CaseKeyRotate(stringObj(path),
+		makeHashObject(map[string]object.Object{"mode": stringObj("passphrase")}))); errObj == nil {
+		t.Fatal("a rotation went through on the wrong current passphrase")
+	}
+	if len(source.forgotten) != 1 || source.forgotten[0] != BuiltinNameCaseKeyRotate+" "+path {
+		t.Fatalf("a failed rotation told the source to forget %v", source.forgotten)
+	}
+
+	// A rotation that succeeds forgets nothing: the replacement it chose is
+	// now the passphrase the file is under, and that is what the source holds.
+	source = installForgetting(t, "the real one", "the new one")
+	mustHash(t, CaseKeyRotate(stringObj(path),
+		makeHashObject(map[string]object.Object{"mode": stringObj("passphrase")})))
+	if len(source.forgotten) != 0 {
+		t.Fatalf("a successful rotation told the source to forget %v", source.forgotten)
+	}
+}
+
+// A rotation that fails after the replacement was chosen -- here, at the write
+// -- forgets as well. The source already holds the replacement for this path,
+// and the file on disk never got it.
+func TestARotationThatDidNotLandIsForgotten(t *testing.T) {
+	openTestCase(t, "IR-FORGET-WRITE", "examiner")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.mkey")
+	stubPassphrase(t, "the real one")
+	mustHash(t, CaseKeyCreate(stringObj(path)))
+
+	// Two ways to make the write fail, because no one way works everywhere.
+	// Windows does not honour directory modes, but refuses to rename over a
+	// file another handle holds open; POSIX renames over an open file freely,
+	// but refuses to create in a directory with no write bit.
+	if runtime.GOOS == "windows" {
+		held, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = held.Close() })
+	} else {
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Skip("cannot make the directory read-only here")
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		probe := filepath.Join(dir, "probe")
+		if f, err := os.Create(probe); err == nil {
+			f.Close()
+			_ = os.Remove(probe)
+			t.Skip("directory modes are not enforced here (running as root?)")
+		}
+	}
+
+	source := installForgetting(t, "the real one", "the new one")
+	if _, errObj := unwrapPairNoFatal(CaseKeyRotate(stringObj(path),
+		makeHashObject(map[string]object.Object{"mode": stringObj("passphrase")}))); errObj == nil {
+		t.Fatal("a rotation reported success into a directory it could not write")
+	}
+	if len(source.forgotten) != 1 {
+		t.Fatalf("a rotation that did not land told the source to forget %v", source.forgotten)
 	}
 }

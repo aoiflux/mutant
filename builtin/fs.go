@@ -47,6 +47,9 @@ func FsWrite(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := refuseClassified(BuiltinNameFsWrite, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	err := os.WriteFile(path.Value, content, 0644)
 	if err != nil {
 		return resultAndError(nil, newError("fs_write: %s", err.Error()))
@@ -64,6 +67,9 @@ func FsAppend(args ...object.Object) object.Object {
 	}
 	content, errObj := requireBinaryArg(BuiltinNameFsAppend, args[1], 2)
 	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if errObj := refuseClassified(BuiltinNameFsAppend, args...); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	f, err := os.OpenFile(path.Value, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)

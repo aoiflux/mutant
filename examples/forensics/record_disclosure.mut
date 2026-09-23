@@ -1,0 +1,264 @@
+// record_disclosure.mut — seal an exhibit at its classification boundaries,
+// disclose two different parts of it to two different people, and hand each of
+// them a package they can check without taking the examiner's word for it.
+//
+// The exhibit is a phishing email, and three things in it are not the same kind
+// of thing:
+//
+//   - the headers and the lure, which anyone working the case may read;
+//   - the victim's mailbox address, which is personal data;
+//   - the attachment, which is live malware, base64-encoded.
+//
+// So the record is sealed with the address classified `pii`, the attachment
+// `restricted`, and everything else `open`. Outside counsel is given `open` and
+// `pii`: the whole email except the malware. A CERT malware desk is given `open`
+// and `restricted`: the whole email except the victim. Both receive the same
+// record file, byte for byte. What differs is which segment keys each one holds.
+//
+// Interactive. The case key and each grant are protected by a passphrase asked
+// for at the terminal, never taken from an argument or the environment, so run
+// it from a terminal -- on Windows from PowerShell rather than Git Bash:
+//
+//     mutant --dev examples/forensics/record_disclosure.mut
+//     mutant --dev examples/forensics/record_disclosure.mu
+//
+// It asks for a passphrase for the case key and one for each grant, each typed
+// twice, and for the counsel grant's again when the package is checked from the
+// recipient's side, where nothing the examiner typed is reused.
+//
+// Safe use: reads examples/data/phish.eml and never writes to it. Everything
+// written goes under example_output/record_disclosure, which must not exist yet:
+// a key, a record and a package are each refused rather than written over.
+// Delete the directory to run it again.
+
+putln("=== record_disclosure ===");
+
+let check_err = fn(err, op) {
+    if (err) {
+        putln("[error]", op, ":", err);
+        return true;
+    };
+    return false;
+};
+
+// A root nobody supplied. There is no null literal, and a bare return is null.
+let no_root = fn() { return; };
+
+let exhibit_path = "examples/data/phish.eml";
+let output_directory = "example_output/record_disclosure";
+// The key stays beside the work and out of every package: it is the one thing
+// that must never travel with a disclosure.
+let key_path = output_directory + "/case.key";
+let record_path = output_directory + "/phish.mrec";
+let ledger_path = output_directory + "/ledger";
+let counsel_dir = output_directory + "/to_counsel";
+let desk_dir = output_directory + "/to_malware_desk";
+
+let print_runs = fn(title, runs) {
+    putln("   ", title);
+    each(runs, fn(r) {
+        putln("      bytes", r["offset"], "+", r["length"], " class:", r["label"]);
+    });
+};
+
+let run = fn() {
+    let exists, err = fs_exists(output_directory);
+    if (check_err(err, "fs_exists")) { return false; };
+    if (exists) {
+        putln(output_directory, "already exists. A key, a record and a package are each");
+        putln("refused rather than written over; delete the directory to run this again.");
+        return false;
+    };
+    let _, err = fs_mkdir(output_directory);
+    if (check_err(err, "fs_mkdir")) { return false; };
+
+    // --- the case and its key ------------------------------------------------
+    let _, err = case_open("IR-2026-0413", "example examiner", {"hash": "sha256"});
+    if (check_err(err, "case_open")) { return false; };
+    let _, err = case_evidence(exhibit_path);
+    if (check_err(err, "case_evidence")) { return false; };
+
+    // The passphrase is chosen here, at the terminal. Opening the key straight
+    // after does not ask again: the answer just chosen for this path is reused.
+    let key, err = case_key_create(key_path);
+    if (check_err(err, "case_key_create")) { return false; };
+    putln("case key:", key["fingerprint"], " generation:", key["generation"]);
+    let _, err = case_key_open(key_path);
+    if (check_err(err, "case_key_open")) { return false; };
+
+    // --- the classification scheme -------------------------------------------
+    // Declared before use, so a misspelt label is an error at the line that
+    // misspelt it rather than a new class nobody recognises. Nothing orders
+    // these: `restricted` is not above `pii`, it is different.
+    let _, err = class_define("open");
+    if (check_err(err, "class_define open")) { return false; };
+    let _, err = class_define("pii", {"description": "a natural person's contact details"});
+    if (check_err(err, "class_define pii")) { return false; };
+    let _, err = class_define("restricted", {"description": "live malicious code"});
+    if (check_err(err, "class_define restricted")) { return false; };
+
+    // --- where each class sits -----------------------------------------------
+    // Found in the exhibit rather than typed in, so the ranges follow the bytes.
+    // text_index counts bytes, which is what a range is measured in.
+    let text, err = fs_read(exhibit_path);
+    if (check_err(err, "fs_read")) { return false; };
+    let victim = "finance@example.org";
+    let victim_at = text_index(text, victim);
+    // TVqQ is the base64 of a PE file's MZ header: the attachment's body starts
+    // there and ends at the blank line before the closing MIME boundary.
+    let payload_at = text_index(text, "TVqQ");
+    let closing_at = text_index(text, "--b0undary42--");
+    if (victim_at < 0 || payload_at < 0 || closing_at < 0) {
+        putln("[error] the exhibit is not the sample this example was written against");
+        return false;
+    };
+
+    let pii, err = record_classify_range(victim_at, len(victim), "pii");
+    if (check_err(err, "record_classify_range pii")) { return false; };
+    let malware, err = record_classify_range(payload_at, closing_at - 2 - payload_at, "restricted");
+    if (check_err(err, "record_classify_range restricted")) { return false; };
+
+    // --- seal ----------------------------------------------------------------
+    // `default` is required: every byte no range names is `open` because the
+    // examiner said so, not because nobody thought about it.
+    let sealed, err = record_seal(exhibit_path, record_path, [pii, malware], {"default": "open"});
+    if (check_err(err, "record_seal")) { return false; };
+    putln("sealed:", sealed["path"], " ", sealed["plaintext_length"], "bytes in",
+        sealed["segments"], "segments  record:", sealed["record_uid"]);
+
+    // Anyone holding the file can check it, including a recipient granted
+    // nothing: no key is used.
+    let checked, err = record_verify(record_path);
+    if (check_err(err, "record_verify")) { return false; };
+    putln("verified without a key:", checked["verified_without_key"], " signed:", checked["signed"],
+        " signature valid:", checked["signature_valid"]);
+
+    let opened, err = record_open(record_path);
+    if (check_err(err, "record_open")) { return false; };
+    let record = opened["handle"];
+
+    // --- what reading it gives you -------------------------------------------
+    // Plaintext read out of a classified record is marked, and the builtins
+    // that send a value out of the process refuse it. The refusal names the
+    // record and the class, and not one byte of what it refused.
+    let address, err = record_read(record, victim_at, len(victim));
+    if (check_err(err, "record_read")) { return false; };
+    let _, err = fs_write(output_directory + "/address.txt", address);
+    putln("writing the address out:", err);
+
+    // Letting it out is a decision, and a decision is recorded: record_release
+    // needs a reason, writes it into the case timeline, and returns a copy
+    // without the mark.
+    let released, err = record_release(address, "the complainant's own address, for their statement");
+    if (check_err(err, "record_release")) { return false; };
+    let _, err = fs_write(output_directory + "/address.txt", released);
+    if (check_err(err, "fs_write")) { return false; };
+    putln("released", len(released), "bytes; the case timeline says who and why");
+
+    // --- two postures --------------------------------------------------------
+    // A view names what it grants and cannot negate: "everything except pii"
+    // would quietly grow to cover every class declared after it.
+    let _, err = view_define("counsel", ["open", "pii"]);
+    if (check_err(err, "view_define counsel")) { return false; };
+    let _, err = view_define("malware-desk", ["open", "restricted"]);
+    if (check_err(err, "view_define malware-desk")) { return false; };
+
+    // What each would release, before anything is released. This is arithmetic
+    // over the public header: no segment is opened to answer it.
+    for (view in ["counsel", "malware-desk"]) {
+        let preview, err = view_preview(record, view);
+        if (check_err(err, "view_preview")) { return false; };
+        putln("view", view, ":", preview["granted_bytes"], "bytes released,",
+            preview["withheld_bytes"], "withheld");
+        print_runs("withheld:", preview["withheld_runs"]);
+    }
+
+    // --- disclose ------------------------------------------------------------
+    // Each disclosure is written into the ledger, signed and attributed, before
+    // the grant is handed back; one the ledger could not record was not issued.
+    let info, err = ledger_open(ledger_path, "example examiner");
+    if (check_err(err, "ledger_open")) { return false; };
+    let ledger = info["handle"];
+
+    let to_counsel, err = disclose_to_passphrase(ledger, record, "counsel", "outside counsel for the complainant");
+    if (check_err(err, "disclose_to_passphrase counsel")) { return false; };
+    let to_desk, err = disclose_to_passphrase(ledger, record, "malware-desk", "CERT malware desk");
+    if (check_err(err, "disclose_to_passphrase malware-desk")) { return false; };
+    putln("to counsel:", to_counsel["granted_segments"], "of", to_counsel["segments"],
+        "segments, in a sealed grant file of", to_counsel["grant_bytes"], "bytes");
+    putln("to the malware desk:", to_desk["granted_segments"], "of", to_desk["segments"],
+        "segments, in a sealed grant file of", to_desk["grant_bytes"], "bytes");
+
+    // --- package -------------------------------------------------------------
+    // A package's inclusion proof resolves against a snapshot, so the ledger is
+    // compacted first. The snapshot root comes back and is NOT in the package:
+    // a root the package supplied would be one its author chose, so it goes to
+    // the recipient by another route.
+    let _, err = ledger_compact(ledger);
+    if (check_err(err, "ledger_compact")) { return false; };
+    let counsel_pkg, err = disclose_bundle(ledger, to_counsel["disclosure_uid"], counsel_dir);
+    if (check_err(err, "disclose_bundle counsel")) { return false; };
+    let desk_pkg, err = disclose_bundle(ledger, to_desk["disclosure_uid"], desk_dir);
+    if (check_err(err, "disclose_bundle malware-desk")) { return false; };
+    let root = counsel_pkg["snapshot_root"];
+    putln("packages:", counsel_pkg["dir"], "and", desk_pkg["dir"]);
+    putln("snapshot root, to send separately:", root);
+
+    // --- the recipient's side ------------------------------------------------
+    // Counsel checks what they were handed, with the root they were sent by
+    // another route. The grant's passphrase is asked for again: this is the
+    // recipient typing it.
+    let verdict, err = disclose_verify(counsel_dir, root);
+    if (check_err(err, "disclose_verify")) { return false; };
+    putln("counsel's package verified:", verdict["verified"], " checks passed:",
+        verdict["checks_passed"], "of", verdict["checks_run"]);
+
+    // Without the root, whether the ledger records this disclosure cannot be
+    // checked, and that is a finding rather than a pass.
+    let unanchored, err = disclose_verify(counsel_dir, no_root());
+    if (check_err(err, "disclose_verify with no root")) { return false; };
+    putln("verified with no root:", unanchored["verified"]);
+    each(unanchored["findings"], fn(finding) { putln("   finding:", finding); });
+
+    // Counsel opens the record with the grant alone: no case key. The malware
+    // is a hole, zero-filled so every other byte keeps its offset.
+    let as_counsel, err = record_open(counsel_dir + "/record.mrec", {"grant": counsel_dir + "/grant.json"});
+    if (check_err(err, "record_open with the grant")) { return false; };
+    let whole, err = record_read_partial(as_counsel["handle"], 0, as_counsel["plaintext_length"]);
+    if (check_err(err, "record_read_partial")) { return false; };
+    putln("counsel reads the record with", whole["withheld"], "of", whole["length"], "bytes withheld:");
+    each(whole["holes"], fn(hole) {
+        putln("   hole at", hole["offset"], "+", hole["length"], " ", hole["reason"]);
+    });
+    let _, err = record_close(as_counsel["handle"]);
+    if (check_err(err, "record_close")) { return false; };
+
+    // --- who holds what ------------------------------------------------------
+    // The ledger answers it, and every row says bytes_recoverable: false. A
+    // disclosure can be withdrawn, which stops further grants; nothing reaches
+    // a copy somebody already holds.
+    let history, err = disclose_history(ledger);
+    if (check_err(err, "disclose_history")) { return false; };
+    each(history["disclosures"], fn(d) {
+        putln("ledger:", d["recipient"], " view:", d["view"], " segments:", d["granted_runs"],
+            " bytes recoverable:", d["bytes_recoverable"]);
+    });
+
+    // --- close ---------------------------------------------------------------
+    let _, err = record_close(record);
+    if (check_err(err, "record_close")) { return false; };
+    let _, err = ledger_close(ledger);
+    if (check_err(err, "ledger_close")) { return false; };
+
+    // The manifest carries the scheme, the views, both disclosures and the
+    // release. case_close zeroes the case key.
+    let written, err = case_write(output_directory + "/manifest.json");
+    if (check_err(err, "case_write")) { return false; };
+    putln("manifest:", written["path"], " signed:", written["signed"]);
+    let _, err = case_close();
+    if (check_err(err, "case_close")) { return false; };
+
+    return true;
+};
+
+run();

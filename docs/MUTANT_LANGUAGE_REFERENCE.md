@@ -962,7 +962,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **651 builtins** across **41 categories**.
+The standard library is **659 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1004,8 +1004,8 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
 | [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-19) | 19 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and the classification labels tagged under it |
-| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-10) | 10 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, and verifying with no key at all |
-| [Disclosure](CAPABILITY_REFERENCE.md#disclosure-3) | 3 | Named disclosure postures, and what one would release from a record -- and hold back -- before anything is handed over |
+| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-11) | 11 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, verifying with no key at all, and the one recorded way to let read plaintext out |
+| [Disclosure](CAPABILITY_REFERENCE.md#disclosure-10) | 10 | Named disclosure postures, the grants issued under them, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
 | [Disk Image Forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-34) | 34 | Raw/EWF/VHD(X) images, MBR/GPT tables |
@@ -2365,6 +2365,20 @@ the property a recipient who was granted nothing still has, and it reports in a
 refuses a span it cannot fully decrypt and names the segments that stood in the
 way; `record_read_partial` is the separate contract that returns those as data.
 
+Plaintext either read returns is marked with the record it came from and the
+classes it crossed, and every builtin that sends a value out of the process --
+`putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
+`report_write`, `report_render`, `case_note`, `cache_put`, `ledger_add_node`,
+`ledger_add_edge` and `db_add_artifact` -- refuses a marked buffer, whether it is
+passed directly or sits anywhere inside an array, hash or struct. The refusal
+names the record, the classes and the length, and not one byte. `bytes_slice`
+carries the mark to the slice it returns, and `+` of two buffers to the joined
+one. `record_release(buffer, reason)` is the
+deliberate way out: it requires a reason and an open case, writes the release
+into the case timeline, and returns an unmarked copy. The mark catches
+accidents, not adversaries: a conversion to a string, to hex, to base64 or to
+JSON drops it, and so does a loop that rebuilds a buffer byte by byte.
+
 Who may open which part of a record is decided by the `view_*` family.
 `view_define(label, classes)` declares a named posture -- the set of
 classifications a grant issued under that name will open -- and `view_list`
@@ -2382,6 +2396,25 @@ to one posture and held back to another. A class whose tag this case cannot name
 is counted in `unnamed_classes` rather than passed off as unclassified, and a
 `does_not_say` field records that a preview establishes what would be disclosed
 and not whether the classification behind it was right.
+
+The `disclose_*` family carries a view out. `disclose_to_passphrase(ledger,
+record, view, recipient)` issues a grant -- the key material for exactly the
+segments the view selects, and nothing from which any other segment's could be
+derived -- seals it under a passphrase asked for at the terminal, and records the
+disclosure in the forensic ledger before handing anything back. The record a
+recipient receives is byte-identical to the one under custody; a disclosure is a
+key grant, never a re-encryption. `disclose_bundle` writes the package and
+returns the ledger snapshot root to be sent separately, and
+`disclose_verify(dir, root)` checks it, where a null root is a finding and never
+a pass. A recipient reads with `record_open(path, {"grant": path})`, which needs
+no case and no case key. `disclose_withdraw` stops further grants and says, in
+`bytes_recoverable: false`, that it reaches nobody's copy; `disclose_history`,
+`disclose_for_segment` and `disclose_reclassified` answer who was given what,
+and who holds bytes whose class has since changed.
+[`examples/forensics/record_disclosure.mut`](../examples/forensics/record_disclosure.mut)
+runs the whole cycle on one exhibit -- seal, preview, two disclosures that each
+withhold what the other grants, both packages, and the recipient's check -- and
+asks at the terminal for every passphrase it needs.
 
 ## Quick Example
 

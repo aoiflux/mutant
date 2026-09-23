@@ -266,6 +266,34 @@ func RequestPassphrase(req PassphraseRequest) ([]byte, error) {
 	return passphrase, nil
 }
 
+// PassphraseForgetter is implemented by a source that remembers answers.
+//
+// Remembering is the whole of what makes a program that opens one key twice
+// ask the examiner once, and it is also how a typo becomes permanent: an
+// answer is remembered when it is typed, which is before anything has checked
+// it, so a source that is never told an answer failed goes on serving the
+// failure for the rest of the run without asking again.
+type PassphraseForgetter interface {
+	Forget(PassphraseRequest)
+}
+
+// ForgetPassphrase tells the installed source that the answer it gave for
+// req.Path did not open what it was asked for, so the next request for that
+// path asks again. A source that remembers nothing need not implement it.
+//
+// Called by every builtin whose passphrase failed to authenticate, and never
+// with the passphrase itself: the source is told which question went wrong,
+// not handed the secret a second time.
+func ForgetPassphrase(req PassphraseRequest) {
+	src := passphraseSource.Load()
+	if src == nil {
+		return
+	}
+	if forgetter, ok := (*src).(PassphraseForgetter); ok {
+		forgetter.Forget(req)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fixed-width types: a wrong length is a compile error, not a panic
 // ---------------------------------------------------------------------------
@@ -426,8 +454,22 @@ func DeriveWrappingKey(passphrase []byte, salt []byte, version uint32) ([]byte, 
 	if len(salt) != CaseKeySaltSize {
 		return nil, fmt.Errorf("the salt must be %d bytes, got %d", CaseKeySaltSize, len(salt))
 	}
-	if err := ValidateArgon2Params(profile.time, profile.memoryKiB, profile.threads); err != nil {
+	key, err := deriveArgon2id(passphrase, salt, profile)
+	if err != nil {
 		return nil, fmt.Errorf("the built-in cost for version %d is out of band: %w", version, err)
+	}
+	return key, nil
+}
+
+// deriveArgon2id runs one fixed profile. Every passphrase in this package goes
+// through it, so a profile that has drifted out of band is refused in one
+// place rather than in each caller that remembered to check.
+func deriveArgon2id(passphrase, salt []byte, profile argon2Profile) ([]byte, error) {
+	if len(passphrase) == 0 {
+		return nil, ErrEmptyPassphrase
+	}
+	if err := ValidateArgon2Params(profile.time, profile.memoryKiB, profile.threads); err != nil {
+		return nil, err
 	}
 	return argon2.IDKey(passphrase, salt, profile.time, profile.memoryKiB, profile.threads, profile.keyLen), nil
 }
@@ -512,11 +554,21 @@ func RecordWrappingKey(caseKey []byte, uid RecordUID) ([]byte, error) {
 // a caller, so the inexact-overlap panics have nothing to overlap with. And the
 // plaintext is bounded far below the 2^38 size limit.
 func sealWith(key []byte, nonce XNonce, plaintext, aad []byte) ([]byte, error) {
+	return sealWithLimit(key, nonce, plaintext, aad, MaxSegmentPlaintext, "a segment")
+}
+
+// sealWithLimit is sealWith under a bound the caller names. Only one caller
+// needs a different one: a disclosure grant carries 56 bytes per granted
+// segment, which for a large record is more than a segment is allowed to be
+// and still four orders of magnitude inside the size at which the cipher
+// panics. The bound is an argument rather than a second copy of this function
+// so that the four closed panic paths stay closed in one place.
+func sealWithLimit(key []byte, nonce XNonce, plaintext, aad []byte, limit int, what string) ([]byte, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("a key must be %d bytes, got %d", KeySize, len(key))
 	}
-	if len(plaintext) > MaxSegmentPlaintext {
-		return nil, fmt.Errorf("a segment must be at most %d bytes, got %d", MaxSegmentPlaintext, len(plaintext))
+	if len(plaintext) > limit {
+		return nil, fmt.Errorf("%s must be at most %d bytes, got %d", what, limit, len(plaintext))
 	}
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
@@ -529,15 +581,20 @@ func sealWith(key []byte, nonce XNonce, plaintext, aad []byte) ([]byte, error) {
 // openWith is sealWith's inverse. It reports one error for every authentication
 // failure, so nothing here is an oracle.
 func openWith(key []byte, nonce XNonce, ciphertext, aad []byte, authErr error) ([]byte, error) {
+	return openWithLimit(key, nonce, ciphertext, aad, authErr, MaxSegmentPlaintext, "a segment")
+}
+
+// openWithLimit is openWith under a bound the caller names; see sealWithLimit.
+func openWithLimit(key []byte, nonce XNonce, ciphertext, aad []byte, authErr error, limit int, what string) ([]byte, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("a key must be %d bytes, got %d", KeySize, len(key))
 	}
 	if len(ciphertext) < chacha20poly1305.Overhead {
 		return nil, authErr
 	}
-	if len(ciphertext) > MaxSegmentPlaintext+chacha20poly1305.Overhead {
-		return nil, fmt.Errorf("a segment must be at most %d bytes, got %d",
-			MaxSegmentPlaintext, len(ciphertext)-chacha20poly1305.Overhead)
+	if len(ciphertext) > limit+chacha20poly1305.Overhead {
+		return nil, fmt.Errorf("%s must be at most %d bytes, got %d",
+			what, limit, len(ciphertext)-chacha20poly1305.Overhead)
 	}
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {

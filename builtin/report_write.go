@@ -55,6 +55,9 @@ func ReportWrite(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := refuseClassified(BuiltinNameReportWrite, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	path, errObj := requireStringArg(BuiltinNameReportWrite, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)

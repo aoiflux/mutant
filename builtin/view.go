@@ -313,55 +313,10 @@ func ViewPreview(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 	granted := viewGrantedTags(view)
-
-	var (
-		grantedRuns   []viewRun
-		withheldRuns  []viewRun
-		grantedBytes  uint64
-		withheldBytes uint64
-		grantedCount  int64
-		tallies       = map[string]*viewClassTally{}
-		order         []string
-	)
-	for _, segment := range session.segments {
-		tag := hex.EncodeToString(segment.Class[:])
-		tally, seen := tallies[tag]
-		if !seen {
-			tally = &viewClassTally{}
-			tallies[tag] = tally
-			order = append(order, tag)
-		}
-		tally.segments++
-		tally.bytes += uint64(segment.Length)
-
-		into := &withheldRuns
-		if granted[tag] {
-			into = &grantedRuns
-			grantedBytes += uint64(segment.Length)
-			grantedCount++
-		} else {
-			withheldBytes += uint64(segment.Length)
-		}
-		// Extended rather than appended when this segment carries the same
-		// class as the last run on the same side AND begins exactly where that
-		// run ended. The offsets are compared rather than assumed contiguous:
-		// the table is derived from spans that partition the plaintext today,
-		// and a run list that quietly bridged a gap would misstate the one
-		// thing it exists to state.
-		if n := len(*into); n > 0 && (*into)[n-1].tag == tag &&
-			(*into)[n-1].offset+(*into)[n-1].length == segment.Offset {
-			(*into)[n-1].length += uint64(segment.Length)
-			(*into)[n-1].last = segment.Index
-			continue
-		}
-		*into = append(*into, viewRun{
-			offset: segment.Offset,
-			length: uint64(segment.Length),
-			first:  segment.Index,
-			last:   segment.Index,
-			tag:    tag,
-		})
-	}
+	split := viewPartition(session, granted)
+	grantedRuns, withheldRuns := split.grantedRuns, split.withheldRuns
+	grantedBytes, withheldBytes, grantedCount := split.grantedBytes, split.withheldBytes, split.grantedCount
+	tallies, order := split.tallies, split.order
 
 	classRows := make([]object.Object, 0, len(order))
 	var unnamed int64
@@ -415,6 +370,72 @@ func ViewPreview(args ...object.Object) object.Object {
 		result[key] = value
 	}
 	return resultAndError(makeHashObject(result), nil)
+}
+
+// viewSplit is a record divided by a view: every segment on one side or the
+// other, as runs, as totals, per class, and as the plain list of granted
+// indices a grant carries material for.
+type viewSplit struct {
+	grantedRuns   []viewRun
+	withheldRuns  []viewRun
+	grantedBytes  uint64
+	withheldBytes uint64
+	grantedCount  int64
+	tallies       map[string]*viewClassTally
+	order         []string
+	granted       []uint64
+}
+
+// viewPartition divides a record by a set of granted tags.
+//
+// It is the one computation behind view_preview and every disclose_* builtin,
+// so that what a preview says a view would release and what a disclosure
+// under that view does release cannot differ -- a preview that was computed
+// one way and a grant that was issued another would make the preview a
+// statement about a different disclosure from the one that happened.
+func viewPartition(session *recordSession, granted map[string]bool) viewSplit {
+	split := viewSplit{tallies: map[string]*viewClassTally{}}
+	for _, segment := range session.segments {
+		tag := hex.EncodeToString(segment.Class[:])
+		tally, seen := split.tallies[tag]
+		if !seen {
+			tally = &viewClassTally{}
+			split.tallies[tag] = tally
+			split.order = append(split.order, tag)
+		}
+		tally.segments++
+		tally.bytes += uint64(segment.Length)
+
+		into := &split.withheldRuns
+		if granted[tag] {
+			into = &split.grantedRuns
+			split.grantedBytes += uint64(segment.Length)
+			split.grantedCount++
+			split.granted = append(split.granted, segment.Index)
+		} else {
+			split.withheldBytes += uint64(segment.Length)
+		}
+		// Extended rather than appended when this segment carries the same
+		// class as the last run on the same side AND begins exactly where that
+		// run ended. The offsets are compared rather than assumed contiguous:
+		// the table is derived from spans that partition the plaintext today,
+		// and a run list that quietly bridged a gap would misstate the one
+		// thing it exists to state.
+		if n := len(*into); n > 0 && (*into)[n-1].tag == tag &&
+			(*into)[n-1].offset+(*into)[n-1].length == segment.Offset {
+			(*into)[n-1].length += uint64(segment.Length)
+			(*into)[n-1].last = segment.Index
+			continue
+		}
+		*into = append(*into, viewRun{
+			offset: segment.Offset,
+			length: uint64(segment.Length),
+			first:  segment.Index,
+			last:   segment.Index,
+			tag:    tag,
+		})
+	}
+	return split
 }
 
 // viewGrantedTags is a view's grant list as a set, lowercased once so that a

@@ -645,12 +645,23 @@ const (
 	BuiltinNameRecordVerify        = "record_verify"
 	BuiltinNameRecordProveSegment  = "record_prove_segment"
 	BuiltinNameRecordClose         = "record_close"
+	BuiltinNameRecordRelease       = "record_release"
 	// disclosure: a view is a named set of classes, declared once and reviewed
 	// as a row in the manifest rather than assembled at each call site. There
 	// is no negation, so a posture cannot widen without somebody editing it.
 	BuiltinNameViewDefine  = "view_define"
 	BuiltinNameViewList    = "view_list"
 	BuiltinNameViewPreview = "view_preview"
+	// disclosure: a grant of some segments' key material, recorded in the
+	// ledger before it is handed back, packaged beside the byte-identical
+	// record, and checkable by the recipient against a root they hold
+	BuiltinNameDiscloseToPassphrase = "disclose_to_passphrase"
+	BuiltinNameDiscloseBundle       = "disclose_bundle"
+	BuiltinNameDiscloseVerify       = "disclose_verify"
+	BuiltinNameDiscloseWithdraw     = "disclose_withdraw"
+	BuiltinNameDiscloseHistory      = "disclose_history"
+	BuiltinNameDiscloseForSegment   = "disclose_for_segment"
+	BuiltinNameDiscloseReclassified = "disclose_reclassified"
 	// the security audit log: the hash chain behind the manifest's counters
 	BuiltinNameAuditHead   = "audit_head"
 	BuiltinNameAuditWrite  = "audit_write"

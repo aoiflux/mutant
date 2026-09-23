@@ -33,6 +33,12 @@ func DbAddArtifact(args ...object.Object) object.Object {
 		if !ok {
 			return resultAndError(nil, newError("argument 3 to `db_add_artifact` must be HASH, got %s", args[2].Type()))
 		}
+		// Each attribute is stored as its Inspect rendering, which for a
+		// buffer is the whole buffer in hex, and graphene keeps property
+		// blobs in its write-ahead log.
+		if errObj := refuseClassified(BuiltinNameDbAddArtifact, args...); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		for _, pair := range attrs.Pairs {
 			keyObj, ok := pair.Key.(*object.String)
 			if !ok {

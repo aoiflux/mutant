@@ -1948,14 +1948,17 @@ func (vm *VM) execBinaryBytesOperation(op code.Opcode, left, right object.Object
 		return fmt.Errorf("unknown bytes operator: %d", op)
 	}
 
-	lval := left.(*object.Bytes).Value
-	rval := right.(*object.Bytes).Value
+	lbuf := left.(*object.Bytes)
+	rbuf := right.(*object.Bytes)
 
-	joined := make([]byte, 0, len(lval)+len(rval))
-	joined = append(joined, lval...)
-	joined = append(joined, rval...)
+	joined := make([]byte, 0, len(lbuf.Value)+len(rbuf.Value))
+	joined = append(joined, lbuf.Value...)
+	joined = append(joined, rbuf.Value...)
 
-	return vm.push(&object.Bytes{Value: joined})
+	// Classified plaintext joined to anything is still classified plaintext;
+	// see object.JoinClassification.
+	return vm.push(&object.Bytes{Value: joined,
+		Classified: object.JoinClassification(lbuf.Classified, rbuf.Classified)})
 }
 
 func (vm *VM) execSetIndex(container, index, value object.Object) (object.Object, error) {

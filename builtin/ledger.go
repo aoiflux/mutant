@@ -698,6 +698,12 @@ func LedgerAddNode(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	// Graphene never holds evidence plaintext: property blobs sit in the
+	// write-ahead log and are replayed at every open, and a ledger is written
+	// to be handed over.
+	if errObj := refuseClassified(BuiltinNameLedgerAddNode, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	props, errObj := ledgerProperties(args[1], BuiltinNameLedgerAddNode)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -749,6 +755,9 @@ func LedgerAddEdge(args ...object.Object) object.Object {
 	dst, ok := args[2].(*object.Integer)
 	if !ok {
 		return resultAndError(nil, newError("argument 3 to `%s` must be INTEGER, got %s", BuiltinNameLedgerAddEdge, args[2].Type()))
+	}
+	if errObj := refuseClassified(BuiltinNameLedgerAddEdge, args...); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 	props, errObj := ledgerProperties(args[3], BuiltinNameLedgerAddEdge)
 	if errObj != nil {

@@ -8,6 +8,11 @@ import (
 )
 
 func Putln(args ...object.Object) object.Object {
+	// Before anything is rendered: Inspect prints a buffer as its entire hex,
+	// so one putln of classified plaintext would print all of it.
+	if errObj := refuseClassified(BuiltinNamePutln, args...); errObj != nil {
+		return errObj
+	}
 	var b bytes.Buffer
 	for i, arg := range args {
 		part := arg.Inspect()

@@ -205,6 +205,13 @@ type custodySession struct {
 	// to every record bound for one recipient -- and because a posture that
 	// lived inside a record could not be reviewed before a record existed.
 	views []caseView
+
+	// disclosures are the grants issued in this case, in the order they were
+	// issued. The ledger is the authoritative record of each one; this is the
+	// run's copy, which holds the sealed grant until disclose_bundle writes it
+	// and puts the disclosure in the manifest beside the view it was issued
+	// under.
+	disclosures []*caseDisclosure
 }
 
 // caseView is one named disclosure posture: the classes a grant issued under
@@ -384,6 +391,11 @@ func CaseNote(args ...object.Object) object.Object {
 
 	var data any
 	if len(args) == 2 {
+		// A note is written into the manifest, and a manifest is written to
+		// be handed to somebody else.
+		if errObj := refuseClassified(BuiltinNameCaseNote, args...); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
 		native, err := objectToNative(args[1], false)
 		if err != nil {
 			return resultAndError(nil, newError("case_note: argument 2 cannot be recorded: %s", err.Error()))
@@ -1054,6 +1066,11 @@ func (s *custodySession) classificationRecord() map[string]any {
 		// what "counsel" grants is a reader who will not turn it.
 		"views":      views,
 		"view_count": int64(len(s.views)),
+		// Every disclosure issued under those views in this run, with the
+		// record, the recipient and the granted set. `bytes_recoverable` is
+		// false on each row because it is false of every disclosure there is.
+		"disclosures":      s.disclosureRows(),
+		"disclosure_count": int64(len(s.disclosures)),
 	}
 	if s.keyed {
 		record["key_fingerprint"] = s.keyFingerprint

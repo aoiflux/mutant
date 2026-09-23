@@ -265,22 +265,44 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("case_manifest_verify: %s is not a manifest: %s", pathObj.Value, err.Error()))
 	}
 
-	seal, ok := document["seal"].(map[string]any)
-	if !ok {
+	if _, ok := document["seal"].(map[string]any); !ok {
 		return resultAndError(nil, newError(
 			"case_manifest_verify: %s has no seal; it was not written by `case_write`", pathObj.Value))
 	}
 
+	result := custodyVerifyDocument(document)
+	if errText, failed := result["error"].(string); failed {
+		return resultAndError(nil, newError("case_manifest_verify: %s", errText))
+	}
+	delete(result, "error")
+	result["path"] = pathObj.Value
+	if caseInfo, ok := document["case"].(map[string]any); ok {
+		result["case_id"], _ = caseInfo["id"].(string)
+		result["examiner"], _ = caseInfo["examiner"].(string)
+	}
+	return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
+}
+
+// custodyVerifyDocument checks a sealed document that has already been decoded
+// with UseNumber: that it hashes to its seal, and that the seal's signature
+// holds over it. It is the one implementation behind case_manifest_verify and
+// disclose_verify, so a case manifest and a disclosure manifest cannot come to
+// mean different things by "verified".
+//
+// A document that cannot be canonicalised is reported under "error"; every
+// other outcome is a value.
+func custodyVerifyDocument(document map[string]any) map[string]any {
+	seal, _ := document["seal"].(map[string]any)
 	canonical, err := custodyCanonical(document)
 	if err != nil {
-		return resultAndError(nil, newError("case_manifest_verify: %s", err.Error()))
+		return map[string]any{"error": err.Error(), "hash_matches": false, "signed": false, "signature_valid": false,
+			"signature_detail": "the document cannot be canonicalised"}
 	}
 	digest := sha256.Sum256(canonical)
 	recomputed := hex.EncodeToString(digest[:])
 	recorded, _ := seal["manifest_hash"].(string)
 
 	result := map[string]any{
-		"path":             pathObj.Value,
 		"manifest_hash":    recorded,
 		"computed_hash":    recomputed,
 		"hash_matches":     recorded != "" && recorded == recomputed,
@@ -288,14 +310,10 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 		"signature_valid":  false,
 		"signature_detail": "this manifest carries no signature",
 	}
-	if caseInfo, ok := document["case"].(map[string]any); ok {
-		result["case_id"], _ = caseInfo["id"].(string)
-		result["examiner"], _ = caseInfo["examiner"].(string)
-	}
 
 	signed, _ := seal["signed"].(bool)
 	if !signed {
-		return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
+		return result
 	}
 	result["signed"] = true
 
@@ -320,8 +338,7 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 			result["public_key"] = stringField(seal, "public_key")
 		}
 	}
-
-	return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
+	return result
 }
 
 // stringField reads a string out of a decoded JSON object, or "" when it is

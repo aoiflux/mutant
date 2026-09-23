@@ -33,6 +33,9 @@ func HttpPost(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `http_post` must be STRING, got %s", args[0].Type()))
 	}
+	if errObj := refuseClassified(BuiltinNameHttpPost, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	body, errObj := httpBodyString(args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -60,6 +63,9 @@ func HttpRequest(args ...object.Object) object.Object {
 	url, ok := args[1].(*object.String)
 	if !ok {
 		return resultAndError(nil, newError("argument 2 to `http_request` must be STRING, got %s", args[1].Type()))
+	}
+	if errObj := refuseClassified(BuiltinNameHttpRequest, args...); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 	body, errObj := httpBodyString(args[2])
 	if errObj != nil {

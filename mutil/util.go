@@ -127,9 +127,10 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		}
 
 		encObj = &object.Encrypted{
-			EncType: object.BYTES_OBJ,
-			Value:   xored,
-			Seed:    int64(length),
+			EncType:    object.BYTES_OBJ,
+			Value:      xored,
+			Seed:       int64(length),
+			Classified: obj.(*object.Bytes).Classified,
 		}
 
 	case object.BOOLEAN_OBJ:
@@ -391,7 +392,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 			case object.STRING_OBJ:
 				return &object.String{Value: ""}, nil
 			case object.BYTES_OBJ:
-				return &object.Bytes{Value: []byte{}}, nil
+				return &object.Bytes{Value: []byte{}, Classified: encrypted.Classified}, nil
 			}
 		}
 
@@ -417,7 +418,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 			decObj = &object.String{Value: string(xored)}
 
 		case object.BYTES_OBJ:
-			decObj = &object.Bytes{Value: xored}
+			decObj = &object.Bytes{Value: xored, Classified: encrypted.Classified}
 
 		case object.BOOLEAN_OBJ:
 			str := strings.ToLower(string(xored))

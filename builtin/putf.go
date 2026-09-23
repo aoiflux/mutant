@@ -16,6 +16,9 @@ func Putf(args ...object.Object) object.Object {
 	if len(args) == 0 {
 		return newError("wrong number of arguments. got=0, want=at least 1")
 	}
+	if errObj := refuseClassified(BuiltinNamePutf, args...); errObj != nil {
+		return errObj
+	}
 
 	format := args[0].Inspect()
 	if strings.Contains(format, "%") {

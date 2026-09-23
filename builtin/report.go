@@ -303,6 +303,9 @@ func ReportRender(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := refuseClassified(BuiltinNameReportRender, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	format, errObj := requireStringArg(BuiltinNameReportRender, args[1], 2)
 	if errObj != nil {
 		return resultAndError(nil, errObj)

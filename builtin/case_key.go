@@ -251,11 +251,12 @@ func CaseKeyOpen(args ...object.Object) object.Object {
 			BuiltinNameCaseKeyOpen, file.CaseID, openCaseID))
 	}
 
-	passphrase, err := security.RequestPassphrase(security.PassphraseRequest{
+	request := security.PassphraseRequest{
 		Purpose: BuiltinNameCaseKeyOpen,
 		Path:    path,
 		Confirm: false,
-	})
+	}
+	passphrase, err := security.RequestPassphrase(request)
 	if err != nil {
 		return resultAndError(nil, passphraseError(BuiltinNameCaseKeyOpen, err))
 	}
@@ -263,6 +264,11 @@ func CaseKeyOpen(args ...object.Object) object.Object {
 
 	caseKey, wrapKey, err := security.OpenCaseKeyFile(file, passphrase, wanted)
 	if err != nil {
+		// Forgotten, so that trying again asks again. The terminal source
+		// remembers an answer when it is typed, before anything has checked
+		// it, and without this a typo here is the answer to every later
+		// case_key_open of this file for the rest of the run.
+		security.ForgetPassphrase(request)
 		return resultAndError(nil, newError("%s: %s", BuiltinNameCaseKeyOpen, err.Error()))
 	}
 	security.SecureZero(wrapKey)
@@ -387,15 +393,28 @@ func CaseKeyRotate(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %s", BuiltinNameCaseKeyRotate, err.Error()))
 	}
 
-	current, err := security.RequestPassphrase(security.PassphraseRequest{
+	currentRequest := security.PassphraseRequest{
 		Purpose: BuiltinNameCaseKeyRotate,
 		Path:    path,
 		Confirm: false,
-	})
+	}
+	current, err := security.RequestPassphrase(currentRequest)
 	if err != nil {
 		return resultAndError(nil, passphraseError(BuiltinNameCaseKeyRotate, err))
 	}
 	defer security.SecureZero(current)
+	// Every way out of this function before the new file is on disk leaves
+	// the file under the passphrase it had -- and leaves the terminal source
+	// remembering whatever was typed here, which after a passphrase rotation
+	// is the REPLACEMENT. Forgetting on every early return, rather than at the
+	// two failures that are easy to see, is what stops the next open in this
+	// run being answered with a passphrase the file never got.
+	committed := false
+	defer func() {
+		if !committed {
+			security.ForgetPassphrase(currentRequest)
+		}
+	}()
 
 	var wrapKey []byte
 	switch mode {
@@ -448,6 +467,7 @@ func CaseKeyRotate(args ...object.Object) object.Object {
 	if errObj := writeKeyFileAtomic(BuiltinNameCaseKeyRotate, path, document); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	committed = true
 
 	generation, err := file.Generation(file.Current)
 	if err != nil {

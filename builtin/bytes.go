@@ -70,7 +70,10 @@ func BytesSlice(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("bytes_slice: requested range start=%d length=%d exceeds buffer length %d", start, length, len(value)))
 	}
 
-	return resultAndError(binaryLike(args[0], value[start:start+length]), nil)
+	// A slice of classified plaintext is classified plaintext. The mark is
+	// carried here and by nothing else that builds a new buffer; see
+	// builtin/classified.go for what that does and does not cover.
+	return resultAndError(classifiedCopy(args[0], binaryLike(args[0], value[start:start+length])), nil)
 }
 
 func BytesReadU16LE(args ...object.Object) object.Object {

@@ -1237,12 +1237,13 @@ var builtinDocs = map[string]builtinDoc{
 		},
 		returns: pairRet("what was sealed, and which class the rounding grew", ParamHash).withFields("case_key_id", "case_uid", "file_length", "generation", "key_created_for_this_run", "path", "plaintext_length", "public_key", "quantised_extra", "quantum", "record_uid", "rounds_to", "segment_size", "segments", "segments_root", "signed", "spans")},
 	BuiltinNameRecordOpen: {
-		signature: "record_open(path)",
-		summary:   "Opens a record for reading and returns a handle. Needs the case key the record was sealed under: the record key is wrapped under it, and a record sealed by another case is refused by its case uid before any unwrapping is attempted. The handle it returns can only ever open -- there is no path from here to sealing, which is what stops a program re-sealing a position and putting two plaintexts under one keystream. Record handles are their own space and are not ledger or database handles. Close it with `record_close`. Returns (record, err).",
+		signature: "record_open(path, options?)",
+		summary:   "Opens a record for reading and returns a handle. By default it needs the case key the record was sealed under: the record key is wrapped under it, and a record sealed by another case is refused by its case uid before any unwrapping is attempted. With `{\"grant\": path}` it opens under a disclosure grant instead -- the recipient's side of a disclosure -- which needs no case and no case key, asks at the terminal for the grant's passphrase, and opens exactly the segments the grant carries material for; a grant for a different record, or one whose segments this header describes differently, is refused before a single segment is tried. `opened_with` says which, and `granted_segments` how many segments will open. The handle can only ever open -- there is no path from here to sealing, and a record opened under a grant cannot issue one. Record handles are their own space and are not ledger or database handles. Close it with `record_close`. Returns (record, err).",
 		params: []builtinParamDoc{
 			param("path", "The `.mrec` to open.", ParamString),
+			param("options?", "`{\"grant\": path}` opens under a disclosure grant rather than the case key. The passphrase is asked for at the terminal and is never an argument.", ParamHash),
 		},
-		returns: pairRet("the handle and what the record says about itself", ParamHash).withFields("case_uid", "generation", "handle", "key_created_for_this_run", "path", "plaintext_length", "record_uid", "segment_size", "segments", "signature_note", "signature_valid", "signed")},
+		returns: pairRet("the handle and what the record says about itself", ParamHash).withFields("case_uid", "disclosure_uid", "generation", "granted_segments", "handle", "key_created_for_this_run", "opened_with", "path", "plaintext_length", "record_uid", "segment_size", "segments", "signature_note", "signature_valid", "signed")},
 	BuiltinNameRecordLayout: {
 		signature: "record_layout(record)",
 		summary:   "Reports the record's public structure -- every span, every segment, where each one sits and which class it carries -- and reads no plaintext to do it. `boundaries_are_public` is returned as a field rather than left to a document, because a reader of a layout is exactly the reader who might otherwise conclude the opposite: offsets and lengths are visible to everyone holding the record, with no key at all. Returns (layout, err).",
@@ -1290,6 +1291,14 @@ var builtinDocs = map[string]builtinDoc{
 			param("record", "Handle from record_open.", ParamInt),
 		},
 		returns: pairRet("true once the handle has been closed", ParamBool)},
+	BuiltinNameRecordRelease: {
+		signature: "record_release(buffer, reason)",
+		summary:   "Returns an unmarked copy of classified plaintext and records, in the open case's timeline, that it was released and why. Plaintext from `record_read` and `record_read_partial` is marked, and the builtins that send a value out of the process -- putln, putf, fs_write, fs_append, http_post, http_request, report_write, report_render, case_note, cache_put, ledger_add_node, ledger_add_edge and db_add_artifact -- refuse a marked buffer anywhere inside their arguments, naming the record and the classes and never the bytes. This is the deliberate path past that check: an accident is caught, a decision is recorded. The mark is carried by bytes_slice and by `+` of two buffers and by nothing else, so a conversion to a string, to hex or to JSON also loses it -- it catches accidents, not adversaries. A buffer that carries no mark is refused rather than copied, because a release of nothing would put a release that did not happen in the timeline. Needs an open case to record into. Returns (buffer, err).",
+		params: []builtinParamDoc{
+			param("buffer", "Plaintext returned by record_read or record_read_partial.", ParamBytes),
+			param("reason", "Why these bytes are leaving the protection they were read under. Recorded as written.", ParamString),
+		},
+		returns: pairRet("an unmarked copy of the buffer", ParamBytes)},
 	BuiltinNameViewDefine: {
 		signature: "view_define(label, classes, options?)",
 		summary:   "Declares one named disclosure posture: the set of classifications a grant issued under this name will open, and nothing else. Declaring it once means a disclosure review asks what a name grants rather than reading the fourth argument of the sixth call in a script, and it puts the posture in the manifest as a row with a label on it. There is deliberately no negation and no \"everything except\": a view that granted all classes but one would widen by itself every time a class was declared after it, changing what it releases with nothing edited and nothing recorded. A view granting no class at all is legal and says so in `grants_nothing` -- it discloses the record, its signature and its shape, and no content. Returns (view, err).",
@@ -1311,6 +1320,82 @@ var builtinDocs = map[string]builtinDoc{
 			param("view", "A posture already declared with `view_define`.", ParamString),
 		},
 		returns: pairRet("what this view would release and what it would hold back", ParamHash).withFields("classes", "discloses_nothing", "discloses_whole_record", "does_not_say", "granted_bytes", "granted_runs", "granted_segments", "plaintext_length", "quantised", "quantised_extra", "quantum", "reads_no_plaintext", "record_uid", "rounding_effect", "rounds_to", "rounds_to_granted", "rounds_to_label", "segments", "unnamed_classes", "view", "withheld_bytes", "withheld_runs", "withheld_segments")},
+	BuiltinNameDiscloseToPassphrase: {
+		signature: "disclose_to_passphrase(ledger, record, view, recipient)",
+		summary:   "Issues a disclosure: the key material for exactly the segments of `record` whose class `view` grants, sealed under a passphrase asked for at the terminal, for a recipient the examiner names. The granted set is computed by the same partition `view_preview` reports, so the preview is the disclosure. The disclosure is written into the ledger -- a Disclosure node with its record, recipient, view and actor, in one signed transaction -- before anything is handed back, and if that write fails nothing was issued. The record the recipient will receive is byte-identical to the one under custody; a disclosure is a key grant and never a re-encryption. A record opened under a grant cannot issue one, and a recipient whose earlier disclosure of this record was withdrawn is refused, because a withdrawal is how further grants are stopped. `bytes_recoverable` is false, as it is of every disclosure: nothing after this call reaches the recipient's copy. The sealed grant is held by this run until `disclose_bundle` writes it. Returns (disclosure, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open. The disclosure is recorded here before it is issued.", ParamInt),
+			param("record", "Handle from record_open, opened with the case key.", ParamInt),
+			param("view", "A posture declared with `view_define`.", ParamString),
+			param("recipient", "Who the grant is for, as the examiner asserts it. Recorded, not verified.", ParamString),
+		},
+		returns: pairRet("what was granted, what was withheld, and where it is recorded", ParamHash).withFields(
+			"bytes_recoverable", "disclosure_uid", "grant_bytes", "grant_sha256", "granted_bytes", "granted_runs",
+			"granted_segments", "ledger_node", "method", "next", "recipient", "record_sha256", "record_uid",
+			"segments", "status", "view", "withheld_bytes", "withheld_runs", "withheld_segments")},
+	BuiltinNameDiscloseBundle: {
+		signature: "disclose_bundle(ledger, disclosure, dir)",
+		summary:   "Writes the package for one disclosure into a directory that must be empty or absent: the record byte for byte (re-hashed and compared with the digest taken when the grant was issued), the sealed grant, the ledger's inclusion proof for the Disclosure node, a report, a manifest sealed and signed over the digests of all four, and a SHA256SUMS last. The ledger must have been compacted since the disclosure, because the proof has to resolve against a snapshot. The snapshot root the proof resolves against is returned and is NOT written into the package: a recipient checking a proof against a root its author supplied would be checking nothing, so the root travels by another route. Returns (bundle, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the disclosure was recorded in.", ParamInt),
+			param("disclosure", "The `disclosure_uid` disclose_to_passphrase returned, issued in this run.", ParamString),
+			param("dir", "An empty or absent directory to write the package into.", ParamString),
+		},
+		returns: pairRet("what was written, and the root to send separately", ParamHash).withFields(
+			"dir", "disclosure_uid", "files", "manifest", "manifest_hash", "signed", "snapshot_root",
+			"snapshot_root_bundled", "status")},
+	BuiltinNameDiscloseVerify: {
+		signature: "disclose_verify(dir, root)",
+		summary:   "Checks a disclosure package, as its recipient or anyone else: the manifest's seal and signature; every file's digest and the SHA256SUMS beside them; the record's own signature, with no key at all; that the grant names this disclosure and this record and was issued against its header exactly as it stands; that the grant opens exactly the segments whose class the view names and the manifest's withheld list is every other segment -- complete as authorised; with the grant's passphrase, asked for at the terminal, that every granted segment decrypts with its tag holding; and, against `root`, that the ledger snapshot contains this disclosure property for property. `root` is required and may be null, and null is a finding, never a pass: a root read out of the package would be one its author chose. `verified` is true only when every check ran and passed. It establishes nothing about whether the classification was right, whether the record is all the evidence there is, or whether the names in it are true -- `does_not_cover` says so. Returns (verification, err).",
+		params: []builtinParamDoc{
+			param("dir", "The package directory.", ParamString),
+			param("root", "The ledger snapshot root, obtained from the examiner by a route other than the package, or null.", ParamString, ParamNull),
+		},
+		returns: pairRet("each check, what failed, and whether all of it held", ParamHash).withFields(
+			"bytes_recoverable", "checks", "checks_passed", "checks_run", "dir", "disclosure_uid", "does_not_cover",
+			"examiner", "findings", "grant_opened", "granted_segments", "recipient", "record_uid", "root_supplied",
+			"signature_note", "verified", "view", "withheld_segments")},
+	BuiltinNameDiscloseWithdraw: {
+		signature: "disclose_withdraw(ledger, disclosure, reason)",
+		summary:   "Records that a disclosure is withdrawn: a Withdrawal node, attributed and signed, pointing at the disclosure, with the reason the examiner gives. It is not a revocation and nothing in this family is named like one -- once the recipient holds the record and the grant, both are theirs and nothing reaches their copy, which `bytes_recoverable: false` says as a field. What a withdrawal does is stop further grants: `disclose_to_passphrase` refuses to issue this record to this recipient again, and `disclose_bundle` refuses to package the withdrawn disclosure. A disclosure is withdrawn once; a second withdrawal is refused and names the first. Needs no open case -- the ledger is the record. Returns (withdrawal, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the disclosure was recorded in.", ParamInt),
+			param("disclosure", "The disclosure's uid.", ParamString),
+			param("reason", "Why, in words a reader will see beside the withdrawal forever. Required.", ParamString),
+		},
+		returns: pairRet("what was recorded, and what a withdrawal cannot do", ParamHash).withFields(
+			"bytes_recoverable", "disclosure_uid", "does_not", "further_grants", "ledger_node", "reason",
+			"recipient", "record_uid", "recorded", "withdrawal_uid", "withdrawn_at")},
+	BuiltinNameDiscloseHistory: {
+		signature: "disclose_history(ledger)",
+		summary:   "Lists every disclosure this ledger records, oldest first, each joined to its withdrawal if it has one: who it was issued to, under which view, from which record, how many segments were granted and withheld, and when and why it was withdrawn. It reads only nodes this family wrote -- a node a script put into the same ledger carries a label a script cannot spell and is not in the history -- and `foreign` counts nodes that carry a disclosure uid without being a disclosure, because a history that skipped them silently would hide the one thing a reviewer should see. It is complete for this ledger and says nothing about any other. Returns (history, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+		},
+		returns: pairRet("every disclosure recorded here", ParamHash).withFields(
+			"count", "disclosures", "does_not_say", "foreign", "ledger", "recipients", "records", "withdrawn")},
+	BuiltinNameDiscloseForSegment: {
+		signature: "disclose_for_segment(ledger, record_uid, segment)",
+		summary:   "Answers who was given one segment of a record: every disclosure of that record whose grant includes the segment, with the segment's byte range and class beside them. A withdrawn disclosure is listed with `withdrawn: true` rather than dropped, because its recipient still holds what they were given -- this is the question a withdrawal cannot answer and the reason it is a query. The segment is derived from what the ledger recorded about the record by the same derivation the record format uses. A record this ledger has never recorded a disclosure of is an answer, not an error: `record_known` is false and nobody holds any of it as far as this ledger knows. Returns (holders, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("record_uid", "The record's uid, as record_open and record_verify report it.", ParamString),
+			param("segment", "The segment index, from 0.", ParamInt),
+		},
+		returns: pairRet("the segment and everybody given its material", ParamHash).withFields(
+			"class", "count", "held_by", "label", "length", "note", "offset", "record_known", "record_uid", "segment")},
+	BuiltinNameDiscloseReclassified: {
+		signature: "disclose_reclassified(ledger, record, superseded)",
+		summary:   "Records that `record` reclassifies `superseded` -- the same evidence sealed again under different classes -- and reports every disclosure of the superseded record whose granted bytes changed class. Both records must be opened with the case key: each footer's sealed whole-plaintext digest is opened and the two compared, and records that do not decrypt to the same plaintext are refused, because a reclassification is the same bytes and nothing else. The change is written to the ledger once, as a ReclassEvent and a SUPERSEDES edge from the new record to the old; asking again reports without writing, and the superseded record can no longer be disclosed. The report never says a class was raised or lowered -- nothing in this tool orders classes -- it says which byte ranges moved from which class to which, which recipients hold them (withdrawn or not, since a withdrawal reaches nobody's copy), and whether each recipient's view grants the new class. `now_withheld_bytes` is what those recipients hold that the classification now in force would not give them. Returns (reclassification, err).",
+		params: []builtinParamDoc{
+			param("ledger", "Handle from ledger_open.", ParamInt),
+			param("record", "The new record, opened with the case key.", ParamInt),
+			param("superseded", "The record it reclassifies, opened with the case key.", ParamInt),
+		},
+		returns: pairRet("what changed class and who holds it", ParamHash).withFields(
+			"affected", "affected_count", "already_recorded", "bytes_recoverable", "changed", "changed_bytes",
+			"does_not_say", "ledger_node", "now_withheld_bytes", "reclassified_at", "record_uid", "recorded",
+			"same_plaintext", "superseded_uid")},
 	BuiltinNameAuditHead: {
 		signature: "audit_head()",
 		summary:   "Returns the head of the security audit chain: the SHA-256 commitment to every security event this run recorded, in order. The counters in `case_manifest` say how many times a check tripped; the chain says in what order and at which stage, which is the question a counter cannot be asked afterwards. The head covers every event ever recorded even when older entries have been dropped from memory, so `entries` and `retained` are different numbers and both are reported.",
@@ -3232,6 +3317,7 @@ var capabilityCategories = []capabilityCategory{
 	// sealed, the other says who may open which part of it, and a reader asking
 	// the second question should not have to read the first to find it.
 	{"view_", "disclosure"},
+	{"disclose_", "disclosure"},
 	// The audit chain is the log behind the manifest's security counters, and
 	// an examiner reads it beside the case documents rather than apart from
 	// them, so it files under the same heading.

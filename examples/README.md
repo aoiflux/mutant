@@ -96,7 +96,7 @@ sweep, not a category the file belongs to.
 - `examples/registry/` offline registry forensic examples
 - `examples/email/` email parsing and phishing triage
 - `examples/memory/` memory scanning and shellcode/PE hunting
-- `examples/forensics/` timeline normalization and the chain-of-custody cycle
+- `examples/forensics/` timeline normalization, the chain-of-custody cycle, and one exhibit sealed at its classification boundaries and disclosed two different ways
   (`case_open` -> evidence -> `case_verify` -> signed manifest)
 - `examples/graph/` graph modeling and timeline-style investigation
 - `examples/detection/` detection builtins and multi-signal scoring

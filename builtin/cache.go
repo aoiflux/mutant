@@ -86,6 +86,9 @@ func CachePut(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := refuseClassified(BuiltinNameCachePut, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	store, errObj := cacheStoreByName(cacheName)
 	if errObj != nil {

@@ -31,10 +31,13 @@ to the rule it exists to enforce, so the split is stated first and plainly.
 | `class_define`, `class_list`, and the manifest's classification block | **In force.** [`builtin/class.go`](../builtin/class.go), [`builtin/custody.go`](../builtin/custody.go) |
 | The `.mrec` container, its header, its footer signature, and the `record_*` family | **In force.** [`security/record_file.go`](../security/record_file.go), [`builtin/record.go`](../builtin/record.go) |
 | `view_define`, `view_list`, `view_preview`, and the manifest's view block | **In force.** [`builtin/view.go`](../builtin/view.go), [`builtin/custody.go`](../builtin/custody.go) |
-| `disclose_*` and the disclosure package | Designed, not yet built |
-| The graphene disclosure ledger | Designed, not yet built |
-| `object.Bytes.Classified` and the sink checks | Designed, not yet built |
-| The machine guard, [Section 10](#10-the-guard) | Designed, not yet built |
+| The disclosure grant: per-segment material, sealed under a passphrase | **In force.** [`security/record_grant.go`](../security/record_grant.go) |
+| `disclose_to_passphrase`, `disclose_bundle`, `disclose_verify`, and `record_open` under a grant | **In force.** [`builtin/disclose.go`](../builtin/disclose.go), [`builtin/record.go`](../builtin/record.go) |
+| `disclose_withdraw`, `disclose_history`, `disclose_for_segment`, `disclose_reclassified` | **In force.** [`builtin/disclose_history.go`](../builtin/disclose_history.go), [`builtin/disclose_reclassify.go`](../builtin/disclose_reclassify.go) |
+| The graphene disclosure ledger, [Section 13](#13-the-disclosure-ledger) | **In force.** [`builtin/disclose_ledger.go`](../builtin/disclose_ledger.go) |
+| `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | Designed, not built -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
+| `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
+| The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
 
 A section below that describes unbuilt code says so in its first sentence. No
 claim in this document is carried into a manifest, a return field or a report
@@ -89,10 +92,22 @@ What withdrawal does achieve is worth stating in full, because it is not nothing
   more; it is not cryptographic evidence that anyone else's copy is gone.
 
 The honest substitute for revocation is a question the schema is built to answer:
-**which recipients hold segments whose classification has since been raised?**
-That is why re-classification is append-only — a new record plus a `SUPERSEDES`
-edge, never an in-place update. Graphene keeps no history, and the next
-compaction would erase the prior value along with the ability to ask.
+**which recipients hold bytes whose classification has since changed, and would
+the posture they were disclosed under still give them those bytes today?**
+`disclose_reclassified` answers it. Re-classification is append-only — a new
+record over the same evidence plus a `SUPERSEDES` edge, never an in-place update
+— because graphene keeps no history, and the next compaction would erase the
+prior value along with the ability to ask. A superseded record cannot be
+disclosed again.
+
+An earlier draft of this section asked which classifications had been
+**raised**. That cannot be computed: nothing in the record format or the class
+table orders one class above another (see
+[Section 5](#5-what-a-disclosure-leaks-by-construction)), and a tool that printed
+"raised" would be supplying a judgement that is the examiner's. What is computed
+is exact — which byte ranges moved from which class to which, who holds them,
+and whether each recipient's view grants the new class — and the report says
+nothing about direction, in a `does_not_say` field.
 
 ## 4. A key grants writing as well as reading
 
@@ -328,39 +343,73 @@ document that does not distinguish them invites a reading it cannot support.
 
 ## 10. The guard
 
-**Not yet built.** [Section 0](#0-what-exists-and-what-this-document-is-ahead-of)
-says so; this section says what it will be, so the shape is agreed before the
-code lands.
+Two halves, one static and one at run time, and neither is a taint analysis.
 
-`policy/disclosure_policy.go` plus `policy/disclosure_guard_test.go`, in the
-style of the guards already in `policy/`, running under an ordinary
-`go test ./...`. It asserts that no file in the record or disclosure family:
+**The static half.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go)
+lists the files that handle classified plaintext or the key material that opens
+it, and [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go),
+running under an ordinary `go test ./...` beside the other guards in `policy/`,
+asserts that none of them:
 
-- calls `.Inspect()` on anything derived from a decrypt — `Inspect()` renders a
-  `*object.Bytes` as the whole buffer in hex, so one call prints the plaintext;
-- passes a decrypt result to `fmt` with a non-constant format string.
+- calls `.Inspect()` — on a `*object.Bytes` it renders the whole buffer in hex,
+  so one call on the wrong value prints the plaintext;
+- formats with a string that is not a constant — `fmt.Sprintf`, `fmt.Errorf`,
+  `fmt.Printf`, `fmt.Fprintf`, `fmt.Appendf` or the builtin package's
+  `newError`, handed anything but a string literal, a concatenation of literals
+  or a declared constant. `fmt.Sprintf(plaintext)` is a disclosure by
+  construction, and a reviewer cannot tell a safe variable format from an unsafe
+  one without tracing where it came from.
+
+The one other form it accepts is a local wrapper declared
+`name := func(format string, args ...any)`, and only because every call of that
+wrapper is itself checked for a constant format. The guard exercises each rule
+against source that breaks it, so a walk that matched nothing cannot pass as
+clean code. Its limit: the list of files is a declaration, and a new file in the
+family that is left off it is not caught by anything.
 
 That turns "plaintext never reaches a log, a manifest or an error message" from a
-practice into something the build enforces.
+practice into something the build enforces — in those files, and for the two
+ways a byte of plaintext becomes text without anybody meaning it to.
 
-What is already enforced: the no-environment-variable rule of
+Also enforced: the no-environment-variable rule of
 [Section 8](#8-key-material-never-travels-as-an-argument), by the configuration
 guard in `policy/`.
 
-### What the `Classified` flag will and will not do
+### What the `Classified` flag does and does not do
 
-When it lands, `object.Bytes` gains a `Classified` flag set by `record_read`,
-propagated through `bytes_slice`, and checked **at the sink call sites** —
-`putln`, `fs_write`, the network builtins, the report builtins — and **never
-inside `Inspect()`**. Making `Inspect()` classification-aware would be a worse
-bug than the one it fixes: `Inspect()` is the de-facto identity function for
-equality in both engines, for `unique`'s dedup key, for `contains` and
-`index_of`, and for hash-key ordering, so a preview there would make two distinct
-buffers compare equal, silently, in six subsystems at once.
+**The run-time half.** `object.Bytes` carries a `Classified` mark — the record
+uid, and the tag and label of each class the read crossed — set by `record_read`
+and `record_read_partial`, kept when the buffer is held in a variable, and
+carried by `bytes_slice` and by `+` of two buffers, which marks the joined
+buffer with every record and class either side came from. It is checked **at the
+sink call sites**, in [`builtin/classified.go`](../builtin/classified.go):
+`putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
+`report_write`, `report_render`, `case_note`, `cache_put`, `ledger_add_node`,
+`ledger_add_edge` and `db_add_artifact` refuse an argument that holds a marked
+buffer, directly or anywhere inside an array, hash, struct, enum payload or
+captured variable, and a value nested too deep to check is refused rather than
+passed. The refusal names the record, the classes and the length, and not one
+byte. A builtin whose parameter is STRING alone — `net_conn_write`,
+`ws_write_frame` and `exec_string` among them — cannot be handed a buffer at all.
+
+The mark is **never consulted inside `Inspect()`**. Making `Inspect()`
+classification-aware would be a worse bug than the one it fixes: `Inspect()` is
+the de-facto identity function for equality in both engines, for `unique`'s
+dedup key, for `contains` and `index_of`, and for hash-key ordering, so a preview
+there would make two distinct buffers compare equal, silently, in six subsystems
+at once. A marked buffer and an unmarked one holding the same bytes are the same
+value to all of them, and a test holds it there.
+
+`record_release(buffer, reason)` is the deliberate way out. It requires a reason
+and an open case, writes into the case timeline which record and which classes
+were released, how many bytes and why, and returns an unmarked copy that shares
+no storage with the original. An accident is caught; a decision is recorded.
 
 Its limits belong next to its existence, in the same paragraph, wherever it is
-documented: the flag dies at any conversion that does not propagate it, and is
-defeated by a loop that rebuilds the buffer a byte at a time. **It catches
+documented: the mark travels through `bytes_slice` and `+` of two buffers and
+nothing else, so a conversion to a string, to hex, to base64 or to JSON
+produces a value without it, and so does a loop that rebuilds the buffer a byte
+at a time. **It catches
 accidents, not adversaries.**
 
 ## 11. What this is not
@@ -375,7 +424,85 @@ It is also not an access-control system. Nothing here authenticates a recipient,
 issues them a credential, or checks one. A grant is a set of bytes handed to a
 named party, and the name is asserted by the examiner who handed them over.
 
-## 12. See also
+## 12. What a grant is, and how it travels
+
+A segment's key and nonce are derived together from the record's pseudorandom
+key and a digest of that segment's whole descriptor. So the only way to open one
+segment without being able to open all of them is to hold that segment's
+**derived** material and nothing it was derived from: 32 bytes of key and 24 of
+nonce, **56 bytes a segment** -- not 32, because the nonce cannot be rebuilt
+without the pseudorandom key. HKDF is one-way in that key, so the material for
+one segment says nothing about any other's. That is a grant.
+
+`disclose_to_passphrase` issues one for exactly the segments whose class the
+view grants, computed by the same partition `view_preview` reports, and seals it
+under a passphrase typed at the terminal -- a grant passphrase is never the
+case-key passphrase, never an argument and never an environment variable, and
+the prompt names which of the two it is asking for. The grant file carries the
+granted set in the clear: a recipient who cannot see what they were *not* given
+cannot check that what opens is everything they were meant to have. Every
+public field is bound into the one AEAD that seals the material, so none of it
+can be edited without the passphrase. It also carries a root over the granted
+segments' descriptors, which lets a reader with no passphrase establish that the
+grant was issued against this record header exactly as it stands.
+
+**The order is the guarantee.** The grant is issued, sealed, and written into
+the ledger -- and handed back only after the ledger commit succeeds. A
+disclosure the ledger could not record was not issued, and nothing says it was.
+The sealed grant is then held by the run that issued it until `disclose_bundle`
+writes it; it is copied key material, so it is never written into the ledger.
+
+**The package** is the record (byte for byte, re-hashed against the digest
+taken at the grant), the grant, the ledger's inclusion proof for the
+Disclosure node, a report, and a manifest sealed and signed over the digests of
+all four, with `SHA256SUMS` last. The snapshot root the proof resolves against
+is **not** in the manifest. The proof file names it, as every proof must, and
+checking a proof against a root its author supplied is checking nothing; the
+examiner sends the root by another route, and `disclose_verify(dir, null)` is a
+finding, never a pass.
+
+**What `disclose_verify` runs**, each as its own reported check: the manifest's
+seal and signature; every file's digest and the checksum file beside them; the
+record's signature, with no key; that the grant names this disclosure and this
+record, and describes its header exactly; complete-as-authorised -- the grant
+opens exactly the segments whose class the view names, and the withheld list is
+every other segment; with the passphrase, that every granted segment decrypts
+with its tag holding; and, against the supplied root, that the ledger holds this
+disclosure property for property. `verified` is true only when all of them ran
+and passed.
+
+**`disclose_to`**, sealing a grant to a recipient's public key instead of a
+passphrase, is designed and deliberately not built. `crypto/ecdh` would make it
+cost no dependency, but nothing in this tree creates a recipient key pair, and
+this design settled that identity is examiner-asserted and that the tool issues
+no credentials. Whether a recipient's key is something Mutant should mint, or
+something it should only accept from outside, is the owner's decision.
+
+## 13. The disclosure ledger
+
+Every disclosure-family write is one signed, attributed graphene transaction in
+a ledger opened by `ledger_open`. The labels are Case (graphene's own built-in
+type), Actor, Record, Classification, View, Recipient, Disclosure, Withdrawal
+and ReclassEvent; the edges IN_CASE, CLASSIFIED_AS, GRANTS, DISCLOSED_TO,
+AUTHORISED_BY, PERFORMED_BY, WITHDREW and SUPERSEDES. Three properties of it are
+worth stating:
+
+- **A script cannot forge a disclosure.** `ledger_add_node` takes types 0 to 127;
+  this schema's custom labels begin at 4096. A script can write a node with a
+  property called `disclosure.uid` -- the property index is shared -- but not one
+  labelled Disclosure, and every read filters on the label. `disclose_history`
+  counts such nodes in `foreign` rather than hiding them.
+- **Nodes are written once.** A Record, View, Recipient or Classification already
+  present is found and reused; a Disclosure, Withdrawal or ReclassEvent is always
+  new. A Record found under the same uid with a different file digest is
+  refused, never reconciled by overwriting.
+- **No Segment nodes.** The design called for one per segment "classified above
+  open"; that condition cannot be evaluated, because classes are not ordered.
+  The granted set is written as runs of segment indices on the Disclosure node
+  and its GRANTS edge, so the graph's size follows the number of spans rather
+  than the size of the evidence, and `disclose_for_segment` reads the runs.
+
+## 14. See also
 
 - [`docs/EVIDENCE_HANDLING_POLICY.md`](EVIDENCE_HANDLING_POLICY.md) — the rule
   governing the original, and the sentence this family inherits: a manifest that

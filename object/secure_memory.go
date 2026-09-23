@@ -14,6 +14,9 @@ type SecureGlobal struct {
 	objectType     ObjectType
 	lastAccess     time.Time
 	seed           int64
+	// classified is the mark a stored buffer carried, kept beside the
+	// ciphertext and put back by Get; see Encrypted.Classified.
+	classified *Classification
 }
 
 // NewSecureGlobal creates an encrypted global object
@@ -28,13 +31,15 @@ func NewSecureGlobal(obj Object, seed int64) (*SecureGlobal, error) {
 		objectType:     obj.Type(),
 		lastAccess:     time.Now(),
 		seed:           seed,
+		classified:     classificationOf(obj),
 	}, nil
 }
 
 // Get decrypts and returns the object
 func (sg *SecureGlobal) Get() (Object, error) {
 	sg.lastAccess = time.Now()
-	return decryptObjectSecure(sg.encryptedValue, sg.objectType, sg.seed, "")
+	obj, err := decryptObjectSecure(sg.encryptedValue, sg.objectType, sg.seed, "")
+	return withClassification(obj, sg.classified), err
 }
 
 // Set encrypts and updates the object
@@ -52,8 +57,26 @@ func (sg *SecureGlobal) Set(obj Object) error {
 	security.SecureZero(sg.encryptedValue)
 
 	sg.encryptedValue = encrypted
+	sg.classified = classificationOf(obj)
 	sg.lastAccess = time.Now()
 	return nil
+}
+
+// classificationOf returns the mark a value carries: a buffer's
+// Classified, and nil for everything else.
+func classificationOf(obj Object) *Classification {
+	if b, ok := obj.(*Bytes); ok {
+		return b.Classified
+	}
+	return nil
+}
+
+// withClassification puts a stored mark back on a decrypted buffer.
+func withClassification(obj Object, c *Classification) Object {
+	if b, ok := obj.(*Bytes); ok && c != nil {
+		b.Classified = c
+	}
+	return obj
 }
 
 // Clear securely wipes the encrypted value
@@ -186,7 +209,8 @@ func (ss *SecureStack) Get(index int) (Object, error) {
 
 	// If it's encrypted, decrypt it
 	if enc, ok := obj.(*Encrypted); ok {
-		return decryptObjectSecure(enc.Value, enc.EncType, ss.seed, "")
+		decrypted, err := decryptObjectSecure(enc.Value, enc.EncType, ss.seed, "")
+		return withClassification(decrypted, enc.Classified), err
 	}
 
 	return obj, nil
@@ -230,13 +254,17 @@ func (ss *SecureStack) AutoProtect() {
 		if now.Sub(ss.lastAccess[i]) > ss.encryptAfter {
 			encrypted, err := encryptObjectSecure(ss.data[i], ss.seed, "")
 			if err == nil {
+				// Taken before the wipe, which must not decide what survives.
+				mark := classificationOf(ss.data[i])
+
 				// Clear the original object
 				ss.clearObject(ss.data[i])
 
 				// Store encrypted version
 				ss.data[i] = &Encrypted{
-					EncType: ss.data[i].Type(),
-					Value:   encrypted,
+					EncType:    ss.data[i].Type(),
+					Value:      encrypted,
+					Classified: mark,
 				}
 			}
 		}
