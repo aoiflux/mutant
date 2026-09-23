@@ -95,6 +95,271 @@ exhaustive lists.
   published beside the file it covers proves the download arrived intact, not
   that it came from us.
 
+- **Integrity that is checked, not only reported.** `ewf_metadata` has always
+  returned the MD5 and SHA-1 an acquisition tool stored inside an E01 image, and
+  nothing compared them with the data. `ewf_verify` does: it re-hashes the
+  image, reports each digest's match beside whether one was stored at all, and
+  lists the bad ranges. An image that stores no digest is **not verified**,
+  rather than verified by default. `ewf_segments` finds a segment set from its
+  first file and names any segment missing from it, and `ewf_open_partial` opens
+  an incomplete set on purpose rather than by accident.
+
+  Six `*_verify` builtins -- `ntfs_verify`, `fat_verify`, `xfat_verify`,
+  `ext_verify`, `hfs_verify` and `xfs_verify` -- run whatever integrity checks
+  each filesystem library carries. Every check reports `checked` beside
+  `passed`, and a volume is `verified` only when at least one check ran and every
+  check that ran passed; one boolean would have an HFS+ volume assert a check its
+  format does not contain. `fat_verify` walks the directory tree before it reads
+  the FAT mirror comparison, because that comparison happens only as entries are
+  looked up, and a volume holding only root entries would otherwise report
+  verified with no comparison made.
+
+- **Security events are recorded, not only counted.** `security.auditEvent` was a
+  no-op at fourteen call sites, so a manifest could say the debugger check tripped
+  eleven times and nothing could say when. It now feeds an append-only,
+  length-prefixed hash chain, read through `audit_head`, `audit_write` and
+  `audit_verify`. The head is bound into the case manifest inside the existing
+  seal, and `audit_verify` takes the head as an argument, because a log checked
+  against the head stored inside it has been checked against a value its own
+  writer chose. At most 4096 entries stay readable; the head still commits to
+  every event, and `entries`, `retained` and `dropped` are three numbers. Every
+  document says what it does not cover: an edited entry breaks every link after
+  it, and no document can show that a whole document is missing.
+
+- **A partition opens where it lies.** The second argument to `ntfs_open`,
+  `fat_open`, `xfat_open`, `ext_open`, `hfs_open` and `xfs_open` is a byte offset
+  or, better, a row straight from `table_list_partitions`, which carries
+  `start_byte` and `length_byte` together so that no line of a script does
+  arithmetic on an offset. Nothing is carved out first. The offset goes to the
+  library rather than to a wrapping reader, so every offset a filesystem reports
+  stays image-absolute: a partition-relative offset looks exactly like an
+  absolute one, and intersecting the two succeeds and is wrong. Every open the
+  case manifest records now carries `volume_offset` and `volume_length`, so two
+  partitions of one image no longer read as the same open twice.
+
+- **Files stream rather than load whole.** Eighteen builtins, three verbs across
+  the six filesystems: `*_extract_file` writes a file out a megabyte at a time
+  and digests it on the way past, `*_hash_file` digests it where it lies, and
+  `*_read_file_at` returns one window of it. A file larger than memory is
+  reachable, including a disk image inside a disk image. Each reports the
+  recorded `size` beside `located_bytes` and never reads past the latter: a FAT
+  entry whose chain broke at deletion still claims its original length, and the
+  clusters past the recoverable prefix now belong to some other file. A short
+  chain extracts its prefix and says `truncated: true`, and the digest covers
+  what was read, never what was claimed. Extraction refuses a destination that
+  exists and removes its partial output on failure.
+
+- **Which partition table is true can be the script's decision.** A disk that
+  two schemes both describe was resolved by a preference the script never saw.
+  `table_open` still resolves by preference and now lists every candidate it
+  passed over; `table_open_strict` refuses and names them; `table_open_as`
+  forces `mbr`, `gpt`, `bsd`, `sun` or `mac`, so an examiner records having
+  decided; and `table_open_all` returns a handle per scheme -- on a hybrid disk
+  the only route to the MBR's real entries. `table_detect` asks without opening
+  anything, and `table_nested` reaches a disklabel inside an MBR slice with
+  offsets computed by the inner table. `table_open` gained `gpt_backup`: the two
+  GPT copies are written together, so a mismatch is a tamper indicator rather
+  than a health check. Every partition row now says what it is: only an
+  `allocated` row is a volume, and the rows marked `occupies_space` tile the
+  device exactly once.
+
+- **What the filesystems remember about files that are gone.** Seven builtins --
+  `ntfs_deleted`, `fat_deleted`, `xfat_deleted`, `ext_deleted`, `hfs_deleted`,
+  `xfs_deleted` and `xfs_unlinked` -- give every supported filesystem the
+  deleted-entry listing that existed only for NTFS resident data. The field that
+  matters is `content_state`, not a `recoverable` flag, because six formats
+  destroy six different things at deletion: ext4 zeroes the extent tree and
+  leaves the file fully described and wholly unlocatable, while exFAT's
+  `NoFatChain` keeps a layout the volume stated while the file was live. Eight
+  `*_recover_file` builtins write what remains back out, addressed by the index
+  the scan gave the entry, and count three kinds of zero apart: bytes read from
+  the image, sparse holes whose zeros are the content, and unlocated ranges
+  written only so that later offsets land. `fat_recover_file_assuming_contiguous`
+  and its exFAT twin are separate names rather than a flag, so the hypothesis is
+  written at the call site.
+
+- **Journals.** Nine builtins read the one structure in these formats that
+  records the past: NTFS's USN journal and `$LogFile` (`ntfs_usn_journal`,
+  `ntfs_log_records`, `ntfs_log_transactions`), ext's JBD2 (`ext_journal`,
+  `ext_journal_block_copies`, `ext_journal_inode_versions`,
+  `ext_recover_journalled_file`) and the XFS log (`xfs_log_records`,
+  `xfs_log_transactions`). All three are written round and round, so every scan
+  says whether it crossed the wrap, and where it did the array is not a timeline
+  and nothing here reorders it. `$LogFile` and the XFS log carry no clock, so
+  what they give is an ordering, not a timeline. `ext_recover_journalled_file` is
+  the one route here to an ext4 file the filesystem itself can no longer locate.
+  ext's fast-commit records are deliberately not read: they carry no sequence and
+  no timestamp.
+
+- **Slack, and the other thing called slack.** `ntfs_slack`, `fat_slack`,
+  `xfat_slack`, `ext_slack`, `hfs_slack`, `xfs_slack`, `ext_dir_slack` and
+  `hfs_unallocated`. File slack lies past the recorded size; unwritten space lies
+  inside it and was never written, and only four of the six formats record that
+  second boundary. Every range carries its class rather than merging the two.
+  These address a live file by path, so the slack of a deleted file is out of
+  their reach, and the reference says so.
+
+- **Content and labels a path does not address.** `ntfs_streams`,
+  `ntfs_read_stream`, `ntfs_extract_stream`, `ntfs_security`,
+  `ntfs_security_descriptors`, `ntfs_reparse`, `ext_xattrs`, `xfs_xattrs`,
+  `hfs_xattrs` and `hfs_resource_fork`. An alternate stream or a resource fork is
+  a second body of bytes; a descriptor or an attribute asserts something about
+  the file and holds none of its content, and the two are never summed. A
+  descriptor with no DACL grants everyone access and one with an empty DACL
+  denies everyone, so `dacl_present` is its own field.
+
+- **Virtual disks as the three things a byte stream hides.** `vhdi_extents`,
+  `vhdi_chain`, `vhdi_changed_extents`, `vhdi_changed_since`, `vhdi_probe` and
+  `vhdi_discover`: an address space that is mostly absent, a device spread over
+  several files, and a change record answerable at block level. A range with no
+  bytes behind it reports `file_offset: -1` rather than the zero the library
+  returns, because on a dynamic VHD byte zero is the footer's mirror. A VHD chain
+  cannot record a deletion at all, and `deletions_expressible` says when that
+  applies. `vhdi_probe` registers the image it names as evidence; `vhdi_discover`,
+  which is asked about a directory, registers nothing.
+
+- **What a filesystem can record, and what this one did.** Six
+  `*_capabilities` builtins report each library's own capability set in three
+  states -- supported, unsupported and unanswered -- because a question the
+  library never answers is not a no: HFS has recorded creation dates since 1985
+  and libhfs does not declare it. Each answer says whether it came from the
+  format or from the volume in hand. Six `*_report` builtins walk a whole volume
+  into one row shape, and `events_from(report, "fs_report")` carries any of them
+  into the ECS, OCSF and Timesketch emitters. `complete` means the walk had no
+  known gap and nothing more; only `xfs_report` can reconcile against the
+  volume's own inode counters, so `completeness_checked` and
+  `completeness_proven` are separate fields.
+
+- **A forensic ledger.** Thirty-nine `ledger_*` builtins, in a new
+  `forensic ledger` category, put graphene's signed-store layer within reach of a
+  script. `ledger_open` has a fixed strict posture and no options hash: every
+  commit signed and attributed, and a retention policy that keeps every commit's
+  actor, timestamp and signature through compaction.
+
+  - **Proofs:** `ledger_prove_node`, `ledger_verify_proof`,
+    `ledger_proof_describe`, `ledger_root_export` and `ledger_verify_chain`. The
+    root is always an argument, never read from the proof.
+  - **Custody and anchoring:** `ledger_custody`, `ledger_custody_anchored`,
+    `ledger_checkpoint`, `ledger_checkpoint_history`, `ledger_verify_anchor` and
+    `ledger_verify_store`. The witness is an argument, and graphene's insecure
+    local anchor is not reachable from the language. A write made since the last
+    compaction moves none of the six heads a checkpoint binds, and graphene
+    reports that as clean; `ledger_verify_anchor` reports it as a gap.
+  - **Attributed redaction:** four `ledger_redact_*` scopes, each requiring a
+    reason, `ledger_redaction_impact` to preview a cascade, `ledger_redactions`,
+    and three `ledger_prove_*redaction` proofs. A redaction does not remove the
+    content from the ledger directory -- the retired log segment that retention
+    keeps for attribution still holds it -- and every redaction reports
+    `retained_segments` rather than implying otherwise. A reason containing one
+    of the redacted values is refused, because graphene publishes the reason
+    where it cannot be redacted.
+  - **Reads:** `ledger_node`, `ledger_edge`, `ledger_provenance`, `ledger_path`,
+    `ledger_subgraph`, `ledger_patterns`, `ledger_query_nodes`,
+    `ledger_explain_query`, four `ledger_declare_*` index declarations and
+    `ledger_indexes`. Declaring a key ordered changes its range comparisons from
+    numeric to byte-wise -- over `9, 10, 1x, 100, 2`, a `between "2" and "100"`
+    goes from four records to none -- so `ledger_declare_ordered` reports
+    `order_differs` before it declares, and `ledger_query_nodes` reports which
+    comparison answered.
+
+  `db_open_disk` refuses a ledger directory: one unsigned write through it would
+  leave a store the strict open then refuses entirely.
+
+- **`mutant graph export` and `mutant graph query`.** `export` walks an entry
+  file's whole import closure and writes a graphene store of its symbol graph: a
+  node per module and per declaration, joined by `DECLARES`, `ENCLOSES`,
+  `REFERENCES`, `IMPORTS` and `USES_TYPE`. `query` reads it back through seven
+  named questions -- `summary`, `modules`, `where`, `callers`, `callees`,
+  `outline` and `exported` -- rather than a filter surface, because in this
+  engine a filter on an unindexed key matches nothing and returns no error. The
+  store is identified by its own label table before anything opens it, and a
+  store with no lock file is read live rather than have one created for it, so
+  the first question put to a restored store does not modify it. Each answer
+  says what it does not cover: `callers` is complete within a module and a floor
+  across one.
+
+- **Classified records.** `case_key_create`, `case_key_open`, `case_key_rotate`
+  and `case_key_fingerprint` take a path, never key material; the passphrase is
+  asked for at the terminal, and an options key named `passphrase`, `password`,
+  `secret` or `key` is refused by name. `class_define` and `class_list`
+  pre-declare the labels a byte range may carry, so a typo is an error rather
+  than a new secret class. Ten `record_*` builtins, in a new `classified records`
+  category, seal a file into a `.mrec` container: ranges of uniform
+  classification, split into segments of at most 64 KiB, each segment its own
+  XChaCha20-Poly1305 unit under a key derived from its record, index, offset,
+  length and class, so a segment moved anywhere else fails to open rather than
+  only failing its tag. `record_verify` authenticates the whole file holding
+  **no key**. `record_read` errors when a requested span overlaps a segment it
+  cannot decrypt, and `record_read_partial` returns `{bytes, holes}` as a
+  separate contract. `record_seal_quantised` rounds boundaries outward so a short
+  secret does not advertise its length, and requires `rounds_to`, the one class
+  rounding may grow, because every byte it grows over changes class. Rotating
+  the case key invalidates no grant already issued.
+
+- **Disclosure: a grant of segments, sealed under a passphrase.** `view_define`,
+  `view_list` and `view_preview`, in a new `disclosure` category, name a set of
+  classes. A view cannot negate, because "everything except restricted" widens by
+  itself each time a class is declared after it. `view_preview` is arithmetic
+  over the public header -- no key, no plaintext -- and states a rounding in the
+  terms of the view in front of it. `disclose_to_passphrase` issues a grant of
+  exactly the segments a view covers, 56 bytes of key and nonce per segment,
+  sealed under a passphrase, and commits it to the ledger before handing it over;
+  a ledger failure means nothing was issued. `disclose_bundle` writes one
+  disclosure's package: the record byte for byte, the sealed grant, the ledger's
+  inclusion proof, a report, a manifest sealed and signed over all four, and
+  `SHA256SUMS` last. The snapshot root is returned and not packaged, and
+  `disclose_verify` requires it as an argument; a null root is recorded as a
+  finding, never read as a pass. `disclose_withdraw` returns
+  `bytes_recoverable: false`, because a recipient holding the ciphertext and a
+  key holds both halves, and no builtin is named `revoke`.
+  `disclose_history`, `disclose_for_segment` and `disclose_reclassified` answer
+  who holds what, and who holds segments whose classification has since changed.
+
+  A grant is sealed under a passphrase and nothing else. That is a decision, not
+  a gap: there is no public-key `disclose_to`, and should one ever be added, the
+  holder of a private key is trusted to keep it secret, as the examiner keeps the
+  case-key passphrase. See [DISCLOSURE_POLICY.md](docs/DISCLOSURE_POLICY.md).
+
+- **Plaintext read from a classified record does not leave the process by
+  accident.** A buffer from `record_read` or `record_read_partial` carries its
+  record and class, `bytes_slice` and `+` of two buffers carry it on, and
+  thirteen builtins refuse it anywhere in their arguments: `putln`, `putf`,
+  `fs_write`, `fs_append`, `http_post`, `http_request`, `report_write`,
+  `report_render`, `case_note`, `cache_put`, `ledger_add_node`,
+  `ledger_add_edge` and `db_add_artifact`. `record_release(buffer, reason)` is
+  the recorded way out: it needs a reason and an open case, records the release
+  in the case timeline, and returns an unmarked copy. The mark is deliberately
+  not consulted by `Inspect`, which is the identity function for equality,
+  `unique`, `contains` and hash keys. It catches accidents, not adversaries: a
+  loop that rebuilds the buffer a byte at a time launders it. A policy guard
+  keeps `Inspect` and runtime format strings out of the files that handle
+  plaintext.
+
+  The editor says so first. A new `classifiedPlaintext` lint rule -- a warning
+  by default, `mutant.lint.rules.classifiedPlaintext.severity` in the extension
+  -- reports a read handed to one of those builtins, directly, through a name
+  bound once, through `bytes_slice` or `record_read_partial`'s `bytes`, or inside
+  a literal array, hash or struct, at the line and before the program runs and
+  asks for a passphrase. Its lists are the runtime's own,
+  `builtin.ClassifiedSinks` and `builtin.ClassifiedSources`, and tests that read
+  the builtin package's source hold both to the code that refuses and marks,
+  and hold every sink to numbering arguments the way the script wrote them. A
+  value from a user function, a name bound twice and `a + b` are not followed,
+  so the rule never reports what it cannot be sure of.
+
+- **An example that runs the whole path.**
+  `examples/forensics/record_disclosure.mut` opens a seized USB stick image,
+  finds its one volume, verifies it and extracts a phishing email from it where
+  it lies, seals the email with the victim's address classified `pii` and the
+  attachment `restricted`, discloses it to a `counsel` view and a
+  `malware-desk` view, bundles both, and re-measures custody at the end. It also
+  tries once to write the address out, to show the refusal.
+  `examples/data/usb_stick.img` is a 100 KiB MBR disk holding one FAT12
+  partition, rebuilt byte for byte by `go run examples/data/make_usb_stick.go`,
+  and `TestTheRecordDisclosureExampleRunsEndToEnd` runs the program with its
+  seven terminal prompts scripted and checks that the email taken off the image
+  is identical to `examples/data/phish.eml`.
+
 ### Changed
 
 - **Every `github.com/aoiflux/*` dependency is on its latest release.**
@@ -179,6 +444,26 @@ exhaustive lists.
   were actually describing. SEC-015 ("the security suites must run on every
   supported OS") drops from `I/C` to `I/P`, because nothing automates the
   "every OS" half any more.
+
+- **`table_open`'s warnings are records, not sentences.** Each warning is now
+  `{code, message, lba}`, beside a deduplicated `warning_codes`, where it was a
+  string. The prose is written for a report and reworded between library
+  releases, so a script that matched on it stopped matching without being told.
+  A script that printed the old strings reads `w["message"]`; one that matched
+  on them should branch on `w["code"]` instead.
+
+- **The editor resolves names the way the compiler does.** Deciding what a name
+  refers to moved into one walk in `sema` that the compiler, the language server
+  and `mutant lint` share, replacing five separate resolvers in the server and a
+  sixth scan that patched the gap they shared. `stats.mean` now has
+  go-to-definition, hover, completion, find-references and rename across every
+  importer, under whatever alias each file chose, and call hierarchy finds
+  callers in files nobody has opened. Cross-file answers are scoped to the import
+  closure rather than to every file in the workspace, so go-to-definition no
+  longer jumps into a module nothing imported. A new `unusedImport` rule reports
+  at information severity, since an imported module's top-level statements run
+  whether or not its namespace is read. `mutant lint` builds the same workspace
+  the editor holds rather than reading one file at a time.
 
 ### Fixed
 
@@ -278,6 +563,37 @@ exhaustive lists.
   ED-1's answer. Counts in `CHANGELOG.md`, `CONTRIBUTING.md` and the roadmap are
   deliberately outside the gate: those record what was true at a past release,
   and correcting history would be the untruth.
+
+- **NTFS evidence was opened writable.** libntfs promotes any `io.WriterAt` to a
+  writable volume, and `*os.File` implements it whatever mode the file was opened
+  in, so `ntfs_open` handed the library a volume it could write to. It is opened
+  read-only now.
+
+- **Lint rules disagreed with the compiler about which names were taken.** The
+  duplicate-declaration rule reported every shadow as a duplicate -- a parameter
+  shadowing a `let`, or a value named like a struct -- and offered a quick fix
+  that deleted one of two lines the program needed. The builtin rules went
+  silent where a struct or enum shared a builtin's name, so
+  `struct rand { x; }; rand.int(1, 5);` drew no arity, argument or `(value, err)`
+  check. `platformSupport` reported a local value named like a namespace as an
+  unsupported builtin. All of them now ask the same graph the compiler builds.
+
+- **Undefined names the build refuses drew no diagnostic, and names it accepts
+  drew four.** `struct Point { x }; Point;`, `len{x: 1}` and an enum used above
+  its declaration failed the build from files the editor showed clean, while a
+  four-line program using a struct, an enum and a macro from an import reported
+  all three undefined and the import unused. The evaluator also folded
+  `str.upper("a")` to the builtin under `enum str { x }`, where the VM refused
+  it; both refuse now, in the same words.
+
+- **The `hardcodedSecret` rule flagged the idiom it recommends.** A name ending
+  `_file`, `_path` or `_dir` holding a real path matched both its name pattern
+  and its looks-issued check, so an author who had just moved a secret out of the
+  source was told to move it out of the source. Those suffixes are exempt.
+
+- **A bad hash algorithm in a `case_open` custody policy was reported as an
+  `fs_hash` error**, naming a builtin the script never called. The error names
+  the builtin that was.
 
 ## [2.5.0] — 2026-09-14
 

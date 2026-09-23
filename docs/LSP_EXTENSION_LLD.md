@@ -417,6 +417,17 @@ policy.
   derived path or a containing directory is never reported. `fs_copy` *from* the
   evidence is the correct procedure and is silent. `db_open_disk` and
   `cache_open` are deliberately not openers: those are the analyst's own files)
+- `classifiedPlaintext` -> warning (plaintext read out of a classified record
+  -- `record_read`'s buffer, `record_read_partial`'s `bytes`, a `bytes_slice` of
+  either, or an array, hash or struct literal holding one -- handed to a builtin
+  that refuses it. The run time is the enforcement and is exact; this is the
+  other half of the owner's "runtime + LSP lint" decision, the same finding at
+  the line before a passphrase has been typed. The sink and source lists are
+  the run time's own, `builtin.ClassifiedSinks` and `builtin.ClassifiedSources`,
+  each held to the code by a test that reads the builtin package's source.
+  Certainty is by construction: a name bound once in its scope is followed, a
+  name bound twice, a user function's result and `a + b` are not.
+  `record_release`'s result is never reported -- it is the way to comply)
 - `pathTraversal` -> warning (a path built from a value the program did not
   write, reaching `fs_*`, a `*_read_file` or an archive entry, with nothing
   looking at the value in between. The only rule in the family with taint

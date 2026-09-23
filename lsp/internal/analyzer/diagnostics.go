@@ -62,6 +62,7 @@ type LintConfig struct {
 	EvidenceMutation             LintSeverity
 	AssignmentTarget             LintSeverity
 	PathTraversal                LintSeverity
+	ClassifiedPlaintext          LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -165,6 +166,12 @@ func DefaultLintConfig() LintConfig {
 		// really hostile depends on who can reach this program -- which is the
 		// one thing a single document cannot answer.
 		PathTraversal: LintSeverityWarning,
+		// Plaintext read out of a classified record, handed to a builtin that
+		// refuses it. The run time refuses the call exactly; this says so at
+		// the line, before the program runs and asks for a passphrase. Warning
+		// rather than error because the code compiles, and the refusal it
+		// predicts is itself the safe outcome.
+		ClassifiedPlaintext: LintSeverityWarning,
 	}
 }
 
@@ -221,6 +228,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.EvidenceMutation
 	case "pathTraversal":
 		severityName = c.PathTraversal
+	case "classifiedPlaintext":
+		severityName = c.ClassifiedPlaintext
 	default:
 		return nil, false
 	}
@@ -298,6 +307,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintAssignmentTargets(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintEvidenceMutation(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPathTraversal(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintClassifiedPlaintext(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

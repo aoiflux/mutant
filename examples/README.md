@@ -18,6 +18,9 @@ Some examples use fixture files in:
 - `examples/data/`
 - `examples/data/memory_dump.bin`
 - `examples/data/offline_hive.json`
+- `examples/data/usb_stick.img` -- a 100 KiB MBR disk with one FAT12 partition
+  holding `phish.eml`. It is generated, not captured:
+  `go run examples/data/make_usb_stick.go` rebuilds it byte for byte.
 
 ## Sweeping every example
 
@@ -96,7 +99,7 @@ sweep, not a category the file belongs to.
 - `examples/registry/` offline registry forensic examples
 - `examples/email/` email parsing and phishing triage
 - `examples/memory/` memory scanning and shellcode/PE hunting
-- `examples/forensics/` timeline normalization, the chain-of-custody cycle, and one exhibit sealed at its classification boundaries and disclosed two different ways
+- `examples/forensics/` timeline normalization, the chain-of-custody cycle, and one exhibit taken off a partitioned disk image where it lies, sealed at its classification boundaries and disclosed two different ways
   (`case_open` -> evidence -> `case_verify` -> signed manifest)
 - `examples/graph/` graph modeling and timeline-style investigation
 - `examples/detection/` detection builtins and multi-signal scoring

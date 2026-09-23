@@ -547,6 +547,18 @@
                         "off"
                     ],
                     "description": "Severity for path-traversal diagnostics: warns when a filesystem path is built from a value the program did not write \u2014 gets(), serve_arg(), net_conn_read(), or an HTTP request or response \u2014 and nothing in the file looks at that value before it reaches fs_read, fs_write, a *_read_file or an archive entry. A '..' segment walks out of whatever directory the rest of the path names, so the file is chosen by whoever supplied the value. The taint follows one hop of 'let' through concatenation and interpolation, and stops at a function boundary. Any mention of the value as an argument to a text-inspecting builtin (text_contains, regex_match, str_starts_with, text_replace, hashset_contains \u2026) counts as the check and silences the report; the rule cannot read which characters were looked for and takes the author's word. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.classifiedPlaintext.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for classified-plaintext diagnostics: warns when plaintext read out of a classified record \u2014 the result of record_read, the bytes of record_read_partial, a bytes_slice of either, or a literal array, hash or struct holding one \u2014 is handed to a builtin that refuses it: putln, putf, fs_write, fs_append, http_post, http_request, report_write, report_render, case_note, cache_put, ledger_add_node, ledger_add_edge or db_add_artifact. The run time refuses the call, naming the record and its class; this says so at the line, before the program runs and asks for a passphrase. The lists are the run time's own, held to the code by tests. record_release(buffer, reason) is the deliberate way out, and its result is never reported. Set to 'off' to suppress the rule."
                 }
             }
         },

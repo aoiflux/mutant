@@ -1,6 +1,13 @@
-// record_disclosure.mut — seal an exhibit at its classification boundaries,
-// disclose two different parts of it to two different people, and hand each of
-// them a package they can check without taking the examiner's word for it.
+// record_disclosure.mut — take an exhibit off a seized device, seal it at its
+// classification boundaries, disclose two different parts of it to two
+// different people, and hand each of them a package they can check without
+// taking the examiner's word for it.
+//
+// The device is a USB stick, imaged to examples/data/usb_stick.img: an MBR and
+// one FAT12 volume. The volume is opened where it lies in the image -- no copy
+// of the partition is carved out first -- checked, and the exhibit streamed off
+// it and digested in the same pass. The image is re-measured at the end, so the
+// manifest can say the examination changed nothing.
 //
 // The exhibit is a phishing email, and three things in it are not the same kind
 // of thing:
@@ -26,7 +33,7 @@
 // twice, and for the counsel grant's again when the package is checked from the
 // recipient's side, where nothing the examiner typed is reused.
 //
-// Safe use: reads examples/data/phish.eml and never writes to it. Everything
+// Safe use: reads examples/data/usb_stick.img and never writes to it. Everything
 // written goes under example_output/record_disclosure, which must not exist yet:
 // a key, a record and a package are each refused rather than written over.
 // Delete the directory to run it again.
@@ -44,8 +51,11 @@ let check_err = fn(err, op) {
 // A root nobody supplied. There is no null literal, and a bare return is null.
 let no_root = fn() { return; };
 
-let exhibit_path = "examples/data/phish.eml";
+let image_path = "examples/data/usb_stick.img";
 let output_directory = "example_output/record_disclosure";
+// The exhibit as carved off the device. It is written once, by the extraction,
+// and everything after reads this copy.
+let exhibit_path = output_directory + "/PHISH.EML";
 // The key stays beside the work and out of every package: it is the one thing
 // that must never travel with a disclosure.
 let key_path = output_directory + "/case.key";
@@ -75,8 +85,58 @@ let run = fn() {
     // --- the case and its key ------------------------------------------------
     let _, err = case_open("IR-2026-0413", "example examiner", {"hash": "sha256"});
     if (check_err(err, "case_open")) { return false; };
-    let _, err = case_evidence(exhibit_path);
+
+    // --- the device ----------------------------------------------------------
+    // Opening the image brings it under custody, digested under the case's
+    // hash policy before anything reads it.
+    let device, err = table_open(image_path);
+    if (check_err(err, "table_open")) { return false; };
+    let rows, err = table_list_partitions(device["handle"]);
+    if (check_err(err, "table_list_partitions")) { return false; };
+    // The listing maps the whole device -- the partition table itself and the
+    // unallocated gaps as well as the volume -- so only an allocated row is a
+    // volume. The first row is the MBR, and handing it to fat_open fails.
+    let volumes = filter(rows, fn(row) { return row["allocated"]; });
+    if (len(volumes) != 1) {
+        putln("[error] expected one volume on the device, found", len(volumes));
+        return false;
+    };
+    let volume = first(volumes);
+    putln("device:", device["table_type"], "table,", len(rows), "rows, one volume:",
+        volume["type_name"], "at byte", volume["start_byte"], "+", volume["length_byte"]);
+    let _, err = table_close(device["handle"]);
+    if (check_err(err, "table_close")) { return false; };
+
+    // Opened at its offset inside the image, bounded by its length.
+    let fs, err = fat_open(image_path, volume);
+    if (check_err(err, "fat_open")) { return false; };
+    let fat = fs["handle"];
+
+    // FAT carries no checksum. Its two allocation tables agreeing is the only
+    // integrity signal the format has, and the check says what it covered.
+    let checked_fs, err = fat_verify(fat);
+    if (check_err(err, "fat_verify")) { return false; };
+    putln("volume verified:", checked_fs["verified"], " checks passed:",
+        checked_fs["checks_passed"], "of", checked_fs["checks_run"]);
+    each(checked_fs["checks"], fn(c) {
+        putln("   ", c["name"], " checked:", c["checked"], " passed:", c["passed"]);
+    });
+
+    // Streamed off the volume and digested in the same pass.
+    let carved, err = fat_extract_file(fat, "/INBOX/PHISH.EML", exhibit_path);
+    if (check_err(err, "fat_extract_file")) { return false; };
+    putln("extracted", carved["path"], ":", carved["bytes_written"], "bytes  sha256:", carved["digest"]);
+    let _, err = fat_close(fat);
+    if (check_err(err, "fat_close")) { return false; };
+
+    // The carved copy goes under custody in its own right, and custody's own
+    // digest of it has to agree with the one taken as it came off the device.
+    let registered, err = case_evidence(exhibit_path);
     if (check_err(err, "case_evidence")) { return false; };
+    if (registered["hash"] != carved["digest"]) {
+        putln("[error] the carved copy is not what came off the device");
+        return false;
+    };
 
     // The passphrase is chosen here, at the terminal. Opening the key straight
     // after does not ask again: the answer just chosen for this path is reused.
@@ -140,7 +200,9 @@ let run = fn() {
     // --- what reading it gives you -------------------------------------------
     // Plaintext read out of a classified record is marked, and the builtins
     // that send a value out of the process refuse it. The refusal names the
-    // record and the class, and not one byte of what it refused.
+    // record and the class, and not one byte of what it refused. The editor
+    // flags the fs_write below before the program runs -- the classifiedPlaintext
+    // warning -- and here that warning is the point.
     let address, err = record_read(record, victim_at, len(victim));
     if (check_err(err, "record_read")) { return false; };
     let _, err = fs_write(output_directory + "/address.txt", address);
@@ -249,6 +311,13 @@ let run = fn() {
     if (check_err(err, "record_close")) { return false; };
     let _, err = ledger_close(ledger);
     if (check_err(err, "ledger_close")) { return false; };
+
+    // Every source is re-measured: the image and the carved copy are what they
+    // were when they came under custody.
+    let drift, err = case_verify();
+    if (check_err(err, "case_verify")) { return false; };
+    putln("custody re-measured", drift["checked"], "sources:", drift["unchanged"], "unchanged,",
+        drift["changed"], "changed,", drift["missing"], "missing");
 
     // The manifest carries the scheme, the views, both disclosures and the
     // release. case_close zeroes the case key.

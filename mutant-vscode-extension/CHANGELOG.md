@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- **Names resolve across modules the way the compiler resolves them.** The
+  language server now asks the same symbol graph the compiler builds, so
+  `stats.mean` has go-to-definition, hover, completion, find-references and
+  rename in every file that imports it, under whatever alias each file chose,
+  and call hierarchy finds callers in files nobody has opened. Answers are
+  scoped to the import closure, so go-to-definition no longer jumps into a
+  module nothing imported.
+- **A new diagnostic: `unusedImport`**, at information severity rather than
+  warning, because an imported module's top-level statements run whether or not
+  its namespace is read. `mutant.lint.rules.unusedImport.severity` sets it.
+- **A new diagnostic: `classifiedPlaintext`.** Plaintext read out of a
+  classified record with `record_read` refuses to go to `putln`, `fs_write`,
+  `http_post` and ten other builtins when the program runs; the editor now says
+  so at the line, before the program runs and asks for a passphrase.
+  `record_release(buffer, reason)` is the way to comply, and its result is never
+  reported. The rule reads the runtime's own lists, so it cannot warn about a
+  builtin that does not refuse. `mutant.lint.rules.classifiedPlaintext.severity`
+  sets it.
+- **Every new builtin is highlighted and hoverable** -- 161 of them, across disk
+  image verification, partition-offset opening, deleted-file recovery, journals,
+  slack, the forensic ledger, classified records and disclosure -- with no change
+  here, because the grammar and the hover cards are both generated from the
+  registry.
+
 ## 0.2.0
 
 New this release:

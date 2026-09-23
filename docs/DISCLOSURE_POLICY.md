@@ -20,9 +20,11 @@ the original. This one governs what leaves.
 
 ## 0. What exists, and what this document is ahead of
 
-This policy is written before all of the code it describes. That is deliberate —
-the refusals below shaped the design — but it makes the document itself subject
+This policy was written before the code it describes. That was deliberate —
+the refusals below shaped the design — but it made the document itself subject
 to the rule it exists to enforce, so the split is stated first and plainly.
+Every row is now either in force or not built by decision: nothing this
+document describes is waiting to be built.
 
 | | Status |
 | --- | --- |
@@ -35,7 +37,7 @@ to the rule it exists to enforce, so the split is stated first and plainly.
 | `disclose_to_passphrase`, `disclose_bundle`, `disclose_verify`, and `record_open` under a grant | **In force.** [`builtin/disclose.go`](../builtin/disclose.go), [`builtin/record.go`](../builtin/record.go) |
 | `disclose_withdraw`, `disclose_history`, `disclose_for_segment`, `disclose_reclassified` | **In force.** [`builtin/disclose_history.go`](../builtin/disclose_history.go), [`builtin/disclose_reclassify.go`](../builtin/disclose_reclassify.go) |
 | The graphene disclosure ledger, [Section 13](#13-the-disclosure-ledger) | **In force.** [`builtin/disclose_ledger.go`](../builtin/disclose_ledger.go) |
-| `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | Designed, not built -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
+| `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
 
@@ -471,12 +473,19 @@ with its tag holding; and, against the supplied root, that the ledger holds this
 disclosure property for property. `verified` is true only when all of them ran
 and passed.
 
-**`disclose_to`**, sealing a grant to a recipient's public key instead of a
-passphrase, is designed and deliberately not built. `crypto/ecdh` would make it
-cost no dependency, but nothing in this tree creates a recipient key pair, and
-this design settled that identity is examiner-asserted and that the tool issues
-no credentials. Whether a recipient's key is something Mutant should mint, or
-something it should only accept from outside, is the owner's decision.
+**A grant is sealed under a passphrase, and under nothing else.** That is the
+owner's decision (2026-09-23), not a gap left for later: there is no
+`disclose_to` sealing a grant to a recipient's public key. Identity here is
+examiner-asserted and the tool issues no credentials, so a recipient key pair
+would be one more secret whose origin no document could vouch for, and the
+passphrase already carries the whole of the protection a grant has. It should
+reach the recipient by a route other than the package, as the snapshot root does.
+
+Should a key-based grant ever be added, its posture is settled too: the holder
+of a private key keeps it secret, exactly as the examiner keeps the case-key
+passphrase and the local signing key, and nothing in this design claims to
+protect a grant from anyone who holds that key. It is the same line the threat
+model already draws around the examiner's own machine.
 
 ## 13. The disclosure ledger
 

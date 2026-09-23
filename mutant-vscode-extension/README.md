@@ -112,6 +112,9 @@ what makes them worth having: nothing else in the toolchain objects.
   path out of a value the program did not choose
 - `mutant.lint.rules.unboundedResource.severity`: severity for reading something
   whose size the program does not control into memory with no ceiling on it
+- `mutant.lint.rules.classifiedPlaintext.severity`: severity for handing
+  plaintext read out of a classified record to a builtin that refuses it --
+  `putln`, `fs_write`, `http_post` and the rest -- before the run time does
 - `mutant.lint.rules.evidenceMutation.severity`: severity for writing to evidence
   a case opened read-only -- the one rule here about the report rather than the
   machine, because an altered artifact is an artifact that proves nothing

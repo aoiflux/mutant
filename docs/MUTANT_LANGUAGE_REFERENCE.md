@@ -2606,7 +2606,7 @@ still running on read-only media is refused rather than read around.
 builtin registry states — how many arguments a builtin takes, what kinds it
 accepts, whether it returns a `(value, err)` pair — and are simply right.
 
-Seven more read intent, and those are the ones worth knowing about, because they
+Eight more read intent, and those are the ones worth knowing about, because they
 are about the work this language is for:
 
 | Rule                      | What it reports                                                                                                    |
@@ -2618,6 +2618,7 @@ are about the work this language is for:
 | `hardcodedSecret`         | A credential written into the source, by name or by a provider's own prefix                                          |
 | `tlsVerificationDisabled` | `insecure: true`, or a `min_version` below 1.2                                                                       |
 | `unboundedResource`       | A `cidr_hosts` or `range` whose literal arguments exceed what the builtin will return                                |
+| `classifiedPlaintext`     | Plaintext from `record_read` handed to `putln`, `fs_write`, `http_post` or another builtin that refuses it           |
 
 Each of these has a way to say "I have handled this", and taking it is what
 silences the rule — there is no suppression comment:
@@ -2634,6 +2635,12 @@ let out, xerr = exec_string("whois " + text_replace(host, ";", ""));
 
 // weakCrypto: comparing two computed digests is matching, not verifying.
 let same = hash_md5(a) == hash_md5(b);
+
+// classifiedPlaintext: letting plaintext out is a decision, and a decision is
+// recorded. record_release needs a reason and writes it into the case timeline.
+let address, rerr = record_read(record, 551, 19);
+let released, lerr = record_release(address, "the complainant's own address");
+let wrote, werr = fs_write("statement/address.txt", released);
 
 // hardcodedSecret: a value handed to a decoder is a sample, not a credential.
 let token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig";

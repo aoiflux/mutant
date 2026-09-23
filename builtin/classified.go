@@ -156,6 +156,31 @@ func classifiedDescribe(b *object.Bytes) string {
 		len(b.Value), c.RecordUID, strings.Join(names, " and "))
 }
 
+// ClassifiedSinks returns the builtins that refuse classified plaintext
+// anywhere in their arguments. The editor's classifiedPlaintext rule reads this
+// list to warn at the call before it runs, and
+// TestClassifiedSinksAreTheBuiltinsThatRefuse holds it to the builtins that
+// actually call refuseClassified, so the warning and the refusal cannot drift
+// apart.
+func ClassifiedSinks() []string {
+	return []string{
+		BuiltinNamePutln, BuiltinNamePutf,
+		BuiltinNameFsWrite, BuiltinNameFsAppend,
+		BuiltinNameHttpPost, BuiltinNameHttpRequest,
+		BuiltinNameReportWrite, BuiltinNameReportRender,
+		BuiltinNameCaseNote, BuiltinNameCachePut,
+		BuiltinNameLedgerAddNode, BuiltinNameLedgerAddEdge,
+		BuiltinNameDbAddArtifact,
+	}
+}
+
+// ClassifiedSources returns the builtins whose result carries the mark:
+// record_read's buffer, and the `bytes` entry of record_read_partial's hash.
+// Held to the code that sets the mark by TestClassifiedSourcesAreTheBuiltinsThatMark.
+func ClassifiedSources() []string {
+	return []string{BuiltinNameRecordRead, BuiltinNameRecordReadPartial}
+}
+
 // refuseClassified is the sink check: nil when no argument holds classified
 // plaintext, and a refusal naming the first one that does.
 func refuseClassified(op string, args ...object.Object) *object.Error {

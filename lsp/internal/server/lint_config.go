@@ -69,6 +69,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "commandInjection", &config.CommandInjection)
 	applyRuleSeverity(rulesMap, "evidenceMutation", &config.EvidenceMutation)
 	applyRuleSeverity(rulesMap, "pathTraversal", &config.PathTraversal)
+	applyRuleSeverity(rulesMap, "classifiedPlaintext", &config.ClassifiedPlaintext)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.
