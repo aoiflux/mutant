@@ -1,0 +1,8 @@
+=== bytes_cursor_elf_sample_demo ===
+Safe use: reads static metadata from examples/data/sample_lnx
+sample bytes: 3191622
+magic: ELF
+elf class: 2 endian: 1 machine: 0x003E
+entry: 0x00000000004813E0
+first16: 0x7F 0x45 0x4C 0x46 0x02 0x01 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+wrote report: example_output/bytes_cursor_sample_demo/report_lnx.json

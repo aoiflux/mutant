@@ -1,0 +1,10 @@
+=== bytes_cursor_sample_demo ===
+Safe use: reads static metadata from examples/data/sample_win.exe
+sample bytes:  3162624
+dos magic:  MZ
+pe offset:  128
+pe signature:  0x00004550
+machine: 0x8664 sections: 15
+optional magic:  0x020B
+first16:  0x4D 0x5A 0x90 0x00 0x03 0x00 0x00 0x00 0x04 0x00 0x00 0x00 0xFF 0xFF 0x00 0x00
+wrote report:  example_output/bytes_cursor_sample_demo/report_win.json

@@ -1,0 +1,7 @@
+=== file_triage_report ===
+sha256(note.txt): 4f779a025230fe45420c0ec205b717fda4c40c5aebf0f48929d42cbf61412080
+type: unknown  mime: application/octet-stream
+known-set size: 2
+note.txt is a known file: true
+random content is known: false
+true

@@ -1,0 +1,19 @@
+beacon 10.0.0.7:4444
+largest hit: 92, total 142
+coverage 30% of the window
+price $5, template ${name}
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+matches a date? true
+beacon report
+  endpoint : 10.0.0.7:4444
+  hits     : 3
+  loudest  : 92
+  run key  : HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+the analyst said "check 10.0.0.7" and left
+rule beacon_marker {
+  strings:
+    $path = "C:\Windows\Temp\svc.exe"
+    $re   = /\d{1,3}(\.\d{1,3}){3}/
+  condition:
+    $path or $re
+}

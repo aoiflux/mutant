@@ -1,0 +1,4 @@
+=== mini_log_correlator ===
+Safe use: local defensive log analytics only.
+seeded test dataset:  example_output/mini_log_correlator/test_logs.json
+wrote report:  example_output/mini_log_correlator/report.json

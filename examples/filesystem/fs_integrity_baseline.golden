@@ -1,0 +1,15 @@
+=== Filesystem Integrity Baseline ===
+fs_list: [{is_dir: false, name: autoruns_hive.json, size: 1353}, {is_dir: false, name: browser_cookies.sqlite, size: 8192}, {is_dir: false, name: browser_history.sqlite, size: 12288}, {is_dir: false, name: make_usb_stick.go, size: 7276}, {is_dir: false, name: memory_dump.bin, size: 48}, {is_dir: false, name: offline_hive.json, size: 847}, {is_dir: false, name: phish.eml, size: 1471}, {is_dir: false, name: sample_lnx, size: 3191622}, {is_dir: false, name: sample_win.exe, size: 3162624}, {is_dir: false, name: usb_stick.img, size: 102400}] err:
+fs_walk count: 11 err:
+hash error: examples/data ERROR:fs_hash: read examples/data: Incorrect function. at examples\filesystem\fs_integrity_baseline.mut:13:20 context=builtin.fs_hash
+sha256: examples\data\autoruns_hive.json ad347e28a05db641286918b9bc07ec12378ee7d495240ba9839150af97cf44e8
+sha256: examples\data\browser_cookies.sqlite 662724db213309e8a24bf5fb46926ce9b14a232206ff6191f6e4109e488cc8c0
+sha256: examples\data\browser_history.sqlite 4815a8a3c6570547267090db8f3b5a30468998174d3b7c1a49350f54fc478254
+sha256: examples\data\make_usb_stick.go a9bb357cfe0fa95c89a2aad1cd3b151e0a591548e7e7bb0fd92ab9b871a9c329
+sha256: examples\data\memory_dump.bin 70e30a5a88b440541af0430b12f6a7c3f5a24d3f151ff25d450d6d4607f3ec6c
+sha256: examples\data\offline_hive.json 6c961305af03e28bed642aa48220284463eeeaa2da8b027853cf481873d89e15
+sha256: examples\data\phish.eml 07cf6f6b05a51d1ba29baebf5795a2cf677ad8140d4361bf090e0984817d33d7
+sha256: examples\data\sample_lnx d30ab1da8ba13a4c74b2412209b9fd627f498ca61c5e74e94c7fd8552c9d8478
+sha256: examples\data\sample_win.exe 7bbaec28f8b1faed6b685f2a8c85d1f1deaf58023f87ba733c9560035c4ad6d7
+sha256: examples\data\usb_stick.img b515a064d3539e1c6dc5ed15fa538fb2dd21f5c0c8fb0335989123a03b6e403d
+false

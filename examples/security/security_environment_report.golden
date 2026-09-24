@@ -1,0 +1,5 @@
+=== Security Environment Forensics Report ===
+debugger detected:  false
+sandbox detected:  false  type=VM
+risk score:  5  severity=low
+wrote report:  example_output/security/environment_report.json

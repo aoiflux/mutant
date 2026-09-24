@@ -1,0 +1,4 @@
+=== Inline Policy Example ===
+policy_load: {allow_query: data.triage.allow, eval_query: data.triage.decision, loaded: true, name: triage_policy, package: triage, rules_query: data.triage.rules} err:
+policy_eval: {allow: true, decision: {allow: true, severity: low, source: sensor-a}, query: data.triage.decision} err:
+policy_allow: true err:

@@ -1,0 +1,8 @@
+=== Cache TTL Workflow ===
+cache_open: {created: true, name: artifact_cache, opened: true} err:
+cache_put #1: true err:
+cache_put #2: true err:
+cache_get: {found: true, value: {path: C:/Temp/b.bin, score: 91.000000}} err:
+cache_keys: [sha256:aaa, sha256:bbb] err:
+cache_stats: {clears: 0, deletes: 0, expires: 0, hits: 1, items: 2, misses: 0, name: artifact_cache, puts: 2} err:
+cache_close: {closed: true, name: artifact_cache} err:

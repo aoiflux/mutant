@@ -1,0 +1,5 @@
+=== lua_scoring_engine ===
+8 fails, off-hours -> score 70
+2 fails, business hours -> score 0
+9 fails, business hours -> score 40
+true

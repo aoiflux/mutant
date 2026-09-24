@@ -1,0 +1,7 @@
+main.mut
+report.mut
+LATENCIES: sum=190 mean=38 max=92
+largest alone: 92
+latencies holds 5 values
+grade: Grade.Fast(0)
+doubled first: 24

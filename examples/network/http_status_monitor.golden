@@ -1,0 +1,4 @@
+=== http_status_monitor ===
+Mode: single-shot snapshot. Schedule periodic runs externally (Task Scheduler/cron).
+seeded test dataset:  example_output/http_status_monitor/endpoints.json
+wrote report:  example_output/http_status_monitor/report.json

@@ -1,0 +1,5 @@
+=== incident_graph ===
+nodes reachable from the process: 2
+process -> network path length: 2
+graph nodes: 3  edges: 2
+true

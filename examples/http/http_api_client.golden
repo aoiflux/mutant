@@ -1,0 +1,12 @@
+=== http_api_client ===
+--- request bytes ---
+POST /api/scan HTTP/1.1
+Host: api.internal
+Content-Type: application/json
+Content-Length: 21
+
+{"target":"10.0.0.1"}
+status: 200
+body.status: ok
+live GET failed honestly: ERROR:http_get: Get "http://127.0.0.1:9/": dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it. at examples\http\http_api_client.mut:48:22 context=builtin.http_get
+true

@@ -30,6 +30,9 @@ type result struct {
 	status status
 	note   string
 	detail string
+	// verified is set when the output matched the example's .golden file --
+	// the only runs whose output, and not just their exit status, was checked.
+	verified bool
 }
 
 func (r result) String() string {
@@ -76,6 +79,12 @@ func (s *sweeper) sweepOne(file string) result {
 	switch marker.Mode {
 	case sweep.ModeServeHandler:
 		return s.compileOnly(file, marker)
+	case sweep.ModeNeedsInput:
+		res := s.compileOnly(file, marker)
+		if res.status == statusOK {
+			res.note = "needs input    " + marker.Reason
+		}
+		return res
 	case sweep.ModeServer:
 		return s.startAndStop(file, marker)
 	default:
@@ -158,7 +167,10 @@ func (s *sweeper) runAcrossLevels(file string, marker sweep.Marker) result {
 	if failure != nil {
 		return *failure
 	}
-	if len(s.opts.levels) == 1 {
+	// A golden file is only meaningful for output that reproduces, so the
+	// golden options need the same probe as a comparison across levels.
+	checkingGolden := s.opts.golden || s.opts.updateGolden
+	if len(s.opts.levels) == 1 && !checkingGolden {
 		return s.ranWell(file, marker, "run", baseline)
 	}
 
@@ -183,11 +195,79 @@ func (s *sweeper) runAcrossLevels(file string, marker sweep.Marker) result {
 	}
 
 	note := fmt.Sprintf("run, identical across %d levels", len(s.opts.levels))
-	if !reproducible {
+	switch {
+	case len(s.opts.levels) == 1 && reproducible:
+		note = "run, reproducible"
+	case len(s.opts.levels) == 1:
+		note = "run, output varies between runs"
+	case !reproducible:
 		note = fmt.Sprintf("run, %d levels, output varies between runs so it was not compared",
 			len(s.opts.levels))
 	}
-	return s.ranWell(file, marker, note, baseline)
+	if !checkingGolden {
+		return s.ranWell(file, marker, note, baseline)
+	}
+
+	verdict, verified, failure := s.checkGolden(file, marker, baseline, reproducible)
+	if failure != nil {
+		return *failure
+	}
+	res := s.ranWell(file, marker, note+"; "+verdict, baseline)
+	res.verified = verified
+	return res
+}
+
+// checkGolden compares one example's normalized output with the .golden file
+// beside it, or rewrites that file under --update-golden. Output that varies
+// between two runs of the same bytecode has no golden: recording one would
+// write down a single sample of something that is not a single value.
+func (s *sweeper) checkGolden(file string, marker sweep.Marker, output string, reproducible bool) (string, bool, *result) {
+	path := sweep.GoldenPath(file)
+	got := sweep.NormalizeOutput(output, s.scratch.root)
+	recorded, err := os.ReadFile(path)
+	has := err == nil
+	want := ""
+	if has {
+		want = sweep.NormalizeOutput(string(recorded), "")
+	}
+
+	if s.opts.updateGolden {
+		switch {
+		case !reproducible && has:
+			if err := os.Remove(path); err != nil {
+				return "", false, &result{file: file, mode: marker.Mode, status: statusFail, note: "golden", detail: err.Error()}
+			}
+			return "golden removed: output varies", false, nil
+		case !reproducible:
+			return "no golden: output varies", false, nil
+		case has && want == got:
+			return "golden unchanged", true, nil
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			return "", false, &result{file: file, mode: marker.Mode, status: statusFail, note: "golden", detail: err.Error()}
+		}
+		return "golden written", true, nil
+	}
+
+	switch {
+	case !has && reproducible:
+		return "no golden", false, nil
+	case !has:
+		return "no golden: output varies", false, nil
+	case !reproducible:
+		return "", false, &result{
+			file: file, mode: marker.Mode, status: statusFail,
+			note:   "has a golden file but its output varies between runs",
+			detail: "delete " + filepath.ToSlash(path) + " or make the example's output deterministic",
+		}
+	case want != got:
+		return "", false, &result{
+			file: file, mode: marker.Mode, status: statusFail,
+			note:   "output differs from " + filepath.ToSlash(path),
+			detail: firstDifference(want, got),
+		}
+	}
+	return "matches golden", true, nil
 }
 
 func (s *sweeper) ranWell(file string, marker sweep.Marker, note, output string) result {
@@ -322,7 +402,7 @@ func lineAt(lines []string, index int) string {
 
 func report(results []result) int {
 	byMode := map[string]int{}
-	failed := 0
+	failed, verified := 0, 0
 
 	for _, res := range results {
 		if res.status == statusFail {
@@ -330,6 +410,12 @@ func report(results []result) int {
 			continue
 		}
 		byMode[string(res.mode)]++
+		if res.verified {
+			verified++
+		}
+	}
+	if verified > 0 {
+		fmt.Printf("\n%d of %d examples printed exactly what their .golden file records\n", verified, len(results))
 	}
 
 	modes := make([]string, 0, len(byMode))

@@ -13,6 +13,8 @@
 //
 //	go run ./cmd/sweep [options] [paths...]
 //	go run ./cmd/sweep --levels 0,5,10          # also compare output across mutation levels
+//	go run ./cmd/sweep --golden                 # compare output with the .golden beside each example
+//	go run ./cmd/sweep --update-golden          # (re)write those .golden files
 package main
 
 import (
@@ -43,6 +45,12 @@ type options struct {
 	password string
 	keep     bool
 	verbose  bool
+
+	// golden compares each reproducible example's output with the .golden
+	// file beside it; updateGolden writes those files instead. They are the
+	// only options that touch the source tree, and only when asked.
+	golden       bool
+	updateGolden bool
 }
 
 func main() {
@@ -107,8 +115,13 @@ func parseOptions(argv []string) (options, []string, error) {
 	set.StringVar(&opts.password, "password", "sweep-Pass!42", "build password")
 	set.BoolVar(&opts.keep, "keep", false, "keep the scratch tree instead of deleting it")
 	set.BoolVar(&opts.verbose, "v", false, "print each run's output")
+	set.BoolVar(&opts.golden, "golden", false, "compare each reproducible example's output with the .golden file beside it")
+	set.BoolVar(&opts.updateGolden, "update-golden", false, "write the .golden file beside each reproducible example")
 	if err := set.Parse(argv); err != nil {
 		return opts, nil, err
+	}
+	if opts.golden && opts.updateGolden {
+		return opts, nil, errors.New("--golden checks the golden files and --update-golden rewrites them; choose one")
 	}
 
 	parsed, err := parseLevels(levels)

@@ -1,0 +1,1 @@
+ewf_open failed: ERROR:ewf_open: open ./image.E01: The system cannot find the file specified. at examples\filesystem\ewf_example.mut:2:24 context=builtin.ewf_open

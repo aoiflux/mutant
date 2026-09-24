@@ -1,0 +1,6 @@
+=== Regex Builtins ===
+regex_match: true err:
+regex_find: ioc-12 err:
+regex_find_all: [ioc-1, ioc-22, ioc-333] err:
+regex_replace: pid=XXXX user=alice err:
+regex_capture_groups: [user=admin:9001, admin, 9001] err:

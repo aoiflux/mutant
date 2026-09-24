@@ -12,6 +12,7 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
+	"mutant/global"
 	"mutant/lsp/internal/analyzer"
 	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/lsp/internal/workspace"
@@ -22,10 +23,13 @@ import (
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
-const (
-	serverName    = "mlsp"
-	serverVersion = "0.1.0"
-)
+// serverName is what the server calls itself in initialize. Its version is the
+// language release it was built from, global.Version -- the same string
+// `mlsp --version` prints -- because the thing an editor needs to know is which
+// release of the language this server teaches.
+const serverName = "mlsp"
+
+var serverVersion = global.Version
 
 type Server struct {
 	handler   *lsp.Handler

@@ -1,6 +1,7 @@
-// Command gendocs writes the two artifacts that describe the builtin registry
-// to somebody outside it: docs/CAPABILITY_REFERENCE.md, and the builtin
-// highlighting rule in the VS Code grammar.
+// Command gendocs writes the artifacts that describe the source to somebody
+// outside it: docs/CAPABILITY_REFERENCE.md and the builtin highlighting rule in
+// the VS Code grammar, both read from the builtin registry, and
+// docs/LIMITS_REFERENCE.md, read from the named limits in the source tree.
 //
 // The reference has always claimed to be "generated from the builtin metadata",
 // but until now nothing generated it, so its signatures and counts could drift
@@ -12,8 +13,11 @@
 // further: 76 of 490 builtins highlighted. Its builtin alternation is now read
 // from the same registry; see grammar.go for what is and is not generated.
 //
-//	go run ./cmd/gendocs           # rewrite both
-//	go run ./cmd/gendocs -check    # fail if either is out of date
+// The limits reference is the third: every constant marked //mutant:limit,
+// with its folded value and the reason its doc comment gives; see limits.go.
+//
+//	go run ./cmd/gendocs           # rewrite all three
+//	go run ./cmd/gendocs -check    # fail if any is out of date
 //
 // The -check mode is the drift gate: it makes an out-of-date artifact a
 // failure rather than something a reader has to notice.
@@ -35,6 +39,7 @@ const defaultOutputPath = "docs/CAPABILITY_REFERENCE.md"
 func main() {
 	output := flag.String("o", defaultOutputPath, "path to write the capability reference to")
 	grammarOutput := flag.String("grammar", defaultGrammarPath, "path to the TextMate grammar whose builtin pattern is generated")
+	limitsOutput := flag.String("limits", defaultLimitsPath, "path to write the limits reference to")
 	check := flag.Bool("check", false, "report whether the generated files are up to date instead of writing them")
 	flag.Parse()
 
@@ -65,6 +70,18 @@ func main() {
 		fail(err)
 	}
 
+	// The limits reference is scanned from the tree gendocs runs in. A missing
+	// file is not an error when writing: the first run creates it.
+	limits, err := renderLimitsReference(".")
+	if err != nil {
+		fail(err)
+	}
+	existingLimits, err := os.ReadFile(*limitsOutput)
+	if err != nil && !os.IsNotExist(err) {
+		fail(err)
+	}
+	limits = matchExistingNewlines(limits, existingLimits)
+
 	if *check {
 		// Both artifacts are reported before exiting. Being told about one
 		// stale file, regenerating, and then being told about the other is two
@@ -81,6 +98,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "gendocs: %s is out of date; run `go run ./cmd/gendocs`\n", *grammarOutput)
 			stale = true
 		}
+		if normalizeNewlines(string(existingLimits)) != normalizeNewlines(limits) {
+			fmt.Fprintf(os.Stderr, "gendocs: %s is out of date; run `go run ./cmd/gendocs`\n", *limitsOutput)
+			stale = true
+		}
 		if stale {
 			os.Exit(1)
 		}
@@ -88,6 +109,7 @@ func main() {
 			*output, len(builtin.Builtins), len(categorySections))
 		fmt.Printf("gendocs: %s is up to date (%d builtins highlighted)\n",
 			*grammarOutput, len(names))
+		fmt.Printf("gendocs: %s is up to date\n", *limitsOutput)
 		return
 	}
 
@@ -102,6 +124,11 @@ func main() {
 	}
 	fmt.Printf("gendocs: wrote %s (%d builtins highlighted)\n",
 		*grammarOutput, len(names))
+
+	if err := os.WriteFile(*limitsOutput, []byte(limits), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Printf("gendocs: wrote %s\n", *limitsOutput)
 }
 
 // fail reports a generator error and stops. Writing half the artifacts would

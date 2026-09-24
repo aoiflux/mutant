@@ -1,0 +1,5 @@
+=== IOC Event Triage ===
+seeded sample events at  example_output/ioc/events.json
+events processed:  4
+high findings:  1  medium findings:  1
+wrote report:  example_output/ioc/ioc_triage_report.json

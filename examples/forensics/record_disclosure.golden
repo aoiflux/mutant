@@ -1,0 +1,7 @@
+=== record_disclosure ===
+device: mbr table, 4 rows, one volume: DOS FAT12 (0x01) at byte 32256 + 64000
+volume verified: true  checks passed: 1 of 1
+   fat_mirror  checked: true  passed: true
+extracted /INBOX/PHISH.EML: 1471 bytes  sha256: 07cf6f6b05a51d1ba29baebf5795a2cf677ad8140d4361bf090e0984817d33d7
+[error] case_key_create: ERROR:case_key_create: reading the passphrase for example_output/record_disclosure/case.key (case_key_create): no password given and stdin is not a terminal, so there is nothing to prompt. Use --password-file <path> or --password-stdin for non-interactive runs, or --dev to use the built-in development key (local development only) at examples\forensics\record_disclosure.mut:143:20 context=builtin.case_key_create
+false

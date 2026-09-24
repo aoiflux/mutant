@@ -148,8 +148,8 @@ func compile(entrypath string, modulePaths []string, stripDebug bool, password s
 // signing -- because a debug session runs the program in the process that
 // compiled it. Round-tripping it through an artifact would mean either a
 // password prompt in the middle of a protocol handshake the editor owns, or a
-// release build with nothing left to step through. See decision 2 in
-// plans/T1_DEBUGGER.md.
+// release build with nothing left to step through. See "How a debug build
+// differs from a release build" in docs/DEBUGGING.md.
 //
 // Mutation is off for the same reason: nothing is being protected in a session
 // whose whole purpose is to watch the program execute, and every layer removed

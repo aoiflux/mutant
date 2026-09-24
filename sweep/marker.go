@@ -40,6 +40,12 @@ const (
 	// serve_conn(). Standalone it has no connection and cannot do its job, so a
 	// sweep compiles it and stops there.
 	ModeServeHandler Mode = "serve-handler"
+
+	// ModeNeedsInput needs something a sweep cannot supply -- an evidence image,
+	// a live network peer, a passphrase typed at a terminal. A sweep compiles it
+	// and counts it separately, so the number of examples whose output was
+	// actually checked is never inflated by ones that could not run.
+	ModeNeedsInput Mode = "needs-input"
 )
 
 // Directive introduces a marker inside a line comment.
@@ -50,7 +56,7 @@ const reasonSeparator = "--"
 
 // Modes lists every mode a marker may name, in the order help text should show
 // them.
-func Modes() []Mode { return []Mode{ModeRun, ModeServer, ModeServeHandler} }
+func Modes() []Mode { return []Mode{ModeRun, ModeServer, ModeServeHandler, ModeNeedsInput} }
 
 // Marker is what one example says about itself.
 type Marker struct {

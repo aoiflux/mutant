@@ -1,0 +1,4 @@
+=== Email Attachment Triage ===
+email_parse: {attachments: [], date: , from: secops@example.org, headers: {From: [secops@example.org], Subject: [Invoice Attached], To: [analyst@example.org]}, html: , message_id: , subject: Invoice Attached, text: Please see attached invoice., to: analyst@example.org} err:
+email_urls: [] err:
+email_spf_dkim: {authentication_results: , dkim: none, dkim_aligned: false, dkim_reported: , dkim_signature_present: false, dkim_signatures: [], dmarc: none, dmarc_policy: reject, from_domain: example.org, received_spf: , spf: none, spf_source: none} err:

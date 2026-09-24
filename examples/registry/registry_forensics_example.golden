@@ -1,0 +1,8 @@
+=== Registry Forensics Builtins ===
+reg_open: {handle: reg-hive-1, path: examples/data/offline_hive.json, source_type: json, status: ok} err:
+reg_enum_keys HKLM\Software: [HKLM\Software\Mutant] err:
+reg_enum_values HKLM\Software\Mutant: [{data: true, name: Enabled, type: REG_DWORD}, {data: C:\Mutant, name: InstallPath, type: REG_SZ}] err:
+reg_get_value InstallPath: {data: C:\Mutant, name: InstallPath, type: REG_SZ} err:
+reg_deleted_keys: [HKLM\Software\OldMutant] err:
+reg_timeline: [{action: create_key, path: HKLM\Software\Mutant, timestamp: 2026-07-01T01:00:00Z}, {action: set_value, name: InstallPath, path: HKLM\Software\Mutant, timestamp: 2026-07-01T01:10:00Z}] err:
+reg_close: {closed: true, handle: reg-hive-1, status: ok} err:

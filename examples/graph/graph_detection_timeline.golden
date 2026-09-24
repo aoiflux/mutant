@@ -1,0 +1,4 @@
+=== Graph + Detection Timeline ===
+timeline events: 5 err:
+detect_network_beacon: {detected: true, hits: [{bytes_cv: 0.000000, confidence: low, count: 3, dst: 198.51.100.25, interval_cv: 0.000000, interval_mean_s: 0.000000, interval_stddev_s: 0.000000, reasons: [high_frequency], score: 50}]} err:
+db_close err:

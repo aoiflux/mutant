@@ -43,8 +43,8 @@ long-term-support branches.
 
 | Version | Supported |
 | ------- | --------- |
-| 2.4.x   | ✅ current |
-| 2.3.x and earlier | ❌ upgrade |
+| 2.5.x   | ✅ current |
+| 2.4.x and earlier | ❌ upgrade |
 
 ## In scope
 

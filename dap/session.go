@@ -140,8 +140,8 @@ func (s *session) dispatch(req *request) error {
 	case "attach":
 		// The adapter is the debuggee. There is no separate process to attach
 		// to, and attaching an OS debugger to a running mutant is what the
-		// anti-reversing probes exist to stop -- see decision 1 in
-		// plans/T1_DEBUGGER.md.
+		// anti-reversing probes exist to stop -- see "What it deliberately does
+		// not do" in docs/DEBUGGING.md.
 		return s.fail(req, "mutant debugs by launching the program, not by attaching to one. "+
 			"Use a launch configuration naming the .mut file.")
 	case "setBreakpoints":

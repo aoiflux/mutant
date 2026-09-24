@@ -1,0 +1,4 @@
+=== ioc_fetcher ===
+Safe use: downloads public IOC feed for defensive filtering.
+seeded test dataset:  example_output/ioc_fetcher/source.json
+wrote report:  example_output/ioc_fetcher/report.json

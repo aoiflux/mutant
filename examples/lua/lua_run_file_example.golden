@@ -1,0 +1,7 @@
+=== lua_run_file example ===
+requires capability: filesystem
+lua_run_file ok
+result:  {error: builtin:lua_run_file:1: attempt to index a non-table object(nil) with key 'open'
+stack traceback:
+	builtin:lua_run_file:1: in main chunk
+	[G]: ?, ok: false, result: , schema_version: 1}

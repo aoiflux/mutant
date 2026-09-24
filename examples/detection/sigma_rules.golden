@@ -1,0 +1,18 @@
+=== Sigma Rules ===
+title:      Encoded PowerShell Command Line
+level:      high
+condition:  selection and not filter
+searches:   [filter, selection]
+fields:     [CommandLine, Image, User]
+
+encoded command line  -> matched: true searches: [selection]
+same, run by SYSTEM   -> matched: false
+an event missing fields -> matched: false fields_missing: [CommandLine, User]
+
+scanned 3 events against 2 rules
+hits: 2 by level: {high: 1, medium: 1}
+  high | Encoded PowerShell Command Line | event 0 | 2026-03-01T09:14:02Z
+  medium | Service Installed | event 1 | 2026-03-01T09:14:40Z
+fields no event carried: []
+
+aggregation rule -> err: ERROR:sigma_parse: rule "Brute Force", condition "selection | count() by TargetUserName > 10": uses an aggregation (`|`), which counts or groups events: this engine answers about one event at a time and will not report a rule as matched when it has not evaluated the aggregation at examples\detection\sigma_rules.mut:128:20 context=builtin.sigma_parse

@@ -1,0 +1,6 @@
+== macro mini-DSL for simple rules ==
+rule outputs:
+{matched: true, name: high-severity}
+{matched: true, name: admin-user}
+{matched: false, name: workstation-source}
+trigger: high-severity rule matched

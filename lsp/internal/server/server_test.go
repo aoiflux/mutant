@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"mutant/global"
+
 	"github.com/tliron/glsp"
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -34,6 +36,11 @@ func TestInitializeAdvertisesMVPCapabilities(t *testing.T) {
 
 	if result.ServerInfo == nil || result.ServerInfo.Name != serverName {
 		t.Fatalf("server info = %#v, want name %q", result.ServerInfo, serverName)
+	}
+	// The editor is told which language release this server teaches; it used
+	// to be told 0.1.0, a version no release of anything here ever had.
+	if result.ServerInfo.Version == nil || *result.ServerInfo.Version != global.Version {
+		t.Fatalf("server info version = %v, want global.Version %q", result.ServerInfo.Version, global.Version)
 	}
 
 	syncOpts, ok := result.Capabilities.TextDocumentSync.(*lsp.TextDocumentSyncOptions)

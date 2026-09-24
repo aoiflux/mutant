@@ -1204,6 +1204,7 @@ two-binding loop bind one.
 
 ### 13.5 Match Expressions
 
+<!-- mutant:fragment -->
 ```mutant
 match (subject) { p1 | p2 => a, p3 => b, _ => c }
 ```

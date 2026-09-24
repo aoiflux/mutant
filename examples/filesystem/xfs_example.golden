@@ -1,0 +1,1 @@
+xfs_open failed: ERROR:xfs_open: open ./disk.xfs: The system cannot find the file specified. at examples\filesystem\xfs_example.mut:2:24 context=builtin.xfs_open

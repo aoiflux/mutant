@@ -1,0 +1,5 @@
+=== dependency_version_auditor ===
+Safe use: reads local dependency manifests and queries public vulnerability API.
+seeded package.json:  example_output/dependency_version_auditor/package.json
+seeded go.mod:  example_output/dependency_version_auditor/go.mod
+wrote report:  example_output/dependency_version_auditor/report.json

@@ -237,5 +237,5 @@ crash needs a catchable fault, which is a language decision.
 
 - [MODULES.md](MODULES.md) — how imports resolve, which is what `--module-path` feeds.
 - [DEBUGGING.md](DEBUGGING.md) — when a failing test is easier to watch than to read.
-- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#testing) — the generated reference for these builtins.
+- [CAPABILITY_REFERENCE.md](CAPABILITY_REFERENCE.md#testing-10) — the generated reference for these builtins.
 - `examples/modules/lib/stats_test.mut` — a worked example, tests and all.

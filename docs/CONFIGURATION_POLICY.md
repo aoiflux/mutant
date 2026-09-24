@@ -231,6 +231,67 @@ machine-checked by it, and since the project runs no CI, nothing checks them on
 a schedule either. The extension's own build-target variable was removed in
 favour of a `--target` argument, but nothing prevents a new one being added.
 
+## 6. Limits
+
+Every value that bounds what Mutant will do -- how much it reads into memory,
+how deep it recurses, how long it waits, how many entries it keeps, how many
+times it retries -- is a named constant in the package that enforces it,
+explained where it is declared, and listed with its value in
+[LIMITS_REFERENCE.md](LIMITS_REFERENCE.md), which `go run ./cmd/gendocs`
+generates from the source.
+
+A limit is not configuration. None is read from the environment or from a file;
+the few a user may change are command-line flags, and the reference names the
+flag beside the value.
+
+A limit is declared like this:
+
+```go
+// maxArchiveEntries bounds how many members an archive may list before the
+// reader stops, so a crafted index cannot exhaust memory.
+//
+//mutant:limit count
+const maxArchiveEntries = 1 << 20
+```
+
+The directive names a unit (`bytes`, `bits`, `count`, `depth`, `duration`,
+`iterations`, `percent`, `ratio` or `score`) and, when a flag overrides the value,
+`flag=--name`. The prose above it is required: a limit whose reason is not written
+down is the hidden default this section exists to remove. A value fixed by a file
+format or a protocol is not a limit; it is marked `//mutant:format <specification>`
+and stays out of the reference.
+
+`go test ./policy/` enforces it (`policy/limit_guard_test.go`, with the rules in
+`policy/limitscan`). It fails on a limit written as a bare literal in a shape it
+recognises:
+
+| Rule | Shape |
+| --- | --- |
+| L1 | an allocation of 1024 or more (`make`) |
+| L2 | an input/output cap: `Scanner.Buffer`, `LimitReader`, `CopyN`, `New*Size`, `MaxBytesReader` |
+| L3 | a duration: `n * time.Second`, `time.Duration(n)` |
+| L4 | a comparison with a depth, retry, budget or similar bound, or `len`/`cap` against 1024 or more |
+| L5 | a retry loop, or a loop of 1000 or more iterations |
+| L6 | a command-line flag default |
+| L7 | a limit-named field or variable given a literal |
+| L8 | a limit constant declared inside a function |
+| L9 | a size passed as an argument: built with `<<` or `*` to 1024 or more, or 65536 or more |
+| N1 | a constant named like a limit (`max…`, `…Timeout`, `…Size`) without a directive |
+
+It also fails on a malformed directive. Hexadecimal, octal and binary literals in
+a comparison are left alone -- that is how this tree writes format checks such
+as `len(data) < 0x40`.
+
+What was already in the tree when the guard arrived is held in a per-file budget,
+`policy/limit_budget.go`, seeded on 2026-09-24 at 174 findings in 82 files. It
+only shrinks: a file above its entry fails, and so does a file below it, so the
+number comes down in the same change that names a limit.
+
+The guard is a floor, not a proof. It recognises limits by shape and by name, so
+a limit in a shape none of the rules describes is not caught; binary-format
+offsets are deliberately not guarded, and their bounds are tested by fuzzing
+instead.
+
 ---
 
 *This document is the one place in the repository where the prohibited name

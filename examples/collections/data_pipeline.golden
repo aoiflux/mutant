@@ -1,0 +1,15 @@
+=== data_pipeline ===
+scores: [3, 3, 9, 5, 8]
+high-severity events: 2
+total risk: 28
+mean risk: 5.600000
+max risk:  9
+ranked (highest first):
+  db01  exfil  score=9
+  db01  priv_esc  score=8
+  web02  scan  score=5
+  web01  login_fail  score=3
+  web01  login_fail  score=3
+weighted (x2): [6, 6, 18, 10, 16]
+unique hosts: [db01, web01, web02]
+true

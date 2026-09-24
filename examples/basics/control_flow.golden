@@ -1,0 +1,25 @@
+while: drained 10, 1 left in the queue
+for-in array: port 22
+for-in array: port 80
+for-in array: port 443
+for-in array: ports[0] = 22
+for-in array: ports[1] = 80
+for-in array: ports[2] = 443
+for-in hash: critical
+for-in hash: high
+for-in hash: low
+for-in hash: critical weighs 3
+for-in hash: high weighs 2
+for-in hash: low weighs 1
+for-in string: m
+for-in string: u
+for-in string: t
+for-in range: 1..4 sums to 10
+match literal: 0 -> clean
+match literal: 2 -> a few findings
+match literal: -1 -> the scan did not run
+match literal: 47 -> many findings
+match enum: finished
+match enum: raised
+match enum: not attempted
+match block arm: critical weighs 30, other weighs 0

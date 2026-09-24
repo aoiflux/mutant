@@ -1,0 +1,5 @@
+=== service_recon ===
+resolved 127.0.0.1 -> [127.0.0.1]
+scanned 5 ports; open: []
+banner: {banner: , error: dial tcp 127.0.0.1:80: connectex: No connection could be made because the target machine actively refused it., ok: false}
+true

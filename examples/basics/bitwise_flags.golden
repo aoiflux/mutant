@@ -1,0 +1,14 @@
+perms       = 5
+can read?   = true
+can write?  = false
+after set   = 7
+after clear = 3
+acc         = 2
+high nibble = 15
+low nibble  = 0
+-8 >> 1     = -4
+packed      = 19802
+unpacked hi = 77
+unpacked lo = 90
+popcount(7)   = 3
+popcount(240) = 4

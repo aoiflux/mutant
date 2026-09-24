@@ -15,85 +15,50 @@ exhaustive lists.
 
 ### Added
 
-- **Sigma rules, evaluated here.** Four builtins in the `detection` category:
-  `sigma_parse` and `sigma_parse_all` compile a rule or a multi-document
-  ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a
-  ruleset over an `events_from` timeline, compiling each rule once.
+- **A release gate you can run.** `scripts/release_gate.sh` and
+  `scripts/release_gate.ps1` run every check a release has to pass -- the
+  toolchain `go.mod` pins, gofmt, vet on three platforms, the six build targets
+  and the WebAssembly REPL, the tests, the race detector, fuzzing, the generated
+  documents, the example sweep against its recorded output, module
+  verification, and the changelog date against the tag -- and print one table.
+  Every choice is a parameter; nothing is read from the environment and nothing
+  is written into the working tree. `scripts/coverage.sh` and
+  `scripts/coverage.ps1` measure unit and cross-package coverage per package
+  through a new `cmd/covreport`. There is still no CI: this is the command a
+  contributor runs, and the one the owner runs before tagging.
 
-  Supported: search identifiers as mappings, lists of mappings or keyword lists;
-  `and`/`or`/`not`, parentheses and the `all of`/`N of`/`any of` quantifiers over
-  `them` and over identifier patterns; and the value modifiers `contains`,
-  `startswith`, `endswith`, `all`, `cased`, `re` (with `i`/`m`/`s`), `base64`,
-  `base64offset`, `utf16`/`utf16le`/`utf16be`/`wide`, `windash`, `cidr`,
-  `lt`/`lte`/`gt`/`gte`, `exists` and `fieldref`, with Sigma's `*` and `?`
-  wildcards and its case-insensitive default.
+- **Every limit is named, and a guard keeps it that way.** A value that bounds
+  what Mutant will do -- how much it reads, how deep it recurses, how long it
+  waits, how many entries it keeps -- is a constant with a `//mutant:limit`
+  directive and a written reason, and `docs/LIMITS_REFERENCE.md`, a third
+  artifact `go run ./cmd/gendocs` generates, lists each with its value and the
+  flag that overrides it, if one does. `go test ./policy/` fails on a limit
+  written as a bare literal in any of ten recognised shapes; the 174 already in
+  the tree are held in a per-file budget that can only shrink. See section 6 of
+  [CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).
 
-  This is possible where a YARA engine is not, and the difference is worth
-  stating: YARA needs libyara, libyara needs cgo, and everything here builds
-  under `CGO_ENABLED=0`. A Sigma rule is YAML and a matching model, and the two
-  things it needed already existed -- `yaml_parse_all`, because a ruleset is a
-  multi-document YAML file, and `events_from`, because a rule needs something
-  uniform to match against.
+- **The documentation is checked against the tree.** Every `mutant` fence
+  compiles, allowing for names an earlier fence defined; every `name(` in prose
+  is a registered builtin; every `mutant` command line uses flags the binary
+  spells, and none teaches the retired `run`, `-pwd` or `--password` forms;
+  every path a document or a Go comment cites exists in a clone; every relative
+  link and anchor resolves. The examples check walks every directory now, and
+  also fails when a README names a program that is not there. The version the
+  documents state is held to `global.Version`: the tutorial's sample output,
+  SECURITY.md's supported-versions table, this file's first release and compare
+  links, and a new `mutantLanguageVersion` field in the extension's manifest.
 
-  Field names are looked up on the event and then inside `extra`, where
-  `events_from` keeps the parser's entry verbatim, so a rule written in a
-  source's own taxonomy runs against a normalized Mutant event with no
-  field-mapping configuration in between.
+- **Examples can record what they print.** `go run ./cmd/sweep --golden`
+  compares each reproducible example's output with a `.golden` file beside it,
+  and `--update-golden` writes them; output that varies between two runs of the
+  same bytecode gets no golden, because one sample of it is not its value. A new
+  `// mutant:sweep needs-input -- <what>` marker compiles an example that needs
+  evidence, a network peer or a passphrase and counts it separately, so the
+  number of examples whose output was actually checked is never inflated.
 
-  **A rule this engine cannot evaluate is a compile error, never a silent
-  non-match.** Aggregations, `near`, `timeframe`, rule collections, `|expand`
-  and unknown modifiers are all refused by name, as are a condition naming an
-  undefined search identifier and an `all of filter*` that matches none. A rule
-  that quietly never fires counts toward coverage and finds nothing, and nobody
-  goes looking for it. For the same reason `sigma_parse_all` fails the whole
-  ruleset when one rule in it does not compile.
-
-  `sigma_match` and `sigma_scan` also report the fields a rule read that the
-  evidence never carried -- `fields_missing` and `unmatched_fields`. A ruleset
-  pointed at an artifact without its fields returns zero hits and is correct
-  about it, and that zero is a rule that never ran rather than a clean host.
-
-  See [DETECTION_RULES.md](docs/DETECTION_RULES.md),
-  `examples/detection/sigma_rules.mut` and cookbook recipe 15.
-  `docs/COMPARISON.md` said "there is no Sigma support at all"; it no longer
-  does, and it still says what a rule engine is better at.
-
-- **A probe that checks the field names in a return contract.** A contract's
-  shape (bare or `(value, err)`) and the kind of its success value were both
-  verified against a real call; its **field names** were not, and those are what
-  the editor renders on hover and what a program types. `{path, bytes, format,
-  sha256}` is declared in `builtin/metadata.go` and spelled again wherever the
-  builtin builds its result, with nothing linking the two.
-
-  `TestEveryFieldAnImplementationReturnsIsDeclared` calls a builtin for real and
-  requires every key it returns to be declared -- which catches a typo in either
-  copy, since a renamed key is undeclared and a renamed declaration leaves the
-  real key undeclared. It reuses the existing purity gate, so it reaches only
-  the builtins that compute rather than touch the world: **4 of the 162 that
-  declare fields**. It logs that number rather than implying coverage it does
-  not have, and widens for free as the pure-probe categories do.
-
-- **Every build script writes a `SHA256SUMS` beside what it produced.**
-  `scripts/build.sh` and `scripts/build.ps1` write one next to the six binaries
-  and another next to the wasm REPL artifacts; `lsp/build.sh` and
-  `lsp/build.ps1` write one next to the six language servers; both VS Code
-  packaging wrappers write one next to the vsix, and `npm run package` writes
-  one covering all six per-platform vsix files.
-
-  It is the format `sha256sum -c` reads -- lowercase hex, two spaces, the
-  file's bare name -- so someone who downloads a binary verifies it with a tool
-  they already have and nothing from this project. The same format
-  `case_bundle` has always written, for the same reason. Names are bare and
-  each file sits beside what it covers, so checking is
-  `cd <dir> && sha256sum -c SHA256SUMS`. Lines are sorted under `LC_ALL=C` and
-  the PowerShell scripts sort to match, so the shell and PowerShell halves emit
-  byte-identical files; a script refuses rather than recording a digest for a
-  file the build did not produce, and the bootstrap binary is deleted before
-  the sums are taken rather than sitting unlisted in the output directory.
-
-  This is not a substitute for signed binaries, which is still open. A checksum
-  published beside the file it covers proves the download arrived intact, not
-  that it came from us.
+- **`db_compact`, and a memory budget for `db_open_disk`.** Graphene v0.9.0
+  compacts a disk store's write-ahead log on request, and caps the memory a
+  disk store may use; v0.4.0 had no memory configuration at all.
 
 - **Integrity that is checked, not only reported.** `ewf_metadata` has always
   returned the MD5 and SHA-1 an acquisition tool stored inside an E01 image, and
@@ -362,11 +327,23 @@ exhaustive lists.
 
 ### Changed
 
+- **The language server reports the language release it teaches.** Its
+  `serverInfo.version` was the constant `0.1.0`, a version nothing here ever
+  had; it is now `global.Version`, the same string `mlsp --version` prints.
+
+- **`object.LuaPatch` no longer carries `DecryptedChecksum`.** The field was
+  documented as set after decryption for validation, but nothing set it or read
+  it, and storing the value in a variable would have dropped it anyway.
+  Validation happens where a patch runs, against `ChecksumExpected`. A new test
+  stores and reloads every object type with every exported field set, which is
+  how this was found and how the next dropped field will be.
+
 - **Every `github.com/aoiflux/*` dependency is on its latest release.**
   `libext` v0.2.0 -> v0.3.0, `libfat` v0.2.0 -> v0.3.1, `libhfs` v0.2.0 ->
   v0.3.2, `libntfs` v0.3.1 -> v0.3.3, `libvhdi` v0.2.0 -> v0.3.0, `libxfat`
-  v1.2.0 -> v1.4.0, `libxfs` v0.3.1 -> v0.4.1. `libewf` v0.2.1, `libtable`
-  v0.2.2 and `graphene` v0.9.0 were already current. No transitive dependency
+  v1.2.0 -> v1.4.0, `libxfs` v0.3.1 -> v0.4.1, and `graphene` v0.4.0 ->
+  v0.9.0, which moved on its own with the namespace-fold fix below. `libewf`
+  v0.2.1 and `libtable` v0.2.2 were already current. No transitive dependency
   moved.
 
   Six of the seven needed no code change: nothing exported was removed from
@@ -404,47 +381,6 @@ exhaustive lists.
   meanings, although the methods behind them were renamed and one had its
   sense inverted upstream.
 
-- **A builtin no longer spells its own name as a literal.** The name was
-  declared once in `builtin/names.go` and said twice more as a constant -- by
-  the dispatch table and by the return contract -- but the error messages a user
-  actually reads spelled it a fourth way, as a string literal inside the
-  implementation: `requireArrayArg("sort", args[0], 1)`. Renaming a builtin was
-  already caught three ways, and none of them looked at what its errors say, so
-  every message it raised would have gone on quoting a name that no longer
-  existed. The same literal reached the chain of custody, where
-  `custodyRecordOpen("zip_open", ...)` is the name that ends up in a case
-  manifest.
-
-  **456 literals across 56 files** now say the constant. The rewrite was scoped
-  to the function each name is registered to rather than matched across the
-  tree, because short builtin names collide with ordinary hash keys -- `"sort"`,
-  `"slice"`, `"error"` and `"count"` are all both -- and a literal is only
-  suspicious inside the function that owns it.
-  `TestNoBuiltinSpellsItsOwnNameAsALiteral` walks the AST the way `policy/`
-  does and fails if one comes back.
-
-- **`case_report` and `case_bundle` passed the builtin's name to the same
-  function twice**, once inside the options value and once as a parameter the
-  function ignored -- so the options and the document it built could have been
-  labelled differently. The dead parameter is gone.
-
-- **The GitHub Actions workflow is gone, and the docs no longer claim it runs.**
-  `.github/workflows/ci.yml` built, vetted and tested on Linux, Windows and
-  macOS, cross-compiled six targets and ran `go mod verify`. Those are still
-  the gates -- they are now commands a contributor runs, listed in
-  [CONTRIBUTING.md](CONTRIBUTING.md), and nothing runs them automatically.
-
-  Four documents asserted otherwise and have been corrected:
-  `CONTRIBUTING.md`, `docs/CONFIGURATION_POLICY.md`, `docs/SECURITY_LLD.md` and
-  `docs/SECURITY_LLD_TRACEABILITY.md`. Two claims in them were already false
-  before this change: `SECURITY_LLD.md` §16.2 described a
-  `.github/workflows/security-profile.yml` that was never written, and the
-  traceability matrix's `C` evidence level meant "CI wired" -- it now means
-  wired into the repository-wide `go test ./...` gate, which is what those rows
-  were actually describing. SEC-015 ("the security suites must run on every
-  supported OS") drops from `I/C` to `I/P`, because nothing automates the
-  "every OS" half any more.
-
 - **`table_open`'s warnings are records, not sentences.** Each warning is now
   `{code, message, lba}`, beside a deduplicated `warning_codes`, where it was a
   string. The prose is written for a report and reworded between library
@@ -467,102 +403,39 @@ exhaustive lists.
 
 ### Fixed
 
-- **A test compared an evidence path against the spelling it typed, not the
-  one custody records.** `case_evidence` stores the resolved path -- that is
-  how two handles on one file become one exhibit -- and Windows hands back an
-  8.3 short path for a `TEMP` under a username longer than eight characters, so
-  `TestCaseReportSaysOnlyWhatTheManifestSays` looked for
-  `C:\Users\RUNNER~1\...` in a report that carried
-  `C:\Users\runneradmin\...`. It failed on that one kind of host and passed
-  on every other, including every machine this was developed on.
+- **A `while` or C-style `for` inside a `for…in` broke the outer loop.** The
+  compiler stripped the pop after an expression statement that ended a
+  condition-driven loop's body, post or init section, so each iteration leaked
+  one stack slot. `for…in` reads its cursor at a fixed offset from the top of the
+  stack, so its next advance read the leaked value and failed with "loop cursor
+  was replaced". Every loop body is stack-neutral again, and
+  `vm/loop_nesting_test.go` runs each nesting shape as its own case.
 
-  The helper now returns the path as custody will record it. The product
-  behaviour was correct and is unchanged; what was missing was a test saying
-  so, and `TestTwoSpellingsOfOneFileAreOneEvidenceEntry` now registers one file
-  under two names and fails if the manifest grows two entries.
+- **`rand.*`, `sort.*`, `assert.*` and `gunzip.*` failed in compiled
+  programs.** The compiler's shadow test for `ns.member` also found builtins, so
+  the four families whose namespace is itself a builtin's name never folded, and
+  compiled a field read on a builtin that the VM can only refuse. Nine builtins
+  ran under the evaluator and in macro expansion, failed under the VM, and were
+  offered by the editor throughout. The test ignores the builtin scope now, and
+  `parity/` holds the two engines to each other on it.
 
-- **A write through more than one container was silently lost.**
-  `grid[0][1] = 9`, `h["a"]["b"] = 2`, `rows[0]["n"] = 99`, `o.inner.v = 42` --
-  every shape with more than one hop in its target -- compiled, ran, changed
-  nothing and reported nothing. The compiler emitted the store back into the
-  variable only when the container expression was a plain identifier; anything
-  deeper mutated a value nothing stored back. Globals and locals are held
-  encrypted, so a load hands back a copy, and the write went into the copy.
+- **`db_add_artifact` was N+1 unchecked writes.** It is one transaction now,
+  and a store handle the timeline kept is no longer leaked.
 
-  For a tool that reports on evidence this is the worst failure available: the
-  report is wrong and looks right. The idiom it breaks is the ordinary one --
-  `counts[host]["n"] = counts[host]["n"] + 1` over a timeline.
+- **Documents that pointed at nothing, taught retired commands, or did not
+  compile.** SECURITY.md named 2.4.x as the supported release; three example
+  READMEs taught `mutant run` with `-pwd`, which puts the password in the
+  process table; four source comments cited a design note that exists nowhere,
+  in a directory git ignores; a MODULES.md example elided its bodies with a
+  comment syntax Mutant does not have; two links pointed at capability-reference
+  anchors that had moved; CONTRIBUTING named the packaging script's old path;
+  and four example programs were named by no README. The checks that found them
+  are the ones added above, so none of these can come back unnoticed.
 
-  The compiler now flattens an assignment target to the variable under it plus
-  its hops, and stores every container it passed through back where it came
-  from. What it still cannot emit correctly it refuses by name: a target with no
-  variable under it (`[1, 2][0] = 9`) has nowhere to store its result, and an
-  index before the last one is loaded again on the way out, so it has to be a
-  name or a literal rather than something with a side effect. The last index is
-  compiled once and is free to be a call.
-
-  The two engines now agree on ten shapes that used to diverge
-  (`TestNestedIndexAssignmentParity`, previously skipped as a known divergence),
-  and the editor reports both refusals where they are written, under a new
-  `assignmentTarget` lint rule whose answers are pinned against the compiler's
-  so the two cannot drift.
-
-- **Index assignment evaluated to the container instead of the value assigned.**
-  `arr[0] = 42` answered with `[42, 2, 3]`, and `h["k"] = 7` with the whole hash,
-  while `x = 5`, `p.x = 9` and `x += 1` all answered with the value -- and so did
-  the evaluator, in every case. `let bound = arr[0] = 42` bound the array.
-
-  Every language where assignment is an expression yields the assigned value and
-  none yields the container, so this was an unfinished implementation rather than
-  a choice: index assignment simply left whatever `OpSetIndex` had put on the
-  stack. The compiler now spills the value to storage of its own, where the value
-  expression was already being compiled, and reads it back after the stores.
-  Nothing is re-evaluated, no opcode was added, and the last index stays free to
-  be a call -- `counts[etld1(url)] = 1` still compiles.
-
-  `TestIndexAssignmentValueParity` was skipped as a known divergence and is now
-  `TestAssignmentYieldsTheValueAssigned`, covering all five forms at three
-  depths.
-
-- **The two engines evaluated an assignment's parts in different orders.** The
-  compiler emits the container, then the index, then the value; the evaluator
-  read the value first, and folded a compound assignment's right-hand side
-  before its target. Invisible until both halves have side effects --
-  `a[note("index")] = note("value")` recorded them in opposite orders -- and it
-  reached real programs through macros, since the evaluator is what computes
-  `unquote(...)` at expansion time. The evaluator now follows source order.
-  Found by the test written for the change above.
-
-- **Twenty-one example programs were in no README.** Among them workshop step 6,
-  a whole numbered lesson in a sequence the reader is told to follow in order.
-  The ten filesystem format demos, the two `net_serve` server pairs and every
-  macro example were likewise unlisted. All of them are now described where they
-  live, and `TestEveryExampleIsListedInItsReadme` fails when a directory that
-  has a README gains a program it does not mention.
-
-- **Workshop step 6 warned about a defect that had been fixed.** Its style note
-  said a closure writing an outer variable does not write back. It does, and has
-  since captured locals became cells; the one case that still does not is a
-  callback running on its own VM, which the editor already reports. A false
-  caveat is worse than none: it teaches a reader to avoid something that works.
-
-- **An example pointed at someone's dev machine.** `ext_example.mut` opened
-  `N:\dev\dataset\img6_ext4.dd` where every one of its nine siblings uses a
-  relative placeholder. It is `./disk.ext4` now, like the rest.
-
-- **Four documents described a standard library three releases old.**
-  `WHAT_IS_MUTANT.md`, `WASM_REPL_REFERENCE.md` and `COMPARISON.md` each said
-  459 builtins, `TUTORIAL_30_MIN.md` said 469, against 497; the category counts
-  (33, 34, 35) were all wrong too, and two documents undercounted `examples/` by
-  twelve programs. Corrected, and gated: `TestProseCountsMatchTheRegistry` and
-  `TestProseExampleCountsMatchTheTree` in `cmd/gendocs` now fail when a document
-  claims a number the registry or the tree does not support.
-
-  This is ED-1's defect in a different file type -- a hand-written claim about
-  the registry with nothing that fails when the registry moves -- so it gets
-  ED-1's answer. Counts in `CHANGELOG.md`, `CONTRIBUTING.md` and the roadmap are
-  deliberately outside the gate: those record what was true at a past release,
-  and correcting history would be the untruth.
+- **This file dated 2.5.0 three days before it was tagged, and listed half of it
+  as unreleased.** Fourteen entries that shipped in the v2.5.0 tag sat under
+  `[Unreleased]`; they are under `[2.5.0]` now, and 2.5.0 is dated 2026-09-17,
+  the day the tag was made. The release gate compares the two from here on.
 
 - **NTFS evidence was opened writable.** libntfs promotes any `io.WriterAt` to a
   writable volume, and `*os.File` implements it whatever mode the file was opened
@@ -595,12 +468,92 @@ exhaustive lists.
   `fs_hash` error**, naming a builtin the script never called. The error names
   the builtin that was.
 
-## [2.5.0] — 2026-09-14
+## [2.5.0] — 2026-09-17
 
 The v2.5 line — *trustworthy: structural correctness*. The theme is that every
 claim the README makes becomes verifiable.
 
 ### Added
+
+- **Sigma rules, evaluated here.** Four builtins in the `detection` category:
+  `sigma_parse` and `sigma_parse_all` compile a rule or a multi-document
+  ruleset, `sigma_match` asks one rule about one event, and `sigma_scan` runs a
+  ruleset over an `events_from` timeline, compiling each rule once.
+
+  Supported: search identifiers as mappings, lists of mappings or keyword lists;
+  `and`/`or`/`not`, parentheses and the `all of`/`N of`/`any of` quantifiers over
+  `them` and over identifier patterns; and the value modifiers `contains`,
+  `startswith`, `endswith`, `all`, `cased`, `re` (with `i`/`m`/`s`), `base64`,
+  `base64offset`, `utf16`/`utf16le`/`utf16be`/`wide`, `windash`, `cidr`,
+  `lt`/`lte`/`gt`/`gte`, `exists` and `fieldref`, with Sigma's `*` and `?`
+  wildcards and its case-insensitive default.
+
+  This is possible where a YARA engine is not, and the difference is worth
+  stating: YARA needs libyara, libyara needs cgo, and everything here builds
+  under `CGO_ENABLED=0`. A Sigma rule is YAML and a matching model, and the two
+  things it needed already existed -- `yaml_parse_all`, because a ruleset is a
+  multi-document YAML file, and `events_from`, because a rule needs something
+  uniform to match against.
+
+  Field names are looked up on the event and then inside `extra`, where
+  `events_from` keeps the parser's entry verbatim, so a rule written in a
+  source's own taxonomy runs against a normalized Mutant event with no
+  field-mapping configuration in between.
+
+  **A rule this engine cannot evaluate is a compile error, never a silent
+  non-match.** Aggregations, `near`, `timeframe`, rule collections, `|expand`
+  and unknown modifiers are all refused by name, as are a condition naming an
+  undefined search identifier and an `all of filter*` that matches none. A rule
+  that quietly never fires counts toward coverage and finds nothing, and nobody
+  goes looking for it. For the same reason `sigma_parse_all` fails the whole
+  ruleset when one rule in it does not compile.
+
+  `sigma_match` and `sigma_scan` also report the fields a rule read that the
+  evidence never carried -- `fields_missing` and `unmatched_fields`. A ruleset
+  pointed at an artifact without its fields returns zero hits and is correct
+  about it, and that zero is a rule that never ran rather than a clean host.
+
+  See [DETECTION_RULES.md](docs/DETECTION_RULES.md),
+  `examples/detection/sigma_rules.mut` and cookbook recipe 15.
+  `docs/COMPARISON.md` said "there is no Sigma support at all"; it no longer
+  does, and it still says what a rule engine is better at.
+
+- **A probe that checks the field names in a return contract.** A contract's
+  shape (bare or `(value, err)`) and the kind of its success value were both
+  verified against a real call; its **field names** were not, and those are what
+  the editor renders on hover and what a program types. `{path, bytes, format,
+  sha256}` is declared in `builtin/metadata.go` and spelled again wherever the
+  builtin builds its result, with nothing linking the two.
+
+  `TestEveryFieldAnImplementationReturnsIsDeclared` calls a builtin for real and
+  requires every key it returns to be declared -- which catches a typo in either
+  copy, since a renamed key is undeclared and a renamed declaration leaves the
+  real key undeclared. It reuses the existing purity gate, so it reaches only
+  the builtins that compute rather than touch the world: **4 of the 162 that
+  declare fields**. It logs that number rather than implying coverage it does
+  not have, and widens for free as the pure-probe categories do.
+
+- **Every build script writes a `SHA256SUMS` beside what it produced.**
+  `scripts/build.sh` and `scripts/build.ps1` write one next to the six binaries
+  and another next to the wasm REPL artifacts; `lsp/build.sh` and
+  `lsp/build.ps1` write one next to the six language servers; both VS Code
+  packaging wrappers write one next to the vsix, and `npm run package` writes
+  one covering all six per-platform vsix files.
+
+  It is the format `sha256sum -c` reads -- lowercase hex, two spaces, the
+  file's bare name -- so someone who downloads a binary verifies it with a tool
+  they already have and nothing from this project. The same format
+  `case_bundle` has always written, for the same reason. Names are bare and
+  each file sits beside what it covers, so checking is
+  `cd <dir> && sha256sum -c SHA256SUMS`. Lines are sorted under `LC_ALL=C` and
+  the PowerShell scripts sort to match, so the shell and PowerShell halves emit
+  byte-identical files; a script refuses rather than recording a digest for a
+  file the build did not produce, and the bootstrap binary is deleted before
+  the sums are taken rather than sitting unlisted in the output directory.
+
+  This is not a substitute for signed binaries, which is still open. A checksum
+  published beside the file it covers proves the download arrived intact, not
+  that it came from us.
 
 - **One event vocabulary across every parser, and three ways out of it.** Five
   of the seven builtins in a new `schema interchange` category.
@@ -1131,6 +1084,47 @@ claim the README makes becomes verifiable.
 
 ### Changed
 
+- **A builtin no longer spells its own name as a literal.** The name was
+  declared once in `builtin/names.go` and said twice more as a constant -- by
+  the dispatch table and by the return contract -- but the error messages a user
+  actually reads spelled it a fourth way, as a string literal inside the
+  implementation: `requireArrayArg("sort", args[0], 1)`. Renaming a builtin was
+  already caught three ways, and none of them looked at what its errors say, so
+  every message it raised would have gone on quoting a name that no longer
+  existed. The same literal reached the chain of custody, where
+  `custodyRecordOpen("zip_open", ...)` is the name that ends up in a case
+  manifest.
+
+  **456 literals across 56 files** now say the constant. The rewrite was scoped
+  to the function each name is registered to rather than matched across the
+  tree, because short builtin names collide with ordinary hash keys -- `"sort"`,
+  `"slice"`, `"error"` and `"count"` are all both -- and a literal is only
+  suspicious inside the function that owns it.
+  `TestNoBuiltinSpellsItsOwnNameAsALiteral` walks the AST the way `policy/`
+  does and fails if one comes back.
+
+- **`case_report` and `case_bundle` passed the builtin's name to the same
+  function twice**, once inside the options value and once as a parameter the
+  function ignored -- so the options and the document it built could have been
+  labelled differently. The dead parameter is gone.
+
+- **The GitHub Actions workflow is gone, and the docs no longer claim it runs.**
+  `.github/workflows/ci.yml` built, vetted and tested on Linux, Windows and
+  macOS, cross-compiled six targets and ran `go mod verify`. Those are still
+  the gates -- they are now commands a contributor runs, listed in
+  [CONTRIBUTING.md](CONTRIBUTING.md), and nothing runs them automatically.
+
+  Four documents asserted otherwise and have been corrected:
+  `CONTRIBUTING.md`, `docs/CONFIGURATION_POLICY.md`, `docs/SECURITY_LLD.md` and
+  `docs/SECURITY_LLD_TRACEABILITY.md`. Two claims in them were already false
+  before this change: `SECURITY_LLD.md` §16.2 described a
+  `.github/workflows/security-profile.yml` that was never written, and the
+  traceability matrix's `C` evidence level meant "CI wired" -- it now means
+  wired into the repository-wide `go test ./...` gate, which is what those rows
+  were actually describing. SEC-015 ("the security suites must run on every
+  supported OS") drops from `I/C` to `I/P`, because nothing automates the
+  "every OS" half any more.
+
 - **Enum equality is typed rather than textual.** Comparing an enum value with
   anything that was not an enum fell through to comparing what the two would
   print, and an enum prints as `Status.Ok(0)` -- so `Status.Ok ==
@@ -1228,6 +1222,103 @@ claim the README makes becomes verifiable.
   configuration is under design; no interface is specified.*
 
 ### Fixed
+
+- **A test compared an evidence path against the spelling it typed, not the
+  one custody records.** `case_evidence` stores the resolved path -- that is
+  how two handles on one file become one exhibit -- and Windows hands back an
+  8.3 short path for a `TEMP` under a username longer than eight characters, so
+  `TestCaseReportSaysOnlyWhatTheManifestSays` looked for
+  `C:\Users\RUNNER~1\...` in a report that carried
+  `C:\Users\runneradmin\...`. It failed on that one kind of host and passed
+  on every other, including every machine this was developed on.
+
+  The helper now returns the path as custody will record it. The product
+  behaviour was correct and is unchanged; what was missing was a test saying
+  so, and `TestTwoSpellingsOfOneFileAreOneEvidenceEntry` now registers one file
+  under two names and fails if the manifest grows two entries.
+
+- **A write through more than one container was silently lost.**
+  `grid[0][1] = 9`, `h["a"]["b"] = 2`, `rows[0]["n"] = 99`, `o.inner.v = 42` --
+  every shape with more than one hop in its target -- compiled, ran, changed
+  nothing and reported nothing. The compiler emitted the store back into the
+  variable only when the container expression was a plain identifier; anything
+  deeper mutated a value nothing stored back. Globals and locals are held
+  encrypted, so a load hands back a copy, and the write went into the copy.
+
+  For a tool that reports on evidence this is the worst failure available: the
+  report is wrong and looks right. The idiom it breaks is the ordinary one --
+  `counts[host]["n"] = counts[host]["n"] + 1` over a timeline.
+
+  The compiler now flattens an assignment target to the variable under it plus
+  its hops, and stores every container it passed through back where it came
+  from. What it still cannot emit correctly it refuses by name: a target with no
+  variable under it (`[1, 2][0] = 9`) has nowhere to store its result, and an
+  index before the last one is loaded again on the way out, so it has to be a
+  name or a literal rather than something with a side effect. The last index is
+  compiled once and is free to be a call.
+
+  The two engines now agree on ten shapes that used to diverge
+  (`TestNestedIndexAssignmentParity`, previously skipped as a known divergence),
+  and the editor reports both refusals where they are written, under a new
+  `assignmentTarget` lint rule whose answers are pinned against the compiler's
+  so the two cannot drift.
+
+- **Index assignment evaluated to the container instead of the value assigned.**
+  `arr[0] = 42` answered with `[42, 2, 3]`, and `h["k"] = 7` with the whole hash,
+  while `x = 5`, `p.x = 9` and `x += 1` all answered with the value -- and so did
+  the evaluator, in every case. `let bound = arr[0] = 42` bound the array.
+
+  Every language where assignment is an expression yields the assigned value and
+  none yields the container, so this was an unfinished implementation rather than
+  a choice: index assignment simply left whatever `OpSetIndex` had put on the
+  stack. The compiler now spills the value to storage of its own, where the value
+  expression was already being compiled, and reads it back after the stores.
+  Nothing is re-evaluated, no opcode was added, and the last index stays free to
+  be a call -- `counts[etld1(url)] = 1` still compiles.
+
+  `TestIndexAssignmentValueParity` was skipped as a known divergence and is now
+  `TestAssignmentYieldsTheValueAssigned`, covering all five forms at three
+  depths.
+
+- **The two engines evaluated an assignment's parts in different orders.** The
+  compiler emits the container, then the index, then the value; the evaluator
+  read the value first, and folded a compound assignment's right-hand side
+  before its target. Invisible until both halves have side effects --
+  `a[note("index")] = note("value")` recorded them in opposite orders -- and it
+  reached real programs through macros, since the evaluator is what computes
+  `unquote(...)` at expansion time. The evaluator now follows source order.
+  Found by the test written for the change above.
+
+- **Twenty-one example programs were in no README.** Among them workshop step 6,
+  a whole numbered lesson in a sequence the reader is told to follow in order.
+  The ten filesystem format demos, the two `net_serve` server pairs and every
+  macro example were likewise unlisted. All of them are now described where they
+  live, and `TestEveryExampleIsListedInItsReadme` fails when a directory that
+  has a README gains a program it does not mention.
+
+- **Workshop step 6 warned about a defect that had been fixed.** Its style note
+  said a closure writing an outer variable does not write back. It does, and has
+  since captured locals became cells; the one case that still does not is a
+  callback running on its own VM, which the editor already reports. A false
+  caveat is worse than none: it teaches a reader to avoid something that works.
+
+- **An example pointed at someone's dev machine.** `ext_example.mut` opened
+  `N:\dev\dataset\img6_ext4.dd` where every one of its nine siblings uses a
+  relative placeholder. It is `./disk.ext4` now, like the rest.
+
+- **Four documents described a standard library three releases old.**
+  `WHAT_IS_MUTANT.md`, `WASM_REPL_REFERENCE.md` and `COMPARISON.md` each said
+  459 builtins, `TUTORIAL_30_MIN.md` said 469, against 497; the category counts
+  (33, 34, 35) were all wrong too, and two documents undercounted `examples/` by
+  twelve programs. Corrected, and gated: `TestProseCountsMatchTheRegistry` and
+  `TestProseExampleCountsMatchTheTree` in `cmd/gendocs` now fail when a document
+  claims a number the registry or the tree does not support.
+
+  This is ED-1's defect in a different file type -- a hand-written claim about
+  the registry with nothing that fails when the registry moves -- so it gets
+  ED-1's answer. Counts in `CHANGELOG.md`, `CONTRIBUTING.md` and the roadmap are
+  deliberately outside the gate: those record what was true at a past release,
+  and correcting history would be the untruth.
 
 - **The debugger refused to run on a virtual machine.** A debug session built
   its VM in secure mode, so the injected sandbox probe fired on launch and the

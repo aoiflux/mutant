@@ -1,0 +1,10 @@
+sum_of([1,2,3,4])     = 10
+even count           = 3
+ticket()             = 101
+ticket()             = 102
+a fresh counter      = 101
+mean of 10,20,60     = 30
+shared               = [3, 3, 3]
+frozen               = [0, 1, 2]
+accumulated in pmap  = 0
+returned from pmap   = 20

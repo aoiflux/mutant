@@ -1,0 +1,6 @@
+=== End-to-End Triage Pipeline ===
+policy_load: {allow_query: data.e2e.allow, eval_query: data.e2e.decision, loaded: true, name: e2e, package: e2e, rules_query: data.e2e.rules} err:
+cache_open: {created: true, name: e2e_cache, opened: true} err:
+policy_eval: {allow: false, decision: {allow: false, score: 85}, query: data.e2e.decision} err:
+cache_get(last_score): {found: true, value: 85.000000} err:
+detect_network_beacon: {detected: true, hits: [{bytes_cv: 0.000000, confidence: low, count: 3, dst: c2.evil.test, interval_cv: 0.000000, interval_mean_s: 0.000000, interval_stddev_s: 0.000000, reasons: [high_frequency], score: 50}]} err:

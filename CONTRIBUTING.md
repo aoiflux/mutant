@@ -64,6 +64,27 @@ for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin
 done
 ```
 
+Those two are the minimum. The whole release gate -- the pinned toolchain,
+gofmt, vet on three platforms, every build target, the tests, the race detector,
+the generated documents, the example sweep against its recorded output, module
+verification, and the changelog date against the tag -- is one command, and it
+prints a table of what passed:
+
+```bash
+scripts/release_gate.sh --go go1.26.2        # Linux, macOS, WSL
+```
+
+```powershell
+scripts/release_gate.ps1 -Go go1.26.2        # Windows
+```
+
+The gates run on the toolchain `go.mod` pins, installed beside any newer one with
+`go install golang.org/dl/go1.26.2@latest` and `go1.26.2 download`; the gate
+reads the version from `go.mod` and refuses any other. Add `--quick` / `-Quick`
+to skip the slow steps while iterating. `scripts/coverage.sh` and
+`scripts/coverage.ps1` measure coverage per package; that is a measurement, not a
+gate.
+
 ## Configuration: no environment variables
 
 **Mutant takes no configuration from the environment.** Using it must never
@@ -146,7 +167,7 @@ builtin changes what the server teaches without touching a single file under
 `lsp/`.
 
 `npm run check:lsp-bins` is what stands in the way, and
-`scripts/package-targets.mjs` runs it before it publishes anything. It compares
+`mutant-vscode-extension/scripts/package-targets.mjs` runs it before it publishes anything. It compares
 the staged binaries against the Go sources of the whole module, not just
 `lsp/**`, and — for the one target the machine running it can execute — asks
 the binary for `--version` and compares that with what the sources build.

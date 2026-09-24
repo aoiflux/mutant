@@ -51,8 +51,8 @@ type capabilities struct {
 	// conditions and data breakpoints are not, and evaluateForHovers is not
 	// either: this adapter answers a bare name and refuses anything else, and
 	// an editor that asked it to evaluate every identifier under the cursor
-	// would collect a refusal for each one. See decision 7 in
-	// plans/T1_DEBUGGER.md.
+	// would collect a refusal for each one. See "What it deliberately does not
+	// do" in docs/DEBUGGING.md.
 	SupportsHitConditionalBreakpoints bool `json:"supportsHitConditionalBreakpoints"`
 
 	// Every value shown is read, never written: setVariable and setExpression

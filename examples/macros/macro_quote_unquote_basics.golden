@@ -1,0 +1,5 @@
+== macro quote/unquote basics ==
+emit_literal() => 7
+add_expr(3, 9) => 12
+add_expr(dynamic, 5) => 17
+negate_expr(11) => -11

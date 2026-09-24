@@ -2,7 +2,7 @@
 
 Mutant ships a networking toolkit in its standard library so that tools such as
 TLS clients/servers and mitmproxy-style interception proxies can be written
-entirely in Mutant source. See the [Capability Reference](CAPABILITY_REFERENCE.md#network-32)
+entirely in Mutant source. See the [Capability Reference](CAPABILITY_REFERENCE.md#network-33)
 for the full network builtin table.
 
 The toolkit is split into three layers:

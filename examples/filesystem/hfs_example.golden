@@ -1,0 +1,1 @@
+hfs_open failed: ERROR:hfs_open: open ./disk.hfs: The system cannot find the file specified. at examples\filesystem\hfs_example.mut:2:24 context=builtin.hfs_open

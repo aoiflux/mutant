@@ -1,0 +1,6 @@
+=== Registry Persistence Hunt ===
+reg_open: {handle: reg-hive-1, path: examples/data/offline_hive.json, source_type: json, status: ok} err:
+reg_enum_values: err: ERROR:reg_enum_values: key not found: HKCU\Software\Microsoft\Windows\CurrentVersion\Run at examples\registry\registry_persistence_hunt.mut:10:23 context=builtin.reg_enum_values
+reg_deleted_keys: [HKLM\Software\OldMutant] err:
+reg_timeline count: 2 err:
+reg_close: {closed: true, handle: reg-hive-1, status: ok} err:

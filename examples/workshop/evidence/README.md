@@ -73,6 +73,14 @@ let events, _ = events_from(rows, "bodyfile");    // normalized -> Sigma / ECS /
 
 Two builtins, and the fsagen corpus is a supertimeline.
 
+## The $MFT for step 09
+
+fsagen writes files, not a filesystem, so it cannot produce the standalone
+`$MFT` that `09_revenant.mut` reads. `export_mft.mut` carves one out of an NTFS
+volume by hand, starting from the boot sector. The facilitator runs it once,
+before the workshop, and ships the file it writes, so students need no admin
+rights and no disk image; its header lists what the volume argument may name.
+
 ## Regenerating just the timeline
 
 If students modify files and want a fresh bodyfile without rebuilding the corpus:

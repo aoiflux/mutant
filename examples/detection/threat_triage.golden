@@ -1,0 +1,7 @@
+=== threat_triage ===
+suspicious findings: {count: 0, detected: false, hits: []}
+beacon analysis: {detected: true, hits: [{bytes_cv: 0.003755, confidence: medium, count: 5, dst: 185.12.0.9, interval_cv: 0.013608, interval_mean_s: 60.000000, interval_stddev_s: 0.816497, reasons: [regular_interval, consistent_size], score: 100}]}
+ipv4 IOCs   : [185.12.0.9]
+domain IOCs : [evil.example.com]
+defanged URL: hxxp://evil[.]example[.]com/payload
+true

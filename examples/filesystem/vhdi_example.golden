@@ -1,0 +1,1 @@
+vhdi_open failed: ERROR:vhdi_open: open ./disk.vhdx: The system cannot find the file specified. at examples\filesystem\vhdi_example.mut:2:24 context=builtin.vhdi_open

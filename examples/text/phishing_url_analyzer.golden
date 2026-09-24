@@ -1,0 +1,4 @@
+=== phishing_url_analyzer ===
+Safe use: defensive URL triage only.
+seeded test dataset:  example_output/phishing_url_analyzer/urls.json
+wrote report:  example_output/phishing_url_analyzer/report.json

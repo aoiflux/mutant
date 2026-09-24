@@ -107,6 +107,9 @@ sweep, not a category the file belongs to.
 - `examples/lua/` Lua interop examples and helper scripts
 - `examples/bytes/` byte cursor and binary-safe parsing helpers
 - `examples/concurrency/` spawn, task_wait, channels, and pmap
+- `examples/collections/` first-class functions, closures, and the higher-order collection builtins (`map`/`filter`/`reduce`/`each`/`sort_by`) over a small dataset
+- `examples/crypto/` hashing, HMAC, AES-GCM, certificate parsing and JWTs, with no external input
+- `examples/structured/` parsing, transforming and re-serializing nested JSON
 
 ## Suggested learning path
 

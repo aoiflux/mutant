@@ -1,0 +1,26 @@
+=== 1. one task, collected later ===
+  spawned, doing something else meanwhile...
+  sum(1..1000) = 500500
+
+=== 2. a producer and a consumer, joined by a channel ===
+  received  alpha
+  received  bravo
+  received  charlie
+  received  delta
+  produced  4, received  4
+
+=== 3. polling instead of waiting ===
+  done before the gate opens?  false
+  task returned  finished
+
+=== 4. a failing task reports, it does not crash ===
+  value=
+  failure=ERROR:task failed: vm_runtime_error ip=6 op=OpDiv: integer division by zero at examples\concurrency\worker_pool.mut:105:22 context=builtin.task_wait
+
+=== 5. when the work IS an array, use pmap ===
+  [1, 4, 9, 16, 25, 36, 49, 64]
+
+=== 6. work the program never collects still finishes ===
+  program body done; the runtime will wait for the detached task
+
+  the detached task finished after the program body did

@@ -1,0 +1,6 @@
+enum value demo:
+active = Color.Green(2)
+enum values are truthy in conditionals
+
+Color.Red(0)
+this is not blue

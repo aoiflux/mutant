@@ -1,0 +1,5 @@
+=== Fuzzy Matching Builtins ===
+text_levenshtein: 3
+text_similarity: 0.900000
+text_fuzzy_find: {distance: 1, found: true, index: 0, match: powershell}
+text_jaro_winkler: 0.961111

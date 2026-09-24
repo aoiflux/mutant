@@ -1,0 +1,2 @@
+=== NTFS Parser Builtins ===
+ntfs_open error: ERROR:ntfs_open: open disk.img: The system cannot find the file specified. at examples\filesystem\ntfs_example.mut:3:17 context=builtin.ntfs_open

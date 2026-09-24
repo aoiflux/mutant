@@ -1,0 +1,6 @@
+initial struct values:
+p.x = 10
+p.y = 20
+
+after field assignment:
+p.y = 99

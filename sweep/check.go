@@ -52,6 +52,13 @@ func Check(src string) error {
 				"marker is stale and a sweep is skipping an example it could run",
 				ModeServer, marker.Line)
 		}
+	case ModeNeedsInput:
+		// A server or a handler has a mode that says so; filing one under
+		// needs-input would hide which of the two it is.
+		if handler || listener {
+			return fmt.Errorf("marked %s on line %d, but this file %s; mark it %s instead",
+				ModeNeedsInput, marker.Line, describeShape(handler, listener), Classify(src))
+		}
 	}
 
 	return nil

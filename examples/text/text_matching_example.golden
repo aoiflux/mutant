@@ -1,0 +1,6 @@
+=== Text Matching Builtins ===
+text_contains: true
+text_index: 7
+text_count: 3
+text_split: [cmd.exe, powershell.exe, rundll32.exe]
+text_replace: signal signal alert

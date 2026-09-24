@@ -1,0 +1,4 @@
+=== Detection Multi-Signal Score ===
+detect_priv_esc: {detected: true, score: 75, signals: [token_theft, lsass_access, se_debug_enabled]} err:
+detect_persistence: {count: 1, detected: true, hits: [{category: startup_files, entry: C:\Users\bob\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\evil.lnk}]} err:
+detect_suspicious_files: {count: 0, detected: false, hits: []} err:

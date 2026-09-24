@@ -38,8 +38,8 @@ Do **not** introduce the language. Do not show a feature list.
 Then the two housekeeping facts, and only these two:
 
 ```
-mutant run tool.mut        # compiles .mut -> .mu
-mutant     tool.mu         # runs it
+mutant gen --src tool.mut  # compiles .mut -> .mu
+mutant tool.mu             # runs it
 ```
 
 > **Run from PowerShell or cmd, not Git Bash or WSL.** Mutant's secure mode
@@ -68,8 +68,8 @@ they don't, one of us made a mistake, and we'll be able to tell which."*
 Sanity check everyone is alive:
 
 ```
-mutant run examples/workshop/ioc_extract.mut
-mutant     examples/workshop/ioc_extract.mu
+mutant gen --src examples/workshop/ioc_extract.mut
+mutant examples/workshop/ioc_extract.mu
 ```
 
 ---

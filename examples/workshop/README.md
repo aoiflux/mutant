@@ -81,13 +81,14 @@ Mutant compiles a `.mut` to a `.mu`, then executes the `.mu`:
 
 ```
 # from the repository root:
-mutant run examples/workshop/ioc_extract.mut -pwd mypass
-mutant     examples/workshop/ioc_extract.mu   -pwd mypass
+mutant gen --src examples/workshop/ioc_extract.mut
+mutant examples/workshop/ioc_extract.mu
 ```
 
-(Use any password you like; the same one for both commands. `-pwd` is deprecated
-because it puts the credential in the process table — omit it and be prompted,
-or use `--password-stdin`.)
+(Each command prompts for a password; use any you like, the same one for both.
+To script it, pass `--password-file <path>` or `--password-stdin` to both. A
+password typed on the command line lands in the process table, which is why
+that form is deprecated.)
 
 **Run from PowerShell/cmd, not Git Bash or WSL.** Secure mode halts when the
 host looks like an analysis sandbox, and Git Bash trips the WSL detector:

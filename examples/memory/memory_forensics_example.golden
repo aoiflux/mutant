@@ -1,0 +1,7 @@
+=== Memory Forensics Builtins ===
+mem_map: [{entropy: 4.626296, offset: 0, printable_ratio: 0.812500, size: 48}] err:
+mem_read: {hex: 4d5a00014d656d6f72792d536e617073686f74004e4f504e4f50001f00000039, offset: 0, size: 32} err:
+mem_scan MZ: {count: 1, offsets: [0], pattern: MZ} err:
+mem_strings: [Memory-Snapshot, NOPNOP, 90909031c05068] err:
+mem_find_pe: {candidates: 1, confirmed: 0, headers: [{confirmed: false, mz_offset: 0}]} err:
+mem_find_shellcode: [] err:

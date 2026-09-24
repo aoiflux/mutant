@@ -1,0 +1,10 @@
+=== Cache Builtins ===
+cache_open: {created: true, name: ioc_cache, opened: true} | err:
+cache_put: true | err:
+cache_put(ttl): true | err:
+cache_get: {found: true, value: 10.10.10.10} | err:
+cache_keys: [ioc:1, ioc:2] | err:
+cache_stats: {clears: 0, deletes: 0, expires: 0, hits: 1, items: 2, misses: 0, name: ioc_cache, puts: 2} | err:
+cache_delete: true | err:
+cache_clear: 1 | err:
+cache_close: {closed: true, name: ioc_cache} | err:

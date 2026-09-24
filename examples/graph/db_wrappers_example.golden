@@ -1,0 +1,8 @@
+=== Graph DB Wrapper Builtins ===
+db_open: 1 err:
+db_add_artifact process: {artifact_type: process, indexed_props: 3, node_id: 1} err:
+db_add_artifact file: {artifact_type: file, indexed_props: 2, node_id: 2} err:
+db_add_relation: {created: true, dst: 2, edge_id: 1, relation: writes, src: 1} err:
+db_query: [1, 2] err:
+db_timeline: [{action: add_artifact, artifact_type: process, node_id: 1}, {action: add_artifact, artifact_type: file, node_id: 2}, {action: add_relation, dst: 2, edge_id: 1, relation: writes, src: 1}] err:
+db_close: true err:

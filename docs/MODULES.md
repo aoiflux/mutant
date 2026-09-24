@@ -76,8 +76,8 @@ A top-level name beginning with `_` is private to the file that declares it.
 
 ```mutant
 // lib/stats.mut
-let _total = fn(values) { /* ... */ };   // private
-let mean = fn(values) { /* ... */ };     // reachable as stats.mean
+let _total = fn(values) { return sum(values); };                // private
+let mean = fn(values) { return _total(values) / len(values); }; // reachable as stats.mean
 ```
 
 Reaching for one from another module is a compile error that names both:

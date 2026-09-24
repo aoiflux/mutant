@@ -1,0 +1,10 @@
+=== supertimeline ===
+filetime -> unix: 1609286400
+iso      -> unix: 1717243500
+webkit   -> unix: 1655526400
+--- supertimeline ---
+  1609286400  [prefetch]  evil.exe executed
+  1655526400  [browser]  downloaded evil.exe
+  1717243500  [evtx]  service installed
+prefetch_parse (no artifact present, honest error): ERROR:prefetch_parse: open C:/Windows/Prefetch/NOTEPAD.EXE-00000000.pf: The system cannot find the file specified. at examples\forensics\supertimeline.mut:44:20 context=builtin.prefetch_parse
+true

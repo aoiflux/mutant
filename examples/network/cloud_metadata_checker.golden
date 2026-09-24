@@ -1,0 +1,4 @@
+=== cloud_metadata_checker ===
+Safe default: metadata checks are opt-in via config allow_sensitive_endpoints=true.
+seeded test dataset:  example_output/cloud_metadata_checker/metadata_targets.json
+wrote report:  example_output/cloud_metadata_checker/report.json

@@ -155,7 +155,7 @@ type BreakpointSpec struct {
 	// what a hit condition compiles to, and it is deliberately the only
 	// condition this engine takes: a general condition is an expression, and
 	// evaluating one in a frame needs a symbol table the artifact does not
-	// carry. See the deferral in plans/T1_DEBUGGER.md.
+	// carry. docs/DEBUGGING.md says so under "What it deliberately does not do".
 	SkipHits int
 }
 
