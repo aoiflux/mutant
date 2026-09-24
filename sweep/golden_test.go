@@ -59,10 +59,34 @@ func TestNormalizeOutput(t *testing.T) {
 		{"wrote " + root + `\examples\out.json` + "\n", "wrote <SCRATCH>\\examples\\out.json\n"},
 		{"wrote C:/Temp/mutant-sweep-123/examples/out.json\n", "wrote <SCRATCH>/examples/out.json\n"},
 		{"", "\n"},
+		// The same honest error, as Windows and as Linux print it.
+		{
+			`ERROR:bin_strings: open README.md: The system cannot find the file specified. at examples\binary\b.mut:5:24 context=builtin.strings`,
+			"ERROR:bin_strings: open README.md: no such file or directory at examples/binary/b.mut:5:24 context=builtin.strings\n",
+		},
+		{
+			"ERROR:bin_strings: open README.md: no such file or directory at examples/binary/b.mut:5:24 context=builtin.strings",
+			"ERROR:bin_strings: open README.md: no such file or directory at examples/binary/b.mut:5:24 context=builtin.strings\n",
+		},
+		{
+			"dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it.",
+			"dial tcp 127.0.0.1:9: connect: connection refused\n",
+		},
+		{`at C:\Temp\mutant-sweep-123\examples\x.mut:1:2`, "at <SCRATCH>/examples/x.mut:1:2\n"},
+		// Paths an example prints as data are the example's output, not the host's.
+		{`entry: C:\Users\alice\Startup\evil.lnk`, "entry: C:\\Users\\alice\\Startup\\evil.lnk\n"},
+		{`key not found: HKCU\Software\Run at examples\r.mut:10:23`, "key not found: HKCU\\Software\\Run at examples/r.mut:10:23\n"},
+		{`copied C:\Windows\Temp\at x.mut to Q:\x.mut:1`, "copied C:\\Windows\\Temp\\at x.mut to Q:\\x.mut:1\n"},
 	}
 	for _, c := range cases {
-		if got := NormalizeOutput(c.in, root); got != c.want {
+		got := NormalizeOutput(c.in, root)
+		if got != c.want {
 			t.Errorf("NormalizeOutput(%q) = %q, want %q", c.in, got, c.want)
+		}
+		// A golden is stored normalized and normalized again when read, so
+		// normalizing twice must change nothing.
+		if again := NormalizeOutput(got, ""); again != got {
+			t.Errorf("NormalizeOutput is not idempotent on %q: %q", got, again)
 		}
 	}
 }

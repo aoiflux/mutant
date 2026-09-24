@@ -135,11 +135,11 @@ type injectionSignature struct {
 }
 
 var injectionSignatures = []injectionSignature{
-	{name: "getpc_fnstenv", weight: 30, sig: []byte{0xd9, 0x74, 0x24, 0xf4}},                             // fnstenv [esp-0Ch] GetPC
-	{name: "peb_walk_x86", weight: 25, sig: []byte{0x64, 0xa1, 0x30, 0x00, 0x00, 0x00}},                  // mov eax, fs:[0x30]
+	{name: "getpc_fnstenv", weight: 30, sig: []byte{0xd9, 0x74, 0x24, 0xf4}},                              // fnstenv [esp-0Ch] GetPC
+	{name: "peb_walk_x86", weight: 25, sig: []byte{0x64, 0xa1, 0x30, 0x00, 0x00, 0x00}},                   // mov eax, fs:[0x30]
 	{name: "peb_walk_x64", weight: 25, sig: []byte{0x65, 0x48, 0x8b, 0x04, 0x25, 0x60, 0x00, 0x00, 0x00}}, // mov rax, gs:[0x60]
-	{name: "classic_prologue", weight: 20, sig: []byte{0xfc, 0xe8}},                                      // cld; call
-	{name: "xor_push", weight: 15, sig: []byte{0x31, 0xc0, 0x50, 0x68}},                                  // xor eax,eax; push eax; push imm
+	{name: "classic_prologue", weight: 20, sig: []byte{0xfc, 0xe8}},                                       // cld; call
+	{name: "xor_push", weight: 15, sig: []byte{0x31, 0xc0, 0x50, 0x68}},                                   // xor eax,eax; push eax; push imm
 }
 
 // countCallPopGetPC counts "call $+5; pop reg" GetPC sequences (E8 00000000

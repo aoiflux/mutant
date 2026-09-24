@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- reads examples/data/sample_capture.pcap, which the repository does not ship
+
 putln("=== Offline PCAP Analysis (Pure-Go backend) ===");
 
 let pcap_path = "examples/data/sample_capture.pcap";

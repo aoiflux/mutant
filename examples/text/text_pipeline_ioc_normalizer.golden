@@ -1,0 +1,6 @@
+=== IOC Normalizer Pipeline ===
+raw:  URL=http://evil.example/login?user=alice
+compact: url=http://evil.example/login?user=alice
+host_match: http://evil.example
+has_http: true
+domain_similarity: 0.916667

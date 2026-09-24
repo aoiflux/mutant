@@ -37,6 +37,7 @@
 // written goes under example_output/record_disclosure, which must not exist yet:
 // a key, a record and a package are each refused rather than written over.
 // Delete the directory to run it again.
+// mutant:sweep needs-input -- case_key_create asks for a passphrase at the terminal; TestTheRecordDisclosureExampleRunsEndToEnd supplies one
 
 putln("=== record_disclosure ===");
 

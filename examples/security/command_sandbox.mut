@@ -40,7 +40,10 @@ let run = fn() {
                 if (xerr) {
                     putln("  exec error:", xerr);
                 } else {
-                    putln("  exec result:", out);
+                    // What whoami prints names this machine's account, so
+                    // show that it ran rather than who it says you are.
+                    putln("  exec ok:", out["ok"], "exit_code:", out["exit_code"],
+                        "timed_out:", out["timed_out"], "printed a name:", len(out["stdout"]) > 0);
                 };
             } else {
                 putln("policy DENIES:", cmd, "(not executed)");

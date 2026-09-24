@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./disk.hfs, an HFS+ image the repository does not ship
+
 let volume_path = "./disk.hfs";
 let opened, open_err = hfs_open(volume_path);
 if (open_err) {

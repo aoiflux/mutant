@@ -28,7 +28,7 @@ func TestLnkParse(t *testing.T) {
 	binary.LittleEndian.PutUint32(hdr[0:4], 0x0000004C) // HeaderSize
 	// LinkFlags: HasRelativePath|HasWorkingDir|HasArguments|IsUnicode.
 	binary.LittleEndian.PutUint32(hdr[20:24], 0x08|0x10|0x20|0x80)
-	binary.LittleEndian.PutUint32(hdr[24:28], 0x20) // FileAttributes (archive)
+	binary.LittleEndian.PutUint32(hdr[24:28], 0x20)     // FileAttributes (archive)
 	binary.LittleEndian.PutUint64(hdr[28:36], filetime) // CreationTime
 	binary.LittleEndian.PutUint64(hdr[36:44], 0)        // AccessTime (unset)
 	binary.LittleEndian.PutUint64(hdr[44:52], filetime) // WriteTime
@@ -36,7 +36,7 @@ func TestLnkParse(t *testing.T) {
 	binary.LittleEndian.PutUint32(hdr[60:64], 1)        // ShowCommand
 
 	blob := hdr
-	blob = append(blob, unicodeStringData(`..\payload.exe`)...) // RelativePath
+	blob = append(blob, unicodeStringData(`..\payload.exe`)...)  // RelativePath
 	blob = append(blob, unicodeStringData(`C:\Users\victim`)...) // WorkingDir
 	blob = append(blob, unicodeStringData(`-q -x`)...)           // Arguments
 

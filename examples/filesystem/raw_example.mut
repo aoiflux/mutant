@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./disk.raw, a raw disk image the repository does not ship
+
 let opened, open_err = raw_open("./disk.raw");
 if (open_err) {
     putln("raw_open failed:", open_err);

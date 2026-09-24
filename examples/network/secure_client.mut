@@ -5,6 +5,7 @@
 //
 // Run:  mutant gen --src examples/network/secure_client.mut --dev
 //       mutant examples/network/secure_client.mu --dev
+// mutant:sweep needs-input -- opens a TLS connection to example.com:443 over the internet
 
 let fetch_secure = fn(host, addr) {
     putln("=== Secure client: connecting to ", addr, " ===");

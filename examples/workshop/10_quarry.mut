@@ -19,6 +19,7 @@
 // checksum, and compare it against the checksum of the candidate original still
 // sitting in the Documents folder. A match is not "a file with the same name".
 // It is the same bytes, proven, without ever decompressing anything.
+// mutant:sweep needs-input -- needs the QUILLDROP evidence that examples/workshop/evidence/build_evidence builds
 
 let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
 

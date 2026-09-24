@@ -1,0 +1,5 @@
+=== 3/5 Timeline construction ===
+supertimeline (3 events, oldest first):
+  1717240000   [evtx]   service installed
+  1717241800   [browser]   downloaded evil.exe
+  1717243500   [prefetch]   evil.exe executed

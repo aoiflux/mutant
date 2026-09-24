@@ -264,7 +264,6 @@ func (p *Parser) parseForStatement(start token.Position, forToken token.Token) *
 		}
 	}
 
-
 	if !p.curTokenIs(token.SEMICOLON) {
 		msg := fmt.Sprintf("expected token %s in for init section, got %s", token.SEMICOLON, p.curToken.Type)
 		p.appendError(p.curToken, msg)

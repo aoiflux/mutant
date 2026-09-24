@@ -1,0 +1,5 @@
+=== Decode payload ===
+found (base64): SW52b2tlLU1pbWlrYXR6IC1EdW1wQ3JlZHM=
+decoded       : Invoke-Mimikatz -DumpCreds
+hex('hi')     : 6869
+hex decode    : hi

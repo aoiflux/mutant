@@ -1,2 +1,0 @@
-=== XFAT Parser Builtins ===
-xfat_open error: ERROR:xfat_open: open disk.exfat: The system cannot find the file specified. at examples\filesystem\xfat_example.mut:3:17 context=builtin.xfat_open

@@ -1,0 +1,3 @@
+=== Parse logs ===
+  user: alice  ip: 10.0.0.5  result: ok
+  user: bob  ip: 8.8.8.8  result: fail

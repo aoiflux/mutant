@@ -1,0 +1,5 @@
+=== Inspect JWT ===
+algorithm: HS256
+subject  : 1234567890
+name     : John Doe
+verified : false

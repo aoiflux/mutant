@@ -95,24 +95,24 @@ var (
 // program -- which, for a ledger handed to a court, is everybody.
 func disclosureTypeNames() (map[store.NodeType]string, map[store.EdgeType]string) {
 	return map[store.NodeType]string{
-		disclosureNodeActor:      "Actor",
-		disclosureNodeRecord:     "Record",
-		disclosureNodeClass:      "Classification",
-		disclosureNodeView:       "View",
-		disclosureNodeRecipient:  "Recipient",
-		disclosureNodeDisclosure: "Disclosure",
-		disclosureNodeWithdrawal: "Withdrawal",
-		disclosureNodeReclass:    "ReclassEvent",
-	}, map[store.EdgeType]string{
-		disclosureEdgeInCase:       "IN_CASE",
-		disclosureEdgeClassifiedAs: "CLASSIFIED_AS",
-		disclosureEdgeGrants:       "GRANTS",
-		disclosureEdgeDisclosedTo:  "DISCLOSED_TO",
-		disclosureEdgeAuthorisedBy: "AUTHORISED_BY",
-		disclosureEdgePerformedBy:  "PERFORMED_BY",
-		disclosureEdgeWithdrew:     "WITHDREW",
-		disclosureEdgeSupersedes:   "SUPERSEDES",
-	}
+			disclosureNodeActor:      "Actor",
+			disclosureNodeRecord:     "Record",
+			disclosureNodeClass:      "Classification",
+			disclosureNodeView:       "View",
+			disclosureNodeRecipient:  "Recipient",
+			disclosureNodeDisclosure: "Disclosure",
+			disclosureNodeWithdrawal: "Withdrawal",
+			disclosureNodeReclass:    "ReclassEvent",
+		}, map[store.EdgeType]string{
+			disclosureEdgeInCase:       "IN_CASE",
+			disclosureEdgeClassifiedAs: "CLASSIFIED_AS",
+			disclosureEdgeGrants:       "GRANTS",
+			disclosureEdgeDisclosedTo:  "DISCLOSED_TO",
+			disclosureEdgeAuthorisedBy: "AUTHORISED_BY",
+			disclosureEdgePerformedBy:  "PERFORMED_BY",
+			disclosureEdgeWithdrew:     "WITHDREW",
+			disclosureEdgeSupersedes:   "SUPERSEDES",
+		}
 }
 
 // disclosureLedgerMu serialises this family's ledger writes within the

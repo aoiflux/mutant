@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- reports this machine's debugger and VM state, which differs from host to host
+
 putln("=== Security Diagnostics Example ===");
 putln("Tip: run with --dev --security-log-level=debug (or --log-level=debug) to see detailed stderr logs.");
 putln("");

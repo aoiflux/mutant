@@ -1,4 +1,0 @@
-=== lua_run_http example ===
-requires capability: network
-set URL to an endpoint that returns plain Lua source code
-lua_run_http failed:  ERROR:lua_run_http: Get "http://127.0.0.1:8080/lua_patch.lua": dial tcp 127.0.0.1:8080: connectex: No connection could be made because the target machine actively refused it. at examples\lua\lua_run_http_example.mut:6:19 context=builtin.lua_run_http

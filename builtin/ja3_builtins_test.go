@@ -23,8 +23,8 @@ func buildClientHello() []byte {
 	body = append(body, 0x01, 0x00) // compression_methods: [null]
 
 	var exts []byte
-	exts = append(exts, 0x0a, 0x0a, 0x00, 0x00)                           // GREASE extension
-	groups := []byte{0x00, 0x06, 0x0a, 0x0a, 0x00, 0x1d, 0x00, 0x17}      // GREASE, 29, 23
+	exts = append(exts, 0x0a, 0x0a, 0x00, 0x00)                      // GREASE extension
+	groups := []byte{0x00, 0x06, 0x0a, 0x0a, 0x00, 0x1d, 0x00, 0x17} // GREASE, 29, 23
 	exts = append(exts, 0x00, 0x0a, byte(len(groups)>>8), byte(len(groups)))
 	exts = append(exts, groups...)
 	formats := []byte{0x01, 0x00} // one point format: uncompressed (0)

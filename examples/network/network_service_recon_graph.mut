@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- resolves and dials example.com and cloudflare.com over the internet
+
 let check = fn(pair, op) {
     let result, err = pair;
     if (err) {

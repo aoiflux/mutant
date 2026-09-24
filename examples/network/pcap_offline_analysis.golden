@@ -1,3 +1,0 @@
-=== Offline PCAP Analysis (Pure-Go backend) ===
-No sample PCAP found at examples/data/sample_capture.pcap
-Place a .pcap file there or change pcap_path to your capture file.

@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./image.E01, an EWF evidence image the repository does not ship
+
 let segments = ["./image.E01", "./image.E02"];
 let opened, open_err = ewf_open(segments);
 if (open_err) {

@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens disk.exfat, an exFAT image the repository does not ship
+
 putln("=== XFAT Parser Builtins ===");
 
 let xfat, err = xfat_open("disk.exfat");

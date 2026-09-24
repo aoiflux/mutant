@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- fetches Lua source from an HTTP server on 127.0.0.1:8080 that nothing starts
+
 putln("=== lua_run_http example ===");
 putln("requires capability: network");
 putln("set URL to an endpoint that returns plain Lua source code");

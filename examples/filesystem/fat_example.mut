@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens disk-fat.img, a FAT image the repository does not ship
+
 putln("=== FAT Parser Builtins ===");
 
 let fat, err = fat_open("disk-fat.img");

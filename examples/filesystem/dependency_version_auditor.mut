@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- queries api.osv.dev over the internet for each dependency
+
 let check = fn(pair, op) {
     let result, err = pair;
     if (err) {

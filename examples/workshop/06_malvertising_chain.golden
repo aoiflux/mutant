@@ -1,0 +1,35 @@
+=== 6 Malvertising: redirect chains + cookie correlation ===
+
+-- visit sequence (chrome, 6 urls) --
+     2026-03-14T02:10:00Z  (+ 0 s)   www.news-daily.example
+  ->  2026-03-14T02:10:03Z  (+ 3 s)   ads.adserve-metrics.example
+  ->  2026-03-14T02:10:04Z  (+ 1 s)   track.adserve-metrics.example
+  ->  2026-03-14T02:10:05Z  (+ 1 s)   cdn.malvert-delivery.top
+  ->  2026-03-14T02:10:09Z  (+ 4 s)   update-flashplayer.win
+     2026-03-14T02:20:00Z  (+ 591 s)   mail.google.example
+
+-- registrable domains in history --
+   news-daily.example
+   adserve-metrics.example
+   malvert-delivery.top
+   update-flashplayer.win
+   google.example
+
+-- cookies (5) vs history --
+   news-daily.example  [session]  in history
+   adserve-metrics.example  [uid]  in history
+   adserve-metrics.example  [bounce]  in history
+   doubleclick-syndication.example  [IDE]  NEVER VISITED  <- rode in on a redirect
+   malvert-delivery.top  [camp]  in history
+
+-- domain scoring --
+   adserve-metrics.example  =>  50   (ad-tech naming, single drive-by visit mid-chain)
+   malvert-delivery.top  =>  60   (high-abuse TLD, single drive-by visit mid-chain)
+   update-flashplayer.win  =>  60   (high-abuse TLD, single drive-by visit mid-chain)
+
+-- downloads --
+   C:\Users\deploy\Downloads\setup.exe  (486912 bytes, application/x-msdownload) from  update-flashplayer.win    <- FROM A FLAGGED DOMAIN
+
+chain graph: 7 nodes, 5 edges
+
+verdict: flagged 3 domain(s): adserve-metrics.example, malvert-delivery.top, update-flashplayer.win

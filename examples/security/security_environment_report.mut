@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- scores this machine's debugger and VM state, which differs from host to host
+
 putln("=== Security Environment Forensics Report ===");
 
 let output_directory = "example_output/security";

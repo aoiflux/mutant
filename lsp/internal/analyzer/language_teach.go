@@ -11,12 +11,12 @@ import (
 )
 
 var keywordHoverDocs = map[string]string{
-	"fn":       "Defines an anonymous function literal. Functions can capture outer variables and be assigned to names.",
-	"let":      "Declares a new binding. Use let name = value; to store values for later use.",
-	"if":       "Conditional expression. Executes the consequence block when the condition is truthy, otherwise runs else if present.",
-	"else":     "Alternative branch for an if expression.",
-	"return":   "Returns one or more values from the current function.",
-	"for": "Three-clause loop: for (init; cond; post) { ... }. The parentheses are required and all three clauses are optional -- for (;;) { ... } is the endless form. init may be a let or an expression, and runs once, in a scope created for the loop. continue runs the post section before re-testing, so the increment is not skipped. The loop variable is one binding for the whole loop, not a fresh one per iteration, so a closure made in the body sees the final value.",
+	"fn":     "Defines an anonymous function literal. Functions can capture outer variables and be assigned to names.",
+	"let":    "Declares a new binding. Use let name = value; to store values for later use.",
+	"if":     "Conditional expression. Executes the consequence block when the condition is truthy, otherwise runs else if present.",
+	"else":   "Alternative branch for an if expression.",
+	"return": "Returns one or more values from the current function.",
+	"for":    "Three-clause loop: for (init; cond; post) { ... }. The parentheses are required and all three clauses are optional -- for (;;) { ... } is the endless form. init may be a let or an expression, and runs once, in a scope created for the loop. continue runs the post section before re-testing, so the increment is not skipped. The loop variable is one binding for the whole loop, not a fresh one per iteration, so a closure made in the body sees the final value.",
 	"in": "Walks a collection: for (v in xs) { ... } binds each element, and for (k, v in xs) { ... } binds " +
 		"both halves. Four things iterate, and what one binding yields differs:\n\n" +
 		"| iterable | two bindings | one binding |\n" +
@@ -30,7 +30,7 @@ var keywordHoverDocs = map[string]string{
 		"Anything else is a run-time error. continue advances the iterator -- a for ... in has no post section, so " +
 		"the advance is the post section. The bindings are one slot for the whole loop rather than a fresh pair per " +
 		"iteration, so a closure made in the body sees the final values. Binding the same name twice is refused.",
-	"while": "Repeats its body while the condition stays truthy: while (cond) { ... }. The condition is required -- while () is refused rather than read as endless, so write while (true) when that is what you mean. Unlike for it has no init or post section, so continue goes straight back to the condition and the body itself has to make progress. Truthiness follows the same rule as if: the condition need not be a boolean.",
+	"while":    "Repeats its body while the condition stays truthy: while (cond) { ... }. The condition is required -- while () is refused rather than read as endless, so write while (true) when that is what you mean. Unlike for it has no init or post section, so continue goes straight back to the condition and the body itself has to make progress. Truthiness follows the same rule as if: the condition need not be a boolean.",
 	"match":    "Expression that takes the first arm whose pattern equals the subject: match (x) { 1 | 2 => \"few\", Status.Ok => \"ok\", _ => \"other\" }. A pattern is a literal, a negated number, an enum variant, or `_` for anything, and alternatives are joined with `|`. An arm body is one expression or a block, and the match evaluates to it. Without a `_` arm, a subject that no arm matches is a run-time error rather than null.",
 	"break":    "Exits the nearest enclosing loop immediately.",
 	"continue": "Skips to the next iteration of the nearest enclosing loop.",
@@ -40,8 +40,8 @@ var keywordHoverDocs = map[string]string{
 	"import": "Loads another file as a module: import \"lib/util.mut\"; binds the namespace `util`, and import u \"lib/util.mut\"; binds `u` instead. " +
 		"Reach into it with `util.name`; the module's own top-level names are not visible unqualified, and a name beginning with _ is private to the file that declares it. " +
 		"The path resolves relative to this file's directory first, then against each --module-path directory in the order given. Top level only: an import inside a block is an error.",
-	"true":     "Boolean literal representing truth.",
-	"false":    "Boolean literal representing falsehood.",
+	"true":  "Boolean literal representing truth.",
+	"false": "Boolean literal representing falsehood.",
 }
 
 var macroSpecialFormDocs = map[string]struct {

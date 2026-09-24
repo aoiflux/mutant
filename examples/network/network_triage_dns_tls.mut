@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- queries DNS, TLS and a banner on example.com over the internet
+
 putln("=== Network Triage DNS + TLS ===");
 
 let dns, err = net_dns_query("example.com", "A");

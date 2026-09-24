@@ -1,0 +1,6 @@
+=== 1/5 Artifact modeling ===
+modeled:
+  powershell.exe --wrote-->        C:/Users/Public/x.ps1
+  powershell.exe --connected_to--> 185.12.0.9:443
+graph holds 3 artifacts and 2 relationships
+true

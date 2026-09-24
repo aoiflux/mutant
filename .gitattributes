@@ -1,0 +1,5 @@
+# Evidence fixtures are bytes, not text. Examples hash them, size them and parse
+# them, and a golden records what they printed, so a checkout that rewrote their
+# line endings (core.autocrlf on Windows) gave them a different size and hash on
+# every host that checked them out differently.
+examples/data/** -text

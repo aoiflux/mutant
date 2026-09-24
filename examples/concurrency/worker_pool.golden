@@ -15,7 +15,7 @@
 
 === 4. a failing task reports, it does not crash ===
   value=
-  failure=ERROR:task failed: vm_runtime_error ip=6 op=OpDiv: integer division by zero at examples\concurrency\worker_pool.mut:105:22 context=builtin.task_wait
+  failure=ERROR:task failed: vm_runtime_error ip=6 op=OpDiv: integer division by zero at examples/concurrency/worker_pool.mut:105:22 context=builtin.task_wait
 
 === 5. when the work IS an array, use pmap ===
   [1, 4, 9, 16, 25, 36, 49, 64]

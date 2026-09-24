@@ -13,6 +13,7 @@
 // "parse NTFS" builtin being called here. There is a boot sector, five integer
 // reads at five documented offsets, one multiplication, and a filesystem falls
 // out. Everything a forensic suite does starts exactly like this.
+// mutant:sweep needs-input -- reads a live NTFS volume through its raw device path, which needs an elevated shell
 
 let VOLUME = "\\\\.\\Q:";
 let OUT    = "examples/workshop/evidence/case_quilldrop.mft";

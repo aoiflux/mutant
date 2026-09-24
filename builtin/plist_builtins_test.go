@@ -68,8 +68,8 @@ func TestPlistParseBinary(t *testing.T) {
 	buf = append(buf, 0x10, 0x01)       // obj2 @13: int 1
 	buf = append(buf, 0x08, 0x0B, 0x0D) // offset table @15: [8,11,13]
 	trailer := make([]byte, 32)
-	trailer[6] = 1 // offsetIntSize
-	trailer[7] = 1 // objectRefSize
+	trailer[6] = 1                                 // offsetIntSize
+	trailer[7] = 1                                 // objectRefSize
 	binary.BigEndian.PutUint64(trailer[8:16], 3)   // numObjects
 	binary.BigEndian.PutUint64(trailer[16:24], 0)  // topObject
 	binary.BigEndian.PutUint64(trailer[24:32], 15) // offsetTableOffset

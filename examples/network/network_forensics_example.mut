@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- queries DNS and fingerprints TLS on example.com over the internet
+
 putln("=== Network Forensics Builtins ===");
 
 let dns_a, err = net_dns_query("localhost", "A");

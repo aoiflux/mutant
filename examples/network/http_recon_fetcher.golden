@@ -1,6 +1,0 @@
-=== http_recon_fetcher ===
-Safe use: this tool targets public test domains only by default.
-seeded test dataset:  example_output/http_recon_fetcher/domains.json
-scanning:  https://example.com
-scanning:  https://httpbin.org
-wrote report:  example_output/http_recon_fetcher/report.json

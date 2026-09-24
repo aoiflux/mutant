@@ -56,8 +56,8 @@ func TestEvaluatorFloatArithmetic(t *testing.T) {
 	// Float and mixed comparisons.
 	testBooleanObject(t, testEval("1.5 <= 1.5"), true)
 	testBooleanObject(t, testEval("2.5 >= 3.0"), false)
-	testBooleanObject(t, testEval("2 < 2.5"), true)   // mixed
-	testBooleanObject(t, testEval("3.0 == 3"), true)  // mixed equality
+	testBooleanObject(t, testEval("2 < 2.5"), true)  // mixed
+	testBooleanObject(t, testEval("3.0 == 3"), true) // mixed equality
 }
 
 // TestEvaluatorDivModByZero matches the VM: integer / and % by zero are errors,

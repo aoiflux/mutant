@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- downloads a public IOC feed from raw.githubusercontent.com
+
 let check = fn(pair, op) {
     let result, err = pair;
     if (err) {

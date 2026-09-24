@@ -1,9 +1,9 @@
 === Binary Analysis Builtins ===
-bin_strings: err: ERROR:bin_strings: open README.md: The system cannot find the file specified. at examples\binary\binary_analysis_example.mut:5:24 context=builtin.strings
-bin_entropy: err: ERROR:bin_entropy: open README.md: The system cannot find the file specified. at examples\binary\binary_analysis_example.mut:8:24 context=builtin.entropy
-bin_yara_scan: err: ERROR:bin_yara_scan: open README.md: The system cannot find the file specified. at examples\binary\binary_analysis_example.mut:12:21 context=builtin.yara_scan
-bin_pe_parse: err: ERROR:bin_pe_parse: open README.md: The system cannot find the file specified. at examples\binary\binary_analysis_example.mut:15:20 context=builtin.pe_parse
-bin_elf_parse: err: ERROR:bin_elf_parse: open README.md: The system cannot find the file specified. at examples\binary\binary_analysis_example.mut:18:21 context=builtin.elf_parse
-bin_dwarf_parse: err: ERROR:bin_dwarf_parse: unsupported or invalid binary format at examples\binary\binary_analysis_example.mut:21:23 context=builtin.dwarf_parse
-bin_imports: err: ERROR:bin_imports: unsupported or invalid binary format at examples\binary\binary_analysis_example.mut:24:24 context=builtin.imports
-bin_sections: err: ERROR:bin_sections: unsupported or invalid binary format at examples\binary\binary_analysis_example.mut:27:25 context=builtin.sections
+bin_strings: err: ERROR:bin_strings: open README.md: no such file or directory at examples/binary/binary_analysis_example.mut:5:24 context=builtin.strings
+bin_entropy: err: ERROR:bin_entropy: open README.md: no such file or directory at examples/binary/binary_analysis_example.mut:8:24 context=builtin.entropy
+bin_yara_scan: err: ERROR:bin_yara_scan: open README.md: no such file or directory at examples/binary/binary_analysis_example.mut:12:21 context=builtin.yara_scan
+bin_pe_parse: err: ERROR:bin_pe_parse: open README.md: no such file or directory at examples/binary/binary_analysis_example.mut:15:20 context=builtin.pe_parse
+bin_elf_parse: err: ERROR:bin_elf_parse: open README.md: no such file or directory at examples/binary/binary_analysis_example.mut:18:21 context=builtin.elf_parse
+bin_dwarf_parse: err: ERROR:bin_dwarf_parse: unsupported or invalid binary format at examples/binary/binary_analysis_example.mut:21:23 context=builtin.dwarf_parse
+bin_imports: err: ERROR:bin_imports: unsupported or invalid binary format at examples/binary/binary_analysis_example.mut:24:24 context=builtin.imports
+bin_sections: err: ERROR:bin_sections: unsupported or invalid binary format at examples/binary/binary_analysis_example.mut:27:25 context=builtin.sections

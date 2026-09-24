@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- downloads a phishing feed from raw.githubusercontent.com and fetches each URL
+
 let check = fn(pair, op) {
     let result, err = pair;
     if (err) {

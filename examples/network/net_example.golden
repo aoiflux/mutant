@@ -1,7 +1,0 @@
-=== DNS Resolution ===
-example.com resolves to:
-  104.20.23.154
-  172.66.147.243
-
-=== TCP Dial ===
-connected to example.com in  0 ms

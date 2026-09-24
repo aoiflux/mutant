@@ -1,0 +1,5 @@
+=== wordlist_mutator ===
+Safe use: for defensive password-strength research only.
+seeded test dataset:  example_output/wordlist_mutator/test_wordlist.txt
+wrote mutated list:  example_output/wordlist_mutator/mutated_wordlist.txt
+wrote report:  example_output/wordlist_mutator/report.json

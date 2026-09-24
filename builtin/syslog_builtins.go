@@ -13,7 +13,8 @@ import (
 
 // rfc3164Re matches a BSD-syslog line (RFC 3164), with an optional <PRI> prefix
 // (often already stripped in /var/log/syslog) and an optional [pid].
-//   [<PRI>]Mmm dd hh:mm:ss host tag[pid]: message
+//
+//	[<PRI>]Mmm dd hh:mm:ss host tag[pid]: message
 var rfc3164Re = regexp.MustCompile(
 	`^(?:<(\d{1,3})>)?([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([^:\[\s]+)(?:\[(\d+)\])?:\s?(.*)$`)
 
@@ -80,7 +81,8 @@ func parseSyslogLine(line string, year int) map[string]object.Object {
 }
 
 // parseSyslog5424 parses an RFC 5424 line:
-//   <PRI>1 TIMESTAMP HOST APP-NAME PROCID MSGID [SD] MSG
+//
+//	<PRI>1 TIMESTAMP HOST APP-NAME PROCID MSGID [SD] MSG
 func parseSyslog5424(line string) (map[string]object.Object, bool) {
 	if !strings.HasPrefix(line, "<") {
 		return nil, false
@@ -114,18 +116,18 @@ func parseSyslog5424(line string) (map[string]object.Object, bool) {
 	}
 
 	m := map[string]object.Object{
-		"format":    stringObj("rfc5424"),
-		"priority":  intObj(int64(pri)),
-		"facility":  intObj(int64(pri / 8)),
-		"severity":  intObj(int64(pri % 8)),
-		"timestamp": stringObj(nilDash(timestamp)),
-		"ts":        intObj(ts),
-		"host":      stringObj(nilDash(host)),
-		"app_name":  stringObj(nilDash(app)),
-		"msgid":     stringObj(nilDash(msgid)),
+		"format":          stringObj("rfc5424"),
+		"priority":        intObj(int64(pri)),
+		"facility":        intObj(int64(pri / 8)),
+		"severity":        intObj(int64(pri % 8)),
+		"timestamp":       stringObj(nilDash(timestamp)),
+		"ts":              intObj(ts),
+		"host":            stringObj(nilDash(host)),
+		"app_name":        stringObj(nilDash(app)),
+		"msgid":           stringObj(nilDash(msgid)),
 		"structured_data": stringObj(nilDash(sd)),
-		"message":   stringObj(msg),
-		"pid":       intObj(0),
+		"message":         stringObj(msg),
+		"pid":             intObj(0),
 	}
 	if p, e := strconv.Atoi(procid); e == nil {
 		m["pid"] = intObj(int64(p))

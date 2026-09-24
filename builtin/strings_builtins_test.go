@@ -73,13 +73,13 @@ func TestStringBuiltins(t *testing.T) {
 
 func TestStringBuiltinArgErrors(t *testing.T) {
 	calls := map[string]object.Object{
-		"upper wrong count":  StrUpper(),
-		"upper wrong type":   StrUpper(intObj(1)),
-		"join not array":     StrJoin(stringObj("x"), stringObj("-")),
-		"repeat negative":    StrRepeat(stringObj("a"), intObj(-1)),
-		"char_at oob":        StrCharAt(stringObj("ab"), intObj(9)),
-		"substr negative":    StrSubstr(stringObj("ab"), intObj(-1), intObj(1)),
-		"pad empty padding":  StrPadLeft(stringObj("a"), intObj(4), stringObj("")),
+		"upper wrong count": StrUpper(),
+		"upper wrong type":  StrUpper(intObj(1)),
+		"join not array":    StrJoin(stringObj("x"), stringObj("-")),
+		"repeat negative":   StrRepeat(stringObj("a"), intObj(-1)),
+		"char_at oob":       StrCharAt(stringObj("ab"), intObj(9)),
+		"substr negative":   StrSubstr(stringObj("ab"), intObj(-1), intObj(1)),
+		"pad empty padding": StrPadLeft(stringObj("a"), intObj(4), stringObj("")),
 	}
 	for name, res := range calls {
 		t.Run(name, func(t *testing.T) {

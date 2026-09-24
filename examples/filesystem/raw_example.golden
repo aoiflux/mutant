@@ -1,1 +1,0 @@
-raw_open failed: ERROR:raw_open: open ./disk.raw: The system cannot find the file specified. at examples\filesystem\raw_example.mut:1:24 context=builtin.raw_open

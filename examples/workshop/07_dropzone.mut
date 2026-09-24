@@ -19,6 +19,7 @@
 // to read the receipt, and then match it against the phishing email.
 //
 // Input: the fsagen corpus. See evidence/README.md.
+// mutant:sweep needs-input -- needs the QUILLDROP evidence that examples/workshop/evidence/build_evidence builds
 
 let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
 

@@ -538,125 +538,125 @@ func (l *Lexer) peekRune() rune {
 	}
 	return rune(l.input[l.readPosition])
 }
-
-// peekRuneAt looks n characters ahead of the cursor; peekRuneAt(1) is
-// peekRune. Only the string readers need to look further than one, to tell
-// """ from an empty string followed by something else.
-func (l *Lexer) peekRuneAt(n int) rune {
-	idx := l.readPosition + n - 1
-	if idx < 0 || idx >= len(l.input) {
-		return 0
-	}
-	return rune(l.input[idx])
-}
-
-// unescape decodes the backslash sequences an ordinary string literal
-// understands: \n \r \t \" \\ \0 and \$. Anything else is kept verbatim, both
-// characters, which is what makes a Windows path in an ordinary string merely
-// tedious rather than wrong. A trailing backslash stays a backslash.
-//
-// \$ is the escape hatch for interpolation: a lone $ is still a $, so only the
-// two characters ${ ever need one.
-func unescape(s string) string {
-	if !strings.ContainsRune(s, '\\') {
-		return s
-	}
-
-	var sb strings.Builder
-	sb.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] != '\\' {
-			sb.WriteByte(s[i])
-			continue
-		}
-		if i+1 >= len(s) {
-			sb.WriteByte('\\')
-			break
-		}
-		i++
-		switch s[i] {
-		case 'n':
-			sb.WriteByte('\n')
-		case 'r':
-			sb.WriteByte('\r')
-		case 't':
-			sb.WriteByte('\t')
-		case '"':
-			sb.WriteByte('"')
-		case '\\':
-			sb.WriteByte('\\')
-		case '$':
-			sb.WriteByte('$')
-		case '0':
-			sb.WriteByte(0)
-		default:
-			sb.WriteByte('\\')
-			sb.WriteByte(s[i])
-		}
-	}
-	return sb.String()
-}
-
-// normalizeNewlines turns CRLF into LF inside a multi-line literal.
-//
-// The newlines in a triple-quoted string come from the file's line endings,
-// and those are a property of the checkout rather than of the program. Without
-// this the same source would produce a different string depending on how it
-// was cloned. A program that wants a carriage return writes \r.
-func normalizeNewlines(s string) string {
-	if !strings.Contains(s, "\r\n") {
-		return s
-	}
-	return strings.ReplaceAll(s, "\r\n", "\n")
-}
-
-// stripBlockIndent removes the indentation a triple-quoted literal inherits
-// from the code it is written inside.
-//
-// Stripping happens only when the opening """ is alone on its line: that is
-// the form that has indentation to inherit, and a literal that starts text on
-// the opening line is one whose first line has no indentation to measure. The
-// amount removed is the smallest indentation of any non-blank line, counting
-// the line the closing """ sits on when it is alone on one -- so aligning the
-// closer with the text, which is what anybody does by reflex, is also what
-// says where the left margin is.
-//
-// Indentation is counted in characters, so a tab is one. Mixing tabs and
-// spaces in the same block therefore strips a consistent number of characters
-// rather than a consistent visual width.
-func stripBlockIndent(body string) string {
-	newline := strings.IndexByte(body, '\n')
-	if newline < 0 || strings.TrimLeft(body[:newline], " \t") != "" {
-		return body
-	}
-	body = body[newline+1:]
-
-	lines := strings.Split(body, "\n")
-	indent := -1
-	if last := lines[len(lines)-1]; strings.TrimLeft(last, " \t") == "" {
-		indent = len(last)
-		lines = lines[:len(lines)-1]
-	}
-
-	for _, line := range lines {
-		if strings.TrimLeft(line, " \t") == "" {
-			continue
-		}
-		if width := len(line) - len(strings.TrimLeft(line, " \t")); indent < 0 || width < indent {
-			indent = width
-		}
-	}
-
-	if indent > 0 {
-		for i, line := range lines {
-			if len(line) < indent {
-				lines[i] = strings.TrimLeft(line, " \t")
-				continue
-			}
-			lines[i] = line[indent:]
-		}
-	}
-	return strings.Join(lines, "\n")
+
+// peekRuneAt looks n characters ahead of the cursor; peekRuneAt(1) is
+// peekRune. Only the string readers need to look further than one, to tell
+// """ from an empty string followed by something else.
+func (l *Lexer) peekRuneAt(n int) rune {
+	idx := l.readPosition + n - 1
+	if idx < 0 || idx >= len(l.input) {
+		return 0
+	}
+	return rune(l.input[idx])
+}
+
+// unescape decodes the backslash sequences an ordinary string literal
+// understands: \n \r \t \" \\ \0 and \$. Anything else is kept verbatim, both
+// characters, which is what makes a Windows path in an ordinary string merely
+// tedious rather than wrong. A trailing backslash stays a backslash.
+//
+// \$ is the escape hatch for interpolation: a lone $ is still a $, so only the
+// two characters ${ ever need one.
+func unescape(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			sb.WriteByte(s[i])
+			continue
+		}
+		if i+1 >= len(s) {
+			sb.WriteByte('\\')
+			break
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			sb.WriteByte('\n')
+		case 'r':
+			sb.WriteByte('\r')
+		case 't':
+			sb.WriteByte('\t')
+		case '"':
+			sb.WriteByte('"')
+		case '\\':
+			sb.WriteByte('\\')
+		case '$':
+			sb.WriteByte('$')
+		case '0':
+			sb.WriteByte(0)
+		default:
+			sb.WriteByte('\\')
+			sb.WriteByte(s[i])
+		}
+	}
+	return sb.String()
+}
+
+// normalizeNewlines turns CRLF into LF inside a multi-line literal.
+//
+// The newlines in a triple-quoted string come from the file's line endings,
+// and those are a property of the checkout rather than of the program. Without
+// this the same source would produce a different string depending on how it
+// was cloned. A program that wants a carriage return writes \r.
+func normalizeNewlines(s string) string {
+	if !strings.Contains(s, "\r\n") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
+
+// stripBlockIndent removes the indentation a triple-quoted literal inherits
+// from the code it is written inside.
+//
+// Stripping happens only when the opening """ is alone on its line: that is
+// the form that has indentation to inherit, and a literal that starts text on
+// the opening line is one whose first line has no indentation to measure. The
+// amount removed is the smallest indentation of any non-blank line, counting
+// the line the closing """ sits on when it is alone on one -- so aligning the
+// closer with the text, which is what anybody does by reflex, is also what
+// says where the left margin is.
+//
+// Indentation is counted in characters, so a tab is one. Mixing tabs and
+// spaces in the same block therefore strips a consistent number of characters
+// rather than a consistent visual width.
+func stripBlockIndent(body string) string {
+	newline := strings.IndexByte(body, '\n')
+	if newline < 0 || strings.TrimLeft(body[:newline], " \t") != "" {
+		return body
+	}
+	body = body[newline+1:]
+
+	lines := strings.Split(body, "\n")
+	indent := -1
+	if last := lines[len(lines)-1]; strings.TrimLeft(last, " \t") == "" {
+		indent = len(last)
+		lines = lines[:len(lines)-1]
+	}
+
+	for _, line := range lines {
+		if strings.TrimLeft(line, " \t") == "" {
+			continue
+		}
+		if width := len(line) - len(strings.TrimLeft(line, " \t")); indent < 0 || width < indent {
+			indent = width
+		}
+	}
+
+	if indent > 0 {
+		for i, line := range lines {
+			if len(line) < indent {
+				lines[i] = strings.TrimLeft(line, " \t")
+				continue
+			}
+			lines[i] = line[indent:]
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // readStringToken reads a complete string literal in any of its spellings and

@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./disk.xfs, an XFS image the repository does not ship
+
 let volume_path = "./disk.xfs";
 let opened, open_err = xfs_open(volume_path);
 if (open_err) {

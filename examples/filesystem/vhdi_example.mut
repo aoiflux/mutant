@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./disk.vhdx, a VHDX image the repository does not ship
+
 let image_path = "./disk.vhdx";
 let opened, open_err = vhdi_open(image_path);
 if (open_err) {

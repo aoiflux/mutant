@@ -16,6 +16,7 @@
 //      this timeline. No backend, no field-mapping file, no Elasticsearch.
 //
 // Input: the fsagen bodyfile, plus the collection for the non-filesystem events.
+// mutant:sweep needs-input -- needs the QUILLDROP evidence that examples/workshop/evidence/build_evidence builds
 
 let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
 let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";

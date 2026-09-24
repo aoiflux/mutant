@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- runs PowerShell against this machine's startup commands and scheduled tasks
+
 putln("=== Persistence Triage via Command Execution ===");
 
 let output_dir = "example_output/persistence";

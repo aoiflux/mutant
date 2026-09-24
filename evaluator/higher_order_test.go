@@ -19,11 +19,11 @@ func TestEvaluatorHigherOrder(t *testing.T) {
 	// evaluator (REPL macro mode). (filter's predicate avoids `%`, which the
 	// evaluator doesn't implement.)
 	intArrayCases := map[string][]int64{
-		`map([1,2,3], fn(x){x*2})`:                     {2, 4, 6},
-		`map([10,20,30], fn(x,i){x+i})`:                {10, 21, 32},
-		`filter([1,2,3,4], fn(x){x>2})`:                {3, 4},
-		`sort_by([3,1,2], fn(x){x})`:                   {1, 2, 3},
-		`let n=100; map([1,2,3], fn(x){x+n})`:          {101, 102, 103},
+		`map([1,2,3], fn(x){x*2})`:            {2, 4, 6},
+		`map([10,20,30], fn(x,i){x+i})`:       {10, 21, 32},
+		`filter([1,2,3,4], fn(x){x>2})`:       {3, 4},
+		`sort_by([3,1,2], fn(x){x})`:          {1, 2, 3},
+		`let n=100; map([1,2,3], fn(x){x+n})`: {101, 102, 103},
 	}
 	for input, want := range intArrayCases {
 		arr, ok := evalHO(t, input).(*object.Array)

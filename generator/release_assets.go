@@ -3,6 +3,7 @@ package generator
 import (
 	"bytes"
 	"fmt"
+	"go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,7 +63,10 @@ func GenerateReleaseAssets(outputPath string) error {
 		entries[key] = relPath
 	}
 
-	indexSource := renderReleaseAssetsIndex(entries)
+	indexSource, err := renderReleaseAssetsIndex(entries)
+	if err != nil {
+		return err
+	}
 	indexPath := filepath.Join(assetsDir, "generated_assets.go")
 	if err := os.WriteFile(indexPath, indexSource, 0644); err != nil {
 		return err
@@ -157,7 +161,11 @@ func compressReleaseRuntimeBinary(binaryData []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func renderReleaseAssetsIndex(entries map[string]string) []byte {
+// renderReleaseAssetsIndex writes the index as gofmt would, so a regenerated
+// file is committed as-is and the release gate's gofmt step stays clean: the
+// map's values are column-aligned, which one Sprintf per line cannot know how
+// to do.
+func renderReleaseAssetsIndex(entries map[string]string) ([]byte, error) {
 	keys := make([]string, 0, len(entries))
 	for key := range entries {
 		keys = append(keys, key)
@@ -175,7 +183,7 @@ func renderReleaseAssetsIndex(entries map[string]string) []byte {
 	}
 	buf.WriteString("}\n")
 
-	return buf.Bytes()
+	return format.Source(buf.Bytes())
 }
 
 func renderReleaseAssetsEmbedBinding() []byte {

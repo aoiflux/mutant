@@ -50,7 +50,7 @@ func JA3(args ...object.Object) (result object.Object) {
 	sum := md5.Sum([]byte(ja3Str))
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		BuiltinNameJA3:           stringObj(ja3Str),
+		BuiltinNameJA3:  stringObj(ja3Str),
 		"ja3_hash":      stringObj(hex.EncodeToString(sum[:])),
 		"tls_version":   intObj(int64(f.version)),
 		"ciphers":       tlsValueArray(f.ciphers),

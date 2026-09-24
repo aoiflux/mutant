@@ -33,10 +33,10 @@ func buildDeletedMFTRecord(recordNum uint32, parentRef uint64, name, content str
 	binary.LittleEndian.PutUint16(rec[1022:], usn)
 
 	off := 0x38
-	off = mftPutResidentAttr(rec, off, 0x10, mftSIValue(ntfsTime))                                        // $STANDARD_INFORMATION
+	off = mftPutResidentAttr(rec, off, 0x10, mftSIValue(ntfsTime))                                               // $STANDARD_INFORMATION
 	off = mftPutResidentAttr(rec, off, 0x30, mftFNValue(parentRef, name, uint64(len(content)), ntfsTime, false)) // $FILE_NAME
-	off = mftPutResidentAttr(rec, off, 0x80, []byte(content))                                             // resident $DATA
-	binary.LittleEndian.PutUint32(rec[off:], 0xFFFFFFFF)                                                  // end marker
+	off = mftPutResidentAttr(rec, off, 0x80, []byte(content))                                                    // resident $DATA
+	binary.LittleEndian.PutUint32(rec[off:], 0xFFFFFFFF)                                                         // end marker
 	off += 4
 	if off%8 != 0 {
 		off += 8 - off%8

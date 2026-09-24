@@ -56,7 +56,7 @@ func TestTimestampNormalize(t *testing.T) {
 	}
 
 	// DOS packed date/time for 2023-11-14 22:13:20.
-	dosDate := uint32(43<<9 | 11<<5 | 14) // year(2023-1980), month 11, day 14
+	dosDate := uint32(43<<9 | 11<<5 | 14)  // year(2023-1980), month 11, day 14
 	dosTime := uint32(22<<11 | 13<<5 | 10) // hour 22, min 13, sec 20/2
 	dosVal := int64(dosDate<<16 | dosTime)
 	h = tsNorm(t, TimestampNormalize(intObj(dosVal), stringObj("dos")))

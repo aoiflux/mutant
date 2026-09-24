@@ -7,13 +7,21 @@ putln("fs_list:", list, "err:", err);
 let walk, err = fs_walk(base);
 putln("fs_walk count:", len(walk), "err:", err);
 
+// A baseline records file contents, and a directory has none: the walk lists
+// the directory it started from, so skip it rather than hash it. Entries are
+// printed by name, which reads the same on every host; the full path carries
+// the host's separator.
 let i = 0;
 for (; i < len(walk); i = i + 1) {
-  let path = walk[i]["path"];
-  let hash, herr = fs_hash(path, "sha256");
-  if (herr) {
-    putln("hash error:", path, herr);
+  let entry = walk[i];
+  if (entry["is_dir"]) {
+    putln("directory:", entry["name"]);
   } else {
-    putln("sha256:", path, hash["hash"]);
+    let hash, herr = fs_hash(entry["path"], "sha256");
+    if (herr) {
+      putln("hash error:", entry["name"], herr);
+    } else {
+      putln("sha256:", entry["name"], hash["hash"]);
+    }
   }
 }

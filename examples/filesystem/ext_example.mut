@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens ./disk.ext4, an ext4 image the repository does not ship
+
 let volume_path = "./disk.ext4";
 let opened, open_err = ext_open(volume_path);
 if (open_err) {

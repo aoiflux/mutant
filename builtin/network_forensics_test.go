@@ -396,7 +396,9 @@ func TestNetForensicsArgumentValidation(t *testing.T) {
 	}{
 		{
 			name: "connect scan port range invalid",
-			call: func() object.Object { return NetConnectScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100)) },
+			call: func() object.Object {
+				return NetConnectScan(stringObj("127.0.0.1"), intObj(100), intObj(10), intObj(100))
+			},
 		},
 		{
 			name: "udp scan bad host type",

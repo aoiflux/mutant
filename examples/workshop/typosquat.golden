@@ -1,0 +1,6 @@
+=== Typosquat detection ===
+  SUSPICIOUS: paypa1.com (distance 1, similarity 0.960000)
+  ok        : paypal.com
+  SUSPICIOUS: paypal-login.com (distance 6, similarity 0.895000)
+  ok        : google.com
+  SUSPICIOUS: paypaI.com (distance 1, similarity 0.960000)

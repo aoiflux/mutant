@@ -1,0 +1,6 @@
+=== 2/5 Timestamp normalization ===
+  Windows FILETIME   -> unix 1609286400  iso 2020-12-30T00:00:00Z
+  Chrome / WebKit    -> unix 1655526400  iso 2022-06-18T04:26:40Z
+  Unix milliseconds  -> unix 1717243500  iso 2024-06-01T12:05:00Z
+  ISO-8601 string    -> unix 1717243500  iso 2024-06-01T12:05:00Z
+  auto-detect (unix) -> unix 1717243500  iso 2024-06-01T12:05:00Z

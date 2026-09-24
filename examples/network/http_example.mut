@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- fetches https://example.com over the internet
+
 putln("=== HTTP GET ===");
 let resp, err = http_get("https://example.com");
 putln("status: ", resp["status"]);

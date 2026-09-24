@@ -48,6 +48,7 @@ func (s *String) HashKey() HashKey {
 }
 
 func (h *Hash) Type() ObjectType { return HASH_OBJ }
+
 // Inspect renders the hash with its keys in a stable order.
 //
 // Pairs live in a Go map, and ranging a map yields a different order on every

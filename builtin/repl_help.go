@@ -53,8 +53,8 @@ var replKeywordDocs = map[string]string{
 	// not one: a REPL line is not a file, so there is nothing for a path to
 	// resolve relative to.
 	"import": "Loads another file as a module in a compiled program. Not available here -- the REPL has no file for a path to resolve against; use `mutant gen` on a source file.",
-	"true":     "Boolean truth literal.",
-	"false":    "Boolean false literal.",
+	"true":   "Boolean truth literal.",
+	"false":  "Boolean false literal.",
 }
 
 type replExample struct {

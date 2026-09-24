@@ -89,9 +89,9 @@ func Imphash(args ...object.Object) (result object.Object) {
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		BuiltinNameImphash:      stringObj(computeImphash(libs)),
-		"import_count": intObj(int64(importCount)),
-		"dll_count":    intObj(int64(len(libs))),
+		BuiltinNameImphash: stringObj(computeImphash(libs)),
+		"import_count":     intObj(int64(importCount)),
+		"dll_count":        intObj(int64(len(libs))),
 	}), nil)
 }
 

@@ -1,2 +1,0 @@
-=== FAT Parser Builtins ===
-fat_open error: ERROR:fat_open: open disk-fat.img: The system cannot find the file specified. at examples\filesystem\fat_example.mut:3:16 context=builtin.fat_open

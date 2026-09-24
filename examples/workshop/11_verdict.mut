@@ -23,6 +23,7 @@
 // Nothing is recorded until case_open is called, and this file writes only to
 // example_output/. It never modifies the evidence -- and that is machine-checked,
 // not merely intended: see docs/EVIDENCE_HANDLING_POLICY.md.
+// mutant:sweep needs-input -- needs the QUILLDROP evidence that examples/workshop/evidence/build_evidence builds
 
 let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
 let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";

@@ -447,8 +447,13 @@ func runViaModules(t *testing.T, root string, searchPaths ...string) (object.Obj
 	password := fmt.Sprint(security.DerivePasswordFromInstructions(byteCode.Instructions))
 	byteCode = mutil.EncryptByteCode(byteCode, password)
 
-	machine := vm.NewWithGlobalStoreAndPassword(byteCode,
-		make([]object.Object, global.GlobalSize), password)
+	// Not secure mode. The generator injects the debugger and sandbox probes,
+	// and in secure mode a probe that fires ends the run: under WSL, or on any
+	// host the detector calls a sandbox, every program here died with "sandbox
+	// detected" before it could say which module it resolved. What the VM does
+	// when a probe fires is the vm package's subject; this one's is resolution.
+	machine := vm.NewWithPasswordAndGlobalStoreMode(byteCode, password,
+		make([]object.Object, global.GlobalSize), false)
 	if err := machine.Run(); err != nil {
 		return nil, err
 	}

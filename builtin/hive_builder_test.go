@@ -64,7 +64,7 @@ func (b *hiveBuilder) buildVKString(name, value string) uint32 {
 	binary.LittleEndian.PutUint16(d[0x02:0x04], uint16(len(nb)))
 	binary.LittleEndian.PutUint32(d[0x04:0x08], uint32(len(data))) // size (referenced, not inline)
 	binary.LittleEndian.PutUint32(d[0x08:0x0C], dataRel)
-	binary.LittleEndian.PutUint32(d[0x0C:0x10], 1)     // REG_SZ
+	binary.LittleEndian.PutUint32(d[0x0C:0x10], 1)      // REG_SZ
 	binary.LittleEndian.PutUint16(d[0x10:0x12], 0x0001) // ASCII name
 	copy(d[0x14:], nb)
 	return b.alloc(d)
@@ -78,7 +78,7 @@ func (b *hiveBuilder) buildVKBinary(name string, data []byte) uint32 {
 	binary.LittleEndian.PutUint16(d[0x02:0x04], uint16(len(nb)))
 	binary.LittleEndian.PutUint32(d[0x04:0x08], uint32(len(data))) // size (referenced, not inline)
 	binary.LittleEndian.PutUint32(d[0x08:0x0C], dataRel)
-	binary.LittleEndian.PutUint32(d[0x0C:0x10], 3)     // REG_BINARY
+	binary.LittleEndian.PutUint32(d[0x0C:0x10], 3)      // REG_BINARY
 	binary.LittleEndian.PutUint16(d[0x10:0x12], 0x0001) // ASCII name
 	copy(d[0x14:], nb)
 	return b.alloc(d)

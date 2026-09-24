@@ -813,7 +813,10 @@ func TestTheCommonRootIsExactAndNeverBareSeparator(t *testing.T) {
 		},
 		{
 			// filepath.Dir returns a volume root WITH its separator, and the
-			// Join then produced "X://" which matches no path.
+			// Join then produced "X://" which matches no path. Only a Windows
+			// filepath reads "X:\" as a volume, so elsewhere the case is
+			// skipped rather than asserted against a path shape the host
+			// cannot produce.
 			name:  "a drive root keeps no trailing separator",
 			paths: []string{`X:\a.mut`, `X:\b.mut`},
 			want:  "X:",
@@ -826,6 +829,9 @@ func TestTheCommonRootIsExactAndNeverBareSeparator(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if strings.Contains(tc.paths[0], `:\`) && filepath.VolumeName(tc.paths[0]) == "" {
+				t.Skipf("%q names a drive, which this host's paths do not have", tc.paths[0])
+			}
 			modules := make([]moduleProps, 0, len(tc.paths))
 			for _, path := range tc.paths {
 				modules = append(modules, moduleProps{Path: path})

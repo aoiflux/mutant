@@ -1,0 +1,85 @@
+=== 13 HEXEYE - read the bytes yourself ===
+
+file: examples/data/sample_win.exe  (3162624 bytes)
+
+-- the first 64 bytes, as any hex editor would show them --
+0x00000000  4D 5A 90 00 03 00 00 00  04 00 00 00 FF FF 00 00  |MZ..............|
+0x00000010  8B 00 00 00 00 00 00 00  40 00 00 00 00 00 00 00  |........@.......|
+0x00000020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+0x00000030  00 00 00 00 00 00 00 00  00 00 00 00 80 00 00 00  |................|
+
+   Look at the very first two bytes: 4D 5A. In the ASCII column: 'MZ'.
+   Those are the initials of Mark Zbikowski, who designed the DOS
+   executable format in 1983. Every Windows program still starts with
+   his initials. File formats are archaeology.
+
+-- walking the header by hand --
+0x00  signature            : 4D 5A  ('MZ')
+0x3C  e_lfanew             : 128  (0x00000080)  <- a pointer
+
+      So: go to that offset and look.
+
+0x00000080  50 45 00 00 64 86 0F 00  00 00 00 00 00 1E 2E 00  |PE..d...........|
+0x00000090  89 0C 00 00 F0 00 22 00  0B 02 03 00 00 F4 0D 00  |......".........|
+
+0x00000080  PE signature         : 'PE..'
+  +04  Machine              : 0x8664  x64 (AMD64)
+  +06  NumberOfSections     : 15
+  +14  SizeOfOptionalHeader : 240
+  +16  Characteristics      : 0x0022
+  +08  TimeDateStamp        : 0  = 1970-01-01 00:00:00 UTC
+
+      That is the COMPILE TIME, sitting in the file, in the clear.
+      Compare it against when the file appeared on the victim's disk:
+        * built long before it arrived  -> an off-the-shelf tool
+        * built hours before it arrived -> compiled for this target
+        * built in the future, or 1970, or all zeroes -> somebody
+          scrubbed it, which is itself a finding
+
+-- section table (40 bytes per entry, read by hand) --
+   name        vsize     vaddr     rawsize   rawptr    flags
+   .text       913969    4096      914432    1536      0x60000020
+   .rdata      1080808   921600    1080832   915968    0x40000040
+   .data       369216    2002944   68096     1996800   0xC0000040
+   .pdata      24564     2375680   24576     2064896   0x40000040
+   .xdata      180       2400256   512       2089472   0x40000040
+   /4          331       2404352   512       2089984   0x42100040
+   /19         202682    2408448   202752    2090496   0x42100040
+   /32         39559     2613248   39936     2293248   0x42100040
+   /46         59        2654208   512       2333184   0x42100040
+   /65         367841    2658304   368128    2333696   0x42100040
+   /78         218960    3026944   219136    2701824   0x42100040
+   /90         79138     3248128   79360     2920960   0x42100040
+   .idata      1342      3330048   1536      3000320   0xC0000040
+   .reloc      20404     3334144   20480     3001856   0x42000040
+   .symtab     140274    3354624   140288    3022336   0x42000000
+
+-- the same file, through the builtins --
+   bin_pe_parse  -> {characteristics: 34, format: pe, machine: 34404, num_sections: 15, path: examples/data/sample_win.exe, timestamp: 0}
+   bin_sections  -> 15 sections
+   imphash       -> d42595b695fc008ef2c56aabd8efd68e  (46 imports)
+                    search that hash on VirusTotal and you get the
+                    family, not the sample.
+   bin_entropy   -> {bytes: 3162624, entropy: 6.895605, path: examples/data/sample_win.exe}
+   bin_is_go     -> true
+   go_symbols    -> 21 user functions recovered
+                    ...from a STRIPPED binary. Go's runtime needs
+                    the symbol table for stack traces, so it cannot
+                    be removed. Strip it and it is still there.
+
+-- carving examples/data/memory_dump.bin --
+   pe: 1 signature(s)
+      first at 0x00000000:
+0x00000000  4D 5A 00 01 4D 65 6D 6F  72 79 2D 53 6E 61 70 73  |MZ..Memory-Snaps|
+0x00000010  68 6F 74 00 4E 4F 50 4E  4F 50 00 1F 00 00 00 39  |hot.NOPNOP.....9|
+
+   fs_carve reports OFFSETS, not extracted files -- it says where a
+   signature is, not how long the thing is, because the length lives
+   inside the format and every format keeps it somewhere else.
+   Extracting is your job, and you now have the tool for it:
+   bytes_slice from the offset, and the format's own length field.
+
+What you just did, in order:
+  read a byte -> read a pointer -> follow it -> read a table
+There is no step in any forensic tool that is harder than that.
+There are only more offsets.

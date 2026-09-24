@@ -42,9 +42,11 @@ const (
 	ModeServeHandler Mode = "serve-handler"
 
 	// ModeNeedsInput needs something a sweep cannot supply -- an evidence image,
-	// a live network peer, a passphrase typed at a terminal. A sweep compiles it
+	// a live network peer, a passphrase typed at a terminal -- or reports on the
+	// machine it runs on, so that no one output is right. A sweep compiles it
 	// and counts it separately, so the number of examples whose output was
-	// actually checked is never inflated by ones that could not run.
+	// actually checked is never inflated by ones that could not run, and a
+	// release gate never depends on the internet or on the host it runs on.
 	ModeNeedsInput Mode = "needs-input"
 )
 

@@ -1,9 +1,0 @@
-=== Network Forensics Builtins ===
-net_dns_query A localhost: [127.0.0.1] err:
-net_dns_query MX example.com: [{host: ., pref: 0}] err:
-net_connect_scan 22-25: {duration_ms: 1, end_port: 25, host: 127.0.0.1, open_ports: [], scanned: 4, start_port: 22} err:
-net_banner 127.0.0.1:22: {banner: , error: dial tcp 127.0.0.1:22: connectex: No connection could be made because the target machine actively refused it., ok: false} err:
-net_tls_fingerprint example.com:443: {alpn: , cipher: TLS_AES_128_GCM_SHA256, error: , issuer: CN=Cloudflare TLS Issuing ECC CA 3,O=SSL Corporation,C=US, not_after: 2026-10-27T22:17:21Z, not_before: 2026-07-29T22:10:08Z, ok: true, peer_cert_sha256: 6153a96fd1a6ab7f4d438fc34932484299d0729d9140b3a126bb2f9c07b02200, subject: CN=example.com, version: TLS1.3} err:
-net_flow_reconstruct: [{bytes: 200, dport: 443, dst: 10.0.0.5, packets: 2, proto: TCP, sport: 51500, src: 10.0.0.2}] err:
-No sample PCAP found at examples/data/sample_capture.pcap
-Place a .pcap file there or change pcap_path to your capture file.

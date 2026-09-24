@@ -33,6 +33,9 @@ go run ./cmd/sweep                       # every example, mutation 0
 go run ./cmd/sweep examples/network      # one folder
 go run ./cmd/sweep --levels 0,5,10       # also require identical output across
                                          # mutation levels
+go run ./cmd/sweep --golden              # also require the output recorded in
+                                         # the .golden file beside each example
+go run ./cmd/sweep --update-golden       # (re)record those .golden files
 ```
 
 Each example runs in a throwaway copy of this tree, reset before every run, so a
@@ -46,6 +49,15 @@ network, so the sweep first runs the lowest level twice and only compares the
 levels of an example that reproduced itself. That is measured rather than
 declared: which builtins are pure is not something an example author should have
 to track.
+
+A `.golden` file records what an example that reproduced itself prints, so the
+sweep checks the output and not only the exit status. Before comparing, it
+ignores what differs by host and not by program: line endings, the scratch
+directory, the path separators in a runtime error's source position, and the
+words Windows uses for a missing file or a refused connection
+([`sweep.NormalizeOutput`](../sweep/golden.go)). A golden recorded on Windows
+checks a run on Linux. An example whose output varies between two runs gets no
+golden, because one sample of it is not its value.
 
 ### Sweep markers
 
@@ -65,6 +77,7 @@ A comment says which:
 | `run` | Compile, run, expect it to finish successfully. | Every example. This is the default and is normally left unwritten. |
 | `server` | Start it and require it to be **still running** a few seconds later, then stop it. Exiting early is the failure. | A program that binds a port and serves until interrupted. |
 | `serve-handler` | Compile it and stop there. | A program `net_serve` dispatches to, which has no connection of its own to read. |
+| `needs-input` | Compile it, stop there, and count it separately from the examples whose output was checked. | A program that needs something a sweep cannot supply (an evidence image, a peer on the internet, a passphrase typed at a terminal) or that reports on the machine it runs on. |
 
 The reason after `--` is required, because the whole point of the marker is
 telling a future reader why this example is not treated like the others.

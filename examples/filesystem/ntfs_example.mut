@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- opens disk.img, an NTFS image the repository does not ship
+
 putln("=== NTFS Parser Builtins ===");
 
 let ntfs, err = ntfs_open("disk.img");

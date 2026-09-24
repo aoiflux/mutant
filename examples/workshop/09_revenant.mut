@@ -26,6 +26,7 @@
 //     absent from disk                metadata that described it.
 //
 // Input: the fsagen bodyfile, and the collection (to see what is still there).
+// mutant:sweep needs-input -- needs the QUILLDROP evidence that examples/workshop/evidence/build_evidence builds
 
 let EVIDENCE = "examples/workshop/evidence/case_quilldrop";
 let BODYFILE = "examples/workshop/evidence/case_quilldrop.body";

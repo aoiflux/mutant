@@ -1,0 +1,7 @@
+=== Extract IOCs ===
+ipv4   : [185.12.0.9]
+domains: [evil.example.com]
+urls   : [http://evil.example.com/panel]
+emails : [ops@evil.example.com]
+md5    : [44d88612fea8a8f36de82e1278abb02f]
+safe   : hxxp://evil[.]example[.]com/panel

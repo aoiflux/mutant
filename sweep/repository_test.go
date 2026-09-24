@@ -60,6 +60,7 @@ func TestTheMarkedProgramsAreTheOnesWeExpect(t *testing.T) {
 		ModeServer:       5,
 		ModeServeHandler: 2,
 		ModeRun:          1,
+		ModeNeedsInput:   33,
 	}
 	for _, mode := range Modes() {
 		if counts[mode] != want[mode] {

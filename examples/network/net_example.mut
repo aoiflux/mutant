@@ -1,3 +1,5 @@
+// mutant:sweep needs-input -- resolves and dials example.com over the internet
+
 putln("=== DNS Resolution ===");
 let addrs, err = net_resolve("example.com");
 putln("example.com resolves to:");

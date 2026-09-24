@@ -51,10 +51,16 @@ exhaustive lists.
 - **Examples can record what they print.** `go run ./cmd/sweep --golden`
   compares each reproducible example's output with a `.golden` file beside it,
   and `--update-golden` writes them; output that varies between two runs of the
-  same bytecode gets no golden, because one sample of it is not its value. A new
-  `// mutant:sweep needs-input -- <what>` marker compiles an example that needs
-  evidence, a network peer or a passphrase and counts it separately, so the
-  number of examples whose output was actually checked is never inflated.
+  same bytecode gets no golden, because one sample of it is not its value. A
+  golden recorded on one OS checks a run on another: the separators in a source
+  position and the few system errors Windows words differently are normalized,
+  and the evidence fixtures in `examples/data` are checked out byte for byte. A
+  new `// mutant:sweep needs-input -- <what>` marker compiles an example that
+  needs evidence, a network peer or a passphrase, or that reports on the machine
+  it runs on, and counts it separately, so the number of examples whose output
+  was actually checked is never inflated. A difference between two mutation
+  levels fails the sweep only if it repeats when both are run again, so output
+  that carries the time is no longer reported as the engine changing a program.
 
 - **`db_compact`, and a memory budget for `db_open_disk`.** Graphene v0.9.0
   compacts a disk store's write-ahead log on request, and caps the memory a

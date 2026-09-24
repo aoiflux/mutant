@@ -124,7 +124,9 @@ func HexEncode(args ...object.Object) object.Object {
 	return stringObj(hex.EncodeToString([]byte(s)))
 }
 
-func HexDecode(args ...object.Object) object.Object { return hexDecode(args, BuiltinNameHexDecode, false) }
+func HexDecode(args ...object.Object) object.Object {
+	return hexDecode(args, BuiltinNameHexDecode, false)
+}
 
 // HexDecodeBytes decodes hex into a buffer. Decoded hex is binary by
 // definition -- that is what hex is for -- so this is the variant most callers
@@ -190,7 +192,9 @@ func Gzip(args ...object.Object) object.Object {
 func Gunzip(args ...object.Object) object.Object { return gunzip(args, BuiltinNameGunzip, false) }
 
 // GunzipBytes decompresses gzip data into a buffer.
-func GunzipBytes(args ...object.Object) object.Object { return gunzip(args, BuiltinNameGunzipBytes, true) }
+func GunzipBytes(args ...object.Object) object.Object {
+	return gunzip(args, BuiltinNameGunzipBytes, true)
+}
 
 // gunzip and zlibDecompress both bound what they will materialise.
 //

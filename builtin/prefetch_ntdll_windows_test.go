@@ -58,7 +58,7 @@ func TestXpressHuffmanAgainstNtdll(t *testing.T) {
 	cases := map[string][]byte{
 		"tiny":                  []byte("hello hello hello world world"),
 		"text":                  bytes.Repeat([]byte("The quick brown fox. "), 40),
-		"compressible-1block":   bytes.Repeat([]byte("ABCDEFG"), 30000),  // single giant match
+		"compressible-1block":   bytes.Repeat([]byte("ABCDEFG"), 30000), // single giant match
 		"incompressible-1block": lcg(60000),                             // < 65536
 		"incompressible-2block": lcg(70000),                             // crosses a 65536 boundary
 		"incompressible-3block": lcg(150000),                            // multiple blocks

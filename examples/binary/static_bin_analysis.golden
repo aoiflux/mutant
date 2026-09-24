@@ -1,0 +1,3 @@
+=== static_binary_metadata_extractor ===
+Safe use: static metadata only. No execution performed.
+wrote report: example_output/static_binary_metadata_extractor/report.json

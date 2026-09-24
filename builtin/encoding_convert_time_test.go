@@ -10,9 +10,9 @@ func TestEncodingRoundTrips(t *testing.T) {
 	msg := "mutant \x00\xffbinary"
 
 	roundTrips := []struct {
-		name    string
-		encode  func() object.Object
-		decode  func(string) object.Object // returns MultiValue pair
+		name   string
+		encode func() object.Object
+		decode func(string) object.Object // returns MultiValue pair
 	}{
 		{"base64", func() object.Object { return Base64Encode(stringObj(msg)) }, func(s string) object.Object { return Base64Decode(stringObj(s)) }},
 		{"base64url", func() object.Object { return Base64URLEncode(stringObj(msg)) }, func(s string) object.Object { return Base64URLDecode(stringObj(s)) }},

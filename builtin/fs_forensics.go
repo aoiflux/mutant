@@ -422,7 +422,7 @@ var fileSignatures = []fileSignature{
 	{"flac", "audio/flac", []byte{'f', 'L', 'a', 'C'}, 0},
 	{"ogg", "application/ogg", []byte{'O', 'g', 'g', 'S'}, 0},
 	{"mp3", "audio/mpeg", []byte{'I', 'D', '3'}, 0},
-	{"mp4", "video/mp4", []byte{'f', 't', 'y', 'p'}, 4}, // also mov/m4a/heic (ISO-BMFF)
+	{"mp4", "video/mp4", []byte{'f', 't', 'y', 'p'}, 4},           // also mov/m4a/heic (ISO-BMFF)
 	{"riff", "application/x-riff", []byte{'R', 'I', 'F', 'F'}, 0}, // refined to wav/avi/webp below
 	{"pe", "application/vnd.microsoft.portable-executable", []byte{0x4D, 0x5A}, 0},
 }

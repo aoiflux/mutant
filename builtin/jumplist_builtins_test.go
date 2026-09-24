@@ -14,9 +14,9 @@ import (
 // (so parseCustomJumplist's scan finds it), carrying a relative path.
 func craftLnk(relPath string) []byte {
 	hdr := make([]byte, 76)
-	copy(hdr[0:20], lnkHeaderSig)                          // HeaderSize + LinkCLSID
-	binary.LittleEndian.PutUint32(hdr[20:24], 0x08|0x80)   // HasRelativePath|IsUnicode
-	binary.LittleEndian.PutUint32(hdr[24:28], 0x20)        // FileAttributes
+	copy(hdr[0:20], lnkHeaderSig)                        // HeaderSize + LinkCLSID
+	binary.LittleEndian.PutUint32(hdr[20:24], 0x08|0x80) // HasRelativePath|IsUnicode
+	binary.LittleEndian.PutUint32(hdr[24:28], 0x20)      // FileAttributes
 	return append(hdr, unicodeStringData(relPath)...)
 }
 
@@ -60,15 +60,15 @@ func TestParseDestList(t *testing.T) {
 	pathU16 := utf16.Encode([]rune(path))
 
 	buf := make([]byte, 32+0x76+len(pathU16)*2+4)
-	binary.LittleEndian.PutUint32(buf[0:], 3)  // version 3
-	binary.LittleEndian.PutUint32(buf[4:], 1)  // 1 entry
-	binary.LittleEndian.PutUint32(buf[8:], 0)  // 0 pinned
+	binary.LittleEndian.PutUint32(buf[0:], 3) // version 3
+	binary.LittleEndian.PutUint32(buf[4:], 1) // 1 entry
+	binary.LittleEndian.PutUint32(buf[8:], 0) // 0 pinned
 
 	base := 32
-	copy(buf[base+0x48:], []byte("MYHOST"))                             // hostname
-	binary.LittleEndian.PutUint32(buf[base+0x58:], 5)                   // stream id
-	binary.LittleEndian.PutUint64(buf[base+0x64:], ft)                  // last access
-	binary.LittleEndian.PutUint32(buf[base+0x6C:], 0)                   // pinned (!=0xFFFFFFFF)
+	copy(buf[base+0x48:], []byte("MYHOST"))                              // hostname
+	binary.LittleEndian.PutUint32(buf[base+0x58:], 5)                    // stream id
+	binary.LittleEndian.PutUint64(buf[base+0x64:], ft)                   // last access
+	binary.LittleEndian.PutUint32(buf[base+0x6C:], 0)                    // pinned (!=0xFFFFFFFF)
 	binary.LittleEndian.PutUint16(buf[base+0x74:], uint16(len(pathU16))) // path size (chars)
 	for i, c := range pathU16 {
 		binary.LittleEndian.PutUint16(buf[base+0x76+i*2:], c)
@@ -108,4 +108,3 @@ func TestJumplistRejectsGarbage(t *testing.T) {
 		t.Errorf("entry_count = %d, want 0", got)
 	}
 }
-
