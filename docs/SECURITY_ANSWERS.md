@@ -19,8 +19,9 @@ outright. The claim also appeared in a comment on `generator.Generate`, and both
 were corrected together.
 
 The password itself does not have to appear on the command line -- prompt,
-`--password-file`, and `--password-stdin` are all supported, and `--password` is
-deprecated. In every case the runtime decrypts before execution and never relies
+`--password-file`, and `--password-stdin` are all supported, and a bare
+`--password` is refused since 2.6.0 (`--password-insecure` is the explicit
+opt-in to argv). In every case the runtime decrypts before execution and never relies
 on plaintext bytecode files.
 
 ## 2) How is authenticity enforced?

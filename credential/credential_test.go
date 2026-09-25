@@ -38,12 +38,6 @@ func TestResolveReadsEachExplicitSource(t *testing.T) {
 		source  Source
 	}{
 		{
-			name:    "inline flag still works while deprecated",
-			request: Request{Inline: "from-argv"},
-			want:    "from-argv",
-			source:  SourceInline,
-		},
-		{
 			name:    "explicit insecure opt-in",
 			request: Request{Insecure: "from-argv-on-purpose"},
 			want:    "from-argv-on-purpose",
@@ -83,26 +77,30 @@ func TestResolveReadsEachExplicitSource(t *testing.T) {
 	}
 }
 
-// The deprecation warning is the whole mechanism of task 4: the flag keeps
-// working for one minor release, but nobody gets to keep using it unaware.
-func TestInlinePasswordWarnsAboutArgvExposure(t *testing.T) {
+// 2.5.0 warned on a bare --password and promised the next minor release would
+// require the explicit opt-in. 2.6.0 keeps that promise: the password is never
+// returned, and the refusal names every way to give it instead -- without
+// repeating it, since the refusal may land in a log.
+func TestBarePasswordIsRefusedNamingTheAlternatives(t *testing.T) {
 	resolver, stderr := newTestResolver()
 
-	if _, _, err := resolver.Resolve(Request{Inline: "hunter2"}); err != nil {
-		t.Fatalf("Resolve() error = %v, want nil", err)
+	secret, source, err := resolver.Resolve(Request{Inline: "hunter2"})
+	if err == nil {
+		t.Fatalf("Resolve() returned %q from %q, want a refusal", secret, source)
 	}
-
-	warning := stderr.String()
-	if !strings.Contains(warning, "[deprecated]") {
-		t.Errorf("stderr = %q, want a [deprecated] marker", warning)
+	if secret != nil {
+		t.Errorf("Resolve() refused but still returned the password %q", secret)
 	}
-	for _, expected := range []string{"argv", "--password-file", "--password-stdin"} {
-		if !strings.Contains(warning, expected) {
-			t.Errorf("stderr = %q, want it to mention %q", warning, expected)
+	if source != SourceInline {
+		t.Errorf("source = %q, want %q so the caller can say which input to fix", source, SourceInline)
+	}
+	for _, expected := range []string{"argv", "--password-insecure", "--password-file", "--password-stdin", "prompt"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("error = %q, want it to name %q", err, expected)
 		}
 	}
-	if strings.Contains(warning, "hunter2") {
-		t.Errorf("stderr echoed the password back: %q", warning)
+	if strings.Contains(err.Error()+stderr.String(), "hunter2") {
+		t.Errorf("the refusal echoed the password back: %q / %q", err, stderr.String())
 	}
 }
 

@@ -159,7 +159,7 @@ format      pe
 machine     0x8664
 compiled    1970-01-01 00:00:00 UTC
 sections    8
-toolchain   go 1.26.2  buildinfo=true build_id=false pclntab=false
+toolchain   go 1.26.6  buildinfo=true build_id=false pclntab=false
 
   .text      addr=0x1000     size=13747200
   .rdata     addr=0xd1e000   size=18840064

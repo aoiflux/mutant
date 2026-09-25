@@ -6,8 +6,10 @@
 // connections, passing a shared arg through to every handler invocation.
 //
 // Run from the repository root so the handler path resolves:
-//   mutant run examples/project/portscan_service/main.mut -pwd <password>
-//   mutant examples/project/portscan_service/main.mu   -pwd <password>
+//   mutant gen examples/project/portscan_service/main.mut
+//   mutant examples/project/portscan_service/main.mu
+// Both prompt for the password; --password-file <path> or --password-stdin
+// avoid the prompt.
 // mutant:sweep server -- binds 127.0.0.1:8085 and serves until interrupted
 
 let header = fn(title) { putln("=== " + title + " ==="); };

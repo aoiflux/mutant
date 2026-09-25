@@ -1,6 +1,6 @@
 module mutant
 
-go 1.26.2
+go 1.26.6
 
 require (
 	github.com/aoiflux/libewf v0.2.1
@@ -24,7 +24,7 @@ require (
 	github.com/sourcegraph/jsonrpc2 v0.2.2
 	github.com/tliron/glsp v0.2.2
 	github.com/yuin/gopher-lua v1.1.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 )
 

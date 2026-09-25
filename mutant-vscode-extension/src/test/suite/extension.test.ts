@@ -206,4 +206,17 @@ suite("Mutant extension integration", () => {
     assert.strictEqual(__test.bundledLanguageServerBinaryName("freebsd", "x64"), undefined);
     assert.strictEqual(__test.bundledLanguageServerBinaryName("linux", "arm"), undefined);
   });
+
+  // mutant refuses a bare --password since 2.6.0, so a task that passed it
+  // would fail before compiling anything.
+  test("tasks never pass the refused --password flag", () => {
+    for (const command of ["gen", "run", "release"] as const) {
+      const args = __test.mutantTaskArgs({ type: "mutant", command, password: "pw", passwordFile: "pw.txt" }, "a.mut");
+      assert.ok(!args.includes("--password"), `${command}: ${args.join(" ")}`);
+      assert.ok(!args.includes("--pwd"), `${command}: ${args.join(" ")}`);
+      assert.deepStrictEqual(args.slice(-4), ["--password-file", "pw.txt", "--password-insecure", "pw"], command);
+    }
+    const prompted = __test.mutantTaskArgs({ type: "mutant", command: "run" }, "a.mut");
+    assert.deepStrictEqual(prompted, ["a.mut"], "no password field means mutant prompts");
+  });
 });

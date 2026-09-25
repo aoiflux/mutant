@@ -170,8 +170,9 @@ So credentials use rule 1's structure with the value removed:
 | `--password-file <path>` | Rule 2: a **path** on argv, content on disk.   |
 | `--password-stdin`       | A pipe. Nothing on argv, nothing on disk.      |
 
-`--password` still works and warns; it will require an explicit
-`--password-insecure` in the next minor release. See `credential/credential.go`.
+A bare `--password` (or `--pwd`) is refused since 2.6.0, as 2.5.0 announced.
+`--password-insecure <value>` keeps the argv form for someone who accepts the
+exposure and says so on the command line. See `credential/credential.go`.
 
 The `--password-file` permission check is POSIX-only. On Windows the mode bits
 `os.FileInfo` reports are synthesised from the read-only attribute rather than

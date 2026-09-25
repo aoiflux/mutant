@@ -48,4 +48,4 @@ Write-Host "  bodyfile : $Bodyfile"
 Write-Host "  csv      : $CsvTl"
 Write-Host ''
 Write-Host 'Now run the first tool:' -ForegroundColor Yellow
-Write-Host '  mutant run examples/workshop/07_dropzone.mut -pwd workshop'
+Write-Host '  mutant examples/workshop/07_dropzone.mut    (it asks for a password)'

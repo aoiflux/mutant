@@ -878,7 +878,7 @@ func (s *realFATSession) fatDeletedEntry(dirEntry libfat.DirEntry) fsDeletedEntr
 	// and now describes whatever came next. AssumeContiguous is the other
 	// answer and it is a hypothesis, so it is not taken here -- it belongs to
 	// a builtin a script has to name.
-	result, err := s.volume.FragmentOffsetsWithOptions(dirEntry, libfat.FragmentOptions{})
+	result, checked, err := s.freedRecordFragments(dirEntry, libfat.FragmentOptions{})
 	if err != nil || result == nil {
 		entry.ContentState = fsDeletedContentNone
 		return entry
@@ -896,10 +896,49 @@ func (s *realFATSession) fatDeletedEntry(dirEntry libfat.DirEntry) fsDeletedEntr
 		})
 	}
 	entry.LocatedBytes = sumRuns(entry.Runs)
-	entry.AllocationChecked = dirEntry.FirstCluster != 0
+	entry.AllocationChecked = checked
 	entry.Reallocated = result.FirstClusterReallocated
 
 	return entry
+}
+
+// freedRecordFragments locates a record whose FAT chain no longer describes
+// it, for the scan and the recovery alike, and reports whether the first
+// cluster's allocation was actually read.
+//
+// libfat refuses to walk the chain of an entry marked deleted, because the
+// chain was freed and now belongs to whatever came next. A record the orphan
+// sweep finds is in the same position without the marker: its directory was
+// unlinked and its own 0xE5 never written. Walking from its first cluster
+// follows the current FAT, which for a cluster since handed to a live file is
+// that file's chain -- its bytes, reported as the orphan's, as preserved,
+// checked and free (M26-FS2-001). So an orphan is treated as what it is, a
+// deleted record: first cluster only, or the contiguity hypothesis a script
+// asked for by name.
+//
+// Reallocation is read here rather than taken from the entry, because libfat
+// sets DirEntry.ClusterAllocated false when it could not read the allocation
+// table, and that false must not be reported as checked-and-free.
+func (s *realFATSession) freedRecordFragments(dirEntry libfat.DirEntry, opts libfat.FragmentOptions) (*libfat.FragmentResult, bool, error) {
+	if dirEntry.Orphaned {
+		dirEntry.Deleted = true
+	}
+	result, err := s.volume.FragmentOffsetsWithOptions(dirEntry, opts)
+	if result == nil {
+		return nil, false, err
+	}
+	if !dirEntry.Deleted || dirEntry.FirstCluster == 0 {
+		// A live entry's cluster is allocated to itself, which says nothing
+		// about reallocation; only the scan's two populations reach here.
+		return result, false, err
+	}
+	allocated, aerr := s.volume.IsClusterAllocated(dirEntry.FirstCluster)
+	if aerr != nil {
+		result.FirstClusterReallocated = false
+		return result, false, err
+	}
+	result.FirstClusterReallocated = allocated
+	return result, true, err
 }
 
 func fatNameSource(dirEntry libfat.DirEntry) string {

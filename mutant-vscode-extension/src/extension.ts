@@ -495,6 +495,7 @@ interface MutantTaskDefinition extends vscode.TaskDefinition {
   arch?: string;
   mutation?: number;
   password?: string;
+  passwordFile?: string;
   args?: string[];
 }
 
@@ -532,10 +533,17 @@ function mutantTaskArgs(def: MutantTaskDefinition, srcFallback: string): string[
       if (typeof def.mutation === "number") {
         args.push("--mutation", String(def.mutation));
       }
-      if (def.password) {
-        args.push("--password", def.password);
-      }
       break;
+  }
+  // mutant refuses a bare --password since 2.6.0. A password written into
+  // tasks.json is on argv whichever flag carries it, so it goes as the explicit
+  // opt-in; passwordFile keeps it off argv. Naming both is refused by mutant,
+  // which says why, rather than one silently winning here.
+  if (def.passwordFile) {
+    args.push("--password-file", def.passwordFile);
+  }
+  if (def.password) {
+    args.push("--password-insecure", def.password);
   }
   if (Array.isArray(def.args)) {
     args.push(...def.args);
@@ -852,5 +860,9 @@ export const __test = {
 
   bundledLanguageServerBinaryName(platform: NodeJS.Platform, arch: string): string | undefined {
     return bundledLanguageServerBinaryName(platform, arch);
+  },
+
+  mutantTaskArgs(def: MutantTaskDefinition, srcFallback: string): string[] {
+    return mutantTaskArgs(def, srcFallback);
   },
 };

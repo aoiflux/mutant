@@ -183,8 +183,8 @@ func TestADisclosureIsIssuedRecordedBundledAndVerified(t *testing.T) {
 			t.Errorf("%s: %s", name, outcome)
 		}
 	}
-	if len(checks) != 10 {
-		t.Errorf("ran %d checks, want 10: %v", len(checks), checks)
+	if len(checks) != 11 {
+		t.Errorf("ran %d checks, want 11: %v", len(checks), checks)
 	}
 	if !discloseBool(t, verified, "verified") {
 		t.Fatalf("a package that passes every check is not verified: %v", checks)

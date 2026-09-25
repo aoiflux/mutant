@@ -816,7 +816,7 @@ func (s *realFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 				"run fat_deleted again", index)
 	}
 
-	result, err := s.volume.FragmentOffsetsWithOptions(native,
+	result, checked, err := s.freedRecordFragments(native,
 		libfat.FragmentOptions{AssumeContiguous: assumeContiguous})
 	if err != nil && result == nil {
 		return fsRecovery{}, err
@@ -841,7 +841,7 @@ func (s *realFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 	}
 	recovery.Assumed = result.Assumed
 	recovery.Reallocated = result.FirstClusterReallocated
-	recovery.AllocationChecked = native.FirstCluster != 0
+	recovery.AllocationChecked = checked
 	recovery.ContentState = fatRecoveredState(result.ChainWalked, result.Assumed)
 	recovery.Caveats = fatRecoveryCaveats(result.ChainBroken, result.LoopDetected)
 	return recovery, nil

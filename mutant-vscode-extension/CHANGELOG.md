@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Tasks keep working with mutant 2.6.0, which refuses a bare `--password`.**
+  A task's `password` field is now passed as `--password-insecure`, the explicit
+  opt-in to a password on the command line, and a new `passwordFile` field
+  passes `--password-file` so the password stays off it. Both now apply to
+  `gen` and `run` tasks as well as `release`. Leave both unset to be prompted
+  in the terminal.
+
 - **Names resolve across modules the way the compiler resolves them.** The
   language server now asks the same symbol graph the compiler builds, so
   `stats.mean` has go-to-definition, hover, completion, find-references and

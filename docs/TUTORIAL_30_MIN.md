@@ -502,7 +502,7 @@ line about "self-verification only" above is the runtime telling you honestly
 that nobody asked it to check a signer.
 
 **Never pass a password as a flag value.** `--password` puts the secret in the
-process table and your shell history; it warns, and it is going away. The three
+process table and your shell history, and since 2.6.0 it is refused. The three
 supported routes are an interactive prompt (the default), `--password-file`, and
 `--password-stdin` for pipelines:
 

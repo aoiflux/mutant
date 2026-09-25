@@ -377,7 +377,7 @@ deterministic local key string.
 Used when:
 
 - Single-arg `.mut`/`.mu` convenience paths.
-- `--dev` mode running `.mu` without explicit `-pwd`.
+- `--dev` mode running `.mu` without a password source.
 
 Security implication:
 

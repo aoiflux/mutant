@@ -8,7 +8,7 @@
 # option, and nothing is written into the working tree -- builds, logs and
 # scratch copies go under --log-dir.
 #
-#   scripts/release_gate.sh [--go go1.26.2] [--fuzz-time 30s] [--quick] [--vuln] [--log-dir DIR]
+#   scripts/release_gate.sh [--go go1.26.6] [--fuzz-time 30s] [--quick] [--vuln] [--log-dir DIR]
 #
 # The expected Go toolchain is read from go.mod, not written here.
 
@@ -198,7 +198,9 @@ step "generated docs are current" gendocs_check
 if [ "$QUICK" -eq 1 ]; then RESULTS+=("$(printf '%-48s %-5s' "example sweep" SKIP)  SKIP: --quick"); else step "example sweep (golden output, levels 0,5,10)" sweep_golden; fi
 step "go mod verify / tidy" mod_check
 step "CHANGELOG date matches the tag" changelog_date
-[ "$VULN" -eq 1 ] && step "govulncheck" vuln
+# A full gate always runs govulncheck: a reachable vulnerability blocks a
+# release. --quick skips it unless --vuln asks for it anyway.
+if [ "$QUICK" -eq 1 ] && [ "$VULN" -eq 0 ]; then RESULTS+=("$(printf '%-48s %-5s' "govulncheck" SKIP)  SKIP: --quick"); else step "govulncheck" vuln; fi
 
 echo
 printf '%s\n' "${RESULTS[@]}"

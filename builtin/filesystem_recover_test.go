@@ -928,3 +928,106 @@ func TestTheBuiltImageMatchesWhatTheRecoveryTestsAssume(t *testing.T) {
 		t.Fatalf("libfat rejected the image the recovery tests use: %v", err)
 	}
 }
+
+// buildFAT16OrphanImage adds a deleted directory to the deleted-scan image
+// whose records were never marked deleted themselves -- the directory was
+// unlinked, its children were not. Its one cluster, 7, is free and nothing
+// references it, so the orphan sweep finds the records in it:
+//
+//   - STALE.TXT names cluster 8 and 1024 bytes. Clusters 8 and 9 have since
+//     been given to the live NEW.TXT, whose bytes are all 'N'.
+//   - FREE.TXT names cluster 11, still free, whose bytes are all 'F'.
+//
+// Neither record carries the 0xE5 marker, so the FAT chain from its first
+// cluster looks like a chain to follow. For STALE.TXT it is NEW.TXT's.
+func buildFAT16OrphanImage(t *testing.T) []byte {
+	t.Helper()
+
+	image := buildFAT16DeletedImage(t)
+	firstFAT := fatDeletedReserved * fatTestSectorSize
+	fatLen := fatDeletedFATSectors * fatTestSectorSize
+	for _, base := range []int{firstFAT, firstFAT + fatLen} {
+		fat := image[base : base+fatLen]
+		putUint16LE(fat, 8*2, 9)
+		putUint16LE(fat, 9*2, 0xFFFF)
+	}
+
+	root := image[fatDeletedRootOffset:]
+	writeFATDirEntry(root[96:], "NEW     TXT", 0x20, 8, 1024)
+	writeFATDirEntry(root[128:], "OLDDIR     ", 0x10, 7, 0)
+	root[128] = 0xE5
+
+	dir := image[fatRecoverClusterOffset(7):]
+	writeFATDirEntry(dir[0:], ".          ", 0x10, 7, 0)
+	writeFATDirEntry(dir[32:], "..         ", 0x10, 0, 0)
+	writeFATDirEntry(dir[64:], "STALE   TXT", 0x20, 8, 1024)
+	writeFATDirEntry(dir[96:], "FREE    TXT", 0x20, 11, 100)
+
+	for cluster, fill := range map[int]byte{8: 'N', 9: 'N', 11: 'F'} {
+		at := fatRecoverClusterOffset(cluster)
+		copy(image[at:at+fatTestSectorSize], bytes.Repeat([]byte{fill}, fatTestSectorSize))
+	}
+	return image
+}
+
+// M26-FS2-001. A record the orphan sweep finds was never marked deleted, so
+// libfat walks the current FAT from its first cluster -- and when that cluster
+// now belongs to a live file, the walk returns the live file's chain. The scan
+// reported it preserved, checked and free, and the recovery wrote the live
+// file's bytes under the orphan's name with no caveat. An orphan's chain is as
+// freed as a deleted entry's: it is located for its first cluster alone, and
+// that cluster's allocation decides reallocated.
+func TestAnOrphanRecordNeverFollowsTheChainOfTheFileNowOwningItsCluster(t *testing.T) {
+	image := buildFAT16OrphanImage(t)
+	session := openRealFATDeletedSession(t, image, 0)
+
+	scan, err := session.ScanDeleted()
+	if err != nil {
+		t.Fatalf("ScanDeleted: %v", err)
+	}
+
+	for _, test := range []struct {
+		name        string
+		cluster     int
+		located     int64 // the first cluster, trimmed to the recorded size
+		reallocated bool
+	}{
+		{"STALE.TXT", 8, fatTestSectorSize, true},
+		{"FREE.TXT", 11, 100, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			index := indexOfScannedEntry(t, scan, test.name)
+			entry := scan.Entries[index]
+			if entry.Source != fsDeletedSourceOrphanScan {
+				t.Fatalf("source = %q, want %q: the fixture no longer exercises the sweep", entry.Source, fsDeletedSourceOrphanScan)
+			}
+
+			if entry.ContentState != fsDeletedContentFirstOnly {
+				t.Errorf("content_state = %q, want %q: an orphan's chain was freed with its directory", entry.ContentState, fsDeletedContentFirstOnly)
+			}
+			wantRun := fsDeletedRun{Offset: int64(fatRecoverClusterOffset(test.cluster)), Length: test.located}
+			if len(entry.Runs) != 1 || entry.Runs[0] != wantRun {
+				t.Errorf("runs = %+v, want the first cluster alone, %+v", entry.Runs, wantRun)
+			}
+			if !entry.AllocationChecked || entry.Reallocated != test.reallocated {
+				t.Errorf("allocation_checked = %v, reallocated = %v; want true, %v", entry.AllocationChecked, entry.Reallocated, test.reallocated)
+			}
+
+			recovery, err := session.RecoverDeleted(index, false)
+			if err != nil {
+				t.Fatalf("RecoverDeleted: %v", err)
+			}
+			if recovery.LocatedBytes != test.located {
+				t.Errorf("located_bytes = %d, want %d: the first cluster", recovery.LocatedBytes, test.located)
+			}
+			if recovery.ContentState != fsDeletedContentFirstOnly || !recovery.AllocationChecked || recovery.Reallocated != test.reallocated {
+				t.Errorf("recovery content_state = %q, allocation_checked = %v, reallocated = %v; want %q, true, %v",
+					recovery.ContentState, recovery.AllocationChecked, recovery.Reallocated, fsDeletedContentFirstOnly, test.reallocated)
+			}
+			warned := strings.Contains(strings.Join(recoveryCaveats(recovery, recovery.Length), "\n"), "allocated to a live file")
+			if warned != test.reallocated {
+				t.Errorf("the reallocation caveat is present = %v, want %v", warned, test.reallocated)
+			}
+		})
+	}
+}

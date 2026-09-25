@@ -159,6 +159,87 @@ func TestGateRefusesALogDirInsideTheRepository(t *testing.T) {
 	}
 }
 
+// TestFullGateRunsGovulncheck: a vulnerability the code can reach blocks a
+// release, so a full gate runs govulncheck without being asked. Only a quick
+// run skips it, and only when --vuln / -Vuln does not ask for it anyway. A
+// gate where the step hides behind an opt-in switch passes every release it
+// was meant to stop.
+func TestFullGateRunsGovulncheck(t *testing.T) {
+	for _, gate := range []struct{ script, guard string }{
+		{"scripts/release_gate.sh", `if [ "$QUICK" -eq 1 ] && [ "$VULN" -eq 0 ]; then`},
+		{"scripts/release_gate.ps1", `if ($Quick -and -not $Vuln) {`},
+	} {
+		lines := gateScriptLines(t, gate.script)
+		guarded, runs := false, false
+		for _, line := range lines {
+			guarded = guarded || strings.Contains(line, gate.guard)
+			runs = runs || strings.Contains(line, "golang.org/x/vuln/cmd/govulncheck")
+		}
+		if !runs {
+			t.Errorf("%s no longer runs govulncheck", gate.script)
+		}
+		if !guarded {
+			t.Errorf("%s does not skip govulncheck with exactly %q, so a full gate may not run it; update this test if the step moved", gate.script, gate.guard)
+		}
+	}
+}
+
+// goModFloors are the lowest versions go.mod may name. Each was raised to clear
+// vulnerabilities govulncheck found reachable (or, for x/crypto, required) on
+// the version before it, so going back under one reintroduces them.
+var goModFloors = []struct{ directive, version string }{
+	{"go", "1.26.6"},                  // 18 reachable standard-library issues in 1.26.2
+	{"golang.org/x/crypto", "0.56.0"}, // ssh denial of service fixed in v0.56.0
+}
+
+// TestGoModStaysAboveItsVulnerabilityFloors: moving the toolchain or a module
+// back is a one-line go.mod edit that no other test notices.
+func TestGoModStaysAboveItsVulnerabilityFloors(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repositoryRoot, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]string{}
+	for line := range strings.SplitSeq(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "require "))
+		if len(fields) >= 2 {
+			named[fields[0]] = strings.TrimPrefix(fields[1], "v")
+		}
+	}
+	for _, floor := range goModFloors {
+		got, ok := named[floor.directive]
+		if !ok {
+			t.Errorf("go.mod no longer names %s; update goModFloors if it was dropped on purpose", floor.directive)
+			continue
+		}
+		if versionLess(got, floor.version) {
+			t.Errorf("go.mod names %s %s, below the floor %s that cleared its known vulnerabilities", floor.directive, got, floor.version)
+		}
+	}
+}
+
+// versionLess compares dotted numeric versions such as 1.26.6 and 0.56.0; a
+// pre-release or build suffix is ignored, which is conservative here.
+func versionLess(a, b string) bool {
+	if i := strings.IndexAny(a, "-+"); i >= 0 {
+		a = a[:i]
+	}
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		var x, y int
+		if i < len(as) {
+			x, _ = strconv.Atoi(as[i])
+		}
+		if i < len(bs) {
+			y, _ = strconv.Atoi(bs[i])
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
+}
+
 // gateCgoWant is the CGO_ENABLED value a gate command line must set.
 func gateCgoWant(line string) string {
 	if strings.Contains(line, "-race") {

@@ -115,7 +115,7 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 		"bytes 1275 + 178  class: restricted",
 		"bytes 551 + 19  class: pii",
 		// The recipient's side.
-		"checks passed: 10 of 10",
+		"checks passed: 11 of 11",
 		"verified with no root: false",
 		"finding: ledger_inclusion:",
 		"counsel reads the record with 178 of 1471 bytes withheld",

@@ -125,7 +125,7 @@ func (s *sweeper) startAndStop(file string, marker sweep.Marker) result {
 		return result{file: file, mode: marker.Mode, status: statusFail, note: "server", detail: err.Error()}
 	}
 
-	command := exec.Command(s.binary, compiled, "--dev", "--password", s.opts.password)
+	command := exec.Command(s.binary, compiled, "--dev", "--password-insecure", s.opts.password)
 	command.Dir = s.scratch.root
 	output := &bytes.Buffer{}
 	command.Stdout, command.Stderr = output, output
@@ -367,7 +367,7 @@ func (s *sweeper) compile(file string, level int) (string, error) {
 
 	command := exec.CommandContext(ctx, s.binary, "gen",
 		"--src", file,
-		"--password", s.opts.password,
+		"--password-insecure", s.opts.password,
 		"--mutation", strconv.Itoa(level),
 		"--seed", strconv.FormatInt(s.opts.seed, 10),
 	)
@@ -390,7 +390,7 @@ func (s *sweeper) execute(compiled string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.opts.timeout)
 	defer cancel()
 
-	command := exec.CommandContext(ctx, s.binary, compiled, "--dev", "--password", s.opts.password)
+	command := exec.CommandContext(ctx, s.binary, compiled, "--dev", "--password-insecure", s.opts.password)
 	command.Dir = s.scratch.root
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	command.Stdout, command.Stderr = stdout, stderr

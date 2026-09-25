@@ -17,9 +17,9 @@ func TestFailedCompileExitsNonZero(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"gen", []string{"mutant", GENCMD, "hello.mut", "--password", "secret"}},
-		{"run of a source file", []string{"mutant", "hello.mut", "--password", "secret"}},
-		{"release", []string{"mutant", RELEASECMD, "hello.mut", "--os", "windows", "--arch", "amd64", "--password", "secret"}},
+		{"gen", []string{"mutant", GENCMD, "hello.mut", "--password-insecure", "secret"}},
+		{"run of a source file", []string{"mutant", "hello.mut", "--password-insecure", "secret"}},
+		{"release", []string{"mutant", RELEASECMD, "hello.mut", "--os", "windows", "--arch", "amd64", "--password-insecure", "secret"}},
 	}
 
 	for _, tc := range cases {
@@ -40,7 +40,7 @@ func TestFailedRunExitsNonZero(t *testing.T) {
 	deps.runCode = func(string, runner.Options) int { return 1 }
 	defer withRuntimeDeps(deps)()
 
-	if got := run([]string{"mutant", "hello.mu", "--password", "secret"}); got != 1 {
+	if got := run([]string{"mutant", "hello.mu", "--password-insecure", "secret"}); got != 1 {
 		t.Fatalf("a failed run exited %d, want 1", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestFailedEmbeddedPayloadRunExitsNonZero(t *testing.T) {
 	deps.runCode = func(string, runner.Options) int { return 1 }
 	defer withRuntimeDeps(deps)()
 
-	if got := run([]string{"mutant-release.exe", "--password", "secret"}); got != 1 {
+	if got := run([]string{"mutant-release.exe", "--password-insecure", "secret"}); got != 1 {
 		t.Fatalf("a failed standalone run exited %d, want 1", got)
 	}
 }
@@ -75,9 +75,9 @@ func TestSuccessfulCommandsExitZero(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"gen", []string{"mutant", GENCMD, "hello.mut", "--password", "secret"}},
-		{"run", []string{"mutant", "hello.mu", "--password", "secret"}},
-		{"release", []string{"mutant", RELEASECMD, "hello.mut", "--os", "linux", "--arch", "amd64", "--password", "secret"}},
+		{"gen", []string{"mutant", GENCMD, "hello.mut", "--password-insecure", "secret"}},
+		{"run", []string{"mutant", "hello.mu", "--password-insecure", "secret"}},
+		{"release", []string{"mutant", RELEASECMD, "hello.mut", "--os", "linux", "--arch", "amd64", "--password-insecure", "secret"}},
 		{"assets", []string{"mutant", GENCMD, "assets", "--out", "build/releaseassets"}},
 	}
 

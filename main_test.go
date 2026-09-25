@@ -356,7 +356,7 @@ func TestRunDispatchesGenCommand(t *testing.T) {
 		return 0
 	}
 
-	exitCode := run([]string{"mutant", GENCMD, "hello.mut", "--password", "secret", "--mutation", "5", "--seed", "42"})
+	exitCode := run([]string{"mutant", GENCMD, "hello.mut", "--password-insecure", "secret", "--mutation", "5", "--seed", "42"})
 	if exitCode != 0 {
 		t.Fatalf("run returned exit code %d, want 0", exitCode)
 	}
@@ -428,7 +428,7 @@ func TestRunDispatchesReleaseCommand(t *testing.T) {
 		return 0
 	}
 
-	exitCode := run([]string{"mutant", RELEASECMD, "hello.mut", "--os", "windows", "--arch", "amd64", "--password", "secret"})
+	exitCode := run([]string{"mutant", RELEASECMD, "hello.mut", "--os", "windows", "--arch", "amd64", "--password-insecure", "secret"})
 	if exitCode != 0 {
 		t.Fatalf("run returned exit code %d, want 0", exitCode)
 	}
@@ -470,7 +470,7 @@ func TestRunDispatchesBytecodeInvocation(t *testing.T) {
 		return 0
 	}
 
-	exitCode := run([]string{"mutant", "hello.mu", "--password", "secret", "--compat", "--signer-auth"})
+	exitCode := run([]string{"mutant", "hello.mu", "--password-insecure", "secret", "--compat", "--signer-auth"})
 	if exitCode != 0 {
 		t.Fatalf("run returned exit code %d, want 0", exitCode)
 	}
@@ -504,7 +504,7 @@ func TestTimingIsCarriedFromTheCommandLine(t *testing.T) {
 		return 0
 	}
 
-	if exitCode := run([]string{"mutant", "hello.mu", "--timing", "--password", "secret"}); exitCode != 0 {
+	if exitCode := run([]string{"mutant", "hello.mu", "--timing", "--password-insecure", "secret"}); exitCode != 0 {
 		t.Fatalf("run returned exit code %d, want 0", exitCode)
 	}
 
@@ -521,9 +521,9 @@ func TestTrustedKeyPathIsCarriedFromTheCommandLine(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"separated", []string{"mutant", "hello.mu", "--password", "secret", "--trusted-key", "keys/pub.hex"}, "keys/pub.hex"},
-		{"joined", []string{"mutant", "hello.mu", "--password", "secret", "--trusted-key=keys/pub.hex"}, "keys/pub.hex"},
-		{"absent", []string{"mutant", "hello.mu", "--password", "secret"}, ""},
+		{"separated", []string{"mutant", "hello.mu", "--password-insecure", "secret", "--trusted-key", "keys/pub.hex"}, "keys/pub.hex"},
+		{"joined", []string{"mutant", "hello.mu", "--password-insecure", "secret", "--trusted-key=keys/pub.hex"}, "keys/pub.hex"},
+		{"absent", []string{"mutant", "hello.mu", "--password-insecure", "secret"}, ""},
 	}
 
 	for _, tc := range tests {
@@ -972,36 +972,60 @@ func TestPasswordFileIsReadEndToEnd(t *testing.T) {
 	}
 }
 
-// The inline flag keeps working for one minor release, but it announces itself
-// every time. Silent deprecation is how a leak survives a version bump.
-func TestInlinePasswordStillRunsButWarns(t *testing.T) {
-	t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
-
-	got := ""
-	runtimeDeps.runCode = func(_ string, opts runner.Options) int {
-		got = opts.Password
-		return 0
+// 2.5.0 promised that a bare --password would need --password-insecure in the
+// next minor release. Every spelling of it, on every command, now stops before
+// anything runs, compiles or is written, and says what to use instead.
+func TestBarePasswordIsRefusedOnEveryCommand(t *testing.T) {
+	mu := "hello" + global.MutantByteCodeCompiledFileExtension
+	mut := "hello" + global.MutantSourceCodeFileExtention
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"run a .mu", []string{"mutant", mu, "--password", "secret"}},
+		{"run a .mu, joined", []string{"mutant", mu, "--password=secret"}},
+		{"run a .mu, -pwd", []string{"mutant", mu, "-pwd", "secret"}},
+		{"run a .mu under --dev", []string{"mutant", mu, "--dev", "--password", "secret"}},
+		{"run a .mut", []string{"mutant", mut, "--password", "secret"}},
+		{"gen", []string{"mutant", GENCMD, mut, "--password", "secret"}},
+		{"gen, --pwd", []string{"mutant", GENCMD, "--src", mut, "--pwd=secret"}},
+		{"release", []string{"mutant", RELEASECMD, mut, "--os", "linux", "--arch", "amd64", "--password", "secret"}},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Cleanup(withRuntimeDeps(stubRuntimeDeps()))
+			reached := ""
+			runtimeDeps.runCode = func(_ string, opts runner.Options) int {
+				reached = "run"
+				return 0
+			}
+			runtimeDeps.compileCode = func(string, string, string, bool, string, int, int64, []string) int {
+				reached = "the compiler"
+				return 0
+			}
 
-	exitCode := 0
-	output := captureStderr(t, func() {
-		exitCode = run([]string{
-			"mutant",
-			"hello" + global.MutantByteCodeCompiledFileExtension,
-			"--password", "secret",
+			// The run path reports on stderr and the compiling commands on stdout
+			// (printCommandError); the refusal only has to be seen, wherever it goes.
+			exitCode := 0
+			var output string
+			stdout := captureStdout(t, func() {
+				output = captureStderr(t, func() { exitCode = run(test.args) })
+			})
+			output += stdout
+
+			if exitCode == 0 {
+				t.Fatalf("run returned exit code 0, want a refusal:\n%s", output)
+			}
+			if reached != "" {
+				t.Fatalf("the password reached %s before the refusal", reached)
+			}
+			for _, alternative := range []string{"--password-insecure", "--password-file", "--password-stdin"} {
+				assertContains(t, output, alternative)
+			}
+			if strings.Contains(output, "secret") {
+				t.Errorf("the refusal echoed the password back:\n%s", output)
+			}
 		})
-	})
-
-	if exitCode != 0 {
-		t.Fatalf("run returned exit code %d, want 0: --password must keep working this release", exitCode)
-	}
-	if got != "secret" {
-		t.Fatalf("password reaching the runner = %q, want %q", got, "secret")
-	}
-	assertContains(t, output, "[deprecated]")
-	assertContains(t, output, "--password-file")
-	if strings.Contains(output, "secret") {
-		t.Errorf("the deprecation warning echoed the password back:\n%s", output)
 	}
 }
 
@@ -1036,7 +1060,7 @@ func TestOnlyEncryptingPathsConfirmThePassword(t *testing.T) {
 				return []byte("secret"), credential.SourcePrompt, nil
 			}))
 
-			if exitCode := run([]string{"mutant", test.file, "--password", "secret"}); exitCode != 0 {
+			if exitCode := run([]string{"mutant", test.file, "--password-insecure", "secret"}); exitCode != 0 {
 				t.Fatalf("run returned exit code %d, want 0", exitCode)
 			}
 			if gotConfirm != test.wantConfirm {

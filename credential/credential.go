@@ -13,12 +13,15 @@
 // inherited by every child process and never appears in the command line an
 // analyst records in their case notes.
 //
-// That leaves four sources, in the order a caller should prefer them:
+// That leaves three sources, in the order a caller should prefer them:
 //
 //	interactive prompt   no password anywhere but the terminal (default)
 //	--password-file      a file whose permissions the OS enforces
 //	--password-stdin     a pipe, for CI and scripted pipelines
-//	--password           argv; deprecated, warns on use
+//
+// Argv is an opt-in, never a default: --password-insecure takes the value on
+// the command line for someone who accepts that exposure, and the bare
+// --password / --pwd that 2.5.0 deprecated is refused (RefusedInlineMessage).
 package credential
 
 import (
@@ -45,10 +48,19 @@ const (
 	SourceInsecure Source = "--password-insecure"
 )
 
+// RefusedInlineMessage is why a bare --password (or --pwd) stops the run, and
+// what to use instead. It is exported so the CLI's help and the docs tests can
+// hold their own wording to it.
+const RefusedInlineMessage = "--password (or --pwd) is refused since 2.6.0: it puts the credential in argv, " +
+	"where every local user can read it from the process table and the shell records it in its " +
+	"history. Omit it to be prompted with echo off, or use --password-file <path> or " +
+	"--password-stdin; --password-insecure <value> keeps the argv behaviour for someone who " +
+	"accepts that exposure"
+
 // Request is the credential half of a parsed command line. Exactly one of the
 // four explicit sources may be set; all unset means "prompt".
 type Request struct {
-	Inline   string // --password / --pwd  (deprecated: argv-visible)
+	Inline   string // --password / --pwd  (refused: parsed only so the refusal can name it)
 	Insecure string // --password-insecure (explicit, unapologetic opt-in)
 	FilePath string // --password-file <path>
 	Stdin    bool   // --password-stdin
@@ -154,12 +166,9 @@ func (r *Resolver) Resolve(req Request) ([]byte, Source, error) {
 
 	switch {
 	case req.Inline != "":
-		fmt.Fprintln(r.stderr(),
-			"[deprecated] --password puts the credential in argv, where it is visible to "+
-				"every local user via the process table and is recorded in shell history. "+
-				"Use --password-file, --password-stdin, or omit it and be prompted. "+
-				"This flag will require --password-insecure in the next minor release.")
-		return withSource([]byte(req.Inline), SourceInline)
+		// 2.5.0 warned and promised this refusal for the next minor release. The
+		// value is never returned, and never repeated: the refusal may be logged.
+		return nil, SourceInline, errors.New(RefusedInlineMessage)
 
 	case req.Insecure != "":
 		return withSource([]byte(req.Insecure), SourceInsecure)

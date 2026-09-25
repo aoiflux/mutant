@@ -1037,6 +1037,7 @@ func DiscloseVerify(args ...object.Object) object.Object {
 	v.checkAuthorised()
 	v.checkGrantOpens()
 	v.checkLedger(root)
+	v.checkLedgerMatchesPackage()
 	if v.record != nil {
 		v.record.file.Close()
 	}
@@ -1381,6 +1382,77 @@ func (v *discloseVerification) checkLedger(root *merkle.Hash) {
 		"record, property for property")
 }
 
+// checkLedgerMatchesPackage holds the ledger's record of this disclosure to the
+// package around it (M26-REC-005).
+//
+// ledger_inclusion proves the manifest's copy of the Disclosure node is in the
+// snapshot, and nothing more: the manifest is signed by whatever key it carries,
+// so anyone holding a genuine package could relabel it for another recipient,
+// or put another disclosure's grant beside this one's ledger record, re-sign,
+// and verify. What the ledger recorded is compared here with what the package
+// holds -- the files themselves where the ledger names a file, and the
+// manifest where the ledger names a fact only the manifest states -- so a
+// package verifies only as the disclosure the ledger actually recorded.
+func (v *discloseVerification) checkLedgerMatchesPackage() {
+	recorded, _ := manifestMap(v.manifest, "ledger")["record"].(map[string]any)
+	if len(recorded) == 0 {
+		v.add("ledger_matches_package", false, "the manifest carries no ledger record to compare")
+		return
+	}
+	disclosure := manifestMap(v.manifest, "disclosure")
+	view := manifestMap(v.manifest, "view")
+	var problems []string
+	agree := func(key, what, actual string) {
+		if want := stringField(recorded, key); !strings.EqualFold(want, actual) {
+			problems = append(problems, fmt.Sprintf("the ledger records %s %q and %s is %q", key, want, what, actual))
+		}
+	}
+
+	agree("disclosure.uid", "the manifest's disclosure", stringField(disclosure, "uid"))
+	agree("disclosure.case_uid", "the manifest's case", stringField(disclosure, "case_uid"))
+	agree("disclosure.recipient", "the manifest's recipient", stringField(disclosure, "recipient"))
+	agree("disclosure.recipient_fp", "the fingerprint of the manifest's recipient",
+		disclosureRecipientFingerprint(stringField(disclosure, "recipient")))
+	agree("disclosure.examiner", "the manifest's examiner", stringField(disclosure, "examiner"))
+	agree("disclosure.method", "the manifest's method", stringField(disclosure, "method"))
+	agree("disclosure.view", "the manifest's view", stringField(view, "label"))
+	agree("disclosure.view_fp", "the manifest's view fingerprint", stringField(view, "fp"))
+
+	if sum, err := custodyHashFile(filepath.Join(v.dir, discloseRecordName), "sha256"); err == nil {
+		agree("disclosure.record_sha256", "the digest of "+discloseRecordName, sum)
+	} else {
+		problems = append(problems, discloseRecordName+" cannot be hashed: "+err.Error())
+	}
+	if sum, err := custodyHashFile(filepath.Join(v.dir, discloseGrantName), "sha256"); err == nil {
+		agree("disclosure.grant_sha256", "the digest of "+discloseGrantName, sum)
+	} else {
+		problems = append(problems, discloseGrantName+" cannot be hashed: "+err.Error())
+	}
+	if v.record != nil {
+		agree("disclosure.record_uid", "the record's own uid", v.record.header.RecordUID)
+		agree("disclosure.segments", "the record's segment count", strconv.Itoa(len(v.record.segments)))
+	}
+	if v.grantFile != nil {
+		runs := make([][2]uint64, 0, len(v.grantFile.Runs))
+		for _, run := range v.grantFile.Runs {
+			runs = append(runs, [2]uint64{run.First, run.Last})
+		}
+		agree("disclosure.uid", "the grant's disclosure", v.grantFile.DisclosureUID)
+		agree("disclosure.case_uid", "the grant's case", v.grantFile.CaseUID)
+		agree("disclosure.record_uid", "the grant's record", v.grantFile.RecordUID)
+		agree("disclosure.granted_runs", "what the grant opens", disclosureRunsText(runs))
+		agree("disclosure.granted_segments", "the grant's segment count", strconv.FormatUint(v.grantFile.Granted, 10))
+		agree("disclosure.descriptors_root", "the grant's descriptors root", v.grantFile.DescriptorsRoot)
+	}
+
+	if len(problems) > 0 {
+		v.add("ledger_matches_package", false, strings.Join(problems, "; "))
+		return
+	}
+	v.add("ledger_matches_package", true, "the disclosure the ledger records is this package: its recipient, "+
+		"examiner, view, record and grant, file for file")
+}
+
 // disclosureLeafNames checks that a proven node leaf is the Disclosure node the
 // manifest describes. It returns "" when it is, and says why when it is not.
 //
@@ -1433,6 +1505,20 @@ func disclosureLeafNames(leaf []byte, ledger map[string]any) string {
 	return ""
 }
 
+// manifestKey is the public key the manifest's seal names, "" when unsigned.
+func (v *discloseVerification) manifestKey() string {
+	seal, _ := v.manifest["seal"].(map[string]any)
+	return strings.ToLower(stringField(seal, "public_key"))
+}
+
+// recordKey is the public key in the record's own signature footer.
+func (v *discloseVerification) recordKey() string {
+	if v.record == nil || v.record.footer == nil {
+		return ""
+	}
+	return strings.ToLower(v.record.footer.PublicKey)
+}
+
 func (v *discloseVerification) result(rootGiven bool) object.Object {
 	rows := make([]object.Object, 0, len(v.checks))
 	passed := 0
@@ -1473,7 +1559,12 @@ func (v *discloseVerification) result(rootGiven bool) object.Object {
 		"record_uid":        stringObj(stringField(record, "uid")),
 		"granted_segments":  intObj(numberOf(v.manifest["granted_segments"])),
 		"withheld_segments": intObj(numberOf(v.manifest["withheld_segments"])),
-		"bytes_recoverable": boolObj(false),
+		// Which keys signed what. A signature holds over whatever its key
+		// signed, so it says nothing until the key is compared with one the
+		// recipient already trusts -- which they can only do if they are told it.
+		"manifest_public_key": stringObj(v.manifestKey()),
+		"record_public_key":   stringObj(v.recordKey()),
+		"bytes_recoverable":   boolObj(false),
 		"does_not_cover":    stringArrayObj(discloseDoesNotCover),
 		"signature_note":    stringObj(discloseSignatureNote),
 	})

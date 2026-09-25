@@ -368,6 +368,107 @@ func ledgerLastRedaction(session *ledgerSession, nodeID store.NodeID, edgeID sto
 	return record, cascaded, found
 }
 
+// --- what a script may redact ------------------------------------------------
+
+// ledgerScriptTypes is how many custom node and edge types a script can name:
+// ledger_add_node, ledger_add_edge and the db_* family map 0..127 into
+// graphene's custom range and nowhere else (dbNodeTypeFromObject).
+const ledgerScriptTypes = 128
+
+func ledgerScriptNodeLabels(labels []store.NodeType) bool {
+	for _, label := range labels {
+		if label < store.NodeTypeCustomBase || label >= store.NodeTypeCustomBase+ledgerScriptTypes {
+			return false
+		}
+	}
+	return len(labels) > 0
+}
+
+func ledgerScriptEdgeLabels(labels []store.EdgeType) bool {
+	for _, label := range labels {
+		if label < store.EdgeTypeCustomBase || label >= store.EdgeTypeCustomBase+ledgerScriptTypes {
+			return false
+		}
+	}
+	return len(labels) > 0
+}
+
+// ledgerSchemaSubject names why a redaction would reach the ledger's own
+// disclosure schema, or returns "" when it would not (M26-CUS-001).
+//
+// graphene's RedactNode deletes the node and its index entries, and every
+// disclose_* read finds its records by index. A script able to redact a
+// Withdrawal could issue a new grant to the recipient it withdrew; a
+// Disclosure would drop out of disclose_history; a ReclassEvent stripped of
+// its properties would let a superseded record be disclosed again. The
+// schema is written and read by disclose_* alone, and a correction to it is a
+// new record appended, never an old one removed -- so the redaction builtins
+// remove only what a script wrote. withCascade adds the edges a node
+// redaction would take with it.
+func ledgerSchemaSubject(session *ledgerSession, nodeID store.NodeID, edgeID store.EdgeID, withCascade bool) string {
+	if edgeID != 0 {
+		edge, err := session.graph.GetEdge(edgeID)
+		if err != nil || ledgerScriptEdgeLabels(edge.Labels) {
+			return "" // a missing edge is the redaction call's to report
+		}
+		return fmt.Sprintf("edge %d is a %s edge of the ledger's disclosure schema", edgeID, ledgerSchemaEdgeName(edge.Labels))
+	}
+	node, err := session.graph.GetNode(nodeID)
+	if err != nil {
+		return ""
+	}
+	if !ledgerScriptNodeLabels(node.Labels) {
+		return fmt.Sprintf("node %d is a %s record of the ledger's disclosure schema", nodeID, ledgerSchemaNodeName(node.Labels))
+	}
+	if !withCascade {
+		return ""
+	}
+	impact, err := session.store.RedactionImpactFor(nodeID)
+	if err != nil {
+		return ""
+	}
+	for _, cascaded := range impact.CascadedEdges {
+		if why := ledgerSchemaSubject(session, 0, cascaded, false); why != "" {
+			return fmt.Sprintf("redacting node %d would take %s with it", nodeID, why)
+		}
+	}
+	return ""
+}
+
+func ledgerSchemaNodeName(labels []store.NodeType) string {
+	names, _ := disclosureTypeNames()
+	names[disclosureNodeCase] = "Case"
+	for _, label := range labels {
+		if name, ok := names[label]; ok {
+			return name
+		}
+	}
+	if len(labels) == 0 {
+		return "unlabelled"
+	}
+	return labels[0].String()
+}
+
+func ledgerSchemaEdgeName(labels []store.EdgeType) string {
+	_, names := disclosureTypeNames()
+	for _, label := range labels {
+		if name, ok := names[label]; ok {
+			return name
+		}
+	}
+	if len(labels) == 0 {
+		return "unlabelled"
+	}
+	return labels[0].String()
+}
+
+func ledgerSchemaRefusal(op, why string) *object.Error {
+	return newError("%s: %s, which disclose_* write and read; the redaction builtins remove only what a script "+
+		"wrote. Removing it would take a withdrawal, a disclosure or a reclassification out of what those "+
+		"builtins consult while the ledger still said it had been recorded. A disclosure record is corrected by "+
+		"a new record (disclose_withdraw, disclose_reclassify), never by removing an old one", op, why)
+}
+
 // --- the four scopes ---------------------------------------------------------
 
 // ledgerRedactNodeScope is the shared body of the two node-scoped builtins.
@@ -396,6 +497,9 @@ func ledgerRedactNodeScope(args []object.Object, op string, redact func(*ledgerS
 	if errObj := ledgerReasonLeak(session.graph.NodePropertyEntries(nodeID), reason,
 		fmt.Sprintf("node %d", nodeID), op); errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	if why := ledgerSchemaSubject(session, nodeID, 0, op == BuiltinNameLedgerRedactNode); why != "" {
+		return resultAndError(nil, ledgerSchemaRefusal(op, why))
 	}
 
 	record, err := redact(session, nodeID, disk.RedactionRequest{ActorID: session.actorID, Reason: reason})
@@ -437,6 +541,9 @@ func ledgerRedactEdgeScope(args []object.Object, op string, redact func(*ledgerS
 	if errObj := ledgerReasonLeak(session.graph.EdgePropertyEntries(edgeID), reason,
 		fmt.Sprintf("edge %d", edgeID), op); errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	if why := ledgerSchemaSubject(session, 0, edgeID, false); why != "" {
+		return resultAndError(nil, ledgerSchemaRefusal(op, why))
 	}
 
 	record, err := redact(session, edgeID, disk.RedactionRequest{ActorID: session.actorID, Reason: reason})
@@ -512,8 +619,13 @@ func LedgerRedactionImpact(args ...object.Object) object.Object {
 	}
 
 	count, bytes := ledgerSegmentFacts(session)
+	protectedBy := ledgerSchemaSubject(session, nodeID, 0, true)
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"node_id": intObj(int64(nodeID)),
+		// A preview that listed what would go without saying the redaction
+		// will be refused would be describing an act that cannot happen.
+		"protected":        boolObj(protectedBy != ""),
+		"protected_reason": stringObj(protectedBy),
 		// The hashes are computed here rather than at deletion time, which is
 		// what lets a manifest record the set this preview showed and a
 		// recipient check that it is the set the record describes.

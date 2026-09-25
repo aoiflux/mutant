@@ -47,7 +47,7 @@ func BrowserHistory(args ...object.Object) (result object.Object) {
 
 	var entries []object.Object
 	browser := ""
-	err := withSQLiteCopy(path, func(db *sql.DB) error {
+	err := withSQLiteCopy(path, func(db *sql.Conn) error {
 		switch {
 		case sqliteTableExists(db, "urls"): // Chromium
 			browser = "chrome"
@@ -109,7 +109,7 @@ func BrowserCookies(args ...object.Object) (result object.Object) {
 
 	var entries []object.Object
 	browser := ""
-	err := withSQLiteCopy(path, func(db *sql.DB) error {
+	err := withSQLiteCopy(path, func(db *sql.Conn) error {
 		switch {
 		case sqliteTableExists(db, "cookies"): // Chromium
 			browser = "chrome"
@@ -180,7 +180,7 @@ func BrowserDownloads(args ...object.Object) (result object.Object) {
 
 	var entries []object.Object
 	browser := ""
-	err := withSQLiteCopy(path, func(db *sql.DB) error {
+	err := withSQLiteCopy(path, func(db *sql.Conn) error {
 		switch {
 		case sqliteTableExists(db, "downloads"): // Chromium
 			browser = "chrome"

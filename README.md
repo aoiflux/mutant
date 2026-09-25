@@ -123,11 +123,12 @@ A password is required, and by default it is never typed on the command line.
 | `--password-file <path>`  | Unattended runs. Refused if the file is readable by other users.      |
 | `--password-stdin`        | CI and pipelines: `mutant hello.mu --password-stdin < secret`.        |
 | `--dev`                   | Local development only. Uses a built-in key that is **not secret**.   |
-| `--password <value>`      | **Deprecated.** Visible in `ps` and shell history; warns on use.      |
+| `--password-insecure <v>` | Only if you accept argv exposure: visible in `ps` and shell history.  |
 
-`--password` still works this release, but it puts the credential in argv where
-every local user can read it out of the process table. It will require an
-explicit `--password-insecure` in the next minor release.
+A bare `--password` (or `--pwd`) is refused since 2.6.0, as 2.5.0 announced: it
+put the credential in argv, where every local user can read it out of the
+process table. `--password-insecure` keeps that behaviour for someone who says
+so explicitly.
 
 There is deliberately no environment-variable form. See
 [docs/CONFIGURATION_POLICY.md](docs/CONFIGURATION_POLICY.md).

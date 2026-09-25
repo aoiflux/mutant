@@ -403,12 +403,12 @@ func AuditVerify(args ...object.Object) object.Object {
 	}
 
 	recorded := strings.ToLower(stringField(document, "head"))
+	// entries, dropped and chain_complete are recomputed by the walk, never
+	// copied from the document: whoever deleted entries from the log can rewrite
+	// those fields to describe a capped log just as easily (M26-CUS-005).
 	result, computed := auditWalk(entries)
 	result["path"] = path
 	result["head"] = recorded
-	result["entries"] = manifestInt(document, "entries")
-	result["dropped"] = manifestInt(document, "dropped")
-	result["chain_complete"] = manifestBool(document, "chain_complete")
 	result["head_matches"] = recorded != "" && recorded == computed
 	result["does_not_cover"] = auditDoesNotCover
 
@@ -432,62 +432,117 @@ func AuditVerify(args ...object.Object) object.Object {
 // after a broken link every later entry is unverifiable for a reason that has
 // nothing to do with that entry -- listing them all would be a page of findings
 // describing one edit.
+//
+// Where the log starts is checked too (M26-CUS-005). The head is the hash of
+// the last entry, so deleting entries from the front leaves the head and every
+// remaining link untouched; only the first entry's position gives it away. The
+// last entry's seq is inside its hash -- authenticated whenever the head is --
+// and the cap drops entries by a fixed rule, so that seq alone says which entry
+// the retained run must begin with (auditFirstRetainedFor). A run that begins
+// at entry 1 must also begin at the genesis.
+//
+// A break is recorded as a flag and a position, never as the breaking entry's
+// seq: an entry with no seq, seq 0 or a seq that is not a positive integer used
+// to break the walk with "no break" recorded, so forged entries appended after
+// the last genuine one verified as intact (M26-CUS-006). Such an entry is now
+// itself the break.
 func auditWalk(entries []any) (map[string]any, string) {
 	previous := ""
 	computed := ""
 	checked := int64(0)
-	var firstBroken int64
+	broken := false
+	var brokenAt, brokenIndex, firstSeq, lastSeq, expectedSeq int64
 	detail := ""
+	fail := func(index int, seq int64, format string, args ...any) {
+		broken, brokenIndex, brokenAt = true, int64(index)+1, seq
+		detail = fmt.Sprintf(format, args...)
+	}
 
-	for _, raw := range entries {
+	if len(entries) > 0 {
+		first, firstOK := auditEntrySeq(entries[0])
+		last, lastOK := auditEntrySeq(entries[len(entries)-1])
+		if firstOK && lastOK {
+			if want := auditFirstRetainedFor(last); first != want {
+				fail(0, first, "the log starts at entry %d, but a log whose last entry is entry %d keeps every entry from entry %d; entries %d to %d are missing",
+					first, last, want, want, first-1)
+			}
+		}
+	}
+
+	for index, raw := range entries {
+		if broken {
+			break
+		}
 		entry, ok := raw.(map[string]any)
 		if !ok {
-			firstBroken, detail = checked+1, "an entry in the log is not an object"
+			fail(index, 0, "log entry %d (by position) is not an object", index+1)
 			break
 		}
 
-		seq := manifestInt(entry, "seq")
+		seq, ok := auditEntrySeq(entry)
+		if !ok {
+			fail(index, 0, "log entry %d (by position) has no positive integer seq (%v); every entry the chain wrote has one", index+1, entry["seq"])
+			break
+		}
+		if expectedSeq != 0 && seq != expectedSeq {
+			fail(index, seq, "entry %d follows entry %d; entries are numbered consecutively", seq, expectedSeq-1)
+			break
+		}
 		unixNano := manifestInt(entry, "unix_nano")
 		prev := strings.ToLower(stringField(entry, "prev"))
 		hash := strings.ToLower(stringField(entry, "hash"))
 
 		// The first retained entry's `prev` is a claim, not something this
-		// document can check: on a capped log the entry it names was dropped.
-		// So the chain is followed from here rather than from the genesis.
+		// document can check, unless it is entry 1: on a capped log the entry
+		// it names was dropped, so the chain is followed from here.
+		if previous == "" && seq == 1 && prev != auditGenesis {
+			fail(index, seq, "entry 1 follows %s but the chain begins at the genesis", prev)
+			break
+		}
 		if previous != "" && prev != previous {
-			firstBroken = seq
-			detail = fmt.Sprintf("entry %d follows %s but the entry before it hashes to %s", seq, prev, previous)
+			fail(index, seq, "entry %d follows %s but the entry before it hashes to %s", seq, prev, previous)
 			break
 		}
 
 		recomputed := auditLink(prev, seq, unixNano, stringField(entry, "event"), stringField(entry, "stage"))
 		if recomputed != hash {
-			firstBroken = seq
-			detail = fmt.Sprintf("entry %d hashes to %s and records %s", seq, recomputed, hash)
+			fail(index, seq, "entry %d hashes to %s and records %s", seq, recomputed, hash)
 			break
 		}
 
 		// The rendered time is outside the hash, so it is checked against the
 		// number that is inside it.
 		if rendered := stringField(entry, "at"); rendered != time.Unix(0, unixNano).UTC().Format(time.RFC3339Nano) {
-			firstBroken = seq
-			detail = fmt.Sprintf("entry %d reads %s and its sealed timestamp is %s",
+			fail(index, seq, "entry %d reads %s and its sealed timestamp is %s",
 				seq, rendered, time.Unix(0, unixNano).UTC().Format(time.RFC3339Nano))
 			break
 		}
 
+		if firstSeq == 0 {
+			firstSeq = seq
+		}
+		lastSeq, expectedSeq = seq, seq+1
 		previous, computed = hash, hash
 		checked++
 	}
 
-	result := map[string]any{
-		"links_checked": checked,
-		"computed_head": computed,
-		"links_intact":  firstBroken == 0,
-		"broken_at":     firstBroken,
-		"detail":        detail,
+	// What the walk established, not what the document says about itself.
+	dropped := int64(0)
+	if firstSeq > 0 {
+		dropped = firstSeq - 1
 	}
-	if firstBroken == 0 {
+	result := map[string]any{
+		"links_checked":  checked,
+		"computed_head":  computed,
+		"links_intact":   !broken,
+		"broken_at":      brokenAt,
+		"broken_index":   brokenIndex,
+		"entries":        lastSeq,
+		"dropped":        dropped,
+		"chain_complete": !broken && dropped == 0,
+		"detail":         detail,
+	}
+	if !broken {
 		if checked == 0 {
 			result["detail"] = "the log is empty; there is nothing to check"
 		} else {
@@ -495,4 +550,36 @@ func auditWalk(entries []any) (map[string]any, string) {
 		}
 	}
 	return result, computed
+}
+
+// auditEntrySeq reads an entry's seq, which the chain writes as a positive
+// integer; anything else is no seq at all.
+func auditEntrySeq(raw any) (int64, bool) {
+	entry, ok := raw.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	number, ok := entry["seq"].(json.Number)
+	if !ok {
+		return 0, false
+	}
+	seq, err := number.Int64()
+	if err != nil || seq < 1 {
+		return 0, false
+	}
+	return seq, true
+}
+
+// auditFirstRetainedFor is the seq the retained run starts at once the chain
+// has recorded total entries: appendEntry keeps every entry up to
+// auditRetained, then drops a quarter of the cap each time the retained run
+// reaches it again. It is part of what mutant-audit-1 means; a different cap
+// rule needs a new auditChainVersion.
+func auditFirstRetainedFor(total int64) int64 {
+	if total <= auditRetained {
+		return 1
+	}
+	quarter := int64(auditRetained / 4)
+	drops := (total - auditRetained + quarter - 1) / quarter
+	return drops*quarter + 1
 }

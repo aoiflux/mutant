@@ -14,18 +14,20 @@
 
 .PARAMETER Go
   The go command to run. The pinned toolchain is installed beside newer ones
-  with golang.org/dl, e.g. -Go go1.26.2.
+  with golang.org/dl, e.g. -Go go1.26.6.
 
 .PARAMETER FuzzTime
   How long to fuzz each target (a Go duration such as 30s or 10m). Empty runs
   the seed corpora only, which plain `go test` already does.
 
 .PARAMETER Quick
-  Skip the slow steps: the race detector, the cross-compiles and the example
-  sweep.
+  Skip the slow steps: the race detector, the cross-compiles, the example
+  sweep and govulncheck.
 
 .PARAMETER Vuln
-  Also run govulncheck (downloads it; does not touch go.mod).
+  Run govulncheck even with -Quick. A full gate always runs it: a reachable
+  vulnerability blocks a release. It downloads govulncheck and its database;
+  it does not touch go.mod.
 
 .PARAMETER LogDir
   Where logs and build outputs go. Defaults to a fresh temporary directory.
@@ -238,7 +240,9 @@ Invoke-Step "CHANGELOG date matches the tag" {
     if ($stated -ne $tagDate) { throw "CHANGELOG.md dates $version '$stated'; the tag $tag was made $tagDate" }
 }
 
-if ($Vuln) {
+if ($Quick -and -not $Vuln) {
+    $results.Add([pscustomobject]@{ Step = "govulncheck"; Status = "SKIP"; Seconds = 0; Note = "SKIP: -Quick"; Log = "" })
+} else {
     Invoke-Step "govulncheck" {
         Param($log)
         Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...")

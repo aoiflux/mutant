@@ -157,8 +157,8 @@ var (
 	// argument to something else (Get-FileHash ./mutant.exe).
 	mutantCommand  = regexp.MustCompile(`(?:^\s*(?:\$|>|PS[^>]*>)?\s*|(?:&&|\|\||;|\|)\s*)(?:\./|\.\\)?mutant(?:\.exe)?((?:\s+[^\s|;&]+)*)`)
 	deprecatedFlag = map[string]string{
-		"pwd":      "--password-file or --password-stdin",
-		"password": "--password-file or --password-stdin",
+		"pwd":      "--password-file, --password-stdin or --password-insecure",
+		"password": "--password-file, --password-stdin or --password-insecure",
 	}
 	deprecationWords = regexp.MustCompile(`(?i)deprecat|refus|insecure|legacy|no longer|removed|never (?:existed|written)`)
 )

@@ -6,7 +6,7 @@
 # its code. Both go into the release review's test-coverage report. This is a
 # measurement, not a gate. Nothing is written into the working tree.
 #
-#   scripts/coverage.sh [--go go1.26.2] [--out-dir DIR]
+#   scripts/coverage.sh [--go go1.26.6] [--out-dir DIR]
 
 set -u
 GO=go

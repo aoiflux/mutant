@@ -227,7 +227,7 @@ you have not seen them.
 | `regex_find_all(p, s, 0)` | returns nothing — `0` is a limit | omit the third argument |
 | Semicolons after block statements | parse error | `if (c) { … };` and `let f = fn(){ … };` |
 | Git Bash / WSL | `sandbox detected, execution halted` | run in PowerShell/cmd, or pass `--compat` |
-| `-pwd` flag | deprecation warning on every run | omit it and be prompted, or `--password-stdin` |
+| `-pwd` / `--password` flag | refused since 2.6.0 | omit it and be prompted, or `--password-stdin` |
 
 ---
 

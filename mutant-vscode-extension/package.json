@@ -167,9 +167,13 @@
                         "type": "number",
                         "description": "Polymorphic mutation level (0-10)."
                     },
+                    "passwordFile": {
+                        "type": "string",
+                        "description": "Path to a file holding the encryption/decryption password, passed as --password-file. Preferred: the password stays off the command line."
+                    },
                     "password": {
                         "type": "string",
-                        "description": "Optional encryption/decryption password."
+                        "description": "The encryption/decryption password itself, passed as --password-insecure: visible in the process table to every local user. Prefer passwordFile, or leave both unset to be prompted in the terminal."
                     },
                     "args": {
                         "type": "array",

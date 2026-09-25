@@ -9,7 +9,7 @@
   measurement, not a gate. Nothing is written into the working tree.
 
 .PARAMETER Go
-  The go command to run, e.g. go1.26.2.
+  The go command to run, e.g. go1.26.6.
 
 .PARAMETER OutDir
   Where the profiles and the table go. Defaults to a fresh temporary directory.

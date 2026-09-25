@@ -73,7 +73,8 @@ a run is a flag, so the command line is a complete record of it. See
 | _(no password flag)_ | Prompt for the password with terminal echo off. The default. |
 | `--password-file <path>` | Read the password from a file. Refused if other users can read it. |
 | `--password-stdin` | Read the password from stdin, for CI and pipelines. |
-| `--password <pw>` | **Deprecated:** password on argv, visible in the process table. Warns on use. |
+| `--password-insecure <pw>` | The password on argv, visible in the process table. Only if you accept that. |
+| `--password`, `--pwd` | Refused since 2.6.0; use one of the sources above. |
 | `--security-log-level <level>` | Security logging verbosity in dev mode. |
 | `--timing` | Per-stage run timing on stderr. |
 

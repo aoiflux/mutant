@@ -20,7 +20,9 @@ exhaustive lists.
   toolchain `go.mod` pins, gofmt, vet on three platforms, the six build targets
   and the WebAssembly REPL, the tests, the race detector, fuzzing, the generated
   documents, the example sweep against its recorded output, module
-  verification, and the changelog date against the tag -- and print one table.
+  verification, the changelog date against the tag, and govulncheck -- and print
+  one table. A reachable vulnerability fails a full run; `--quick` / `-Quick`
+  skips that step unless `--vuln` / `-Vuln` asks for it.
   Everything it builds is what a release ships: the pinned toolchain with
   `CGO_ENABLED=0`, the race detector's test binaries alone excepted, and the
   sweep runs a binary the gate built rather than one built by whatever `go` is
@@ -338,6 +340,16 @@ exhaustive lists.
 
 ### Changed
 
+- **A bare `--password` is refused.** 2.5.0 warned on it and promised the next
+  minor release would require the explicit opt-in; this is that release.
+  `--password` and `--pwd`, in every spelling and on every command, stop the run
+  before anything compiles, runs or is written, and the refusal names what to
+  use instead: the prompt (the default), `--password-file`, `--password-stdin`,
+  or `--password-insecure <value>` for someone who accepts that argv is readable
+  by every local user. The `--dev` refusal on `release` no longer recommends the
+  flag. The example sweep passes `--password-insecure`, and the VS Code
+  extension's task `password` field now does too.
+
 - **The language server reports the language release it teaches.** Its
   `serverInfo.version` was the constant `0.1.0`, a version nothing here ever
   had; it is now `global.Version`, the same string `mlsp --version` prints.
@@ -414,6 +426,19 @@ exhaustive lists.
 
 ### Fixed
 
+- **`fat_deleted` reported a live file's content as an orphan's, and
+  `fat_recover_file` wrote it.** A record the orphan sweep finds sits in a
+  deleted directory's freed cluster without its own 0xE5 marker, so libfat
+  walked the current FAT from its first cluster -- and when that cluster had
+  since been given to a live file, the walk returned that file's chain. The
+  scan said `preserved`, `allocation_checked: true`, `reallocated: false`, and
+  the recovery wrote the live file's bytes under the orphan's name with no
+  caveat. An orphan's chain is as freed as a deleted entry's: it is now located
+  for its first cluster alone, as the scope has always said, and `reallocated`
+  is read from the allocation table, so a recovery over a reassigned cluster
+  carries the caveat that it is most likely another file's content.
+  `allocation_checked` is true only when that read succeeded.
+
 - **A `while` or C-style `for` inside a `for…in` broke the outer loop.** The
   compiler stripped the pop after an expression statement that ended a
   condition-driven loop's body, post or init section, so each iteration leaked
@@ -478,6 +503,70 @@ exhaustive lists.
 - **A bad hash algorithm in a `case_open` custody policy was reported as an
   `fs_hash` error**, naming a builtin the script never called. The error names
   the builtin that was.
+
+### Security
+
+- **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**
+  Under go1.26.2, govulncheck found 18 standard-library vulnerabilities the code
+  reaches, several through parsers that read evidence: XML inside an E01 image
+  and in plists, certificates, email addresses. go1.26.6 fixes all of them. A
+  release binary compiles the standard library in, so the move matters to
+  anyone who runs a released `mutant`, and anyone building from source needs
+  go1.26.6 or newer. `go test ./policy/` refuses a `go.mod` that goes back
+  below either version.
+
+- **`sqlite_query` and `sqlite_query_bytes` could modify the evidence they
+  read.** Both copy the database first and promised the original is never
+  touched, but ran the script's SQL on a writable connection to that copy, so
+  `ATTACH` opened any other path read-write. A plain `SELECT` through an
+  attached WAL-mode database checkpointed its write-ahead log into it and
+  deleted the log -- uncheckpointed and deleted records with it -- and a bound
+  parameter, classified plaintext included, could be written to a file the
+  script named. The copy is now opened read-only and may attach nothing, so
+  `ATTACH` and `VACUUM INTO` are refused with a reason and no statement writes
+  any file. Joining two databases takes two queries. The `browser_*` parsers
+  read through the same confined connection.
+
+- **`audit_verify` passed two kinds of doctored log.** A log with entries
+  deleted from the front verified as intact, anchored and complete against the
+  head sealed into the case manifest, because the head is the last entry's hash
+  and the verifier never checked where the chain began; and an entry with no
+  sequence number, or a sequence number that was not a positive integer, ended
+  the walk as though nothing had broken, so forged entries appended after the
+  last genuine one verified too. The last entry's sequence number is inside its
+  hash and the memory cap drops entries by a fixed rule, so the verifier now
+  knows which entry a log of that length must start with, and refuses any other;
+  every entry needs a positive, consecutive sequence number; `entries`,
+  `dropped` and `chain_complete` are recomputed from the entries rather than
+  copied from the document; and a break carries its position in the new
+  `broken_index`.
+
+- **A script could redact the disclosure ledger's own records.** The
+  `ledger_redact_*` builtins checked the handle, the id and the reason but not
+  what they were removing, and a redaction deletes a record's index entries with
+  it -- which is how every `disclose_*` builtin finds a withdrawal, a disclosure
+  or a reclassification. Redacting a Withdrawal re-enabled grants to the
+  recipient it had withdrawn; redacting a Disclosure took it out of
+  `disclose_history`. The four redaction builtins now remove only what a script
+  wrote: any node or edge of the disclosure schema, and any node whose cascade
+  would take such an edge, is refused with the reason, and
+  `ledger_redaction_impact` reports `protected` and `protected_reason` before
+  anything is attempted. A disclosure record is corrected by appending a new
+  one, never by removing an old one.
+
+- **`disclose_verify` verified a genuine package that had been relabelled or
+  given another disclosure's grant.** Its ledger check proved the manifest's
+  copy of the ledger record was in the snapshot, but never held that record to
+  the package around it, and the manifest is signed by whatever key it carries.
+  So a genuine package re-labelled for another recipient, or holding another
+  disclosure's grant beside this one's ledger record, re-signed with any key,
+  verified against the genuine root. A new check, `ledger_matches_package`,
+  compares what the ledger recorded with the manifest's recipient, examiner and
+  view and with the record and grant files themselves -- digest, uid, runs,
+  descriptors root -- and names every disagreement; a package now takes eleven
+  checks to verify. The result also gives `manifest_public_key` and
+  `record_public_key`, because a signature means something only once its key is
+  compared with one the recipient already trusts.
 
 ## [2.5.0] — 2026-09-17
 

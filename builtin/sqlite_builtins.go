@@ -1,12 +1,15 @@
 package builtin
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -81,7 +84,7 @@ func sqliteQueryBuiltin(name string, cell sqlCellConverter, args ...object.Objec
 
 	columns, rows, truncated, err := sqliteQuery(path, cell, query, params)
 	if err != nil {
-		return resultAndError(nil, newError("%s: %s", name, err.Error()))
+		return resultAndError(nil, newError("%s: %s%s", name, err.Error(), sqliteRefusalReason(err)))
 	}
 
 	colObjs := make([]object.Object, len(columns))
@@ -104,7 +107,16 @@ func sqliteQueryBuiltin(name string, cell sqlCellConverter, args ...object.Objec
 // opens it, and invokes fn with the connection. The original is never touched, so
 // a live/locked forensic database is safe to read. The temp copy is always
 // removed. Shared by sqlite_query and the browser_* artifact parsers.
-func withSQLiteCopy(path string, fn func(*sql.DB) error) error {
+//
+// The connection fn receives is read-only and confined to the copy (M26-DAT-001).
+// sqlite_query runs whatever SQL the script wrote, several statements at a time,
+// and on a writable connection ATTACH opened any other path read-write: a SELECT
+// through an attached WAL-mode database checkpointed its WAL into it and deleted
+// the WAL, and an INSERT wrote a bound buffer to a file the script named. So the
+// copy's WAL is folded into the copy first, the copy is reopened with mode=ro --
+// an open flag, which SQL cannot undo the way it can PRAGMA query_only -- and the
+// connection may attach no database at all, which refuses VACUUM INTO as well.
+func withSQLiteCopy(path string, fn func(*sql.Conn) error) error {
 	if _, err := os.Stat(path); err != nil {
 		return err
 	}
@@ -126,12 +138,70 @@ func withSQLiteCopy(path string, fn func(*sql.DB) error) error {
 		}
 	}
 
+	if err := settleSQLiteCopy(tmpDB); err != nil {
+		return err
+	}
+
+	db, err := sql.Open("sqlite", sqliteReadOnlyDSN(tmpDB))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := confineSQLiteConn(conn); err != nil {
+		return err
+	}
+	// Sorts and temporary tables stay in memory, so a bound buffer does not
+	// reach a temp file on its way through a query either.
+	if _, err := conn.ExecContext(ctx, "PRAGMA temp_store=MEMORY"); err != nil {
+		return err
+	}
+	return fn(conn)
+}
+
+// sqliteRefusalReason says why SQLite refused, when the refusal is the
+// confinement's rather than the query's own mistake.
+func sqliteRefusalReason(err error) string {
+	switch msg := err.Error(); {
+	case strings.Contains(msg, "too many attached databases"):
+		return " (ATTACH and VACUUM INTO are refused: the query runs on a copy of the one " +
+			"database given, and may reach no other file; query each database separately)"
+	case strings.Contains(msg, "readonly database"):
+		return " (the query runs read-only on a copy of the database; nothing can be written)"
+	}
+	return ""
+}
+
+// settleSQLiteCopy folds the copy's write-ahead log into the copy and takes it
+// out of WAL mode, so the read-only connection sees every committed row without
+// needing to write the -shm index a WAL database is read through. It touches the
+// copy alone: the connection is opened on the temp file, and this is the only
+// SQL the builtin runs on a writable connection.
+func settleSQLiteCopy(tmpDB string) error {
 	db, err := sql.Open("sqlite", tmpDB)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	return fn(db)
+	if _, err := db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
+		return err
+	}
+	return db.Close()
+}
+
+// sqliteReadOnlyDSN opens path as a SQLite URI filename with mode=ro. The path
+// is the builtin's own temp file, never one a script named.
+func sqliteReadOnlyDSN(path string) string {
+	uriPath := filepath.ToSlash(path)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath // file:///C:/... on Windows
+	}
+	return (&url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}).String()
 }
 
 // sqliteQuery copies the database and runs one query against the copy, returning
@@ -140,7 +210,7 @@ func sqliteQuery(path string, cell sqlCellConverter, query string, params []any)
 	var columns []string
 	var out []map[string]object.Object
 	var truncated bool
-	err := withSQLiteCopy(path, func(db *sql.DB) error {
+	err := withSQLiteCopy(path, func(db *sql.Conn) error {
 		c, r, t, e := queryDBWith(db, cell, query, params...)
 		columns, out, truncated = c, r, t
 		return e
@@ -151,12 +221,12 @@ func sqliteQuery(path string, cell sqlCellConverter, query string, params []any)
 // queryDB runs a query on an open connection and scans the rows, rendering a
 // BLOB the way sqlite_query does. The browser-artifact readers all come through
 // here and read their columns back with rowStr, so their values stay strings.
-func queryDB(db *sql.DB, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
+func queryDB(db *sql.Conn, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
 	return queryDBWith(db, sqlValueToObject, query, params...)
 }
 
-func queryDBWith(db *sql.DB, cell sqlCellConverter, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
-	rows, err := db.Query(query, params...)
+func queryDBWith(db *sql.Conn, cell sqlCellConverter, query string, params ...any) ([]string, []map[string]object.Object, bool, error) {
+	rows, err := db.QueryContext(context.Background(), query, params...)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -192,9 +262,9 @@ func queryDBWith(db *sql.DB, cell sqlCellConverter, query string, params ...any)
 }
 
 // sqliteTableExists reports whether a table is present in the opened database.
-func sqliteTableExists(db *sql.DB, name string) bool {
+func sqliteTableExists(db *sql.Conn, name string) bool {
 	var n int
-	err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
+	err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n)
 	return err == nil && n > 0
 }
 

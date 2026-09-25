@@ -2315,7 +2315,10 @@ writes — is a log deleted or truncated as a whole. An edited entry breaks ever
 link after it; a missing document breaks nothing, because there is nothing left
 to break. The chain keeps the most recent entries in memory and reports how many
 it dropped, so a capped log is never mistaken for a short one; the head still
-covers the events it can no longer show you.
+covers the events it can no longer show you. Entries deleted from the front of a
+written log break it too: the last entry's sequence number is inside its hash,
+and the cap drops entries by a fixed rule, so that number says exactly which
+entry the log has to start with.
 
 The manifest also carries a reproducibility record: the tool build, and the path
 and digest of the exact `.mu` that produced the document. And it asserts

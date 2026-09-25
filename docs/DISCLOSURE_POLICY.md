@@ -306,6 +306,14 @@ Note the middle row's window: `RemovalProvable` is false between a redaction and
 the next compaction. During that window the report says `provable: false` rather
 than writing a claim the recipient cannot yet check.
 
+The middle row applies to what a script wrote, never to the disclosure record
+itself. The `ledger_redact_*` builtins refuse every node and edge this policy's
+builtins write -- the Case, each Disclosure, Withdrawal and ReclassEvent, and
+the edges between them -- because the `disclose_*` family finds those records by
+index, and a redaction deletes the index entry with the record: a withdrawal
+redacted away would stop stopping grants. A disclosure record is corrected by a
+new record appended to it, never by removing an old one.
+
 ## 8. Key material never travels as an argument
 
 Four rules, all in force today.
@@ -469,9 +477,16 @@ record's signature, with no key; that the grant names this disclosure and this
 record, and describes its header exactly; complete-as-authorised -- the grant
 opens exactly the segments whose class the view names, and the withheld list is
 every other segment; with the passphrase, that every granted segment decrypts
-with its tag holding; and, against the supplied root, that the ledger holds this
-disclosure property for property. `verified` is true only when all of them ran
-and passed.
+with its tag holding; against the supplied root, that the ledger holds this
+disclosure property for property; and that what the ledger holds is this
+package -- the recipient, examiner and view the manifest states, and the record
+and grant files themselves by digest, uid, runs and descriptors root. The last
+is what stops a genuine package being relabelled for someone else, or given
+another disclosure's grant, and re-signed with any key: the manifest's signature
+holds over whatever its key signed, so the result also names that key
+(`manifest_public_key`, and the record's `record_public_key`) for the recipient
+to compare with one they already trust. `verified` is true only when all of them
+ran and passed.
 
 **A grant is sealed under a passphrase, and under nothing else.** That is the
 owner's decision (2026-09-23), not a gap left for later: there is no

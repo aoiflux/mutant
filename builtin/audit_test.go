@@ -2,8 +2,10 @@ package builtin
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -573,5 +575,168 @@ func TestAuditMetadataStatesWhatTheChainCannotShow(t *testing.T) {
 	// The limit belongs in the document, not only in the manual.
 	if !strings.Contains(auditDoesNotCover, "deleted") {
 		t.Fatal("the does_not_cover sentence no longer names wholesale deletion")
+	}
+}
+
+// M26-CUS-005. The head is the hash of the last entry, so deleting entries from
+// the front of a written log leaves the head, the anchor and every remaining
+// link unchanged. audit_verify took the first entry's prev on trust and copied
+// entries, dropped and chain_complete from the document, so a log whose first
+// events were deleted verified as intact, anchored and complete. The last
+// entry's seq is inside its hash, and the cap drops entries by a fixed rule, so
+// that seq alone says where the retained run must start.
+func TestADeletedPrefixIsNotAnIntactLog(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		doctor func(document map[string]any)
+	}{
+		{"the counts left as written", func(map[string]any) {}},
+		{"the counts rewritten to pose as a capped log", func(document map[string]any) {
+			document["dropped"] = json.Number("3")
+			document["chain_complete"] = false
+			document["first_retained_seq"] = json.Number("4")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			useTestAuditChain(t)
+			for _, stage := range []string{"one", "two", "three", "four", "five"} {
+				auditLog.AuditEvent("debugger_detected", stage)
+			}
+			head := auditLog.snapshot().Head
+			path := filepath.Join(t.TempDir(), "audit.json")
+			writeAuditLog(t, path)
+
+			document := readAuditDocument(t, path)
+			document["log"] = auditLogEntries(t, document)[3:]
+			test.doctor(document)
+			writeAuditDocument(t, path, document)
+
+			result := verifyAuditLog(t, stringObj(path), stringObj(head))
+			if mustHashBoolValue(t, result, "links_intact") {
+				t.Fatalf("a log missing its first three entries verified: %s", mustHashStringValue(t, result, "detail"))
+			}
+			if got := mustHashIntValue(t, result, "broken_index"); got != 1 {
+				t.Errorf("broken_index = %d, want 1: the first entry is where the log stops agreeing", got)
+			}
+			if detail := mustHashStringValue(t, result, "detail"); !strings.Contains(detail, "entry 1") || !strings.Contains(detail, "entry 4") {
+				t.Errorf("detail does not say which entries are missing: %q", detail)
+			}
+			if mustHashBoolValue(t, result, "chain_complete") {
+				t.Error("chain_complete = true, copied from a document that lost its first entries")
+			}
+		})
+	}
+}
+
+// A capped log is the one legitimate shape with a missing prefix, and it still
+// verifies -- but only with exactly the prefix the cap drops, not one entry
+// more.
+func TestACappedLogVerifiesAndACappedLogMissingMoreDoesNot(t *testing.T) {
+	useTestAuditChain(t)
+	total := auditRetained + auditRetained/4 + 7
+	for index := 1; index <= total; index++ {
+		auditLog.AuditEvent("probe", "loop")
+	}
+	snapshot := auditLog.snapshot()
+	path := filepath.Join(t.TempDir(), "audit.json")
+	writeAuditLog(t, path)
+
+	result := verifyAuditLog(t, stringObj(path), stringObj(snapshot.Head))
+	if !mustHashBoolValue(t, result, "links_intact") || !mustHashBoolValue(t, result, "anchor_matches") {
+		t.Fatalf("an untouched capped log did not verify: %s", mustHashStringValue(t, result, "detail"))
+	}
+	if mustHashBoolValue(t, result, "chain_complete") {
+		t.Error("chain_complete = true on a log the cap truncated")
+	}
+	if got := mustHashIntValue(t, result, "dropped"); got != snapshot.Dropped {
+		t.Errorf("dropped = %d, want %d", got, snapshot.Dropped)
+	}
+	if got := mustHashIntValue(t, result, "entries"); got != int64(total) {
+		t.Errorf("entries = %d, want %d", got, total)
+	}
+
+	document := readAuditDocument(t, path)
+	document["log"] = auditLogEntries(t, document)[auditRetained/4:]
+	document["dropped"] = json.Number(strconv.FormatInt(snapshot.Dropped+auditRetained/4, 10))
+	document["first_retained_seq"] = json.Number(strconv.FormatInt(snapshot.Dropped+auditRetained/4+1, 10))
+	writeAuditDocument(t, path, document)
+
+	shorter := verifyAuditLog(t, stringObj(path), stringObj(snapshot.Head))
+	if mustHashBoolValue(t, shorter, "links_intact") {
+		t.Fatal("a capped log with a further quarter deleted verified")
+	}
+}
+
+// M26-CUS-006. The walk used the breaking entry's seq as both the break flag
+// and its position, so an entry with no seq, seq 0 or a seq that is not a
+// number broke the walk with "no break" recorded: links_intact true and
+// "all intact". Forged entries appended after the genuine last one verified,
+// and the computed head stayed the genuine one, so the anchor matched too.
+func TestAnEntryWithoutAPositiveSeqBreaksTheChain(t *testing.T) {
+	for _, seq := range []any{nil, json.Number("0"), "three", json.Number("-1"), json.Number("2.5")} {
+		t.Run(fmt.Sprintf("appended with seq %v", seq), func(t *testing.T) {
+			useTestAuditChain(t)
+			auditLog.AuditEvent("probe", "one")
+			auditLog.AuditEvent("probe", "two")
+			head := auditLog.snapshot().Head
+			path := filepath.Join(t.TempDir(), "audit.json")
+			writeAuditLog(t, path)
+
+			document := readAuditDocument(t, path)
+			forged := map[string]any{"event": "integrity_failed", "stage": "forged", "prev": head, "hash": "deadbeef",
+				"unix_nano": json.Number("1"), "at": "1970-01-01T00:00:00.000000001Z"}
+			if seq != nil {
+				forged["seq"] = seq
+			}
+			document["log"] = append(auditLogEntries(t, document), forged)
+			writeAuditDocument(t, path, document)
+
+			result := verifyAuditLog(t, stringObj(path), stringObj(head))
+			if mustHashBoolValue(t, result, "links_intact") {
+				t.Fatalf("a forged entry with seq %v verified: %s", seq, mustHashStringValue(t, result, "detail"))
+			}
+			if got := mustHashIntValue(t, result, "broken_index"); got != 3 {
+				t.Errorf("broken_index = %d, want 3, the forged entry", got)
+			}
+			if strings.Contains(mustHashStringValue(t, result, "detail"), "all intact") {
+				t.Errorf("detail says all intact: %q", mustHashStringValue(t, result, "detail"))
+			}
+		})
+	}
+
+	t.Run("a middle entry edited with its seq removed", func(t *testing.T) {
+		useTestAuditChain(t)
+		for _, stage := range []string{"one", "two", "three"} {
+			auditLog.AuditEvent("probe", stage)
+		}
+		path := filepath.Join(t.TempDir(), "audit.json")
+		writeAuditLog(t, path)
+
+		document := readAuditDocument(t, path)
+		entry := auditLogEntry(t, document, 1)
+		delete(entry, "seq")
+		entry["stage"] = "something else"
+		writeAuditDocument(t, path, document)
+
+		result := verifyAuditLog(t, stringObj(path))
+		if mustHashBoolValue(t, result, "links_intact") {
+			t.Fatalf("an edited entry with no seq verified: %s", mustHashStringValue(t, result, "detail"))
+		}
+		if got := mustHashIntValue(t, result, "broken_index"); got != 2 {
+			t.Errorf("broken_index = %d, want 2", got)
+		}
+	})
+}
+
+// auditFirstRetainedFor is what lets the verifier say where a log must start,
+// so it has to be the cap rule appendEntry actually follows, at every length.
+func TestTheCapRuleTheVerifierUsesIsTheOneTheChainFollows(t *testing.T) {
+	useTestAuditChain(t)
+	for total := int64(1); total <= 2*auditRetained+auditRetained/2; total++ {
+		auditLog.AuditEvent("probe", "loop")
+		snapshot := auditLog.snapshot()
+		if got, want := auditFirstRetainedFor(total), snapshot.firstRetainedSeq(); got != want {
+			t.Fatalf("after %d events the chain keeps from entry %d; auditFirstRetainedFor says %d", total, want, got)
+		}
 	}
 }
