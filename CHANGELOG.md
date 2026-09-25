@@ -21,8 +21,13 @@ exhaustive lists.
   and the WebAssembly REPL, the tests, the race detector, fuzzing, the generated
   documents, the example sweep against its recorded output, module
   verification, and the changelog date against the tag -- and print one table.
-  Every choice is a parameter; nothing is read from the environment and nothing
-  is written into the working tree. `scripts/coverage.sh` and
+  Everything it builds is what a release ships: the pinned toolchain with
+  `CGO_ENABLED=0`, the race detector's test binaries alone excepted, and the
+  sweep runs a binary the gate built rather than one built by whatever `go` is
+  first on the PATH. Every choice is a parameter; nothing is read from the
+  environment and nothing is written into the working tree -- a log directory
+  inside the repository is refused, since the Go files the gate writes there
+  would join the module it is checking. `scripts/coverage.sh` and
   `scripts/coverage.ps1` measure unit and cross-package coverage per package
   through a new `cmd/covreport`. There is still no CI: this is the command a
   contributor runs, and the one the owner runs before tagging.

@@ -15,8 +15,9 @@ import (
 // This is a test rather than only a benchmark because "pmap compiles and returns
 // the right answers" is worth nothing if it silently runs one element at a time.
 // The margin is deliberately loose -- sequential would be ~8x the parallel time,
-// so requiring merely a 2x improvement leaves plenty of room on a loaded
-// machine while still failing outright if the work is not overlapping.
+// so requiring pmap to save merely half the sequential time leaves plenty of
+// room on a loaded machine while still failing outright if the work is not
+// overlapping.
 func TestPMapActuallyOverlapsWork(t *testing.T) {
 	if runtime.NumCPU() < 2 {
 		t.Skip("needs more than one CPU to overlap work")
@@ -31,26 +32,32 @@ func TestPMapActuallyOverlapsWork(t *testing.T) {
 		sequenceM = elements * sleepMs
 	)
 
-	source := func(op string) string {
-		return fmt.Sprintf(`%s(range(0, %d), fn(x) { sleep_ms(%d); return x; }, %d)`,
-			op, elements, sleepMs, elements)
+	callback := fmt.Sprintf(`fn(x) { sleep_ms(%d); return x; }`, sleepMs)
+	timed := func(source string) time.Duration {
+		start := time.Now()
+		if _, err := runEncryptedVM(source); err != nil {
+			t.Fatalf("%s failed: %s", source, err)
+		}
+		return time.Since(start)
 	}
 
-	start := time.Now()
-	if _, err := runEncryptedVM(source("pmap")); err != nil {
-		t.Fatalf("pmap failed: %s", err)
-	}
-	parallel := time.Since(start)
+	// Each run also pays a fixed cost before the first element -- parse,
+	// compile, key derivation, encryption -- that the race detector alone
+	// multiplies several times over. Both runs pay it, so the difference
+	// between them is the overlap and nothing else.
+	sequential := timed(fmt.Sprintf(`map(range(0, %d), %s)`, elements, callback))
+	parallel := timed(fmt.Sprintf(`pmap(range(0, %d), %s, %d)`, elements, callback, elements))
+	saved := sequential - parallel
 
 	// The whole sequential cost, for the comparison to be meaningful.
 	sequentialBudget := time.Duration(sequenceM) * time.Millisecond
 
-	if parallel > sequentialBudget/2 {
-		t.Fatalf("pmap of %d x %dms took %s; sequential would be about %s, so the work is not overlapping",
-			elements, sleepMs, parallel, sequentialBudget)
+	if saved < sequentialBudget/2 {
+		t.Fatalf("pmap of %d x %dms took %s and map took %s; overlapping should save most of %s, so the work is not overlapping",
+			elements, sleepMs, parallel, sequential, sequentialBudget)
 	}
-	t.Logf("pmap of %d x %dms took %s (sequential would be about %s)",
-		elements, sleepMs, parallel, sequentialBudget)
+	t.Logf("pmap of %d x %dms took %s, map took %s (the callbacks alone would take about %s in sequence)",
+		elements, sleepMs, parallel, sequential, sequentialBudget)
 }
 
 // BenchmarkMapVsPMap reports the speedup on a CPU-bound callback. Run with:

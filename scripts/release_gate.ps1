@@ -45,6 +45,17 @@ Set-Location $repoRoot
 if ($LogDir -eq "") {
     $LogDir = Join-Path ([IO.Path]::GetTempPath()) ("mutant-release-gate-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 }
+# The gofmt step writes an LF copy of every Go file under -LogDir. Inside the
+# repository those copies are packages of the module: go test ./... would
+# compile them beside the real ones and every tree-walking guard would count
+# them twice, so the gate would fail for a reason that is nowhere in the code.
+$logFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LogDir).TrimEnd('\', '/')
+$rootFull = (Get-Item -LiteralPath $repoRoot).FullName.TrimEnd('\', '/')
+$pathCase = if ($IsWindows -or $PSVersionTable.PSEdition -eq "Desktop") { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+if ($logFull.Equals($rootFull, $pathCase) -or $logFull.StartsWith($rootFull + [IO.Path]::DirectorySeparatorChar, $pathCase)) {
+    Write-Host "release_gate: -LogDir $LogDir is inside the repository ($rootFull). The gate writes Go files there, which go test ./... would take for part of the module; pick a directory outside it." -ForegroundColor Red
+    exit 2
+}
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 
 # The six release targets, the same list scripts/build.ps1 builds.
@@ -171,7 +182,9 @@ if ($Quick) {
 Invoke-Step "fuzz targets" {
     Param($log)
     if ($FuzzTime -eq "") { return "SKIP: seed corpora ran in go test; pass -FuzzTime to fuzz" }
-    $listing = & $Go test -list '^Fuzz' ./... 2>&1
+    $listLog = Join-Path $LogDir "fuzz_listing.log"
+    Invoke-Logged -Log $listLog -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("test", "-list", '^Fuzz', "./...")
+    $listing = Get-Content $listLog
     $pending = @()
     $ran = 0
     foreach ($line in $listing) {
@@ -190,15 +203,19 @@ Invoke-Step "fuzz targets" {
 
 Invoke-Step "generated docs are current" {
     Param($log)
-    Invoke-Logged -Log $log -Exe $Go -Arguments @("run", "./cmd/gendocs", "-check")
+    Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("run", "./cmd/gendocs", "-check")
 }
 
 if ($Quick) {
     $results.Add([pscustomobject]@{ Step = "example sweep"; Status = "SKIP"; Seconds = 0; Note = "SKIP: -Quick"; Log = "" })
 } else {
+    # The sweep runs the binary a release ships -- this toolchain, no cgo --
+    # not one it would otherwise build with whatever go is first on the PATH.
     Invoke-Step "example sweep (golden output, levels 0,5,10)" {
         Param($log)
-        Invoke-Logged -Log $log -Exe $Go -Arguments @("run", "./cmd/sweep", "--levels", "0,5,10", "--golden")
+        $bin = Join-Path $LogDir "bin/sweep/mutant.exe"
+        Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("build", "-trimpath", "-o", $bin, ".")
+        Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("run", "./cmd/sweep", "--levels", "0,5,10", "--golden", "--mutant", $bin)
         $summary = Select-String -Path $log -Pattern 'printed exactly what' | Select-Object -Last 1
         if ($summary) { return $summary.Line.Trim() }
     }
@@ -224,7 +241,7 @@ Invoke-Step "CHANGELOG date matches the tag" {
 if ($Vuln) {
     Invoke-Step "govulncheck" {
         Param($log)
-        Invoke-Logged -Log $log -Exe $Go -Arguments @("run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...")
+        Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("run", "golang.org/x/vuln/cmd/govulncheck@latest", "./...")
     }
 }
 

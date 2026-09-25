@@ -115,6 +115,42 @@ Neither remaining failure comes from the harness. `worker_pool` needs a change i
 the runtime (M26-VM-002). The govulncheck failure is M26-RUN-003. The Windows
 gate took 22 minutes and the Linux gate 16. The two ran at the same time.
 
+### Re-runs in Stage B
+
+The Windows sweep above was not the binary a release ships. The sweep built
+its own `mutant` with the first `go` on the PATH, which on this host is
+go1.27.0, and cgo was on because gcc is on the PATH. The gendocs check,
+govulncheck and the fuzz-target listing also took the host's cgo default
+(M26-TEST-006). The gate now builds the sweep binary itself, with the pinned
+toolchain and `CGO_ENABLED=0`, and sets cgo on every command. Re-run on
+2026-09-25 that way, the Windows sweep reads as before: **74 of 124 examples
+with verified output**, and `worker_pool` is the only failure.
+
+The same re-run showed that the gate must not keep its logs inside the
+repository. The gofmt step writes an LF copy of every Go file under the log
+directory. `go test ./...`, vet, the limits scan and gendocs then read those
+copies as part of the module and failed (M26-TEST-008). The gate now refuses
+such a directory. Every step that did not read the copies stood:
+
+- the race detector passed on 14 packages with no race;
+- the cross-compiles passed;
+- module verification and the CHANGELOG date passed;
+- govulncheck failed as before (M26-RUN-003);
+- the sweep gave the result above.
+
+A `-Quick` gate with its logs outside the tree then passed toolchain, gofmt,
+vet ×3, `go test ./...`, the generated docs, module verification and the
+CHANGELOG date.
+
+On Linux, WSL now has gcc and the C headers, so the race detector runs there
+too. Its first run over `7aeee5a`, with the cgo fix laid over it, reported no
+data race. It failed one timing test, `TestPMapActuallyOverlapsWork`, which
+timed its own start-up against a budget meant only for the overlapped work
+(M26-TEST-007, fixed). That run's sweep gave 73 of 124: `worker_pool` failed as
+on Windows, and `static_bin_analysis` ran past the 60-second limit because nine
+audit agents shared the host. On the idle host it takes about 27 seconds
+(M26-VM-001).
+
 ## Tests and the race detector
 
 At `07c737a`, `go test ./...` passed on Windows: 34 packages ok, 10 without test
@@ -123,8 +159,9 @@ described above.
 
 The race step covers these packages and everything under them: vm, builtin,
 serve, security, object, runtime, repl, dap, sema, lsp and cli. On Windows all
-14 of them that have tests passed with no race reported. On Linux it
-has never run: WSL has no gcc, and installing it needs the owner's password.
+14 of them that have tests passed with no race reported. On Linux it did not
+run in Stage A, because WSL had no gcc. It has run since, with no race reported
+(see [Re-runs in Stage B](#re-runs-in-stage-b)).
 
 ## Example sweep
 

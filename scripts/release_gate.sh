@@ -38,6 +38,26 @@ cd "$REPO_ROOT" || exit 2
 if [ -z "$LOG_DIR" ]; then
   LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mutant-release-gate-XXXXXXXX")"
 fi
+
+# absolute_path DIR: DIR made absolute through its deepest existing ancestor, so
+# symlinks resolve the same way pwd -P resolves the repository root.
+absolute_path() {
+  local p="$1" rest=""
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  while [ ! -d "$p" ]; do rest="/$(basename "$p")$rest"; p="$(dirname "$p")"; done
+  echo "$(cd "$p" && pwd -P)$rest"
+}
+
+# The gofmt step writes an LF copy of every Go file under --log-dir. Inside the
+# repository those copies are packages of the module: go test ./... would
+# compile them beside the real ones and every tree-walking guard would count
+# them twice, so the gate would fail for a reason that is nowhere in the code.
+ROOT_PHYSICAL="$(pwd -P)"
+case "$(absolute_path "$LOG_DIR")/" in
+  "$ROOT_PHYSICAL"/*)
+    echo "release_gate: --log-dir $LOG_DIR is inside the repository ($ROOT_PHYSICAL). The gate writes Go files there, which go test ./... would take for part of the module; pick a directory outside it." >&2
+    exit 2 ;;
+esac
 mkdir -p "$LOG_DIR"
 
 TARGETS="windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64"
@@ -137,14 +157,18 @@ fuzz() {
         done
         pending="" ;;
     esac
-  done < <("$GO" test -list '^Fuzz' ./... 2>&1)
+  done < <(env CGO_ENABLED=0 "$GO" test -list '^Fuzz' ./... 2>&1)
   if [ "$ran" -eq 0 ]; then echo "SKIP: no fuzz targets"; else echo "$ran target(s), $FUZZ_TIME each"; fi
 }
 
-gendocs_check() { run "$1" "$GO" run ./cmd/gendocs -check; }
+gendocs_check() { run "$1" env CGO_ENABLED=0 "$GO" run ./cmd/gendocs -check; }
 
+# The sweep runs the binary a release ships -- this toolchain, no cgo -- not
+# one it would otherwise build with whatever go is first on the PATH.
 sweep_golden() {
-  run "$1" "$GO" run ./cmd/sweep --levels 0,5,10 --golden || return 1
+  local bin="$LOG_DIR/bin/sweep/mutant"
+  run "$1" env CGO_ENABLED=0 "$GO" build -trimpath -o "$bin" . || return 1
+  run "$1" env CGO_ENABLED=0 "$GO" run ./cmd/sweep --levels 0,5,10 --golden --mutant "$bin" || return 1
   grep 'printed exactly what' "$1" | tail -n 1
 }
 
@@ -161,7 +185,7 @@ changelog_date() {
   fi
 }
 
-vuln() { run "$1" "$GO" run golang.org/x/vuln/cmd/govulncheck@latest ./...; }
+vuln() { run "$1" env CGO_ENABLED=0 "$GO" run golang.org/x/vuln/cmd/govulncheck@latest ./...; }
 
 step "toolchain is the pinned one" toolchain
 step "gofmt (on LF copies)" gofmt_lf
