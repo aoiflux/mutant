@@ -30,6 +30,10 @@ var (
 	// that is not a concern here; a builtin that ever spans several calls would
 	// need graphene's own Begin/Commit rather than a lock.
 	dbHandles sync.Map
+	// dbDiskPaths maps the handle of each db_open_disk store to its path, so
+	// the end of a program can name a store it forgot to close. An in-memory
+	// graph has nothing on disk to leave unclean and is not in it.
+	dbDiskPaths sync.Map
 )
 
 const DATA = 0
@@ -141,6 +145,9 @@ func DbOpenDisk(args ...object.Object) object.Object {
 	if ledgerIsMarked(path.Value) {
 		return resultAndError(nil, newError("db_open_disk: %s is a Mutant forensic ledger; open it with ledger_open, because opening it here would write unsigned commits into a store that requires signed ones", path.Value))
 	}
+	if errObj := dbRefuseForeignLabels(path.Value); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	opts := disk.Options{}
 	if len(args) == 2 {
@@ -156,6 +163,7 @@ func DbOpenDisk(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_open_disk: %s", err.Error()))
 	}
 	handle := atomic.AddInt64(&dbHandleCounter, 1)
+	dbDiskPaths.Store(handle, path.Value)
 	dbHandles.Store(handle, g)
 	return resultAndError(intObj(handle), nil)
 }
@@ -242,6 +250,7 @@ func DbClose(args ...object.Object) object.Object {
 	// handle is already out of dbHandles by this point and nothing can ask
 	// for them again.
 	dbTimelineForget(h.Value)
+	dbDiskPaths.Delete(h.Value)
 
 	if err := g.Close(); err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))

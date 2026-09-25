@@ -323,9 +323,10 @@ Four rules, all in force today.
 - **A passphrase is read from the terminal.** Never from an argument, never from
   a file named in program text, and **never from an environment variable** — see
   [`docs/CONFIGURATION_POLICY.md`](CONFIGURATION_POLICY.md), which makes that a
-  machine-checked rule for the whole tree. An options key named `passphrase`,
-  `password`, `secret` or `key` is refused **by name**, before the options parser
-  can report it as merely unknown, because "unknown option" reads as a
+  machine-checked rule for the whole tree. Every `case_*`, `class_*`,
+  `record_*`, `view_*` and `disclose_*` builtin that takes an options hash
+  refuses a key named `passphrase`, `password`, `secret` or `key` **by name**,
+  before it looks at any other argument, because "unknown option" reads as a
   misspelling and the point is that the option is forbidden.
 - **Plaintext is `ParamBytes`, never `ParamString`.** A Go string cannot be
   zeroed, and the runtime copies and retains one at will. See
@@ -374,8 +375,12 @@ The one other form it accepts is a local wrapper declared
 `name := func(format string, args ...any)`, and only because every call of that
 wrapper is itself checked for a constant format. The guard exercises each rule
 against source that breaks it, so a walk that matched nothing cannot pass as
-clean code. Its limit: the list of files is a declaration, and a new file in the
-family that is left off it is not caught by anything.
+clean code. A file that names the key material -- the case key, the class-tag
+key, a grant or record-key operation, a passphrase request or its source, the
+function that marks a read `Classified` -- and is left off the list fails
+`TestEveryFileHoldingKeyMaterialIsGuarded`. Its limit: a file that handles
+plaintext without naming any of those is not caught, so the list is still a
+declaration.
 
 That turns "plaintext never reaches a log, a manifest or an error message" from a
 practice into something the build enforces — in those files, and for the two
@@ -394,11 +399,13 @@ carried by `bytes_slice` and by `+` of two buffers, which marks the joined
 buffer with every record and class either side came from. It is checked **at the
 sink call sites**, in [`builtin/classified.go`](../builtin/classified.go):
 `putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
-`report_write`, `report_render`, `case_note`, `cache_put`, `ledger_add_node`,
-`ledger_add_edge` and `db_add_artifact` refuse an argument that holds a marked
-buffer, directly or anywhere inside an array, hash, struct, enum payload or
-captured variable, and a value nested too deep to check is refused rather than
-passed. The refusal names the record, the classes and the length, and not one
+`report_write`, `report_render`, `report_table`, `report_list`, `case_note`,
+`cache_put`, `ledger_add_node`, `ledger_add_edge` and `db_add_artifact` refuse
+an argument that holds a marked buffer, directly or anywhere inside an array,
+hash, struct, enum payload or captured variable, and a value nested too deep to
+check is refused rather than passed. `report_table` and `report_list` are on the
+list because they render a cell to text as it is added: by the time a report
+reaches `report_render` or `report_write` there is no buffer left in it to find. The refusal names the record, the classes and the length, and not one
 byte. A builtin whose parameter is STRING alone — `net_conn_write`,
 `ws_write_frame` and `exec_string` among them — cannot be handed a buffer at all.
 

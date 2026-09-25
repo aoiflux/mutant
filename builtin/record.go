@@ -252,6 +252,14 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 	if len(args) != 4 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
+	allowed := recordSealOptions
+	if quantised {
+		allowed = recordSealQuantisedOptions
+	}
+	opts, errObj := secretOptionsArg(op, args, 4, allowed...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	source, errObj := requireStringArg(op, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -261,14 +269,6 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 		return resultAndError(nil, errObj)
 	}
 	ranges, errObj := recordRangesArg(op, args[2])
-	if errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	allowed := recordSealOptions
-	if quantised {
-		allowed = recordSealQuantisedOptions
-	}
-	opts, errObj := formatOptionsArg(op, args, 4, allowed...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -746,6 +746,11 @@ func recordBuildHeader(op string, identity recordIdentity, spans []security.Reco
 // The destination is created with O_EXCL. Overwriting is not offered: the
 // lesson is next door in case_key.go, where a builtin that would have
 // overwritten a private key was the defect that made the rule.
+// recordSealInterrupt, when set, runs after each segment is written. It exists
+// for one test, which exits the process there to show what a crash mid-seal
+// leaves on disk.
+var recordSealInterrupt func()
+
 func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 	segments []security.RecordSegment, keys *security.RecordKeys, sign bool) (
 	*security.RecordFooter, uint64, *object.Error,
@@ -761,7 +766,12 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 			return nil, 0, newError("%s: %s", op, err.Error())
 		}
 	}
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// The name is reserved first, empty, and refused if it exists: a record is
+	// never written over. The record is written to a temporary file beside it,
+	// synced, and renamed over the reservation only once it is complete, so a
+	// process killed mid-seal leaves under the name an empty file the reader
+	// refuses -- never part of a record, which looks like evidence and is not.
+	reserved, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, 0, newError("%s: %s already exists. A record is never written over: if this is a "+
@@ -769,10 +779,22 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 		}
 		return nil, 0, newError("%s: %s", op, err.Error())
 	}
-	// Anything that goes wrong from here leaves no half-written record behind.
-	// A file that looks like evidence and is not is worse than no file.
+	if err := reserved.Close(); err != nil {
+		_ = os.Remove(dest)
+		return nil, 0, newError("%s: %s", op, err.Error())
+	}
+	// CreateTemp makes the file 0600 before anything is written to it.
+	out, err := os.CreateTemp(filepath.Dir(dest), ".mutant-record-*")
+	if err != nil {
+		_ = os.Remove(dest)
+		return nil, 0, newError("%s: %s", op, err.Error())
+	}
+	temp := out.Name()
+	// Anything that goes wrong from here removes both the partial record and
+	// the reservation.
 	abandon := func(format string, args ...any) *object.Error {
 		out.Close()
+		_ = os.Remove(temp)
 		_ = os.Remove(dest)
 		return newError(format, args...)
 	}
@@ -821,6 +843,9 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 			return nil, 0, abandon("%s: %s", op, err.Error())
 		}
 		digests = append(digests, digest)
+		if recordSealInterrupt != nil {
+			recordSealInterrupt()
+		}
 	}
 	if !keys.SealComplete() {
 		return nil, 0, abandon("%s: the record sealed %d of its %d segments", op,
@@ -858,8 +883,10 @@ func recordWriteFile(op, source, dest string, header *security.RecordHeader,
 		return nil, 0, abandon("%s: %s", op, err.Error())
 	}
 	if err := out.Close(); err != nil {
-		_ = os.Remove(dest)
-		return nil, 0, newError("%s: %s", op, err.Error())
+		return nil, 0, abandon("%s: %s", op, err.Error())
+	}
+	if err := os.Rename(temp, dest); err != nil {
+		return nil, 0, abandon("%s: %s", op, err.Error())
 	}
 	return footer, written, nil
 }
@@ -887,6 +914,10 @@ func recordLoad(op, path string) (*recordSession, *object.Error) {
 		return nil, fail("%s: %s", op, err.Error())
 	}
 	size := uint64(info.Size())
+	if size == 0 {
+		return nil, fail("%s: %s is empty. record_seal holds a record's name with an empty file and renames "+
+			"the finished record over it, so this is a seal that was interrupted; remove it and seal again", op, path)
+	}
 
 	prefix := make([]byte, security.RecordFilePrefixSize)
 	if _, err := file.ReadAt(prefix, 0); err != nil {
@@ -1067,11 +1098,11 @@ func RecordOpen(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	path, errObj := requireStringArg(op, args[0], 1)
+	opts, errObj := secretOptionsArg(op, args, 2, recordOpenOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg(op, args, 2, recordOpenOptions...)
+	path, errObj := requireStringArg(op, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

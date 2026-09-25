@@ -90,13 +90,12 @@ func detectFridaPtrace() AntiTamperSignal {
 	return makeSignal(ProbeFridaPtrace, false, ConfidenceNone, "no frida/ptrace heuristic triggered")
 }
 
-func detectLDPreload() AntiTamperSignal {
-	return makeSignal(ProbeLDPreload, false, ConfidenceNone, "env-based preload checks disabled")
-}
-
 func detectCPUIDHypervisor() AntiTamperSignal {
 	sandboxType, confidence, err := DetectSandboxType()
-	if err == nil && sandboxType != sandboxTypeNone && confidence >= sandboxDetectedThreshold {
+	if err != nil {
+		return unmeasuredSignal(ProbeCPUIDHypervisor, "not measured: the sandbox detector failed: "+err.Error())
+	}
+	if sandboxType != sandboxTypeNone && confidence >= sandboxDetectedThreshold {
 		return makeSignal(ProbeCPUIDHypervisor, true, ConfidenceCPUIDHypervisorDetected, "sandbox_type="+sandboxType)
 	}
 
@@ -126,36 +125,6 @@ func detectRDTSCDrift() AntiTamperSignal {
 		confidence,
 		"sleep_ms="+strconv.Itoa(elapsedMs)+";drift_ms="+strconv.Itoa(drift),
 	)
-}
-
-func detectACPIPCI() AntiTamperSignal {
-	sandboxType, confidence, err := DetectSandboxType()
-	if err != nil {
-		return makeSignal(ProbeACPIPCI, false, ConfidenceNone, "sandbox detect error: "+err.Error())
-	}
-
-	indicators, indicatorsErr := GetSandboxIndicators()
-	if indicatorsErr != nil {
-		return makeSignal(ProbeACPIPCI, false, ConfidenceNone, "sandbox indicators error: "+indicatorsErr.Error())
-	}
-
-	detail := "no sandbox indicators"
-	if len(indicators) > 0 {
-		detail = "indicators=" + strings.Join(indicators, ";")
-	}
-
-	if sandboxType != sandboxTypeNone && confidence > 0 {
-		score := confidence
-		if score > ACPIPCIConfidenceCap {
-			score = ACPIPCIConfidenceCap
-		}
-		if score < ACPIPCIConfidenceMin {
-			score = ACPIPCIConfidenceMin
-		}
-		return makeSignal(ProbeACPIPCI, true, score, "sandbox_type="+sandboxType+";"+detail)
-	}
-
-	return makeSignal(ProbeACPIPCI, false, ConfidenceNone, detail)
 }
 
 func readLinuxTracerPID() (int, bool) {

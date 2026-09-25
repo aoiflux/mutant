@@ -305,6 +305,10 @@ func disclosureSegmentRuns(indices []uint64) [][2]uint64 {
 // disclose_to_passphrase
 // ---------------------------------------------------------------------------
 
+// disclosureIssueGrant is the one call that derives a recipient's key material.
+// It is a variable so a test can show that a refusal came before it.
+var disclosureIssueGrant = (*security.RecordKeys).IssueGrant
+
 // DiscloseToPassphrase issues a grant under a view and records it:
 // disclose_to_passphrase(ledger, record, view, recipient).
 func DiscloseToPassphrase(args ...object.Object) object.Object {
@@ -354,6 +358,9 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if err := disclosurePreflight(ledger, record, recipient); err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 
 	// The same partition view_preview reports, so the preview an examiner
 	// read is the disclosure that happens.
@@ -367,7 +374,7 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 		}
 		descriptors = append(descriptors, aad)
 	}
-	grant, err := record.keys.IssueGrant(descriptors)
+	grant, err := disclosureIssueGrant(record.keys, descriptors)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
 	}

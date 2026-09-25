@@ -186,6 +186,12 @@ func ReportList(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
+	// Refused here, where the buffer goes in: the item is rendered to text as
+	// it is added, so by report_render or report_write there is no marked
+	// buffer left for their own check to find.
+	if errObj := refuseClassified(BuiltinNameReportList, args...); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	report, errObj := requireHashArg(BuiltinNameReportList, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -235,6 +241,10 @@ var reportTableOptions = []string{"columns", "caption", "header"}
 func ReportTable(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
+	}
+	// Refused where the buffer goes in, for the reason report_list gives.
+	if errObj := refuseClassified(BuiltinNameReportTable, args...); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 	report, errObj := requireHashArg(BuiltinNameReportTable, args[0], 1)
 	if errObj != nil {

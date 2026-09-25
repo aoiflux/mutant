@@ -74,7 +74,6 @@ package cli
 //     one case where a lock-free read would be reading a store mid-change.
 
 import (
-	"bufio"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -83,9 +82,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
+	"mutant/graphstore"
 	"mutant/sema"
 
 	"github.com/aoiflux/graphene"
@@ -306,7 +305,7 @@ func requireSymbolGraph(dir string) (int, error) {
 		return 0, fmt.Errorf("graph query: %s is a file; a graph store is a directory", dir)
 	}
 
-	nodes, edges, err := readLabelTable(filepath.Join(dir, "graphene.labels"))
+	nodes, edges, err := graphstore.ReadLabelTable(filepath.Join(dir, graphstore.LabelTableName))
 	if err != nil {
 		return 0, fmt.Errorf("graph query: %s is not a symbol graph: %w", dir, err)
 	}
@@ -352,78 +351,6 @@ func sortedLabels[T ~uint16](table map[T]string) []uint16 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
-}
-
-// readLabelTable parses graphene.labels.
-//
-// graphene's own parser is unexported, and reimplementing it is the point
-// rather than a workaround: this one is stricter where the engine is lenient,
-// because the engine is deciding what to register and this is deciding whether
-// to believe a directory at all. A table truncated inside its last name parses
-// as a shorter name there and is accepted; here a file whose last byte is not a
-// newline is torn, because the writer always ends with one.
-func readLabelTable(path string) (map[uint16]string, map[uint16]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, errors.New("it has no graphene.labels, so nothing says what its numbers mean")
-		}
-		return nil, nil, err
-	}
-	if len(raw) == 0 {
-		return nil, nil, errors.New("its graphene.labels is empty")
-	}
-	if raw[len(raw)-1] != '\n' {
-		return nil, nil, errors.New("its graphene.labels does not end in a newline, so it is torn")
-	}
-
-	nodes := make(map[uint16]string)
-	edges := make(map[uint16]string)
-	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
-	if !scanner.Scan() {
-		return nil, nil, errors.New("its graphene.labels is empty")
-	}
-	if header := scanner.Text(); header != "graphene-labels v1" {
-		return nil, nil, fmt.Errorf("its graphene.labels begins %q, not %q",
-			header, "graphene-labels v1")
-	}
-
-	for line := 2; scanner.Scan(); line++ {
-		text := scanner.Text()
-		if text == "" {
-			continue
-		}
-		fields := strings.Split(text, "\t")
-		if len(fields) != 3 {
-			return nil, nil, fmt.Errorf("graphene.labels line %d: want three tab-separated fields, got %d",
-				line, len(fields))
-		}
-		value, convErr := strconv.ParseUint(fields[1], 10, 16)
-		if convErr != nil {
-			return nil, nil, fmt.Errorf("graphene.labels line %d: %q is not a label number", line, fields[1])
-		}
-		// Last-wins is what the engine does with a repeated number, silently. A
-		// table that names one number twice has drifted from whatever wrote it,
-		// and that is enough to stop trusting the rest of it.
-		switch fields[0] {
-		case "node":
-			if _, twice := nodes[uint16(value)]; twice {
-				return nil, nil, fmt.Errorf("graphene.labels names node label %d twice", value)
-			}
-			nodes[uint16(value)] = fields[2]
-		case "edge":
-			if _, twice := edges[uint16(value)]; twice {
-				return nil, nil, fmt.Errorf("graphene.labels names edge label %d twice", value)
-			}
-			edges[uint16(value)] = fields[2]
-		default:
-			return nil, nil, fmt.Errorf("graphene.labels line %d: unknown kind %q", line, fields[0])
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, nil, err
-	}
-	return nodes, edges, nil
 }
 
 // openForReading opens the store without changing what it says, and reports

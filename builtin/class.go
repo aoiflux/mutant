@@ -56,11 +56,11 @@ func ClassDefine(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
-	label, errObj := requireStringArg(BuiltinNameClassDefine, args[0], 1)
+	opts, errObj := secretOptionsArg(BuiltinNameClassDefine, args, 2, classDefineOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	opts, errObj := formatOptionsArg(BuiltinNameClassDefine, args, 2, classDefineOptions...)
+	label, errObj := requireStringArg(BuiltinNameClassDefine, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

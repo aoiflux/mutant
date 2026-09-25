@@ -7,6 +7,10 @@ package builtin
 // its OpGetBuiltin operands through this slice, so an edit here silently rebinds
 // every call in every artifact already in the wild.
 //
+// It stays for the whole 2.x line: dropping it stops every artifact built by
+// v2.4.0 or earlier from running, which only a major release may do, and 3.0 is
+// the first that may. docs/BYTECODE_IR.md section 4.1 says the same.
+//
 // New builtins do not belong here. Bytecode from BytecodeVersionNamedBuiltins
 // onward carries the names it referenced and never consults this table, so the
 // snapshot has no reason to grow. TestLegacyBuiltinOrdinalsAreFrozen pins it.

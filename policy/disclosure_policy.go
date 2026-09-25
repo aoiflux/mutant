@@ -28,15 +28,21 @@ package policy
 // material that opens it.
 //
 // A new file in the record, grant or disclosure families belongs on this list.
-// As with EvidenceReadOnlyFiles, leaving one off is not caught by anything,
-// which is why the list is a declaration in source.
+// A file that names the key material -- the case key, the class-tag key, a
+// grant or record-key operation, a passphrase request, the mark a read carries
+// -- and is left off it fails TestEveryFileHoldingKeyMaterialIsGuarded. A file
+// that handles plaintext without naming any of those is not caught, which is
+// why the list is still a declaration in source.
 var DisclosureFiles = []string{
 	// the key schedule, the container and the grant
 	"security/record_crypto.go",
 	"security/record_file.go",
 	"security/record_grant.go",
-	// the case key and the classification scheme
+	// the case key, where its passphrase comes from, the case session that
+	// holds it, and the classification scheme
 	"builtin/case_key.go",
+	"case_key_passphrase.go",
+	"builtin/custody.go",
 	"builtin/class.go",
 	// sealing, opening and reading records, and what a read is marked with
 	"builtin/record.go",

@@ -49,6 +49,16 @@ func TestSandboxStatusBuiltin(t *testing.T) {
 		t.Fatalf("sandbox_status() result is not Hash. got=%T", payload)
 	}
 
+	// Every probe row says whether the probe looked, because detected false
+	// from a probe that cannot run on this host is not a finding (M26-TMP-018).
+	rows, _ := hashValueByKey(hash, "probe_signals").(*object.Array)
+	if rows == nil || len(rows.Elements) == 0 {
+		t.Fatal("sandbox_status() returned no probe rows")
+	}
+	for _, row := range rows.Elements {
+		assertHashHasKeyType(t, row.(*object.Hash), "measured", object.BOOLEAN_OBJ)
+	}
+
 	assertHashHasKeyType(t, hash, "detected", object.BOOLEAN_OBJ)
 	assertHashHasKeyType(t, hash, "type", object.STRING_OBJ)
 	assertHashHasKeyType(t, hash, "confidence", object.INTEGER_OBJ)

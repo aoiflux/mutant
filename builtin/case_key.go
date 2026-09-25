@@ -82,10 +82,7 @@ func CaseKeyCreate(args ...object.Object) object.Object {
 	if strings.TrimSpace(path) == "" {
 		return resultAndError(nil, newError("%s: the path must not be empty", BuiltinNameCaseKeyCreate))
 	}
-	if errObj := refusePassphraseOption(BuiltinNameCaseKeyCreate, args, 2); errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	opts, errObj := formatOptionsArg(BuiltinNameCaseKeyCreate, args, 2, caseKeyCreateOptions...)
+	opts, errObj := secretOptionsArg(BuiltinNameCaseKeyCreate, args, 2, caseKeyCreateOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -212,10 +209,7 @@ func CaseKeyOpen(args ...object.Object) object.Object {
 	if strings.TrimSpace(path) == "" {
 		return resultAndError(nil, newError("%s: the path must not be empty", BuiltinNameCaseKeyOpen))
 	}
-	if errObj := refusePassphraseOption(BuiltinNameCaseKeyOpen, args, 2); errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	opts, errObj := formatOptionsArg(BuiltinNameCaseKeyOpen, args, 2, caseKeyOpenOptions...)
+	opts, errObj := secretOptionsArg(BuiltinNameCaseKeyOpen, args, 2, caseKeyOpenOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -354,10 +348,7 @@ func CaseKeyRotate(args ...object.Object) object.Object {
 	if strings.TrimSpace(path) == "" {
 		return resultAndError(nil, newError("%s: the path must not be empty", BuiltinNameCaseKeyRotate))
 	}
-	if errObj := refusePassphraseOption(BuiltinNameCaseKeyRotate, args, 2); errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	opts, errObj := formatOptionsArg(BuiltinNameCaseKeyRotate, args, 2, caseKeyRotateOptions...)
+	opts, errObj := secretOptionsArg(BuiltinNameCaseKeyRotate, args, 2, caseKeyRotateOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -564,6 +555,11 @@ func CaseKeyFingerprint(args ...object.Object) object.Object {
 // whole point of this refusal is that the option is not missing, it is
 // forbidden, and silently ignoring it would leave an examiner believing they
 // had supplied a passphrase.
+//
+// secretOptionsArg is how every builtin that handles a case, its key, its
+// classes, its records or their disclosure reads its options: DISCLOSURE_POLICY
+// section 8 promises the refusal in all of them, and a test holds each one with
+// an options hash to it.
 func refusePassphraseOption(op string, args []object.Object, pos int) *object.Error {
 	if len(args) < pos {
 		return nil
@@ -585,6 +581,17 @@ func refusePassphraseOption(op string, args []object.Object, pos int) *object.Er
 		}
 	}
 	return nil
+}
+
+// secretOptionsArg reads an options hash after refusing, by name, an option
+// named for a secret. The builtins that use it call it before they check their
+// other arguments' meaning, before they touch a file, a key or the case, so the
+// refusal is what an examiner sees whatever else is wrong with the call.
+func secretOptionsArg(op string, args []object.Object, pos int, allowed ...string) (*formatOptions, *object.Error) {
+	if errObj := refusePassphraseOption(op, args, pos); errObj != nil {
+		return nil, errObj
+	}
+	return formatOptionsArg(op, args, pos, allowed...)
 }
 
 // caseKeyGenerationOption reads the optional generation number. Zero means

@@ -370,6 +370,9 @@ func (s *session) publishExit(runErr error) {
 	// has been read and never before.
 	if s.machine != nil {
 		builtin.WaitForTasks()
+		for _, note := range builtin.CloseForgottenHandles() {
+			_ = s.event("output", outputBody{Category: "stderr", Output: "[warning] " + note + "\n"})
+		}
 		s.machine.CleanupSensitiveData(true)
 	}
 

@@ -524,6 +524,40 @@ func disclosureRecipientFingerprint(name string) string {
 // disclosureWriteIssue commits one disclosure: the Disclosure node, whatever
 // Case, Actor, Record, Classification, View and Recipient nodes the ledger does
 // not already hold, and the edges between them, in one signed transaction.
+// disclosureRefusal says why the ledger rules out disclosing this record to
+// this recipient, or returns nil: the record was reclassified, so its
+// classification is not the one in force, or an earlier disclosure of it to
+// them was withdrawn.
+func disclosureRefusal(g *graphene.Graph, record *recordSession, recipient, recipientFP string) error {
+	recordUID := strings.ToLower(record.header.RecordUID)
+	if event, superseded, err := disclosureFind(g, disclosureNodeReclass, "reclass.superseded_uid", recordUID); err != nil {
+		return err
+	} else if superseded {
+		return fmt.Errorf("record %s was reclassified by record %s at %s, so its classification is not "+
+			"the one in force. Disclose the record that superseded it", record.header.RecordUID,
+			event.get("reclass.record_uid"), event.get("reclass.at"))
+	}
+	if withdrawn, err := disclosureWithdrawnFor(g, recordUID, recipientFP); err != nil {
+		return err
+	} else if withdrawn != "" {
+		return fmt.Errorf("an earlier disclosure of record %s to %q was withdrawn (%s), and a withdrawal "+
+			"is how further grants are stopped. To disclose to them again, seal a new record -- which is "+
+			"what a changed classification is anyway -- and disclose that",
+			record.header.RecordUID, recipient, withdrawn)
+	}
+	return nil
+}
+
+// disclosurePreflight asks the ledger for a refusal before anything is spent
+// on the disclosure: before a grant's key material is derived, and before the
+// examiner is asked to choose a passphrase for it. DISCLOSURE_POLICY promises
+// that a withdrawal is checked before any new key is issued.
+func disclosurePreflight(session *ledgerSession, record *recordSession, recipient string) error {
+	disclosureLedgerMu.Lock()
+	defer disclosureLedgerMu.Unlock()
+	return disclosureRefusal(session.graph, record, recipient, disclosureRecipientFingerprint(recipient))
+}
+
 func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store.NodeID, error) {
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
@@ -533,21 +567,10 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 	if err := g.DeclareTypeNames(nodes, edges); err != nil {
 		return 0, err
 	}
-	if event, superseded, err := disclosureFind(g, disclosureNodeReclass, "reclass.superseded_uid",
-		strings.ToLower(issue.record.header.RecordUID)); err != nil {
+	// disclosurePreflight asked this before the grant was issued; asked again
+	// under the lock for a withdrawal or reclassification recorded since.
+	if err := disclosureRefusal(g, issue.record, issue.recipient, issue.recipientFP); err != nil {
 		return 0, err
-	} else if superseded {
-		return 0, fmt.Errorf("record %s was reclassified by record %s at %s, so its classification is not "+
-			"the one in force. Disclose the record that superseded it", issue.record.header.RecordUID,
-			event.get("reclass.record_uid"), event.get("reclass.at"))
-	}
-	if withdrawn, err := disclosureWithdrawnFor(g, strings.ToLower(issue.record.header.RecordUID), issue.recipientFP); err != nil {
-		return 0, err
-	} else if withdrawn != "" {
-		return 0, fmt.Errorf("an earlier disclosure of record %s to %q was withdrawn (%s), and a withdrawal "+
-			"is how further grants are stopped. To disclose to them again, seal a new record -- which is "+
-			"what a changed classification is anyway -- and disclose that",
-			issue.record.header.RecordUID, issue.recipient, withdrawn)
 	}
 
 	tx := disclosureBegin(session)

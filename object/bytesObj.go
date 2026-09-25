@@ -1,9 +1,9 @@
 package object
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"hash/fnv"
 
 	"mutant/security"
 )
@@ -112,10 +112,15 @@ func (b *Bytes) Inspect() string { return hex.EncodeToString(b.Value) }
 
 // HashKey lets a bytes value be a hash key. The key carries the type, so bytes
 // and strings occupy disjoint keyspaces: {"4d5a": 1}[some_bytes] does not hit.
+//
+// The key is the buffer's SHA-256, not the buffer. A map key is an immutable Go
+// string nothing can zero, and a buffer may be classified plaintext, so the
+// buffer itself is never copied into one. A 64-bit digest was not enough: two
+// buffers with one FNV-1a-64 digest were one key, and such pairs take seconds
+// to find. No SHA-256 collision is known.
 func (b *Bytes) HashKey() HashKey {
-	h := fnv.New64a()
-	h.Write(b.Value)
-	return HashKey{Type: b.Type(), Value: h.Sum64()}
+	digest := sha256.Sum256(b.Value)
+	return HashKey{Type: b.Type(), Text: string(digest[:])}
 }
 
 // Preview renders at most limit bytes of the buffer, with the length in front,

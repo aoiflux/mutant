@@ -11,7 +11,12 @@ func SetAntiTamperProbeEnabledForTesting(enabled bool) {
 }
 
 type AntiTamperSignal struct {
-	Name       string
+	Name string
+	// Measured says the probe ran on this host and looked. A probe that cannot
+	// run here -- one that reads Windows process structures, on Linux -- or
+	// whose own check failed answers Measured false, and its Detected false is
+	// then not a finding: "not detected" and "not looked for" are two answers.
+	Measured   bool
 	Detected   bool
 	Confidence int
 	Detail     string
@@ -48,11 +53,19 @@ func runNativeProbe(requested []string) []AntiTamperSignal {
 	return out
 }
 
+// makeSignal is a probe's answer when it looked.
 func makeSignal(name string, detected bool, confidence int, detail string) AntiTamperSignal {
 	return AntiTamperSignal{
 		Name:       name,
+		Measured:   true,
 		Detected:   detected,
 		Confidence: confidence,
 		Detail:     detail,
 	}
+}
+
+// unmeasuredSignal is a probe's answer when it did not look, with detail
+// saying why. It is never detected and carries no confidence.
+func unmeasuredSignal(name, detail string) AntiTamperSignal {
+	return AntiTamperSignal{Name: name, Detail: detail}
 }

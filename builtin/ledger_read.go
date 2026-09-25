@@ -613,14 +613,16 @@ func LedgerPath(args ...object.Object) object.Object {
 	case errors.Is(err, traversal.ErrNoPath):
 		// An answer, not a failure. See the header.
 		return resultAndError(makeHashObject(map[string]object.Object{
-			"found":      boolObj(false),
-			"src":        intObj(int64(src)),
-			"dst":        intObj(int64(dst)),
-			"cost_model": stringObj(model),
-			"cost":       floatObj(0),
-			"hops":       intObj(0),
-			"nodes":      &object.Array{Elements: []object.Object{}},
-			"edges":      &object.Array{Elements: []object.Object{}},
+			"found":         boolObj(false),
+			"src":           intObj(int64(src)),
+			"dst":           intObj(int64(dst)),
+			"cost_model":    stringObj(model),
+			"cost":          floatObj(0),
+			"hops":          intObj(0),
+			"nodes":         &object.Array{Elements: []object.Object{}},
+			"edges":         &object.Array{Elements: []object.Object{}},
+			"reversed_hops": &object.Array{Elements: []object.Object{}},
+			"directed":      boolObj(true),
 		}), nil)
 	case errors.Is(err, store.ErrBudgetExceeded):
 		return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerPath))
@@ -640,23 +642,32 @@ func LedgerPath(args ...object.Object) object.Object {
 		nodes = append(nodes, rendered)
 	}
 	edges := make([]object.Object, 0, len(result.Edges))
-	for _, edge := range result.Edges {
+	// graphene's weighted search walks an edge either way. Hop i ran against
+	// its edge when the edge points from the node the hop reached back to the
+	// node it left, and a provenance reading has to know which hops did.
+	reversed := []object.Object{}
+	for i, edge := range result.Edges {
 		rendered, err := ledgerEdgeObject(edge)
 		if err != nil {
 			return resultAndError(nil, newError("%s: edge %d has a property blob this language cannot decode: %s", BuiltinNameLedgerPath, edge.ID, err.Error()))
 		}
 		edges = append(edges, rendered)
+		if i+1 < len(result.Nodes) && edge.Src == result.Nodes[i+1].ID && edge.Dst == result.Nodes[i].ID {
+			reversed = append(reversed, intObj(int64(i)))
+		}
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"found":      boolObj(true),
-		"src":        intObj(int64(src)),
-		"dst":        intObj(int64(dst)),
-		"cost_model": stringObj(model),
-		"cost":       floatObj(ledgerPathCost(model, result.Edges)),
-		"hops":       intObj(int64(len(result.Edges))),
-		"nodes":      &object.Array{Elements: nodes},
-		"edges":      &object.Array{Elements: edges},
+		"found":         boolObj(true),
+		"src":           intObj(int64(src)),
+		"dst":           intObj(int64(dst)),
+		"cost_model":    stringObj(model),
+		"cost":          floatObj(ledgerPathCost(model, result.Edges)),
+		"hops":          intObj(int64(len(result.Edges))),
+		"nodes":         &object.Array{Elements: nodes},
+		"edges":         &object.Array{Elements: edges},
+		"reversed_hops": &object.Array{Elements: reversed},
+		"directed":      boolObj(len(reversed) == 0),
 	}), nil)
 }
 
@@ -1206,6 +1217,35 @@ func ledgerComparisonFor(session *ledgerSession, ranged []store.PropertyFilter) 
 	}
 }
 
+// ledgerUnindexedKeys names the query's filter keys the node index holds
+// nothing under. A filter on one matches nothing whatever the ledger's property
+// blobs hold: the disclose_* family keeps most of its properties in the blob and
+// indexes only the keys it looks records up by, and a misspelt key is the same
+// answer for the same reason. known is false when the store cannot list its
+// keys, and the list is then empty because nothing could be said.
+//
+// graphene's list is an upper bound on the disk backend -- a key whose every
+// entry was since retracted may still be named -- so a key missing from it
+// matches nothing for certain, which is the direction this needs.
+func ledgerUnindexedKeys(session *ledgerSession, filters []store.PropertyFilter) (unindexed []string, known bool) {
+	keys, ok := session.graph.NodePropKeys()
+	if !ok {
+		return nil, false
+	}
+	seen := make(map[string]bool, len(filters))
+	for _, filter := range filters {
+		if seen[filter.Key] {
+			continue
+		}
+		seen[filter.Key] = true
+		if i := sort.SearchStrings(keys, filter.Key); i == len(keys) || keys[i] != filter.Key {
+			unindexed = append(unindexed, filter.Key)
+		}
+	}
+	sort.Strings(unindexed)
+	return unindexed, true
+}
+
 // LedgerQueryNodes answers a node query, and says which comparison rule
 // answered it.
 func LedgerQueryNodes(args ...object.Object) object.Object {
@@ -1235,16 +1275,19 @@ func LedgerQueryNodes(args ...object.Object) object.Object {
 	for _, key := range keys {
 		rangeKeys = append(rangeKeys, stringObj(key))
 	}
+	unindexed, known := ledgerUnindexedKeys(session, query.Filters)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"ids":           &object.Array{Elements: elements},
-		"count":         intObj(int64(len(ids))),
-		"comparison":    stringObj(comparison),
-		"range_keys":    &object.Array{Elements: rangeKeys},
-		"range_filters": intObj(int64(len(ranged))),
-		"limited":       boolObj(query.Limit > 0 && len(ids) == query.Limit),
-		"limit":         intObj(int64(query.Limit)),
-		"offset":        intObj(int64(query.Offset)),
+		"ids":              &object.Array{Elements: elements},
+		"count":            intObj(int64(len(ids))),
+		"comparison":       stringObj(comparison),
+		"range_keys":       &object.Array{Elements: rangeKeys},
+		"range_filters":    intObj(int64(len(ranged))),
+		"limited":          boolObj(query.Limit > 0 && len(ids) == query.Limit),
+		"limit":            intObj(int64(query.Limit)),
+		"offset":           intObj(int64(query.Offset)),
+		"unindexed_keys":   ledgerStringArray(unindexed),
+		"index_keys_known": boolObj(known),
 	}), nil)
 }
 

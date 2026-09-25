@@ -70,15 +70,15 @@ func ViewDefine(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
+	opts, errObj := secretOptionsArg(op, args, 3, viewDefineOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	label, errObj := requireStringArg(op, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	list, errObj := requireArrayArg(op, args[1], 2)
-	if errObj != nil {
-		return resultAndError(nil, errObj)
-	}
-	opts, errObj := formatOptionsArg(op, args, 3, viewDefineOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

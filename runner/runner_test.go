@@ -318,6 +318,7 @@ func TestEnforceProcessProtectionSecureModeTerminatesOnHighConfidence(t *testing
 	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
 		return []security.AntiTamperSignal{{
 			Name:       "trampoline",
+			Measured:   true,
 			Detected:   true,
 			Confidence: processProtectionTerminateConfidence,
 			Detail:     "test",
@@ -341,6 +342,7 @@ func TestEnforceProcessProtectionIgnoresLowConfidence(t *testing.T) {
 	runAntiTamperProbe = func(requested []string, stage string) ([]security.AntiTamperSignal, bool, error) {
 		return []security.AntiTamperSignal{{
 			Name:       "process_injection",
+			Measured:   true,
 			Detected:   true,
 			Confidence: processProtectionTerminateConfidence - 1,
 			Detail:     "test",
@@ -367,6 +369,7 @@ func TestEnforceProcessProtectionDisabled(t *testing.T) {
 		called = true
 		return []security.AntiTamperSignal{{
 			Name:       "trampoline",
+			Measured:   true,
 			Detected:   true,
 			Confidence: processProtectionTerminateConfidence,
 			Detail:     "test",
@@ -414,6 +417,7 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 			probeEnabled: false,
 			signals: []security.AntiTamperSignal{{
 				Name:       "trampoline",
+				Measured:   true,
 				Detected:   true,
 				Confidence: processProtectionTerminateConfidence,
 			}},
@@ -434,6 +438,7 @@ func TestEnforceProcessProtectionGateMatrix(t *testing.T) {
 			probeEnabled: true,
 			signals: []security.AntiTamperSignal{{
 				Name:       "process_injection",
+				Measured:   true,
 				Detected:   true,
 				Confidence: processProtectionTerminateConfidence,
 			}},

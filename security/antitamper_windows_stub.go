@@ -3,26 +3,37 @@
 
 package security
 
+import "runtime"
+
+// notMeasuredHere is the answer of a probe that reads Windows process
+// structures -- the import table, ntdll's prologues, loaded modules, page
+// protections -- on a host that has none. It did not look, and says so: all
+// five probes the runner's process protection runs are among these, so off
+// Windows that protection measures nothing.
+func notMeasuredHere(name string) AntiTamperSignal {
+	return unmeasuredSignal(name, "not measured on "+runtime.GOOS+": this probe reads Windows process structures")
+}
+
 func detectIATGOT() AntiTamperSignal {
-	return makeSignal(ProbeIATGOT, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeIATGOT)
 }
 
 func detectSyscallTable() AntiTamperSignal {
-	return makeSignal(ProbeSyscallTable, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeSyscallTable)
 }
 
 func detectTrampoline() AntiTamperSignal {
-	return makeSignal(ProbeTrampoline, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeTrampoline)
 }
 
 func detectProcessInjection() AntiTamperSignal {
-	return makeSignal(ProbeProcessInjection, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeProcessInjection)
 }
 
 func detectModuleIntegrity() AntiTamperSignal {
-	return makeSignal(ProbeModuleIntegrity, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeModuleIntegrity)
 }
 
 func detectMemoryPageAnomaly() AntiTamperSignal {
-	return makeSignal(ProbeMemoryPageAnomaly, false, ConfidenceNone, "not supported on this platform")
+	return notMeasuredHere(ProbeMemoryPageAnomaly)
 }

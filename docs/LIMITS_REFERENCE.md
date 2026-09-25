@@ -15,13 +15,20 @@ A limit that is not listed here is a bare literal somewhere in the source, and
 `policy/limit_budget.go`. Values fixed by a file format or a protocol are not
 limits; they are marked `//mutant:format` and are not listed.
 
-4 limits in 2 packages.
+6 limits in 3 packages.
 
 ## `policy/limitscan`
 
 | Limit | Value | Unit | Flag | Why | File |
 | --- | --- | --- | --- | --- | --- |
 | `maxShownExpression` | 80 bytes | bytes | -- | maxShownExpression bounds how much of an expression a finding quotes, so a failure message stays one line per finding. | `policy/limitscan/limitscan.go` |
+
+## `runner`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `maxArtifactFile` | 1 GiB | bytes | -- | maxArtifactFile bounds the file a program is run from, read before anything knows what the file is. The largest artifact is a standalone executable -- the whole runtime, under 200 MiB even as a development build with debug information, plus its payload -- so a real program is far below it, and a disk image or a memory dump named by mistake is refused before it is read into memory rather than after. | `runner/runner.go` |
+| `maxBytecode` | 256 MiB | bytes | -- | maxBytecode bounds what an artifact's bytecode may inflate to. A zstd frame declares its own content size, so a payload of a few kilobytes can ask the decoder for gigabytes; the bound is checked while inflating, before gob sees a byte. The largest program in examples/, 25 KB of source, compiles to a 50 KB artifact. | `runner/runner.go` |
 
 ## `testkit`
 

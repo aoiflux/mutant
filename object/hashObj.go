@@ -3,15 +3,22 @@ package object
 import (
 	"bytes"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"sort"
 	"strings"
 )
 
+// HashKey identifies a hash entry, and every field takes part when a map
+// compares two of them, which is the point: two keys are one entry only when
+// their values are equal. A boolean, an integer or a float fits in Value
+// exactly. A string is carried whole in Text -- it shares the string's memory,
+// so nothing is copied -- because a digest in Value made two strings with one
+// digest a single key, and a pair of FNV-1a-64 collisions takes under a minute
+// to find. A buffer carries its SHA-256 in Text; see Bytes.HashKey.
 type HashKey struct {
 	Type  ObjectType
 	Value uint64
+	Text  string
 }
 
 type HashPair struct {
@@ -42,9 +49,7 @@ func (f *Float) HashKey() HashKey {
 }
 
 func (s *String) HashKey() HashKey {
-	h := fnv.New64a()
-	h.Write([]byte(s.Value))
-	return HashKey{Type: s.Type(), Value: h.Sum64()}
+	return HashKey{Type: s.Type(), Text: s.Value}
 }
 
 func (h *Hash) Type() ObjectType { return HASH_OBJ }

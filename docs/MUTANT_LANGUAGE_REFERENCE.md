@@ -159,6 +159,13 @@ one you forget is held until the process exits — invisible in a script that
 opens an image and stops, descriptor exhaustion in a loop over a corpus or a
 long-running server.
 
+Two kinds are closed for you at the end of a program: a ledger (`ledger_open`)
+and a graph store on disk (`db_open_disk`). A store still open when the process
+exits is recorded by its next open as a restart after an unclean shutdown -- in a
+custody ledger, a permanent audit entry for a crash that did not happen -- so
+running a `.mu`, `mutant test`, the debugger and the REPL close each one they
+find and name it on stderr. The warning is the bug report: close it yourself.
+
 `with_resource(resource, closer, fn)` makes the close happen:
 
 ```mutant
@@ -2371,8 +2378,9 @@ way; `record_read_partial` is the separate contract that returns those as data.
 Plaintext either read returns is marked with the record it came from and the
 classes it crossed, and every builtin that sends a value out of the process --
 `putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
-`report_write`, `report_render`, `case_note`, `cache_put`, `ledger_add_node`,
-`ledger_add_edge` and `db_add_artifact` -- refuses a marked buffer, whether it is
+`report_write`, `report_render`, `report_table`, `report_list`, `case_note`,
+`cache_put`, `ledger_add_node`, `ledger_add_edge` and `db_add_artifact` --
+refuses a marked buffer, whether it is
 passed directly or sits anywhere inside an array, hash or struct. The refusal
 names the record, the classes and the length, and not one byte. `bytes_slice`
 carries the mark to the slice it returns, and `+` of two buffers to the joined

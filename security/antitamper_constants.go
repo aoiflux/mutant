@@ -5,11 +5,8 @@ const (
 	ProbeTiming             = "timing"
 	ProbeSyscall            = "syscall"
 	ProbeFridaPtrace        = "frida_ptrace"
-	ProbeLDPreload          = "ld_preload"
 	ProbeCPUIDHypervisor    = "cpuid_hypervisor"
 	ProbeRDTSCDrift         = "rdtsc_drift"
-	ProbeACPIPCI            = "acpi_pci"
-	ProbeGPUFeature         = "gpu_feature"
 	ProbeIATGOT             = "iat_got"
 	ProbeSyscallTable       = "syscall_table"
 	ProbeTrampoline         = "trampoline"
@@ -19,14 +16,12 @@ const (
 
 	AntiTamperUnknownStage = "unknown"
 
-	AntiTamperDetailNotImplemented = "not implemented yet"
-	AntiTamperDetailUnknownProbe   = "unknown probe"
+	AntiTamperDetailUnknownProbe = "unknown probe"
 
 	ConfidenceNone                        = 0
 	ConfidenceTimingBaseline              = 5
 	ConfidenceRDTSCDriftSuspicious        = 35
 	ConfidenceTimingSuspicious            = 40
-	ConfidenceLDPreloadWindowsMarkers     = 55
 	ConfidenceHardwareBreakpointDetected  = 65
 	ConfidenceCPUIDHypervisorDetected     = 70
 	ConfidenceHardwareBreakpointNamed     = 70
@@ -36,7 +31,6 @@ const (
 	ConfidenceSyscallDetected             = 80
 	ConfidenceSyscallTableDetected        = 82
 	ConfidenceFridaTasklistDetected       = 85
-	ConfidenceLDPreloadDetected           = 85
 	ConfidenceModuleIntegrityDetected     = 85
 	ConfidenceIATGOTDetected              = 90
 	ConfidenceFridaEnvMarkerDetected      = 90
@@ -52,9 +46,6 @@ const (
 	RDTSCDriftSleepIterations = 3
 	RDTSCDriftThresholdMs     = 10
 
-	ACPIPCIConfidenceCap = 60
-	ACPIPCIConfidenceMin = 1
-
 	LinuxProcSelfStatusPath = "/proc/self/status"
 )
 
@@ -64,16 +55,20 @@ var (
 
 	windowsInjectionEnvMarkers = []string{"COR_ENABLE_PROFILING", "COR_PROFILER", "COR_PROFILER_PATH", "__COMPAT_LAYER"}
 
+	// AntiTamperSupportedProbes are the probes that measure something. Three
+	// names that did not left the list in 2.6.0 and are unknown probes now:
+	// acpi_pci re-reported the sandbox detector, which cpuid_hypervisor
+	// reports; gpu_feature was never implemented; and ld_preload could not
+	// have seen anything, because a statically linked build (CGO_ENABLED=0,
+	// as every release is) never runs the dynamic loader LD_PRELOAD works
+	// through. docs/ANTITAMPER_PROBE.md says the same.
 	AntiTamperSupportedProbes = []string{
 		ProbeHardwareBreakpoint,
 		ProbeTiming,
 		ProbeSyscall,
 		ProbeFridaPtrace,
-		ProbeLDPreload,
 		ProbeCPUIDHypervisor,
 		ProbeRDTSCDrift,
-		ProbeACPIPCI,
-		ProbeGPUFeature,
 		ProbeIATGOT,
 		ProbeSyscallTable,
 		ProbeTrampoline,

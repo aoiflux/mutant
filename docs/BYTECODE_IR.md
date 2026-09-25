@@ -322,6 +322,11 @@ recompiled. A builtin that is renamed adds an entry to `builtin.Aliases`, which
 keeps the old name resolvable for old bytecode without keeping it callable from
 new source.
 
+Both stay for the whole 2.x line: retiring version 1, or the `net_syn_scan`
+alias of `net_connect_scan`, stops artifacts that already exist from running,
+which only a major release may do. 3.0 is the first release that may remove
+either, and its changelog will say so if it does.
+
 The `0x8000` tag on version 2 operands (`code.BuiltinNameTableFlag`) is for the
 one case the version field cannot cover. A pre-v2.5 runtime does not know to
 read `Version`, so gob hands it a name-table index and it reads that as a
@@ -1617,10 +1622,17 @@ type Hashable interface {
 type HashKey struct {
     Type  ObjectType
     Value uint64
+    Text  string
 }
 ```
 
-Implemented by `Integer`, `Boolean`, and `String`.
+Implemented by `Integer`, `Float`, `Boolean`, `String` and `Bytes`. Two keys are
+one entry only when every field is equal, and every field is exact: a boolean,
+an integer or a float's bits sit in `Value`, a string sits whole in `Text`, and
+a buffer's SHA-256 sits in `Text` -- never the buffer, which may be classified
+plaintext and would otherwise be copied into a string nothing can zero. Before
+2.6.0 a string or a buffer was keyed by its FNV-1a-64 digest alone, so two
+values with one digest were one entry.
 
 ### 17.4 `CompiledFunction`
 

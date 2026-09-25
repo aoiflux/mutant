@@ -251,8 +251,13 @@ func ExportGraph(opts ExportOptions) (ExportSummary, error) {
 // leave one dangling until the cascade reaches it -- so an unresolved import
 // would become an edge into node zero and read, to anything walking it, as an
 // import of whatever happened to be written first.
-func ExportProgram(program *sema.Program, out string) (ExportSummary, error) {
-	summary := ExportSummary{Out: out}
+// closeExportStore closes the store an export wrote. A variable so a test can
+// make the close fail, which a real store does rarely: on a WAL that will not
+// close, a clean mark that will not persist, a lock that will not release.
+var closeExportStore = (*graphene.Graph).Close
+
+func ExportProgram(program *sema.Program, out string) (summary ExportSummary, err error) {
+	summary = ExportSummary{Out: out}
 	if out == "" {
 		return summary, fmt.Errorf("graph export: an output directory is required")
 	}
@@ -268,7 +273,14 @@ func ExportProgram(program *sema.Program, out string) (ExportSummary, error) {
 	if err != nil {
 		return summary, fmt.Errorf("graph export: %w", err)
 	}
-	defer func() { _ = g.Close() }()
+	// The close is part of the export: it is what marks the store as shut
+	// down cleanly, and a store whose close failed is not one to report as
+	// written.
+	defer func() {
+		if closeErr := closeExportStore(g); closeErr != nil && err == nil {
+			err = fmt.Errorf("graph export: closing the store: %w", closeErr)
+		}
+	}()
 
 	nodeNames, edgeNames := labelNames()
 	if err := g.DeclareTypeNames(nodeNames, edgeNames); err != nil {

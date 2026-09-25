@@ -21,6 +21,9 @@ import (
 	"mutant/vm"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -36,6 +39,30 @@ var (
 )
 
 const processProtectionTerminateConfidence = 80
+
+// processProtectionNote makes the note that process protection measured
+// nothing appear once in a run, not once per stage it runs at. A pointer so a
+// test can start over.
+var processProtectionNote = new(sync.Once)
+
+// maxArtifactFile bounds the file a program is run from, read before anything
+// knows what the file is. The largest artifact is a standalone executable -- the whole
+// runtime, under 200 MiB even as a development build with debug information,
+// plus its payload -- so a real program is far below it, and a disk image or a
+// memory dump named by mistake is refused before it is read into memory rather
+// than after.
+//
+//mutant:limit bytes
+const maxArtifactFile = 1 << 30
+
+// maxBytecode bounds what an artifact's bytecode may inflate to. A zstd frame
+// declares its own content size, so a payload of a few kilobytes can ask the
+// decoder for gigabytes; the bound is checked while inflating, before gob sees
+// a byte. The largest program in examples/, 25 KB of source, compiles to a
+// 50 KB artifact.
+//
+//mutant:limit bytes
+const maxBytecode = 256 << 20
 
 // Options carries the per-run switches resolved from the command line. Mutant
 // takes no configuration from environment variables, so everything that shapes
@@ -79,7 +106,7 @@ func Run(srcpath string, opts Options) (error, errrs.ErrorType) {
 	password, secureMode, enforceSignerAuth := opts.Password, opts.SecureMode, opts.EnforceSignerAuth
 
 	sw := newStopwatch(opts.Timing)
-	signedCode, err := os.ReadFile(srcpath)
+	signedCode, err := readArtifact(srcpath, maxArtifactFile)
 	if err != nil {
 		return err, errrs.ERROR
 	}
@@ -224,6 +251,16 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 	if !enabled {
 		return nil
 	}
+	if !anyMeasured(signals) {
+		// Off Windows every one of these probes reads structures the host
+		// does not have. The stage passes, as it must, but a run that shows
+		// no warning is otherwise indistinguishable from one that looked.
+		processProtectionNote.Do(func() {
+			fmt.Fprintf(os.Stderr, "[security] process protection measured nothing on %s: none of its probes "+
+				"(%s) can run here\n", runtime.GOOS, strings.Join(probes, ", "))
+		})
+		return nil
+	}
 
 	for _, signal := range signals {
 		if !signal.Detected || signal.Confidence < processProtectionTerminateConfidence {
@@ -245,6 +282,16 @@ func enforceProcessProtection(secureMode bool, stage string) error {
 
 func isProcessProtectionEnabled() bool {
 	return true
+}
+
+// anyMeasured reports whether at least one probe looked.
+func anyMeasured(signals []security.AntiTamperSignal) bool {
+	for _, signal := range signals {
+		if signal.Measured {
+			return true
+		}
+	}
+	return false
 }
 
 // processProtectionDetail names the probe that fired and what it saw, so a
@@ -319,7 +366,7 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	}
 	defer security.SecureZero(decodedData)
 
-	inflatedData, err := maybeDecompressEncodedByteCode(decodedData)
+	inflatedData, err := maybeDecompressEncodedByteCode(decodedData, maxBytecode)
 	if err != nil {
 		return nil, err
 	}
@@ -337,20 +384,52 @@ func decode(data []byte, password string) (*compiler.ByteCode, error) {
 	return bytecode, nil
 }
 
-func maybeDecompressEncodedByteCode(data []byte) ([]byte, error) {
+// readArtifact reads the file a program is run from, refusing one larger than
+// limit before any of it is read.
+func readArtifact(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("%s is %d bytes, and a program or a standalone executable is at most %d; "+
+			"it is not a Mutant artifact", path, info.Size(), limit)
+	}
+	// Bounded again while reading, for a file that grows after the Stat.
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s grew past %d bytes while it was being read", path, limit)
+	}
+	return data, nil
+}
+
+func maybeDecompressEncodedByteCode(data []byte, limit int64) ([]byte, error) {
 	if len(data) < 4 || data[0] != 0x28 || data[1] != 0xb5 || data[2] != 0x2f || data[3] != 0xfd {
 		return data, nil
 	}
 
-	decoder, err := zstd.NewReader(bytes.NewReader(data))
+	decoder, err := zstd.NewReader(bytes.NewReader(data), zstd.WithDecoderMaxMemory(uint64(limit)))
 	if err != nil {
 		return nil, err
 	}
 	defer decoder.Close()
 
-	inflated, err := io.ReadAll(decoder)
+	inflated, err := io.ReadAll(io.LimitReader(decoder, limit+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(inflated)) > limit {
+		security.SecureZero(inflated)
+		return nil, fmt.Errorf("the program's bytecode inflates past %d bytes, more than any program the "+
+			"compiler writes; the artifact is damaged or was not written by mutant gen", limit)
 	}
 
 	return inflated, nil
@@ -391,7 +470,7 @@ func extractStandaloneSignedCode(binaryData []byte) ([]byte, error) {
 }
 
 func HasStandalonePayload(srcpath string) (bool, error) {
-	binaryData, err := os.ReadFile(srcpath)
+	binaryData, err := readArtifact(srcpath, maxArtifactFile)
 	if err != nil {
 		return false, err
 	}
@@ -503,7 +582,11 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	globals := make([]object.Object, global.GlobalSize)
 	machine := vm.NewWithPasswordAndGlobalStoreMode(bytecode, password, globals, secureMode)
 	defer machine.CleanupSensitiveData(true)
-	// Registered second so it runs FIRST (defers unwind last-registered-first).
+	// After the tasks, which may still be writing to a store, and before the
+	// cleanup: a ledger or graph store the program never closed is closed
+	// here and named on stderr.
+	defer builtin.ReportForgottenHandles(os.Stderr)
+	// Registered last so it runs FIRST (defers unwind last-registered-first).
 	// A spawned task outlives the main program by design, and it is still
 	// decrypting the very constants CleanupSensitiveData zeroes -- the trap
 	// serve.go documents. Waiting here means a program that starts work and

@@ -78,7 +78,7 @@ var LimitBudget = map[string]int{
 	"runtime/lua/vm.go":                             2,
 	"security/antidebug_linux.go":                   1,
 	"security/antidebug_windows.go":                 2,
-	"security/antitamper_constants.go":              4,
+	"security/antitamper_constants.go":              2,
 	"security/command_exec.go":                      2,
 	"security/kdf.go":                               10,
 	"security/processscan_config.go":                4,

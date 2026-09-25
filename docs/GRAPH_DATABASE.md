@@ -48,7 +48,15 @@ is closed or the process exits, good for one-off analysis and tests.
 `db_open_disk(path)` opens or creates a graph rooted at `path`, backed by a
 write-ahead log and a delta layer that periodically merges into an on-disk
 CSR store; every other `db_*` builtin works identically against either
-backend. Always release a handle with `db_close` when done with it.
+backend. Always release a handle with `db_close` when done with it; a disk
+store the program forgets is closed at its end and named on stderr.
+
+`db_open_disk` reads the directory's `graphene.labels` before opening it,
+because graphene registers a store's label names for the whole process. It
+refuses a table that names any of the custom labels 0-127 that `db_*` writes
+without names -- a symbol graph from `mutant graph export` is one, and is read
+with `mutant graph query` -- or that gives a label of the disclosure ledger's
+schema another name, or that is torn. A forensic ledger is refused as well.
 
 ```
 let db, err = db_open();

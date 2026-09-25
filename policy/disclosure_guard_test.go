@@ -1,9 +1,11 @@
 package policy
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -185,6 +187,97 @@ func TestDisclosureCodeNeverRendersPlaintext(t *testing.T) {
 			f, disclosurePolicyDoc)
 	}
 	t.Logf("scanned %d files that handle classified plaintext; %d findings", scanned, len(findings))
+}
+
+// keyMaterialNames mark a file as one that holds the key material that opens a
+// classified record, derives it, asks for a passphrase that protects it, or
+// puts the Classified mark on plaintext: the case session's case key and
+// class-tag key, the grant and record-key operations, the passphrase request
+// and the hook that answers it, and the one function that marks a read.
+//
+// Carrying the mark is not among them. The evaluator, the VM and the storage
+// layer copy Classified from one buffer to the next; that is the runtime half
+// of the enforcement doing its job, and those files render values by design.
+var keyMaterialNames = map[string]bool{
+	"caseKey":              true,
+	"classTagKey":          true,
+	"IssueGrant":           true,
+	"SealGrant":            true,
+	"UnwrapRecordKey":      true,
+	"openSegment":          true,
+	"RequestPassphrase":    true,
+	"SetPassphraseSource":  true,
+	"recordClassification": true,
+}
+
+// M26-SEC-001. DisclosureFiles is a declaration, and a file left off it was
+// never scanned: the case session that holds the case key and the class-tag
+// key, and the file that caches case-key passphrases, were both missing, and
+// nothing said so. Every file that names key material is now held to the list.
+func TestEveryFileHoldingKeyMaterialIsGuarded(t *testing.T) {
+	listed := map[string]bool{}
+	for _, rel := range DisclosureFiles {
+		listed[rel] = true
+	}
+	root, err := filepath.Abs(repositoryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	holders := map[string][]string{}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skippedDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if ident, ok := n.(*ast.Ident); ok && keyMaterialNames[ident.Name] && !seen[ident.Name] {
+				seen[ident.Name] = true
+				holders[rel] = append(holders[rel], ident.Name)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk repository: %v", err)
+	}
+	// A walk that found nothing would pass by finding nothing to require.
+	for _, known := range []string{"builtin/disclose.go", "security/record_grant.go", "builtin/record_read.go"} {
+		if holders[known] == nil {
+			t.Fatalf("%s names none of the key-material identifiers -- the walk or the names are wrong", known)
+		}
+	}
+	var missing []string
+	for rel, names := range holders {
+		if !listed[rel] {
+			sort.Strings(names)
+			missing = append(missing, fmt.Sprintf("%s (%s)", rel, strings.Join(names, ", ")))
+		}
+	}
+	sort.Strings(missing)
+	for _, m := range missing {
+		t.Errorf("%s handles key material and is not in policy.DisclosureFiles, so the plaintext guard never "+
+			"reads it. Add it. See %s, section 10", m, disclosurePolicyDoc)
+	}
 }
 
 // The scanner catches what it says it catches. A guard that passes because its

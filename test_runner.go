@@ -304,6 +304,7 @@ func runTestFileAt(path string, modulePaths []string, options vm.TestRunOptions)
 	// asserts on its effect sees a finished program rather than a racing one --
 	// the same guarantee runner.runvm gives a real run.
 	builtin.WaitForTasks()
+	builtin.ReportForgottenHandles(os.Stderr)
 	report.elapsed = time.Since(started)
 	report.results = machine.TestResults()
 

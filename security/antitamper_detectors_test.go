@@ -1,6 +1,9 @@
 package security
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMakeSignalFields(t *testing.T) {
 	signal := makeSignal(ProbeTiming, true, ConfidenceTimingSuspicious, "detail")
@@ -50,22 +53,38 @@ func TestProbeOneUnknownAndEmpty(t *testing.T) {
 	}
 }
 
-func TestProbeOneNotImplementedSignals(t *testing.T) {
-	tests := []string{ProbeACPIPCI, ProbeGPUFeature}
-
-	for _, probe := range tests {
-		signal := probeOne(probe)
-		if signal.Name != probe {
-			t.Fatalf("expected probe name %q, got %q", probe, signal.Name)
+// M26-TMP-001 and M26-TMP-018. Three supported probes measured nothing:
+// acpi_pci and gpu_feature were routed to "not implemented yet", and ld_preload
+// was hard-wired to "env-based preload checks disabled". And six probes that
+// read Windows process structures answer "not supported on this platform"
+// everywhere else -- including all five the runner's process protection runs
+// -- in the same shape as a clean result, detected false, so off Windows that
+// protection passed without looking. A probe now either measured, or says in
+// Measured, and in its detail, that it did not; the three names are not probes.
+func TestEverySupportedProbeMeasuresOrSaysItDidNot(t *testing.T) {
+	for _, name := range AntiTamperSupportedProbes {
+		signal := probeOne(name)
+		if !signal.Measured {
+			if signal.Detected || signal.Confidence != ConfidenceNone || signal.Detail == "" {
+				t.Errorf("%s did not measure, and answers %+v", name, signal)
+			}
+			continue
 		}
-		if signal.Detected {
-			t.Fatalf("expected probe %q to be not detected", probe)
+		detail := strings.ToLower(signal.Detail)
+		for _, absent := range []string{"not implemented", "disabled", "placeholder", "not supported", "not measured", AntiTamperDetailUnknownProbe} {
+			if strings.Contains(detail, absent) {
+				t.Errorf("%s says it measured, and reports %q", name, signal.Detail)
+			}
 		}
-		if signal.Confidence != ConfidenceNone {
-			t.Fatalf("expected probe %q confidence=%d, got %d", probe, ConfidenceNone, signal.Confidence)
+	}
+	for _, retired := range []string{"acpi_pci", "gpu_feature", "ld_preload"} {
+		for _, name := range AntiTamperSupportedProbes {
+			if name == retired {
+				t.Errorf("%s is still listed as a supported probe", retired)
+			}
 		}
-		if signal.Detail != AntiTamperDetailNotImplemented {
-			t.Fatalf("expected probe %q detail=%q, got %q", probe, AntiTamperDetailNotImplemented, signal.Detail)
+		if signal := probeOne(retired); signal.Detail != AntiTamperDetailUnknownProbe || signal.Measured || signal.Detected {
+			t.Errorf("%s is still routed, or claims a measurement: %+v", retired, signal)
 		}
 	}
 }

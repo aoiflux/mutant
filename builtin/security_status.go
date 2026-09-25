@@ -87,7 +87,7 @@ func SandboxStatus(args ...object.Object) object.Object {
 	}
 
 	probeSignals, probeEnabled, probeErr := security.RunAntiTamperProbe(
-		[]string{"cpuid_hypervisor", "rdtsc_drift", "acpi_pci", "gpu_feature", "ld_preload", "syscall_table", "module_integrity", "memory_page_anomaly"},
+		[]string{"cpuid_hypervisor", "rdtsc_drift", "syscall_table", "module_integrity", "memory_page_anomaly"},
 		"builtin:sandbox_status",
 	)
 	result["probe_enabled"] = boolObj(probeEnabled)
@@ -194,7 +194,11 @@ func antiTamperSignalArrayObj(signals []security.AntiTamperSignal) *object.Array
 	elements := make([]object.Object, len(signals))
 	for i, signal := range signals {
 		elements[i] = makeHashObject(map[string]object.Object{
-			"name":       stringObj(signal.Name),
+			"name": stringObj(signal.Name),
+			// measured false means the probe did not look -- it cannot run on
+			// this host, or its own check failed -- and detected false beside
+			// it is then not a finding. detail says which.
+			"measured":   boolObj(signal.Measured),
 			"detected":   boolObj(signal.Detected),
 			"confidence": intObj(int64(signal.Confidence)),
 			"detail":     stringObj(signal.Detail),

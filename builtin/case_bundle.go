@@ -59,7 +59,7 @@ func CaseReport(args ...object.Object) object.Object {
 	if len(args) > 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
-	opts, errObj := formatOptionsArg(BuiltinNameCaseReport, args, 1, caseReportOptions...)
+	opts, errObj := secretOptionsArg(BuiltinNameCaseReport, args, 1, caseReportOptions...)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -83,16 +83,16 @@ func CaseBundle(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
+	opts, errObj := secretOptionsArg(BuiltinNameCaseBundle, args, 2, caseBundleOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	dir, errObj := requireStringArg(BuiltinNameCaseBundle, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	if strings.TrimSpace(dir) == "" {
 		return resultAndError(nil, newError("case_bundle: the directory must not be empty"))
-	}
-	opts, errObj := formatOptionsArg(BuiltinNameCaseBundle, args, 2, caseBundleOptions...)
-	if errObj != nil {
-		return resultAndError(nil, errObj)
 	}
 	sign, errObj := opts.boolean("sign", true)
 	if errObj != nil {

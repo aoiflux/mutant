@@ -170,10 +170,18 @@ func custodySeal(manifest map[string]any, sign bool) error {
 	return nil
 }
 
+// caseWriteOptions are the options case_write takes; {"signed": false} is
+// refused, not read as a request to sign.
+var caseWriteOptions = []string{"sign"}
+
 // CaseWrite writes the manifest to disk as a signed JSON document.
 func CaseWrite(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
+	}
+	opts, errObj := secretOptionsArg(BuiltinNameCaseWrite, args, 2, caseWriteOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	pathObj, ok := args[0].(*object.String)
@@ -184,9 +192,9 @@ func CaseWrite(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("case_write: the path must not be empty"))
 	}
 
-	sign := true
-	if len(args) == 2 {
-		sign = optBool(args[1], "sign", true)
+	sign, errObj := opts.boolean("sign", true)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	custodyStore.RLock()

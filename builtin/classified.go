@@ -8,7 +8,9 @@ package builtin
 // entire hex. So the buffer carries a mark -- object.Bytes.Classified -- and the
 // builtins that send a value out of the process refuse one that carries it:
 // putln and putf, fs_write and fs_append, http_post and http_request,
-// report_write and report_render, case_note, cache_put, and ledger_add_node,
+// report_write and report_render, report_table and report_list (which render a
+// cell as it is added, so the check has to happen there), case_note,
+// cache_put, and ledger_add_node,
 // ledger_add_edge and db_add_artifact (graphene must never hold evidence
 // plaintext: its property blobs sit in the write-ahead log, and a ledger is
 // written to be handed over).
@@ -168,6 +170,7 @@ func ClassifiedSinks() []string {
 		BuiltinNameFsWrite, BuiltinNameFsAppend,
 		BuiltinNameHttpPost, BuiltinNameHttpRequest,
 		BuiltinNameReportWrite, BuiltinNameReportRender,
+		BuiltinNameReportTable, BuiltinNameReportList,
 		BuiltinNameCaseNote, BuiltinNameCachePut,
 		BuiltinNameLedgerAddNode, BuiltinNameLedgerAddEdge,
 		BuiltinNameDbAddArtifact,

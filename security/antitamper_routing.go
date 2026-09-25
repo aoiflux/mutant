@@ -10,16 +10,10 @@ func probeOne(name string) AntiTamperSignal {
 		return detectSyscall()
 	case ProbeFridaPtrace:
 		return detectFridaPtrace()
-	case ProbeLDPreload:
-		return detectLDPreload()
 	case ProbeCPUIDHypervisor:
 		return detectCPUIDHypervisor()
 	case ProbeRDTSCDrift:
 		return detectRDTSCDrift()
-	case ProbeACPIPCI:
-		return makeSignal(name, false, ConfidenceNone, AntiTamperDetailNotImplemented)
-	case ProbeGPUFeature:
-		return makeSignal(name, false, ConfidenceNone, AntiTamperDetailNotImplemented)
 	case ProbeIATGOT:
 		return detectIATGOT()
 	case ProbeSyscallTable:
@@ -33,8 +27,8 @@ func probeOne(name string) AntiTamperSignal {
 	case ProbeMemoryPageAnomaly:
 		return detectMemoryPageAnomaly()
 	case "":
-		return makeSignal("", false, ConfidenceNone, AntiTamperDetailUnknownProbe)
+		return unmeasuredSignal("", AntiTamperDetailUnknownProbe)
 	default:
-		return makeSignal(name, false, ConfidenceNone, AntiTamperDetailUnknownProbe)
+		return unmeasuredSignal(name, AntiTamperDetailUnknownProbe)
 	}
 }

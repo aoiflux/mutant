@@ -305,9 +305,21 @@ var custodyActive atomic.Bool
 // immune to a wall clock that jumps mid-investigation.
 var custodyNow = time.Now
 
+// The options case_open and case_evidence take. An unknown key is refused
+// rather than ignored: a case opened with {"hash_policy": "sha256"} would
+// otherwise digest nothing and say so only after the evidence was opened.
+var (
+	caseOpenOptions     = []string{"hash"}
+	caseEvidenceOptions = []string{"hash"}
+)
+
 func CaseOpen(args ...object.Object) object.Object {
 	if len(args) < 2 || len(args) > 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
+	}
+	opts, errObj := secretOptionsArg(BuiltinNameCaseOpen, args, 3, caseOpenOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	idObj, ok := args[0].(*object.String)
@@ -334,13 +346,14 @@ func CaseOpen(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	policy := "none"
-	if len(args) == 3 {
-		policy = strings.ToLower(strings.TrimSpace(optString(args[2], "hash", "none")))
-		if !custodyHashPolicies[policy] {
-			return resultAndError(nil, newError(
-				"case_open: unknown hash policy %q; want \"none\", \"md5\", \"sha1\" or \"sha256\"", policy))
-		}
+	requested, errObj := opts.str("hash", "none")
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	policy := strings.ToLower(strings.TrimSpace(requested))
+	if !custodyHashPolicies[policy] {
+		return resultAndError(nil, newError(
+			"case_open: unknown hash policy %q; want \"none\", \"md5\", \"sha1\" or \"sha256\"", policy))
 	}
 
 	custodyStore.Lock()
@@ -470,6 +483,10 @@ func CaseEvidence(args ...object.Object) object.Object {
 	if len(args) < 1 || len(args) > 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
+	opts, errObj := secretOptionsArg(BuiltinNameCaseEvidence, args, 2, caseEvidenceOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	pathObj, ok := args[0].(*object.String)
 	if !ok {
@@ -495,14 +512,16 @@ func CaseEvidence(args ...object.Object) object.Object {
 
 	// An explicit registration may ask for a digest the case as a whole did not,
 	// because an examiner who names one file is willing to wait for it.
-	if len(args) == 2 {
-		requested := strings.ToLower(strings.TrimSpace(optString(args[1], "hash", policy)))
-		if !custodyHashPolicies[requested] {
-			return resultAndError(nil, newError(
-				"case_evidence: unknown hash policy %q; want \"none\", \"md5\", \"sha1\" or \"sha256\"", requested))
-		}
-		policy = requested
+	requested, errObj := opts.str("hash", policy)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if !custodyHashPolicies[requested] {
+		return resultAndError(nil, newError(
+			"case_evidence: unknown hash policy %q; want \"none\", \"md5\", \"sha1\" or \"sha256\"", requested))
+	}
+	policy = requested
 
 	source := custodyStatSource(pathObj.Value)
 	if !source.onDisk {

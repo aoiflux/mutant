@@ -189,7 +189,7 @@ So a reader does not go looking for a switch that is not there:
 | Protection profile | fixed at `standard`; `minimal`/`paranoid` remain only so V3 release trailers can be read back | `security/profile.go` — `ResolveProtectionProfile` |
 | Tamper response | derived from mode: `terminate` in secure mode, `warn` in `--compat`/`--dev` | `security/response_policy.go` — `ResolveTamperResponse` |
 | Tamper delay | `250` ms constant | `security/response_policy.go` — `DefaultTamperDelayMs` |
-| Process protection | always on | `runner/runner.go` — `isProcessProtectionEnabled` |
+| Process protection | always on; its five probes run on Windows only, so on Linux and macOS it measures nothing and the run says so on stderr | `runner/runner.go` — `isProcessProtectionEnabled` |
 | Process-protection terminate threshold | confidence `80` | `runner/runner.go` — `processProtectionTerminateConfidence` |
 | Anti-tamper probe | on by default; the setter exists for tests | `security/antitamper_probe.go` — `antiTamperProbeEnabled` |
 | Remote process scan | off; reachable only from tests | `security/processscan_config.go` |

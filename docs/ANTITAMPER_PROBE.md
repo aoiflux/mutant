@@ -51,15 +51,21 @@ Behavior:
 Each probe returns one `AntiTamperSignal` with:
 
 1. `name`
-2. `detected`
-3. `confidence`
-4. `detail`
+2. `measured`
+3. `detected`
+4. `confidence`
+5. `detail`
 
 Interpretation:
 
-1. `detected` is evidence for that probe only.
-2. `confidence` is a per-probe confidence score, not a global verdict.
-3. policy action is decided by caller logic (runner or builtin consumer).
+1. `measured` says whether the probe looked. A probe that cannot run on the
+   host, or whose own check failed, answers `measured=false`, `detected=false`,
+   confidence `0`, and a `detail` saying why. Its `detected=false` is then not
+   a finding: "not detected" and "not looked for" are different answers, and
+   before 2.6.0 they looked the same.
+2. `detected` is evidence for that probe only.
+3. `confidence` is a per-probe confidence score, not a global verdict.
+4. policy action is decided by caller logic (runner or builtin consumer).
 
 ## 4. Implemented Probes (Current)
 
@@ -67,17 +73,24 @@ Interpretation:
 2. `timing`
 3. `syscall`
 4. `frida_ptrace`
-5. `ld_preload`
-6. `cpuid_hypervisor`
-7. `rdtsc_drift`
-8. `acpi_pci`
-9. `gpu_feature` (placeholder)
-10. `iat_got`
-11. `syscall_table`
-12. `trampoline`
-13. `process_injection`
-14. `module_integrity`
-15. `memory_page_anomaly`
+5. `cpuid_hypervisor`
+6. `rdtsc_drift`
+7. `iat_got`
+8. `syscall_table`
+9. `trampoline`
+10. `process_injection`
+11. `module_integrity`
+12. `memory_page_anomaly`
+
+Three names were listed here until 2.6.0 and measured nothing, so they are no
+longer probes; asking for one returns the `unknown probe` signal.
+
+- `acpi_pci` re-reported the sandbox detector's verdict, which
+  `cpuid_hypervisor` already reports, and read no ACPI table or PCI device.
+- `gpu_feature` was a placeholder that answered "not implemented yet".
+- `ld_preload` answered "env-based preload checks disabled". It could not have
+  seen anything: a release is built with `CGO_ENABLED=0` and statically linked,
+  so the dynamic loader that `LD_PRELOAD` works through never runs.
 
 ## 5. Runner Enforcement vs Builtin Diagnostics
 
@@ -93,6 +106,11 @@ Runner threshold:
 
 1. any signal with `detected=true` and `confidence >= 80` triggers
    `process_protection_detected` policy flow.
+
+All five read Windows process structures, so they run on Windows only. On Linux
+and macOS every one answers `measured=false`: process protection looks at
+nothing there, the stage passes, and the run says so once on stderr --
+`[security] process protection measured nothing on linux: ...`.
 
 Builtin diagnostics (`builtin/security_status.go`) use broader probe sets for
 visibility and troubleshooting. This is expected and independent of runner
@@ -111,11 +129,12 @@ Windows:
 Linux:
 
 1. `frida_ptrace` checks FRIDA env markers and `/proc/self/status` tracer PID.
-2. `ld_preload` reports active `LD_PRELOAD` markers.
 
-macOS/unsupported paths:
+Linux, macOS and anything else:
 
-1. unsupported probes return neutral signals with explanatory detail.
+1. `iat_got`, `syscall_table`, `trampoline`, `process_injection`,
+   `module_integrity` and `memory_page_anomaly` answer `measured=false`, with
+   `not measured on <os>: this probe reads Windows process structures`.
 
 ## 7. Student Notes
 

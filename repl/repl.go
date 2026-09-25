@@ -1140,6 +1140,7 @@ func randomWelcomeMessage() string {
 }
 
 func gracefulExit() {
+	builtin.ReportForgottenHandles(os.Stderr)
 	fmt.Printf("\n\n")
 	fmt.Println(colorize(exitMessages[replRNG.Intn(len(exitMessages))], activeReplTheme.Exit))
 	fmt.Printf("\n\n")

@@ -424,6 +424,34 @@ exhaustive lists.
   whether or not its namespace is read. `mutant lint` builds the same workspace
   the editor holds rather than reading one file at a time.
 
+- **`case_open`, `case_evidence` and `case_write` refuse an option they do
+  not take.** They used to read their one option (`hash`, or `sign`) and
+  ignore everything else, so `case_open(id, examiner, {"hash_policy":
+  "sha256"})` opened a case that digested nothing, and `{"signed": false}`
+  signed. An unknown key, an options argument that is not a hash, and a value
+  of the wrong type are now errors. Every `case_*`, `class_*`, `record_*` and
+  `view_*` builtin with an options hash also refuses a key named `passphrase`,
+  `password`, `secret` or `key` by name, before it looks at any other argument,
+  as DISCLOSURE_POLICY section 8 says; only `case_key_*` did before.
+
+- **`sandbox_status` reports only probes that measure something.** Three of its
+  probe signals measured nothing: `acpi_pci` and `gpu_feature` answered "not
+  implemented yet", and `ld_preload` answered "env-based preload checks
+  disabled". They are no longer probes. `acpi_pci` re-reported what
+  `cpuid_hypervisor` already reports, and `ld_preload` could never see anything
+  in a statically linked build, which never runs the dynamic loader
+  `LD_PRELOAD` works through.
+
+- **A probe that did not look says so, and so does process protection.** The
+  six probes that read Windows process structures answered "not supported on
+  this platform" elsewhere with `detected: false`, the same shape as a clean
+  result. All five probes of the runner's process protection are among them, so
+  on Linux and macOS that stage looked at nothing and passed without a word.
+  Every probe signal in `sandbox_status` and `debug_status` now carries
+  `measured`, which is false for a probe that could not run or whose check
+  failed, and a run whose process protection measured nothing says so once on
+  stderr. Process protection runs on Windows only, and the docs now say so.
+
 ### Fixed
 
 - **`fat_deleted` reported a live file's content as an orphan's, and
@@ -504,6 +532,52 @@ exhaustive lists.
   `fs_hash` error**, naming a builtin the script never called. The error names
   the builtin that was.
 
+- **Running a program bounds what it reads.** The runner read the program's
+  file whole whatever its size, and inflated its bytecode to whatever size the
+  zstd frame declared, so a disk image named by mistake was read into memory
+  and a payload of a few hundred bytes could ask for gigabytes. A file over
+  1 GiB is now refused before it is read, and bytecode that inflates past
+  256 MiB is refused while inflating. Both limits are in
+  `docs/LIMITS_REFERENCE.md`.
+
+- **A killed `record_seal` no longer leaves part of a record under the
+  record's name.** The record was written in place and removed only when the
+  seal saw an error, so a process killed mid-seal left a file with a valid
+  header and some of the segments, where a complete record was expected. The
+  record is now written beside its name and renamed into place once complete;
+  a seal that is killed leaves an empty file, which `record_open` refuses as an
+  interrupted seal, and a `.mutant-record-*` file of partial ciphertext.
+
+- **Two ledger reads said less than they knew.** `ledger_query_nodes` on a key
+  the ledger's index never held returned an empty answer indistinguishable from
+  "no such record" -- a misspelt key, or any of the `disclose_*` family's own
+  properties, which that family keeps unindexed. The result now carries
+  `unindexed_keys` and `index_keys_known`. `ledger_path` walks edges in either
+  direction and did not say when a hop ran against its edge; it now returns
+  `reversed_hops` and `directed`.
+
+- **`mutant graph export` reports a store it could not close.** The export
+  discarded the store's close error, so an export whose store was never marked
+  cleanly shut down still reported success. The close error is now the
+  export's error.
+
+- **A ledger or disk graph store the program forgot to close is closed at its
+  end.** A store still open when the process exited was recorded by its next
+  open as a restart after an unclean shutdown -- in a custody ledger, a
+  permanent audit entry for a crash that did not happen. Running a `.mu`,
+  `mutant test`, the debugger and the REPL now close every `ledger_open` and
+  `db_open_disk` store the program left open, and name each on stderr.
+
+- **`db_open_disk` reads a store's label table before opening it.** graphene
+  registers a store's label names for the whole process, and `db_open_disk`
+  opened any directory. Opening an exported symbol graph let `db_add_node`
+  write nodes under the label the graph names `Module`, which `mutant graph
+  query` then could not decode; opening a store that named a disclosure-ledger
+  label differently made every later disclosure, withdrawal and
+  reclassification in the run fail. A table that names the custom labels 0-127
+  `db_*` writes, renames a disclosure label, or is torn is now refused before
+  anything is opened.
+
 ### Security
 
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**
@@ -567,6 +641,30 @@ exhaustive lists.
   checks to verify. The result also gives `manifest_public_key` and
   `record_public_key`, because a signature means something only once its key is
   compared with one the recipient already trusts.
+
+- **A refused disclosure was refused too late.** `disclose_to_passphrase`
+  derived the grant's key material and asked the examiner to choose and
+  confirm its passphrase before checking whether the recipient's earlier
+  disclosure of the record had been withdrawn, or whether the record had been
+  reclassified. The refusal still came and nothing was issued, but
+  DISCLOSURE_POLICY promises the withdrawal is checked before any new key is
+  issued. Both refusals now come first, and are asked again inside the ledger
+  write for a withdrawal recorded in between.
+
+- **Two different strings could be one hash key.** A string or buffer used as
+  a hash key was identified by its 64-bit FNV digest alone, and lookups never
+  compared the key itself, so two values with one digest -- a pair takes under
+  a minute to find -- were one entry in both engines: a count lost one of them,
+  and a lookup of either returned the other's value. Hash keys chosen from
+  evidence, such as file or account names, could be merged that way on purpose.
+  A string key is now the whole string, and a buffer key its SHA-256.
+
+- **A classified buffer put in a report table was written out whole.**
+  `report_table` and `report_list` render each cell to text as it is added --
+  a buffer as its hex -- so by the time the report reached `report_render` or
+  `report_write`, both of which refuse classified plaintext, there was no
+  marked buffer left for them to find. Both builders now refuse one where it
+  goes in, and the editor warns at the call.
 
 ## [2.5.0] — 2026-09-17
 
