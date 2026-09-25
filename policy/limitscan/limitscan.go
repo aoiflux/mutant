@@ -124,7 +124,7 @@ var (
 	retryName = regexp.MustCompile(`(?i)^(attempt|attempts|retry|retries|try|tries|round|rounds)$`)
 
 	// limitWords are the words that make a name a limit wherever they sit in
-	// it: sqliteMaxRows, ledgerWalkMaxTime and maxServeHandlers all qualify.
+	// it: sqliteMaxRows, WalkMaxTime and maxServeHandlers all qualify.
 	limitWords = map[string]bool{
 		"max": true, "min": true, "maximum": true, "minimum": true,
 		"limit": true, "limits": true, "budget": true, "cap": true, "capacity": true,

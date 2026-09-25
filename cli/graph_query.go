@@ -38,43 +38,15 @@ package cli
 //
 // # Reading a store without changing what it says
 //
-// graphene.Open takes an exclusive lock, stamps the calling process's pid into
-// graphene.lock on open and again on close, and -- the part that decides this
-// -- CREATES a store for any path that does not hold one. A query built on it
-// would answer "0 modules, 0 declarations" for a mistyped --store while writing
-// two files into whatever directory was actually named.
-//
-// So the store is identified before it is opened, by its own label table, and
-// opened read-only afterwards. OpenReadOnly refuses a missing path and a path
-// that is not a directory, admits other readers, and writes nothing into any
-// file that carries what the store says.
-//
-// It does not leave the directory untouched, and saying that it did would be
-// the kind of claim this tool exists not to make. OpenReadOnly takes its shared
-// lock through graphene.lock and opens that file O_CREATE, so reading a store
-// that has no lock file creates a zero-byte one and moves the directory's
-// mtime. That is not an exotic shape: graphene's Store.Backup excludes
-// graphene.lock by design, so every store recovered through its own supported
-// restore path arrives without one and would be modified by its first query.
-//
-// Hence three ways in, chosen by what is on disk before anything is opened.
-//
-//   - graphene.lock is present and writable. OpenReadOnly. A writer holding the
-//     store is refused here rather than read around.
-//
-//   - graphene.lock is absent. No lock can be held through a file that does not
-//     exist, so the store is opened live, which creates nothing, and the answer
-//     says the read was lock-free and why.
-//
-//   - graphene.lock is present and cannot be opened for writing, because the
-//     media or the directory is read-only. OpenReadOnly cannot take its shared
-//     lock. The store is opened live and the answer says so -- but only after
-//     the lock's own owner record has been read, because a permission error is
-//     also what a live writer on read-only media looks like, and that is the
-//     one case where a lock-free read would be reading a store mid-change.
+// graphene.Open CREATES a store for any path that does not hold one, so a query
+// built on it would answer "0 modules, 0 declarations" for a mistyped --store
+// while writing two files into whatever directory was actually named. The store
+// is therefore identified before it is opened, by its own label table, and then
+// opened by graphstore.OpenForReading, which never creates a store, never takes
+// a writer's lock, and says when it had to read without any lock at all. Its
+// header has the three ways in and why each is sound.
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,7 +60,6 @@ import (
 	"mutant/sema"
 
 	"github.com/aoiflux/graphene"
-	"github.com/aoiflux/graphene/disk"
 	"github.com/aoiflux/graphene/store"
 )
 
@@ -220,9 +191,9 @@ func QueryGraph(opts QueryOptions) (QueryAnswer, error) {
 				"both versions agree on", extras))
 	}
 
-	g, lockFree, err := openForReading(opts.Store)
+	g, lockFree, err := graphstore.OpenForReading(opts.Store)
 	if err != nil {
-		return answer, err
+		return answer, fmt.Errorf("graph query: %w", err)
 	}
 	defer func() { _ = g.Close() }()
 	if lockFree != "" {
@@ -353,100 +324,6 @@ func sortedLabels[T ~uint16](table map[T]string) []uint16 {
 	return out
 }
 
-// openForReading opens the store without changing what it says, and reports
-// why, when it could not take a lock. See the file header.
-//
-// The empty string means the ordinary locked read. Anything else is the reason
-// the read was lock-free, and it is carried to the answer verbatim rather than
-// reduced to a boolean, because the two reasons are not equally comfortable and
-// a reader is entitled to know which one they got.
-func openForReading(dir string) (*graphene.Graph, string, error) {
-	// A store with no lock file cannot be held by anybody, and OpenReadOnly
-	// would create one. Open live: it takes no lock and creates nothing.
-	if _, err := os.Stat(filepath.Join(dir, "graphene.lock")); errors.Is(err, fs.ErrNotExist) {
-		live, liveErr := graphene.OpenLive(dir)
-		if liveErr != nil {
-			return nil, "", fmt.Errorf("graph query: %w", liveErr)
-		}
-		return live, "this store has no graphene.lock, so it was read without taking one rather " +
-			"than have one created for it. graphene's own Backup excludes that file, so a store " +
-			"restored from a backup looks exactly like this -- but so does a store somebody " +
-			"deleted it from, and the two are not distinguishable from here", nil
-	}
-
-	g, err := graphene.OpenReadOnly(dir)
-	if err == nil {
-		return g, "", nil
-	}
-	// A writer holding the store is the one case where reading without a lock
-	// would be reading a store mid-change. Refuse rather than fall back.
-	if errors.Is(err, disk.ErrStoreLocked) {
-		return nil, "", fmt.Errorf("graph query: %w", err)
-	}
-	// Everything else is a candidate for the lock-free read, but only two
-	// things make it sound: the failure has to be about permission, and the
-	// lock's owner record has to say nobody is holding it. A live writer on
-	// read-only media fails with a permission error too, so the first test
-	// alone would read a store mid-change and call it write-protected.
-	if !errors.Is(err, fs.ErrPermission) {
-		return nil, "", fmt.Errorf("graph query: %w", err)
-	}
-	if owner, readable := readLockOwner(filepath.Join(dir, "graphene.lock")); readable &&
-		owner.present && !owner.clean && owner.pid != 0 {
-		return nil, "", fmt.Errorf("graph query: %s could not be locked for reading, and its "+
-			"graphene.lock records process %d as holding it without having closed it. Reading "+
-			"without a lock would read a store that is being written: %w", dir, owner.pid, err)
-	}
-	live, liveErr := graphene.OpenLive(dir)
-	if liveErr != nil {
-		// Both attempts failed, and it is the second that decided the outcome:
-		// the lock-free read is the one this tool exists to be able to do, so
-		// blaming the lock here would name as fatal the exact condition the
-		// fallback was written to survive.
-		return nil, "", fmt.Errorf("graph query: %s could not be read with a lock (%v) and could "+
-			"not be read without one either: %w", dir, err, liveErr)
-	}
-	return live, "the store is write-protected, so it was read without taking a lock. Its " +
-		"graphene.lock records no unclosed writer, so the reading is consistent -- but that is " +
-		"an inference from a record the last writer left, not a guarantee from the engine", nil
-}
-
-// lockOwner is what graphene's last exclusive holder recorded about itself.
-//
-// graphene writes a 32-byte record at offset 0 of graphene.lock -- magic
-// "GLK1", a version byte, the pid, and a clean flag Close sets before it
-// releases -- and keeps every reader of it unexported. Reading it here is the
-// same decision readLabelTable already makes for graphene.labels: the engine is
-// deciding what to do about the file, and this is deciding whether to believe a
-// directory at all, which has to happen before the engine is involved.
-//
-// It is deliberately read without a lock. The record sits outside the locked
-// byte range and is written in one 32-byte WriteAt, so a concurrent reader sees
-// the old record or the new one and never a mixture.
-type lockOwner struct {
-	present bool
-	pid     uint64
-	clean   bool
-}
-
-// readLockOwner returns the record and whether the file could be read at all.
-// An unreadable or foreign file yields a zero owner and false, which callers
-// must treat as "nothing is known" rather than as "nobody is holding it".
-func readLockOwner(path string) (lockOwner, bool) {
-	raw, err := os.ReadFile(path)
-	if err != nil || len(raw) < 32 {
-		return lockOwner{}, false
-	}
-	if string(raw[0:4]) != "GLK1" || raw[4] != 1 {
-		return lockOwner{}, false
-	}
-	return lockOwner{
-		present: true,
-		pid:     binary.LittleEndian.Uint64(raw[8:16]),
-		clean:   raw[16] == 1,
-	}, true
-}
-
 // requireWrittenIndex refuses a store this program cannot read the way it
 // expects to, rather than letting the difference show up as an empty answer.
 //
@@ -481,14 +358,6 @@ func requireWrittenIndex(g *graphene.Graph) error {
 			"than its program being empty")
 	}
 
-	keys, supported := g.NodePropKeys()
-	if !supported {
-		return nil
-	}
-	have := make(map[string]bool, len(keys))
-	for _, key := range keys {
-		have[key] = true
-	}
 	need := []string{"key", "name"}
 	declarations, err := g.QueryNodeIDs(store.NodeQuery{Types: []store.NodeType{nodeDeclaration}})
 	if err != nil {
@@ -497,14 +366,13 @@ func requireWrittenIndex(g *graphene.Graph) error {
 	if len(declarations) > 0 {
 		need = append(need, "id", "kind", "module")
 	}
-	for _, key := range need {
-		if !have[key] {
-			return fmt.Errorf("graph query: this store does not index %q, so a lookup by it would "+
-				"match nothing and report no error. It was written by a different version of "+
-				"`mutant graph export`", key)
-		}
+	missing, known := graphstore.UnindexedKeys(g, need)
+	if !known || len(missing) == 0 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("graph query: this store does not index %q, so a lookup by it would "+
+		"match nothing and report no error. It was written by a different version of "+
+		"`mutant graph export`", missing[0])
 }
 
 // --- the modules, which every other answer renders through ---

@@ -1,5 +1,8 @@
 // Package graphstore holds what more than one of Mutant's graph families needs
-// to know about a graphene store on disk, beginning with the label table.
+// to know about a graphene store: its label table, how to open it without
+// changing it, the budget a walk over it runs under, which hops of a path ran
+// backwards, and which keys its index never held -- so that two families asking
+// the same question of a store get the same answer.
 //
 // graphene keeps the names of a store's node and edge labels in a text file
 // beside the image, graphene.labels, and registers them process-wide when the

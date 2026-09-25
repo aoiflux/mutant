@@ -138,6 +138,54 @@ func BenchmarkDbBFS(b *testing.B) {
 	})
 }
 
+// BenchmarkDbBFSParallelEdges is the chain again with three edges on every
+// hop. A traversal that deduplicates by neighbour reports one of them, so this
+// is the shape on which reporting every edge costs something to measure.
+func BenchmarkDbBFSParallelEdges(b *testing.B) {
+	depth := intObj(12)
+	direction := stringObj("out")
+
+	eachBackend(b, func(b *testing.B, handle *object.Integer) {
+		b.StopTimer()
+		origin := benchNode(b, handle)
+		previous := origin
+		for i := 0; i < 1000; i++ {
+			next := benchNode(b, handle)
+			for parallel := 0; parallel < 3; parallel++ {
+				DbAddEdge(handle, previous, next)
+			}
+			previous = next
+		}
+		b.StartTimer()
+
+		for i := 0; i < b.N; i++ {
+			DbBFS(handle, origin, depth, direction)
+		}
+	})
+}
+
+// BenchmarkDbShortestPath finds the node twelve hops down the chain.
+func BenchmarkDbShortestPath(b *testing.B) {
+	eachBackend(b, func(b *testing.B, handle *object.Integer) {
+		b.StopTimer()
+		origin := benchNode(b, handle)
+		previous, target := origin, origin
+		for i := 0; i < 1000; i++ {
+			next := benchNode(b, handle)
+			DbAddEdge(handle, previous, next)
+			if i == 11 {
+				target = next
+			}
+			previous = next
+		}
+		b.StartTimer()
+
+		for i := 0; i < b.N; i++ {
+			DbShortestPath(handle, origin, target)
+		}
+	})
+}
+
 // BenchmarkDbCompact measures the call that gives the memory back. Each
 // iteration rebuilds the delta it then merges, because compacting an already
 // compacted store measures nothing.

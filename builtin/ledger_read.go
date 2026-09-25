@@ -79,19 +79,13 @@ package builtin
 // and without a budget "the only symptom is the process growing until it
 // stops". It refuses rather than truncating, and returns nothing partial.
 //
-// Every walk here is bounded, with the limits fixed rather than taken as an
-// argument, for the reason `ledger_open`'s posture is fixed: this is a decision
-// about not losing an examiner's session to a graph whose shape is data, and a
-// default of "unlimited" is the wrong one to leave lying where a script can
-// inherit it by omission. The limits are generous enough that reaching one
-// means the question was wrong, and the refusal says so rather than handing
-// back a partial walk that reads like a complete answer.
-//
-// `MaxTime` is set well above the platform's clock granularity on purpose.
-// graphene's own note is that on Windows the runtime reads the interrupt time,
-// which advances at the timer tick -- 15.6 ms by default -- so a deadline in
-// the microseconds is a deadline in name only; a probe with `MaxTime: 1ns`
-// completed a 201-node walk and reported no error at all.
+// Every walk here runs under graphstore.WalkBudget, with the limits fixed
+// rather than taken as an argument, for the reason `ledger_open`'s posture is
+// fixed: this is a decision about not losing an examiner's session to a graph
+// whose shape is data, and a default of "unlimited" is the wrong one to leave
+// lying where a script can inherit it by omission. The limits are generous
+// enough that reaching one means the question was wrong, and the refusal says
+// so rather than handing back a partial walk that reads like a complete answer.
 //
 // # Properties come back as BYTES
 //
@@ -122,23 +116,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aoiflux/graphene/store"
 	"github.com/aoiflux/graphene/traversal"
 	"github.com/vmihailenco/msgpack/v5"
 
+	"mutant/graphstore"
 	"mutant/object"
-)
-
-// The fixed walk budget. See the header: these are not arguments because
-// "unlimited" is the wrong thing for a script to inherit by omission, and they
-// are generous because reaching one should mean the question was wrong rather
-// than that the graph was large.
-const (
-	ledgerWalkMaxNodes = 2_000_000
-	ledgerWalkMaxEdges = 8_000_000
-	ledgerWalkMaxTime  = 60 * time.Second
 )
 
 // ledgerPatternMinNodes and ledgerPatternMaxNodes are graphene's documented
@@ -152,15 +136,6 @@ const (
 	ledgerPatternMaxNodes = 20
 )
 
-// ledgerWalkBudget is the budget every traversal in this file runs under.
-func ledgerWalkBudget() store.Budget {
-	return store.Budget{
-		MaxNodes: ledgerWalkMaxNodes,
-		MaxEdges: ledgerWalkMaxEdges,
-		MaxTime:  ledgerWalkMaxTime,
-	}
-}
-
 // ledgerBudgetRefusal turns graphene's budget error into one that says what
 // was refused and that nothing partial is being returned.
 //
@@ -169,7 +144,7 @@ func ledgerWalkBudget() store.Budget {
 // error exists to prevent.
 func ledgerBudgetRefusal(err error, op string) *object.Error {
 	return newError("%s: the walk was stopped by this language's fixed traversal budget (%d nodes, %d edges, %s) and nothing partial is returned -- a truncated walk that reads like a complete one is the failure this refuses. graphene: %s. Narrow the question: scope it to a set of ids, or lower the depth",
-		op, ledgerWalkMaxNodes, ledgerWalkMaxEdges, ledgerWalkMaxTime, err.Error())
+		op, graphstore.WalkMaxNodes, graphstore.WalkMaxEdges, graphstore.WalkMaxTime, err.Error())
 }
 
 // ledgerReadRefusal is the not-found path for every read in this file.
@@ -399,7 +374,7 @@ func LedgerProvenance(args ...object.Object) object.Object {
 		return resultAndError(nil, ledgerReadRefusal(session, err, origin, 0, BuiltinNameLedgerProvenance))
 	}
 
-	result, err := session.graph.ProvenanceChainCtx(ledgerContext(), origin, int(depthArg.Value), nil, ledgerWalkBudget())
+	result, err := session.graph.ProvenanceChainCtx(ledgerContext(), origin, int(depthArg.Value), nil, graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
 			return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerProvenance))
@@ -608,7 +583,7 @@ func LedgerPath(args ...object.Object) object.Object {
 	}
 
 	cost, badEdge := ledgerCostFor(model)
-	result, err := session.graph.ShortestWeightedPathCtx(ledgerContext(), src, dst, nil, cost, ledgerWalkBudget())
+	result, err := session.graph.ShortestWeightedPathCtx(ledgerContext(), src, dst, nil, cost, graphstore.WalkBudget())
 	switch {
 	case errors.Is(err, traversal.ErrNoPath):
 		// An answer, not a failure. See the header.
@@ -642,19 +617,18 @@ func LedgerPath(args ...object.Object) object.Object {
 		nodes = append(nodes, rendered)
 	}
 	edges := make([]object.Object, 0, len(result.Edges))
-	// graphene's weighted search walks an edge either way. Hop i ran against
-	// its edge when the edge points from the node the hop reached back to the
-	// node it left, and a provenance reading has to know which hops did.
-	reversed := []object.Object{}
-	for i, edge := range result.Edges {
+	for _, edge := range result.Edges {
 		rendered, err := ledgerEdgeObject(edge)
 		if err != nil {
 			return resultAndError(nil, newError("%s: edge %d has a property blob this language cannot decode: %s", BuiltinNameLedgerPath, edge.ID, err.Error()))
 		}
 		edges = append(edges, rendered)
-		if i+1 < len(result.Nodes) && edge.Src == result.Nodes[i+1].ID && edge.Dst == result.Nodes[i].ID {
-			reversed = append(reversed, intObj(int64(i)))
-		}
+	}
+	// graphene's weighted search walks an edge either way, and a provenance
+	// reading has to know which hops did.
+	reversed := []object.Object{}
+	for _, hop := range graphstore.ReversedHops(result.Nodes, result.Edges) {
+		reversed = append(reversed, intObj(int64(hop)))
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -969,7 +943,7 @@ func LedgerPatterns(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: maxMatches must not be negative, got %d. Use 0 for no cap", BuiltinNameLedgerPatterns, maxArg.Value))
 	}
 
-	matches, err := session.graph.FindPatternsCtx(ledgerContext(), pattern, scope, int(maxArg.Value), ledgerWalkBudget())
+	matches, err := session.graph.FindPatternsCtx(ledgerContext(), pattern, scope, int(maxArg.Value), graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
 			return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerPatterns))
@@ -1218,32 +1192,19 @@ func ledgerComparisonFor(session *ledgerSession, ranged []store.PropertyFilter) 
 }
 
 // ledgerUnindexedKeys names the query's filter keys the node index holds
-// nothing under. A filter on one matches nothing whatever the ledger's property
-// blobs hold: the disclose_* family keeps most of its properties in the blob and
-// indexes only the keys it looks records up by, and a misspelt key is the same
-// answer for the same reason. known is false when the store cannot list its
-// keys, and the list is then empty because nothing could be said.
-//
-// graphene's list is an upper bound on the disk backend -- a key whose every
-// entry was since retracted may still be named -- so a key missing from it
-// matches nothing for certain, which is the direction this needs.
+// nothing under, sorted. A filter on one matches nothing whatever the ledger's
+// property blobs hold: the disclose_* family keeps most of its properties in
+// the blob and indexes only the keys it looks records up by, and a misspelt key
+// is the same answer for the same reason. See graphstore.UnindexedKeys for what
+// known means and why a missing key is certain.
 func ledgerUnindexedKeys(session *ledgerSession, filters []store.PropertyFilter) (unindexed []string, known bool) {
-	keys, ok := session.graph.NodePropKeys()
-	if !ok {
-		return nil, false
-	}
-	seen := make(map[string]bool, len(filters))
+	keys := make([]string, 0, len(filters))
 	for _, filter := range filters {
-		if seen[filter.Key] {
-			continue
-		}
-		seen[filter.Key] = true
-		if i := sort.SearchStrings(keys, filter.Key); i == len(keys) || keys[i] != filter.Key {
-			unindexed = append(unindexed, filter.Key)
-		}
+		keys = append(keys, filter.Key)
 	}
+	unindexed, known = graphstore.UnindexedKeys(session.graph, keys)
 	sort.Strings(unindexed)
-	return unindexed, true
+	return unindexed, known
 }
 
 // LedgerQueryNodes answers a node query, and says which comparison rule

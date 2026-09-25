@@ -38,7 +38,7 @@ var LimitBudget = map[string]int{
 	"builtin/http.go":                               1,
 	"builtin/ioc_builtins.go":                       1,
 	"builtin/jumplist_builtins.go":                  1,
-	"builtin/ledger_read.go":                        5,
+	"builtin/ledger_read.go":                        2,
 	"builtin/ledger_redact.go":                      1,
 	"builtin/lua.go":                                1,
 	"builtin/memory_forensics.go":                   2,
