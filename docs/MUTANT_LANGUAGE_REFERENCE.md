@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **664 builtins** across **41 categories**.
+The standard library is **667 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1010,7 +1010,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Memory Forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
-| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-19) | 19 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and the classification labels tagged under it |
+| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-22) | 22 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, and the case's lifecycle and roles kept in its ledger |
 | [Classified Records](CAPABILITY_REFERENCE.md#classified-records-11) | 11 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, verifying with no key at all, and the one recorded way to let read plaintext out |
 | [Disclosure](CAPABILITY_REFERENCE.md#disclosure-10) | 10 | Named disclosure postures, the grants issued under them, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
@@ -2270,6 +2270,29 @@ carries it, beside `"role_authenticated": false` in the manifest. A ledger you
 open with `ledger_open` takes the same role unless you name one, and a ledger
 opened as auditor refuses every write. None of that is access control: it keeps
 the record consistent with what you said you were.
+
+**A case can outlive the run.** `case_attach(ledger)` binds the open case to a
+ledger its examiner opened. The first attach registers the case there; a later
+run's attach reads it back -- its lifecycle state, who holds which role in it,
+and the classes and views declared under the open key -- so the same script run
+again gets `already_defined: true` from `class_define` rather than a refusal.
+Attach before you define anything. `case_transition(ledger, "active", reason)`
+moves the case along registered, active, in_review, concluded, retained and
+disposed, and each state refuses what it cannot take: nothing is sealed while a
+case is in review, concluded or retained, and a disposed case takes nothing but
+a withdrawal. `case_assign(ledger, "bob", "investigator", reason)` records a
+role in the case, and the ledger's assignments decide the role each examiner
+attaches under. Keys and grants are never read back from the ledger.
+
+```mutant
+case_open("IR-2026-014", "examiner", {"role": "case_owner"});
+case_key_open("case.mkey");
+let info, err = ledger_open("case-ledger", "examiner");
+let ledger = info["handle"];
+case_attach(ledger);
+class_define("pii");
+case_transition(ledger, "active", "evidence received");
+```
 
 **The seal is checkable by someone else.** `case_write` puts a SHA-256 over every
 field except the seal itself, plus an Ed25519 signature over the same bytes and

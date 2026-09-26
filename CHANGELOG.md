@@ -373,6 +373,26 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A case keeps its state in its ledger.** `case_attach(ledger)` binds the open
+  case to a ledger. The first attach registers it -- a Case node, a `registered`
+  lifecycle event and the examiner's assignment -- and a later run's attach
+  reads back its lifecycle state, every examiner's latest assignment, and the
+  classes and views declared under the open key generation, tagging each class
+  again and refusing a ledger whose tag the key does not give. While attached,
+  `class_define` and `view_define` write through to the ledger, answer a
+  definition read back with `already_defined: true`, and report `in_ledger`;
+  `class_list`, `view_list` and the manifest say where each came from, and the
+  manifest gains a `ledger_state` block. `case_transition(ledger, to, reason)`
+  moves the case from registered to active and reopens a concluded one, and each
+  state refuses what it cannot take: in review, sealing, definitions,
+  reclassifications and disclosures; concluded or retained, sealing; disposed,
+  everything but a withdrawal. `case_assign(ledger, examiner, role, reason)`
+  records a role in the case or ends one with `none`, and `case_attach` refuses
+  an examiner the ledger assigns no role or a different one. Lifecycle events
+  and assignments are hash-linked chains, and a fork is refused by every reader.
+  The ledger's label table now also names the labels the rest of the case
+  builtins will write, so their numbers are fixed before anything uses them.
+
 - **Roles are recorded.** `case_open` and `ledger_open` take `{"role": ...}`:
   one of administrator, case_owner, lead_investigator, investigator, reviewer
   or auditor. A ledger opened by the case's examiner takes the case's role
@@ -546,6 +566,15 @@ exhaustive lists.
   role each disclosure and withdrawal was made under.
 
 ### Fixed
+
+- **A withdrawal could leave its examiner unable to write to the ledger.** A
+  disclose_* write finds an Actor, Record, Class or View node the ledger
+  already holds before adding one, and asked only the ledger -- which cannot see
+  a node added earlier in the same transaction. So `disclose_withdraw` on the
+  examiner's own authority, its default, by an examiner the ledger held no
+  Actor node for wrote two, and every later disclosure-family write naming that
+  examiner was refused as a ledger written to by something else. A transaction
+  now finds what it has itself added.
 
 - **`fat_deleted` reported a live file's content as an orphan's, and
   `fat_recover_file` wrote it.** A record the orphan sweep finds sits in a

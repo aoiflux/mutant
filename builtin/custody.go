@@ -218,6 +218,10 @@ type custodySession struct {
 	// and puts the disclosure in the manifest beside the view it was issued
 	// under.
 	disclosures []*caseDisclosure
+
+	// attached is the ledger this case is attached to in this run, and the
+	// state read from it, or nil; see case_lifecycle.go.
+	attached *caseAttachment
 }
 
 // caseView is one named disclosure posture: the classes a grant issued under
@@ -244,6 +248,10 @@ type caseView struct {
 	Tags      []string
 	Index     int
 	DefinedAt time.Time
+	// FromLedger is true of a view case_attach read back; InLedger of one
+	// the ledger holds, read back or written there by view_define.
+	FromLedger bool
+	InLedger   bool
 }
 
 // render is one row of the manifest's view block.
@@ -260,7 +268,18 @@ func (v caseView) render() map[string]any {
 		"grant_count": int64(len(v.Classes)),
 		"index":       int64(v.Index),
 		"defined_at":  v.DefinedAt.UTC().Format(time.RFC3339Nano),
+		"source":      definitionSource(v.FromLedger),
+		"in_ledger":   v.InLedger,
 	}
+}
+
+// definitionSource says where a class or view came from: declared in this
+// run, or read back from the case's ledger.
+func definitionSource(fromLedger bool) string {
+	if fromLedger {
+		return "ledger"
+	}
+	return "run"
 }
 
 // caseClass is one classification label and the tag its segments carry.
@@ -278,6 +297,9 @@ type caseClass struct {
 	Tag         string
 	Index       int
 	DefinedAt   time.Time
+	// FromLedger and InLedger are what they are on caseView.
+	FromLedger bool
+	InLedger   bool
 }
 
 // render is one row of the manifest's classification block.
@@ -289,6 +311,8 @@ func (c caseClass) render() map[string]any {
 		"tag":         c.Tag,
 		"index":       int64(c.Index),
 		"defined_at":  c.DefinedAt.UTC().Format(time.RFC3339Nano),
+		"source":      definitionSource(c.FromLedger),
+		"in_ledger":   c.InLedger,
 	}
 }
 
@@ -1185,7 +1209,11 @@ func (s *custodySession) manifest() map[string]any {
 		// Emitted whether or not a key was opened, because "no classification
 		// scheme was in force" is a fact about the investigation and an absent
 		// key reads as an oversight. See classificationRecord.
-		"classification":     s.classificationRecord(),
+		"classification": s.classificationRecord(),
+		// Whether the case is attached to a ledger, and if so the state and
+		// assignments read from it: marked source "ledger", because it is
+		// what the ledger said and not what this run decided.
+		"ledger_state":       s.ledgerStateRecord(),
 		"timeline":           timeline,
 		"security_telemetry": telemetry,
 		// The counters say how many. The audit chain says in what order, and

@@ -56,6 +56,9 @@ var DisclosureFiles = []string{
 	"builtin/disclose_history.go",
 	"builtin/disclose_ledger.go",
 	"builtin/disclose_reclassify.go",
+	// the case in its ledger, which tags a read-back class under the case key
+	"builtin/case_lifecycle.go",
+	"builtin/case_chain.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

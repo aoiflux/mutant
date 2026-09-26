@@ -727,4 +727,11 @@ const (
 	BuiltinNameDbRelations = "db_relations"
 	BuiltinNameDbSchema    = "db_schema"
 	BuiltinNameDbVerify    = "db_verify"
+
+	// the case in its ledger: binding a case to the ledger that keeps its
+	// state, moving it along its lifecycle, and recording who holds which
+	// role in it
+	BuiltinNameCaseAttach     = "case_attach"
+	BuiltinNameCaseTransition = "case_transition"
+	BuiltinNameCaseAssign     = "case_assign"
 )

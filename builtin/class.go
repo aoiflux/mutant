@@ -20,8 +20,10 @@ package builtin
 // On the case session, sealed into the manifest, which is signed. Not in the
 // key file: the key is the thing an examiner keeps away from the handover, and
 // a scheme written into it would either travel with the key or not travel at
-// all. Not in graphene: that arrives with the disclosure schema, and a class
-// table is small, ordered and read far more often than it is written.
+// all. And in the case's ledger once the case is attached to one with
+// `case_attach`: class_define writes each definition there before the run
+// holds it, and a later attach reads back the ones made under the open key
+// (see case_lifecycle.go).
 //
 // The cost is stated plainly in docs/DISCLOSURE_POLICY.md and repeated here
 // because it is the kind of thing a reader should meet twice. A `.mrec`
@@ -86,12 +88,30 @@ func ClassDefine(args ...object.Object) object.Object {
 			BuiltinNameClassDefine))
 	}
 	for _, existing := range session.classes {
-		if existing.Canonical == canonical {
-			return resultAndError(nil, newError("%s: %q is already defined as %q. Two labels that "+
-				"differ only in case or spacing would carry the same tag and mean two different "+
-				"things in the same report",
-				BuiltinNameClassDefine, label, existing.Label))
+		if existing.Canonical != canonical {
+			continue
 		}
+		// A class case_attach read back is the same class declared again by
+		// the same script in a later run, and that is not a mistake.
+		if existing.FromLedger && (description == "" || description == existing.Description) {
+			return resultAndError(classDefineResult(existing, true), nil)
+		}
+		if existing.FromLedger {
+			return resultAndError(nil, newError("%s: the case's ledger defines %q with the description %q, "+
+				"and a definition there is written once", BuiltinNameClassDefine, existing.Label,
+				existing.Description))
+		}
+		return resultAndError(nil, newError("%s: %q is already defined as %q. Two labels that "+
+			"differ only in case or spacing would carry the same tag and mean two different "+
+			"things in the same report",
+			BuiltinNameClassDefine, label, existing.Label))
+	}
+	if errObj := session.stateRefusalLocked(BuiltinNameClassDefine, caseActDefine); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	ledger, errObj := session.attachedLedgerLocked(BuiltinNameClassDefine)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	tag, err := security.TagForClass(session.classTagKey, canonical)
@@ -106,6 +126,15 @@ func ClassDefine(args ...object.Object) object.Object {
 		Index:       len(session.classes),
 		DefinedAt:   custodyNow(),
 	}
+	// Written through to the ledger of an attached case before it is in the
+	// run, so the run never holds a definition its ledger does not.
+	if ledger != nil {
+		if err := session.recordClassLocked(ledger, class); err != nil {
+			return resultAndError(nil, newError("%s: recording the class in the case's ledger: %s",
+				BuiltinNameClassDefine, err.Error()))
+		}
+		class.InLedger = true
+	}
 	session.classes = append(session.classes, class)
 
 	// Recorded under the lock this function already holds, which is why it
@@ -117,16 +146,25 @@ func ClassDefine(args ...object.Object) object.Object {
 		"canonical": canonical,
 		"tag":       class.Tag,
 		"index":     int64(class.Index),
+		"in_ledger": class.InLedger,
 	})
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"label":       stringObj(class.Label),
-		"canonical":   stringObj(class.Canonical),
-		"description": stringObj(class.Description),
-		"index":       intObj(int64(class.Index)),
-		"tag":         stringObj(class.Tag),
-		"status":      stringObj("ok"),
-	}), nil)
+	return resultAndError(classDefineResult(class, false), nil)
+}
+
+// classDefineResult is class_define's answer, for a class declared now or
+// one the case's ledger already defined.
+func classDefineResult(class caseClass, already bool) object.Object {
+	return makeHashObject(map[string]object.Object{
+		"label":           stringObj(class.Label),
+		"canonical":       stringObj(class.Canonical),
+		"description":     stringObj(class.Description),
+		"index":           intObj(int64(class.Index)),
+		"tag":             stringObj(class.Tag),
+		"in_ledger":       boolObj(class.InLedger),
+		"already_defined": boolObj(already),
+		"status":          stringObj("ok"),
+	})
 }
 
 // ClassList reports the scheme in force.
@@ -162,6 +200,8 @@ func ClassList(args ...object.Object) object.Object {
 			"description": stringObj(class.Description),
 			"index":       intObj(int64(class.Index)),
 			"tag":         stringObj(class.Tag),
+			"source":      stringObj(definitionSource(class.FromLedger)),
+			"in_ledger":   boolObj(class.InLedger),
 		}))
 	}
 	return resultAndError(makeHashObject(map[string]object.Object{

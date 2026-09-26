@@ -15,7 +15,13 @@ A limit that is not listed here is a bare literal somewhere in the source, and
 `policy/limit_budget.go`. Values fixed by a file format or a protocol are not
 limits; they are marked `//mutant:format` and are not listed.
 
-10 limits in 4 packages.
+11 limits in 5 packages.
+
+## `builtin`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `maxCaseReason` | 4 KiB | bytes | -- | maxCaseReason bounds a reason or a name written into a case record. It is written into a signed commit that is never compacted away, so it is a sentence and not a document. | `builtin/case_lifecycle.go` |
 
 ## `graphstore`
 

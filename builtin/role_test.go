@@ -251,6 +251,7 @@ func TestAnAuditorWritesNothingIntoALedger(t *testing.T) {
 		BuiltinNameLedgerCheckpoint: true, BuiltinNameLedgerRedactNode: true, BuiltinNameLedgerRedactNodeProperties: true,
 		BuiltinNameLedgerRedactEdge: true, BuiltinNameLedgerRedactEdgeProperties: true,
 		BuiltinNameDiscloseToPassphrase: true, BuiltinNameDiscloseWithdraw: true, BuiltinNameDiscloseReclassified: true,
+		BuiltinNameCaseAttach: true, BuiltinNameCaseTransition: true, BuiltinNameCaseAssign: true,
 	}
 	seen := 0
 	for name, doc := range builtinDocs {

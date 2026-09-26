@@ -748,6 +748,9 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameDbRelations, &BuiltIn{DbRelations}},
 	{BuiltinNameDbSchema, &BuiltIn{DbSchema}},
 	{BuiltinNameDbVerify, &BuiltIn{DbVerify}},
+	{BuiltinNameCaseAttach, &BuiltIn{CaseAttach}},
+	{BuiltinNameCaseTransition, &BuiltIn{CaseTransition}},
+	{BuiltinNameCaseAssign, &BuiltIn{CaseAssign}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

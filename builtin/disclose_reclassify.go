@@ -275,6 +275,9 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 		}
 		return existing, false, nil
 	}
+	if err := caseLedgerStateRefusal(g, facts.caseUID, caseActDefine); err != nil {
+		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
+	}
 
 	tx := disclosureBegin(session)
 	caseID, _, err := tx.findOrAdd(g, disclosureNodeCase, "case.uid", map[string]string{

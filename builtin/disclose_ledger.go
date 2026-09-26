@@ -76,6 +76,26 @@ var (
 	disclosureNodeDisclosure = store.CustomNodeType(disclosureTypeBase + 6)
 	disclosureNodeWithdrawal = store.CustomNodeType(disclosureTypeBase + 7)
 	disclosureNodeReclass    = store.CustomNodeType(disclosureTypeBase + 8)
+
+	// The case-management labels, appended after the disclosure family's.
+	// A label's number is written into every ledger that holds one, so it is
+	// a format: TestTheLedgerLabelsAreAFormat pins each.
+	disclosureNodeRole             = store.CustomNodeType(disclosureTypeBase + 9)
+	disclosureNodeRoleBundle       = store.CustomNodeType(disclosureTypeBase + 10)
+	disclosureNodeAssignment       = store.CustomNodeType(disclosureTypeBase + 11)
+	disclosureNodeLifecycle        = store.CustomNodeType(disclosureTypeBase + 12)
+	disclosureNodeCustodyEvent     = store.CustomNodeType(disclosureTypeBase + 13)
+	disclosureNodeReviewRequest    = store.CustomNodeType(disclosureTypeBase + 14)
+	disclosureNodeReviewDecision   = store.CustomNodeType(disclosureTypeBase + 15)
+	disclosureNodeRetention        = store.CustomNodeType(disclosureTypeBase + 16)
+	disclosureNodeErasure          = store.CustomNodeType(disclosureTypeBase + 17)
+	disclosureNodeClassEvent       = store.CustomNodeType(disclosureTypeBase + 18)
+	disclosureNodeRedactionVersion = store.CustomNodeType(disclosureTypeBase + 19)
+	disclosureNodeRedactionReview  = store.CustomNodeType(disclosureTypeBase + 20)
+
+	// Evidence is graphene's own built-in EvidenceFile, for the reason Case
+	// is: the name is reserved, and it is what the built-in type is for.
+	disclosureNodeEvidence = store.NodeTypeEvidenceFile
 )
 
 // Edge labels.
@@ -88,6 +108,20 @@ var (
 	disclosureEdgePerformedBy  = store.CustomEdgeType(disclosureTypeBase + 5)
 	disclosureEdgeWithdrew     = store.CustomEdgeType(disclosureTypeBase + 6)
 	disclosureEdgeSupersedes   = store.CustomEdgeType(disclosureTypeBase + 7)
+
+	disclosureEdgeHoldsRole   = store.CustomEdgeType(disclosureTypeBase + 8)
+	disclosureEdgeAssignedTo  = store.CustomEdgeType(disclosureTypeBase + 9)
+	disclosureEdgeBundles     = store.CustomEdgeType(disclosureTypeBase + 10)
+	disclosureEdgeIssuedUnder = store.CustomEdgeType(disclosureTypeBase + 11)
+	disclosureEdgeRedactedAs  = store.CustomEdgeType(disclosureTypeBase + 12)
+	disclosureEdgeRevises     = store.CustomEdgeType(disclosureTypeBase + 13)
+	disclosureEdgeTransitions = store.CustomEdgeType(disclosureTypeBase + 14)
+	disclosureEdgeCustodian   = store.CustomEdgeType(disclosureTypeBase + 15)
+	disclosureEdgeReviews     = store.CustomEdgeType(disclosureTypeBase + 16)
+	disclosureEdgeErases      = store.CustomEdgeType(disclosureTypeBase + 17)
+
+	// EvidenceFile -> Case, graphene's built-in edge for exactly that.
+	disclosureEdgeBelongsTo = store.EdgeTypeBelongsTo
 )
 
 // disclosureTypeNames is what DeclareTypeNames writes beside the ledger, so
@@ -103,6 +137,19 @@ func disclosureTypeNames() (map[store.NodeType]string, map[store.EdgeType]string
 			disclosureNodeDisclosure: "Disclosure",
 			disclosureNodeWithdrawal: "Withdrawal",
 			disclosureNodeReclass:    "ReclassEvent",
+
+			disclosureNodeRole:             "Role",
+			disclosureNodeRoleBundle:       "RoleBundle",
+			disclosureNodeAssignment:       "Assignment",
+			disclosureNodeLifecycle:        "LifecycleEvent",
+			disclosureNodeCustodyEvent:     "CustodyEvent",
+			disclosureNodeReviewRequest:    "ReviewRequest",
+			disclosureNodeReviewDecision:   "ReviewDecision",
+			disclosureNodeRetention:        "RetentionEvent",
+			disclosureNodeErasure:          "ErasureEvent",
+			disclosureNodeClassEvent:       "ClassEvent",
+			disclosureNodeRedactionVersion: "RedactionVersion",
+			disclosureNodeRedactionReview:  "RedactionReview",
 		}, map[store.EdgeType]string{
 			disclosureEdgeInCase:       "IN_CASE",
 			disclosureEdgeClassifiedAs: "CLASSIFIED_AS",
@@ -112,6 +159,17 @@ func disclosureTypeNames() (map[store.NodeType]string, map[store.EdgeType]string
 			disclosureEdgePerformedBy:  "PERFORMED_BY",
 			disclosureEdgeWithdrew:     "WITHDREW",
 			disclosureEdgeSupersedes:   "SUPERSEDES",
+
+			disclosureEdgeHoldsRole:   "HOLDS_ROLE",
+			disclosureEdgeAssignedTo:  "ASSIGNED_TO",
+			disclosureEdgeBundles:     "BUNDLES",
+			disclosureEdgeIssuedUnder: "ISSUED_UNDER",
+			disclosureEdgeRedactedAs:  "REDACTED_AS",
+			disclosureEdgeRevises:     "REVISES",
+			disclosureEdgeTransitions: "TRANSITIONS",
+			disclosureEdgeCustodian:   "CUSTODIAN",
+			disclosureEdgeReviews:     "REVIEWS",
+			disclosureEdgeErases:      "ERASES",
 		}
 }
 
@@ -152,6 +210,10 @@ var disclosureKeys = map[store.NodeType][]string{
 	disclosureNodeDisclosure: {"disclosure.uid", "disclosure.record_uid", "disclosure.recipient_fp"},
 	disclosureNodeWithdrawal: {"withdrawal.uid", "withdrawal.disclosure_uid"},
 	disclosureNodeReclass:    {"reclass.uid", "reclass.pair", "reclass.superseded_uid"},
+
+	disclosureNodeRole:       {"role.name"},
+	disclosureNodeLifecycle:  {"lifecycle.uid", "lifecycle.chain"},
+	disclosureNodeAssignment: {"assignment.uid", "assignment.chain", "assignment.case_uid"},
 }
 
 // disclosureNode is one node of this schema as read back: its id and its
@@ -243,10 +305,17 @@ func disclosureAll(g *graphene.Graph, label store.NodeType) ([]disclosureNode, e
 // disclosureTx buffers one transaction's worth of this schema's writes.
 type disclosureTx struct {
 	tx *graphene.Tx
+	// added is every node findOrAdd has buffered in this transaction, by
+	// label, key and value. The graph cannot see a buffered node until the
+	// commit, so without it a second findOrAdd of the same key in the same
+	// transaction -- an examiner who is both the actor and the authority,
+	// or both the assigner and the assignee -- adds a second node, and every
+	// later lookup of that key refuses the ledger (M26-REC-021).
+	added map[string]disclosureNode
 }
 
 func disclosureBegin(session *ledgerSession) *disclosureTx {
-	return &disclosureTx{tx: session.graph.Begin().As(session.txContext())}
+	return &disclosureTx{tx: session.graph.Begin().As(session.txContext()), added: map[string]disclosureNode{}}
 }
 
 // actorNode finds or adds the Actor node for an asserted name. The id is the
@@ -311,9 +380,13 @@ func (d *disclosureTx) edge(src, dst store.NodeID, label store.EdgeType, props m
 // and a node written once keeps the words it was first written with.
 func (d *disclosureTx) findOrAdd(g *graphene.Graph, label store.NodeType, key string, props map[string]string,
 	mustMatch ...string) (store.NodeID, bool, error) {
-	found, ok, err := disclosureFind(g, label, key, props[key])
-	if err != nil {
-		return 0, false, err
+	buffered := fmt.Sprintf("%d|%s|%s", label, key, props[key])
+	found, ok := d.added[buffered]
+	if !ok {
+		var err error
+		if found, ok, err = disclosureFind(g, label, key, props[key]); err != nil {
+			return 0, false, err
+		}
 	}
 	if ok {
 		for _, field := range mustMatch {
@@ -326,6 +399,9 @@ func (d *disclosureTx) findOrAdd(g *graphene.Graph, label store.NodeType, key st
 		return found.id, false, nil
 	}
 	id, err := d.node(label, props)
+	if err == nil {
+		d.added[buffered] = disclosureNode{id: id, props: props}
+	}
 	return id, true, err
 }
 
@@ -349,6 +425,33 @@ func (d *disclosureTx) classNodes(g *graphene.Graph, labels map[string]string) f
 		}
 		return id, err
 	}
+}
+
+// viewNode finds or adds a view's node, and on adding it writes one GRANTS edge
+// per class the view grants.
+func (d *disclosureTx) viewNode(g *graphene.Graph, view caseView, fp string,
+	classNode func(string) (store.NodeID, error)) (store.NodeID, error) {
+	viewID, viewNew, err := d.findOrAdd(g, disclosureNodeView, "view.fp", map[string]string{
+		"view.fp":          fp,
+		"view.label":       view.Label,
+		"view.canonical":   view.Canonical,
+		"view.classes":     strings.Join(view.Classes, ", "),
+		"view.tags":        strings.Join(view.Tags, ","),
+		"view.description": view.Description,
+	})
+	if err != nil || !viewNew {
+		return viewID, err
+	}
+	for _, tag := range view.Tags {
+		id, err := classNode(strings.ToLower(tag))
+		if err != nil {
+			return 0, err
+		}
+		if err := d.edge(viewID, id, disclosureEdgeGrants, nil); err != nil {
+			return 0, err
+		}
+	}
+	return viewID, nil
 }
 
 // disclosureRecordFacts is what a Record node says about a record file.
@@ -559,14 +662,14 @@ func disclosureRecipientFingerprint(name string) string {
 	return ledgerHash(sha256Of("mutant-recipient-v1|" + name))
 }
 
-// disclosureWriteIssue commits one disclosure: the Disclosure node, whatever
-// Case, Actor, Record, Classification, View and Recipient nodes the ledger does
-// not already hold, and the edges between them, in one signed transaction.
 // disclosureRefusal says why the ledger rules out disclosing this record to
-// this recipient, or returns nil: the record was reclassified, so its
-// classification is not the one in force, or an earlier disclosure of it to
-// them was withdrawn.
+// this recipient, or returns nil: the case's lifecycle state takes no
+// disclosure, the record was reclassified, so its classification is not the
+// one in force, or an earlier disclosure of it to them was withdrawn.
 func disclosureRefusal(g *graphene.Graph, record *recordSession, recipient, recipientFP string) error {
+	if err := caseLedgerStateRefusal(g, record.header.CaseUID, caseActDisclose); err != nil {
+		return err
+	}
 	recordUID := strings.ToLower(record.header.RecordUID)
 	if event, superseded, err := disclosureFind(g, disclosureNodeReclass, "reclass.superseded_uid", recordUID); err != nil {
 		return err
@@ -596,6 +699,9 @@ func disclosurePreflight(session *ledgerSession, record *recordSession, recipien
 	return disclosureRefusal(session.graph, record, recipient, disclosureRecipientFingerprint(recipient))
 }
 
+// disclosureWriteIssue commits one disclosure: the Disclosure node, whatever
+// Case, Actor, Record, Classification, View and Recipient nodes the ledger does
+// not already hold, and the edges between them, in one signed transaction.
 func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store.NodeID, error) {
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
@@ -635,27 +741,9 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 		return 0, err
 	}
 
-	viewID, viewNew, err := tx.findOrAdd(g, disclosureNodeView, "view.fp", map[string]string{
-		"view.fp":          issue.viewFP,
-		"view.label":       issue.view.Label,
-		"view.canonical":   issue.view.Canonical,
-		"view.classes":     strings.Join(issue.view.Classes, ", "),
-		"view.tags":        strings.Join(issue.view.Tags, ","),
-		"view.description": issue.view.Description,
-	})
+	viewID, err := tx.viewNode(g, issue.view, issue.viewFP, classNode)
 	if err != nil {
 		return 0, err
-	}
-	if viewNew {
-		for _, tag := range issue.view.Tags {
-			id, err := classNode(strings.ToLower(tag))
-			if err != nil {
-				return 0, err
-			}
-			if err := tx.edge(viewID, id, disclosureEdgeGrants, nil); err != nil {
-				return 0, err
-			}
-		}
 	}
 
 	recipientID, _, err := tx.findOrAdd(g, disclosureNodeRecipient, "recipient.fp", map[string]string{

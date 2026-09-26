@@ -1167,7 +1167,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameCaseManifest: {
 		signature: "case_manifest()",
 		summary:   "Returns the case manifest as it stands: the case and examiner, the tool build, every evidence source with its size and digest, every builtin that touched each source with a count, the timeline, and the security telemetry for the run. Readable while the case is open and after it closes.",
-		returns:   pairRet("the case manifest", ParamHash).withFields("audit", "case", "classification", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+		returns:   pairRet("the case manifest", ParamHash).withFields("audit", "case", "classification", "evidence", "integrity", "ledger_state", "program", "seal", "security_telemetry", "timeline", "tool")},
 	BuiltinNameCaseWrite: {
 		signature: "case_write(path, options?)",
 		summary:   "Writes the manifest to disk as a signed JSON document. The seal carries a SHA-256 over every field except itself and an Ed25519 signature over the same bytes, from the local key pair Mutant already maintains; the public key travels in the document, so `case_manifest_verify` needs nothing but the file.",
@@ -1199,7 +1199,33 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameCaseClose: {
 		signature: "case_close()",
 		summary:   "Closes the case and returns its final manifest. After this, evidence openers stop recording.",
-		returns:   pairRet("the final manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "program", "seal", "security_telemetry", "timeline", "tool")},
+		returns:   pairRet("the final manifest", ParamHash).withFields("audit", "case", "evidence", "integrity", "ledger_state", "program", "seal", "security_telemetry", "timeline", "tool")},
+	BuiltinNameCaseAttach: {
+		signature: "case_attach(ledger)",
+		summary:   "Binds the open case to a ledger, so that its state outlives the run. The first attach registers the case: a Case node, a `registered` lifecycle event and the examiner's assignment under the role they asserted. Every later attach reads the case back -- its lifecycle state, every examiner's latest assignment, and the classes and views declared under the open key generation, each class tagged again under that key and compared with the tag the ledger holds -- and refuses an examiner the ledger assigns no role, or a different one; that keeps two records from disagreeing about one person and is not access control. Keys and grants are never read back. Needs an open case with its key open, a ledger opened by the case's examiner under an asserted role, and no classes or views defined in this run yet: attach before defining, so every definition the case holds is one its ledger holds. While attached, class_define and view_define write through to the ledger, and the manifest carries a `ledger_state` block marked `source: ledger`. Lifecycle and assignment records are hash-linked chains, and a chain with two events after one, or an event whose uid does not recompute, is refused by every reader rather than resolved. Refused on a ledger opened as auditor. Returns (case, err).",
+		params: []builtinParamDoc{
+			param("ledger", "A ledger handle from ledger_open, opened by the case's examiner.", ParamInt),
+		},
+		returns: pairRet("the case as the ledger holds it", ParamHash).withFields("assignments", "case_id", "case_uid", "classes_read", "definitions_other_keys", "first_attach", "ledger", "lifecycle", "moves", "role", "role_authenticated", "source", "state", "views_read")},
+	BuiltinNameCaseTransition: {
+		signature: "case_transition(ledger, to, reason)",
+		summary:   "Moves the attached case along its lifecycle -- registered, active, in_review, concluded, retained, disposed -- by appending a lifecycle event to the ledger, hash-linked to the one before it and attributed to the examiner and the role they asserted. It makes the moves that are an examiner's decision alone: registered to active, and reopening a concluded case; a refusal names the state the case is in and the moves available from it. A state refuses what it cannot take: in review, sealing, definitions, reclassifications and disclosures; concluded or retained, sealing; disposed, everything but a withdrawal, which every state takes. Builtins that take the ledger ask the ledger for the state, and the rest ask the case attached in this run. Refused on a ledger opened as auditor. Returns (transition, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			choiceParam("to", "The state to move the case to.", caseStates),
+			param("reason", "Why, in words a reader will see beside the move forever. Required.", ParamString),
+		},
+		returns: pairRet("the move", ParamHash).withFields("at", "case_id", "from", "moves", "reason", "role", "role_authenticated", "seq", "state", "uid")},
+	BuiltinNameCaseAssign: {
+		signature: "case_assign(ledger, examiner, role, reason)",
+		summary:   "Records the role an examiner holds in the attached case, or ends it with the role `none`, as the next event of that examiner's assignment chain in the ledger. A later case_attach by that examiner must assert the role the chain's head names. Anybody attached may assign anybody: who may assign is an organisation's policy and this program does not hold one, so the record says who assigned whom, and neither name is authenticated. A recipient-only role is refused -- nobody works a case as one -- as is an assignment that changes nothing. Refused while the case is disposed, and on a ledger opened as auditor. Returns (assignment, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("examiner", "The examiner's name, as they will assert it at ledger_open.", ParamString),
+			choiceParam("role", "The role they hold in the case, or `none` to end their assignment.", caseAssignRoles()),
+			param("reason", "Why, in words a reader will see beside the assignment forever. Required.", ParamString),
+		},
+		returns: pairRet("the assignment", ParamHash).withFields("at", "by", "by_role", "case_id", "examiner", "in_force", "previous_role", "reason", "role", "role_authenticated", "seq", "uid")},
 	BuiltinNameCaseKeyCreate: {
 		signature: "case_key_create(path, options?)",
 		summary:   "Mints the case key a classified record is sealed under and writes it to a file that must not already exist. The passphrase is asked for at the terminal and never appears in an argument: key material in program text is key material a traceback can print, and a Go string holding a secret cannot be wiped. Refuses an existing path, because writing a key over a key makes every record sealed under the old one unopenable.",
@@ -1233,12 +1259,12 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("what the file claims", ParamHash).withFields("authenticated", "case_id", "case_uid", "current", "generations", "path", "previous_file_mac", "signature_detail", "signature_valid", "signed", "status")},
 	BuiltinNameClassDefine: {
 		signature: "class_define(label, options?)",
-		summary:   "Declares one classification label and returns the tag its segments will carry. Labels are declared before use so that a typo is an error rather than a new secret class nobody recognises. The tag is keyed to the case key, so two investigations that both declare \"restricted\" produce different tags and neither can be linked to the other.",
+		summary:   "Declares one classification label and returns the tag its segments will carry. Labels are declared before use so that a typo is an error rather than a new secret class nobody recognises. The tag is keyed to the case key, so two investigations that both declare \"restricted\" produce different tags and neither can be linked to the other. While the case is attached to a ledger with `case_attach`, the definition is written into the ledger before the run holds it (`in_ledger`), and a label a later attach read back is answered with `already_defined: true` instead of being refused -- unless a description is given that differs from the ledger's, which is refused, because a definition there is written once. Refused while the attached case is in review or disposed.",
 		params: []builtinParamDoc{
 			param("label", "The label as it should read in a report. Normalised to NFC, trimmed, internal spacing collapsed and lowercased before tagging, so `Restricted` and ` restricted ` are one class; a control or formatting character is refused.", ParamString),
 			param("options?", "`{\"description\": \"...\"}` is prose for the manifest and is never part of the tag.", ParamHash),
 		},
-		returns: pairRet("the declared label", ParamHash).withFields("canonical", "description", "index", "label", "status", "tag")},
+		returns: pairRet("the declared label", ParamHash).withFields("already_defined", "canonical", "description", "in_ledger", "index", "label", "status", "tag")},
 	BuiltinNameClassList: {
 		signature: "class_list()",
 		summary:   "Returns the classification scheme in force, in declaration order. Answers with the same keys whether or not a case is open, so a program branches on a field rather than on an error: `open` says a case is open, `tagged` says a case key is open, which is what makes a tag possible at all. The order is presentation order and carries no authority; nothing here enforces a lattice.",
@@ -1337,13 +1363,13 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("an unmarked copy of the buffer", ParamBytes)},
 	BuiltinNameViewDefine: {
 		signature: "view_define(label, classes, options?)",
-		summary:   "Declares one named disclosure posture: the set of classifications a grant issued under this name will open, and nothing else. Declaring it once means a disclosure review asks what a name grants rather than reading the fourth argument of the sixth call in a script, and it puts the posture in the manifest as a row with a label on it. There is deliberately no negation and no \"everything except\": a view that granted all classes but one would widen by itself every time a class was declared after it, changing what it releases with nothing edited and nothing recorded. A view granting no class at all is legal and says so in `grants_nothing` -- it discloses the record, its signature and its shape, and no content. Returns (view, err).",
+		summary:   "Declares one named disclosure posture: the set of classifications a grant issued under this name will open, and nothing else. Declaring it once means a disclosure review asks what a name grants rather than reading the fourth argument of the sixth call in a script, and it puts the posture in the manifest as a row with a label on it. There is deliberately no negation and no \"everything except\": a view that granted all classes but one would widen by itself every time a class was declared after it, changing what it releases with nothing edited and nothing recorded. A view granting no class at all is legal and says so in `grants_nothing` -- it discloses the record, its signature and its shape, and no content. While the case is attached to a ledger with `case_attach`, the view is written into the ledger before the run holds it (`in_ledger`); a view a later attach read back is answered with `already_defined: true` when it grants the same classes, and refused when it grants anything else. Refused while the attached case is in review or disposed. Returns (view, err).",
 		params: []builtinParamDoc{
 			param("label", "The name of the posture, as it should read in a disclosure record. Normalised exactly as a class label is, so `Counsel` and ` counsel ` are one view.", ParamString),
 			param("classes", "An array of labels already declared with `class_define`. A label nobody declared is refused at the entry that named it; a label named twice is refused rather than collapsed, because a repeated class is a list whose author lost track of it.", ParamArray),
 			param("options?", "`{\"description\": \"...\"}` is prose for the manifest and is never part of what the view grants.", ParamHash),
 		},
-		returns: pairRet("the declared posture", ParamHash).withFields("canonical", "description", "grant_count", "grants", "grants_nothing", "index", "label", "status")},
+		returns: pairRet("the declared posture", ParamHash).withFields("already_defined", "canonical", "description", "grant_count", "grants", "grants_nothing", "in_ledger", "index", "label", "status")},
 	BuiltinNameViewList: {
 		signature: "view_list()",
 		summary:   "Returns the disclosure postures declared for this case, in declaration order. Answers with the same keys whether or not a case is open, so a program branches on a field rather than on an error: `open` says a case is open, `tagged` says a case key is open, which is what makes a class tag and therefore a view possible at all.",

@@ -236,6 +236,10 @@ type ledgerSession struct {
 	// disclosureLedgerMu.
 	disclosureNamesDeclared bool
 
+	// handle is this session's number in ledgerHandles, kept so a case
+	// attached to the ledger can tell that the ledger has since been closed.
+	handle int64
+
 	openedAt time.Time
 }
 
@@ -564,6 +568,7 @@ func LedgerOpen(args ...object.Object) object.Object {
 	}
 
 	handle := atomic.AddInt64(&ledgerHandleCounter, 1)
+	session.handle = handle
 	ledgerHandles.Store(handle, session)
 
 	custodyRecordArtifact(BuiltinNameLedgerOpen,

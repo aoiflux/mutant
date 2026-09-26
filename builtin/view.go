@@ -106,12 +106,18 @@ func ViewDefine(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: no case key is open; call `case_key_open(path)` first, "+
 			"because a view names classes and a class is tagged under the case key", op))
 	}
-	for _, existing := range session.views {
-		if existing.Canonical == canonical {
+	var readBack *caseView
+	for i, existing := range session.views {
+		if existing.Canonical != canonical {
+			continue
+		}
+		if !existing.FromLedger {
 			return resultAndError(nil, newError("%s: %q is already defined as %q. Two views whose names "+
 				"differ only in case or spacing are two postures nobody could tell apart in a "+
 				"disclosure record", op, label, existing.Label))
 		}
+		// Compared once the class list is resolved, below.
+		readBack = &session.views[i]
 	}
 
 	labels := make([]string, 0, len(list.Elements))
@@ -146,6 +152,27 @@ func ViewDefine(args ...object.Object) object.Object {
 		tags = append(tags, class.Tag)
 	}
 
+	// A view case_attach read back is the same posture declared again by the
+	// same script in a later run, and that is not a mistake -- as long as it
+	// grants what the ledger says it grants.
+	if readBack != nil {
+		if disclosureViewFingerprint(caseView{Canonical: canonical, Tags: tags}) != disclosureViewFingerprint(*readBack) ||
+			(description != "" && description != readBack.Description) {
+			return resultAndError(nil, newError("%s: the case's ledger defines view %q as granting %s, with the "+
+				"description %q, and a definition there is written once. Declare a posture that grants "+
+				"something else under another name", op, readBack.Label, strings.Join(readBack.Classes, ", "),
+				readBack.Description))
+		}
+		return resultAndError(viewDefineResult(*readBack, true), nil)
+	}
+	if errObj := session.stateRefusalLocked(op, caseActDefine); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	ledger, errObj := session.attachedLedgerLocked(op)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+
 	view := caseView{
 		Label:       label,
 		Canonical:   canonical,
@@ -154,6 +181,14 @@ func ViewDefine(args ...object.Object) object.Object {
 		Tags:        tags,
 		Index:       len(session.views),
 		DefinedAt:   custodyNow(),
+	}
+	// Written through to the ledger of an attached case before it is in the
+	// run, as class_define does.
+	if ledger != nil {
+		if err := session.recordViewLocked(ledger, view); err != nil {
+			return resultAndError(nil, newError("%s: recording the view in the case's ledger: %s", op, err.Error()))
+		}
+		view.InLedger = true
 	}
 	session.views = append(session.views, view)
 
@@ -167,9 +202,16 @@ func ViewDefine(args ...object.Object) object.Object {
 		"grants":      strings.Join(labels, ", "),
 		"grant_count": int64(len(labels)),
 		"index":       int64(view.Index),
+		"in_ledger":   view.InLedger,
 	})
 
-	return resultAndError(makeHashObject(map[string]object.Object{
+	return resultAndError(viewDefineResult(view, false), nil)
+}
+
+// viewDefineResult is view_define's answer, for a view declared now or one the
+// case's ledger already defined.
+func viewDefineResult(view caseView, already bool) object.Object {
+	return makeHashObject(map[string]object.Object{
 		"label":       stringObj(view.Label),
 		"canonical":   stringObj(view.Canonical),
 		"description": stringObj(view.Description),
@@ -180,9 +222,11 @@ func ViewDefine(args ...object.Object) object.Object {
 		// it discloses the record's existence, its signature and its shape, and
 		// no content at all. It is said out loud because an empty array is also
 		// what a typo produces.
-		"grants_nothing": boolObj(len(view.Classes) == 0),
-		"status":         stringObj("ok"),
-	}), nil)
+		"grants_nothing":  boolObj(len(view.Classes) == 0),
+		"in_ledger":       boolObj(view.InLedger),
+		"already_defined": boolObj(already),
+		"status":          stringObj("ok"),
+	})
 }
 
 // ViewList reports the postures declared for this case: view_list().
@@ -217,6 +261,8 @@ func ViewList(args ...object.Object) object.Object {
 			"grants":      viewGrantRows(view),
 			"grant_count": intObj(int64(len(view.Classes))),
 			"index":       intObj(int64(view.Index)),
+			"source":      stringObj(definitionSource(view.FromLedger)),
+			"in_ledger":   boolObj(view.InLedger),
 		}))
 	}
 	return resultAndError(makeHashObject(map[string]object.Object{

@@ -260,6 +260,9 @@ func recordSealImpl(op string, args []object.Object, quantised bool) object.Obje
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := caseAttachedStateRefusal(op, caseActSeal); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	source, errObj := requireStringArg(op, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
