@@ -373,6 +373,25 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **Roles are recorded.** `case_open` and `ledger_open` take `{"role": ...}`:
+  one of administrator, case_owner, lead_investigator, investigator, reviewer
+  or auditor. A ledger opened by the case's examiner takes the case's role
+  unless it names its own, and `ledger_open` reports `role`, `role_id` and
+  `role_source`. The role is stamped on every case timeline entry, written into
+  the manifest beside `role_authenticated: false`, kept by graphene on every
+  redaction record, and written on every Disclosure, Withdrawal and
+  ReclassEvent and on their PERFORMED_BY edges. It is never checked. Three
+  refusals keep the record consistent with it, and each says it is not access
+  control: a recipient role (legal, external_partner, restricted_viewer) cannot
+  be asserted by an examiner, one examiner cannot hold two roles in one
+  process, and a ledger opened as auditor refuses every write -- the four
+  redactions, `ledger_add_node`, `ledger_add_edge`, `ledger_compact`,
+  `ledger_checkpoint`, `disclose_to_passphrase`, `disclose_withdraw` and
+  `disclose_reclassified` -- and cannot create a ledger that does not exist.
+  A script's own `ledger_add_node` or `ledger_add_edge` commit records the actor
+  and not the role: graphene v0.9.0 keeps no role on a commit, and Mutant passes
+  it anyway so a graphene that does will record it.
+
 ### Changed
 
 - **A bare `--password` is refused.** 2.5.0 warned on it and promised the next
@@ -518,6 +537,13 @@ exhaustive lists.
 - **An attribute key that is not a string is refused.** `db_add_artifact` used
   to skip such a key, and reported the node with fewer properties than the
   script gave it and nothing to say which had gone.
+
+- **`ledger_open` takes an options hash, and the one option is the role.**
+  The posture stays out of reach: `sign`, `strict`, `retention` and every other
+  key are refused before anything is opened. `ledger_redactions` and the four
+  redaction builtins report each record's `role` and `role_id` and where its
+  actor's name came from (`actor_source`), and `disclose_history` reports the
+  role each disclosure and withdrawal was made under.
 
 ### Fixed
 
@@ -665,6 +691,21 @@ exhaustive lists.
   keys -- as the number of nodes reached, sections and PE headers: 2 nodes for
   3, 3 sections for 15, 3 PE headers for 1. `incident_graph` now also looks the
   process up with `db_find` and lists what it touched with `db_relations`.
+
+- **A withdrawal recorded who made it and not on whose authority,** though the
+  disclosure policy promised both. `disclose_withdraw(ledger, disclosure,
+  reason, {"authorised_by": name})` records the authority; left out, it is the
+  examiner's own. The Withdrawal carries the name and `authority_basis`
+  (`self` or `named`) and an AUTHORISED_BY edge to that name's Actor node, and
+  `disclose_history` shows both. A withdrawal recorded before this release
+  reports its basis as `not recorded`.
+
+- **`ledger_redactions` named whoever was reading the ledger as the actor of
+  every redaction.** The name came from the reading session, not the record, so
+  a redaction one examiner made was attributed by name to the next one to open
+  the ledger. The name is now the one behind the record's own actor id: this
+  session's, or the one a disclosure-family Actor node pairs with it, and
+  otherwise empty, with `actor_source` saying which.
 
 ### Security
 

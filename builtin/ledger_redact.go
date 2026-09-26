@@ -91,6 +91,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/aoiflux/graphene/disk"
@@ -225,13 +226,38 @@ func ledgerEdgeList(edges []store.EdgeID) object.Object {
 	return &object.Array{Elements: elements}
 }
 
+// The values of a redaction record's actor_source.
+const (
+	ledgerActorFromSession = "session"
+	ledgerActorFromLedger  = "ledger"
+	ledgerActorUnknown     = "unknown"
+)
+
+// ledgerActorName names the actor behind an id a record carries.
+//
+// Graphene records the id, never the name. The session's own name is known for
+// its own id; any other is looked for among the Actor nodes the disclosure
+// family writes, which pair each id with the name it came from; and a name found
+// in neither place is reported as unknown rather than filled in. It used to be
+// filled in with the reading session's name, which put the reader's name on
+// every redaction anybody else had made (M26-CUS-007).
+func ledgerActorName(session *ledgerSession, actorID uint64) (string, string) {
+	if actorID == session.actorID {
+		return session.actor, ledgerActorFromSession
+	}
+	if actor, found, err := disclosureFind(session.graph, disclosureNodeActor, "actor.id",
+		strconv.FormatUint(actorID, 10)); err == nil && found {
+		return actor.get("actor.name"), ledgerActorFromLedger
+	}
+	return "", ledgerActorUnknown
+}
+
 // ledgerRecordInto writes one redaction record's fields.
 //
-// actor is the name the session asserted, which graphene never sees -- it
-// records the id this process derived from the name. Both are reported: the id
-// is what the record carries and the name is what a reader needs, and a report
-// showing only the name would invite it to be read as something the store
-// vouches for.
+// actor is a name graphene never sees -- it records the id this process derived
+// from the name. Both are reported: the id is what the record carries and the
+// name is what a reader needs, and actor_source says where the name came from,
+// so it is not read as something the store vouches for.
 func ledgerRecordInto(session *ledgerSession, record disk.RedactionRecord, out map[string]object.Object) {
 	out["seq"] = intObj(int64(record.Seq))
 	out["scope"] = stringObj(record.Scope.String())
@@ -239,8 +265,14 @@ func ledgerRecordInto(session *ledgerSession, record disk.RedactionRecord, out m
 	out["edge_id"] = intObj(int64(record.EdgeID))
 	out["reason"] = stringObj(record.Reason)
 
-	out["actor"] = stringObj(session.actor)
+	actor, source := ledgerActorName(session, record.ActorID)
+	out["actor"] = stringObj(actor)
+	out["actor_source"] = stringObj(source)
 	out["actor_id"] = stringObj(fmt.Sprintf("%d", record.ActorID))
+	// The role the redaction was made under, as asserted; "" on a record made
+	// before roles were recorded.
+	out["role"] = stringObj(roleNameForID(record.RoleID))
+	out["role_id"] = stringObj(fmt.Sprintf("%d", record.RoleID))
 	out["key_id"] = stringObj(fmt.Sprintf("%d", record.KeyID))
 	// An unsigned record is still hash-chained, so it is tamper-evident and
 	// unattributed to a key. Reported rather than assumed: a strict ledger
@@ -482,7 +514,7 @@ func ledgerRedactNodeScope(args []object.Object, op string, redact func(*ledgerS
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], op)
+	session, errObj := ledgerWriteHandleArg(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -502,7 +534,7 @@ func ledgerRedactNodeScope(args []object.Object, op string, redact func(*ledgerS
 		return resultAndError(nil, ledgerSchemaRefusal(op, why))
 	}
 
-	record, err := redact(session, nodeID, disk.RedactionRequest{ActorID: session.actorID, Reason: reason})
+	record, err := redact(session, nodeID, disk.RedactionRequest{ActorID: session.actorID, RoleID: session.role.ID, Reason: reason})
 	if err != nil {
 		return resultAndError(nil, ledgerRedactRefusal(session, err, nodeID, 0, op))
 	}
@@ -526,7 +558,7 @@ func ledgerRedactEdgeScope(args []object.Object, op string, redact func(*ledgerS
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], op)
+	session, errObj := ledgerWriteHandleArg(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -546,7 +578,7 @@ func ledgerRedactEdgeScope(args []object.Object, op string, redact func(*ledgerS
 		return resultAndError(nil, ledgerSchemaRefusal(op, why))
 	}
 
-	record, err := redact(session, edgeID, disk.RedactionRequest{ActorID: session.actorID, Reason: reason})
+	record, err := redact(session, edgeID, disk.RedactionRequest{ActorID: session.actorID, RoleID: session.role.ID, Reason: reason})
 	if err != nil {
 		return resultAndError(nil, ledgerRedactRefusal(session, err, 0, edgeID, op))
 	}

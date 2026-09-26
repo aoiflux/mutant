@@ -146,7 +146,7 @@ func DiscloseReclassified(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
-	ledger, errObj := ledgerHandleArg(args[0], op)
+	ledger, errObj := ledgerWriteHandleArg(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -284,10 +284,7 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 	if err != nil {
 		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
 	}
-	actorID, _, err := tx.findOrAdd(g, disclosureNodeActor, "actor.id", map[string]string{
-		"actor.id":   strconv.FormatUint(session.actorID, 10),
-		"actor.name": session.actor,
-	})
+	actorID, err := tx.actorNode(g, session.actor)
 	if err != nil {
 		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
 	}
@@ -334,6 +331,7 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 		"reclass.changed_bytes":  strconv.FormatUint(changed, 10),
 		"reclass.at":             now.UTC().Format(time.RFC3339Nano),
 		"reclass.unix_nano":      strconv.FormatInt(now.UnixNano(), 10),
+		"reclass.actor_role":     session.role.Name,
 	}
 	eventID, err := tx.node(disclosureNodeReclass, props)
 	if err != nil {
@@ -342,12 +340,13 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 	for _, e := range []struct {
 		src, dst store.NodeID
 		label    store.EdgeType
+		props    map[string]string
 	}{
-		{recordIDs[0], recordIDs[1], disclosureEdgeSupersedes},
-		{eventID, caseID, disclosureEdgeInCase},
-		{eventID, actorID, disclosureEdgePerformedBy},
+		{recordIDs[0], recordIDs[1], disclosureEdgeSupersedes, nil},
+		{eventID, caseID, disclosureEdgeInCase, nil},
+		{eventID, actorID, disclosureEdgePerformedBy, disclosurePerformedBy(session)},
 	} {
-		if err := tx.edge(e.src, e.dst, e.label, nil); err != nil {
+		if err := tx.edge(e.src, e.dst, e.label, e.props); err != nil {
 			return disclosureNode{}, false, newError("%s: %s", op, err.Error())
 		}
 	}

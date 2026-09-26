@@ -112,17 +112,11 @@ func ClassDefine(args ...object.Object) object.Object {
 	// appends directly rather than calling custodyRecordArtifact -- that takes
 	// the same lock and would deadlock.
 	now := class.DefinedAt
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   BuiltinNameClassDefine,
-		Detail:  fmt.Sprintf("classification %q declared", label),
-		Data: map[string]any{
-			"label":     label,
-			"canonical": canonical,
-			"tag":       class.Tag,
-			"index":     int64(class.Index),
-		},
+	session.appendEvent(now, BuiltinNameClassDefine, fmt.Sprintf("classification %q declared", label), map[string]any{
+		"label":     label,
+		"canonical": canonical,
+		"tag":       class.Tag,
+		"index":     int64(class.Index),
 	})
 
 	return resultAndError(makeHashObject(map[string]object.Object{

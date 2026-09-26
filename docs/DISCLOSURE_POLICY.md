@@ -87,8 +87,12 @@ the word. The verb is `disclose_withdraw`, and it returns
 What withdrawal does achieve is worth stating in full, because it is not nothing:
 
 - **Future grants stop.** The withdrawal is checked before any new key is issued.
-- **The withdrawal is attributed.** Who withdrew what, when, and on whose
-  authority, in an append-only ledger.
+- **The withdrawal is attributed.** Who withdrew what, when, acting as which
+  role, and on whose authority, in an append-only ledger. `disclose_withdraw`
+  takes `{authorised_by}`; left out, the authority is the examiner's own. The
+  Withdrawal gets an AUTHORISED_BY edge to the authority's Actor node beside its
+  PERFORMED_BY edge. Every name here is asserted, and none is checked
+  ([Section 9](#9-the-signature-authenticates-the-document-not-the-names-in-it)).
 - **Crypto-erasure is available.** Destroying the record key means you can no
   longer open the record. That is a claim about your own storage and nothing
   more; it is not cryptographic evidence that anyone else's copy is gone.
@@ -347,6 +351,25 @@ A *signed* manifest invites a reader to treat the names inside it as verified.
 They are not. Every rendering of a disclosure or a manifest carries the sentence
 in some form: **the signature authenticates the document, not the names in it.**
 
+A role is a name of the same kind. `case_open` and `ledger_open` take
+`{role}` -- one of administrator, case_owner, lead_investigator, investigator,
+reviewer or auditor -- and a ledger opened by the case's examiner takes the
+case's role unless it names its own. The role is recorded, never checked:
+
+- on every case timeline entry, and in the manifest's case block beside
+  `role_authenticated: false`;
+- on every redaction record, where graphene keeps it as `RoleID`, and every
+  Disclosure, Withdrawal and ReclassEvent, as `<prefix>.actor_role` and on the
+  PERFORMED_BY edge. A script's own `ledger_add_node` or `ledger_add_edge` commit
+  records the actor but not the role, because graphene keeps no role on a
+  commit.
+
+legal, external_partner and restricted_viewer name recipients, and asserting one
+of them for the examiner is refused. One examiner asserting two roles in one
+process is refused. A ledger opened as auditor refuses every write: an auditor
+reads what it audits. None of these refusals is access control. Anybody can
+reopen the ledger under another role, and each refusal says so.
+
 One related field deserves the prominence it already has in `custody_seal.go`:
 `key_created_for_this_run`. A signing key generated seconds before it signed is
 not the same thing as a key an organisation has held and protected, and a
@@ -515,8 +538,10 @@ Every disclosure-family write is one signed, attributed graphene transaction in
 a ledger opened by `ledger_open`. The labels are Case (graphene's own built-in
 type), Actor, Record, Classification, View, Recipient, Disclosure, Withdrawal
 and ReclassEvent; the edges IN_CASE, CLASSIFIED_AS, GRANTS, DISCLOSED_TO,
-AUTHORISED_BY, PERFORMED_BY, WITHDREW and SUPERSEDES. Three properties of it are
-worth stating:
+AUTHORISED_BY, PERFORMED_BY, WITHDREW and SUPERSEDES. AUTHORISED_BY runs from a
+Disclosure to the View it was issued under, and from a Withdrawal to the Actor
+whose authority it was made on. PERFORMED_BY carries the role its actor asserted.
+Three properties of it are worth stating:
 
 - **A script cannot forge a disclosure.** `ledger_add_node` takes types 0 to 127;
   this schema's custom labels begin at 4096. A script can write a node with a

@@ -2235,7 +2235,7 @@ A forensic answer is only worth what its provenance is worth. `case_open` starts
 a session that records the investigation as it happens:
 
 ```mutant
-let opened, err = case_open("IR-2026-0413", "G. Gogia", {"hash": "sha256"});
+let opened, err = case_open("IR-2026-0413", "G. Gogia", {"hash": "sha256", "role": "case_owner"});
 
 let image, err = raw_open("/evidence/laptop.E01");     // recorded: path, size, digest
 let header, err = raw_read_at(image["handle"], 0, 2);  // recorded: raw_read_at x1
@@ -2245,7 +2245,7 @@ let written, err = case_write("case.json");            // sealed and signed
 let manifest, err = case_close();
 ```
 
-Four properties are worth knowing before you reach for it.
+Five properties are worth knowing before you reach for it.
 
 **Nothing is recorded until `case_open` is called.** The hooks sit in every
 evidence opener and every handle resolver, so a program that does not open a case
@@ -2262,6 +2262,14 @@ mistaken for a stronger one.
 **The touch record is aggregated, not logged.** Per source, per builtin: first
 touch, last touch, and a count. A program that reads a hundred thousand files
 produces a manifest a person can read.
+
+**A role is recorded, not checked.** `{"role": "case_owner"}` names which of
+six examiner roles you are acting under -- administrator, case_owner,
+lead_investigator, investigator, reviewer, auditor -- and every timeline entry
+carries it, beside `"role_authenticated": false` in the manifest. A ledger you
+open with `ledger_open` takes the same role unless you name one, and a ledger
+opened as auditor refuses every write. None of that is access control: it keeps
+the record consistent with what you said you were.
 
 **The seal is checkable by someone else.** `case_write` puts a SHA-256 over every
 field except the seal itself, plus an Ed25519 signature over the same bytes and

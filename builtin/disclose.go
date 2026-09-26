@@ -316,7 +316,7 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 	if len(args) != 4 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
-	ledger, errObj := ledgerHandleArg(args[0], op)
+	ledger, errObj := ledgerWriteHandleArg(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -432,6 +432,7 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 		caseUID:         strings.ToLower(facts.caseUID),
 		caseID:          facts.id,
 		examiner:        facts.examiner,
+		actorRole:       ledger.role.Name,
 		recipient:       recipient,
 		recipientFP:     disclosureRecipientFingerprint(recipient),
 		view:            view,
@@ -526,21 +527,15 @@ func disclosureRemember(op string, d *caseDisclosure) *object.Error {
 			"could be held for bundling: %s", op, d.UID, errObj.Message)
 	}
 	session.disclosures = append(session.disclosures, d)
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      d.Issued,
-		Elapsed: d.Issued.Sub(session.OpenedAt),
-		Event:   op,
-		Detail: fmt.Sprintf("disclosure %s issued to %q under view %q: %d of %d segments of record %s",
-			d.UID, d.Recipient, d.View.Label, d.Split.grantedCount, d.Total, d.RecordUID),
-		Data: map[string]any{
-			"disclosure_uid":   d.UID,
-			"recipient":        d.Recipient,
-			"view":             d.View.Label,
-			"record_uid":       d.RecordUID,
-			"granted_segments": d.Split.grantedCount,
-			"grant_sha256":     d.GrantSHA256,
-			"ledger_node":      d.LedgerNode,
-		},
+	session.appendEvent(d.Issued, op, fmt.Sprintf("disclosure %s issued to %q under view %q: %d of %d segments of record %s",
+		d.UID, d.Recipient, d.View.Label, d.Split.grantedCount, d.Total, d.RecordUID), map[string]any{
+		"disclosure_uid":   d.UID,
+		"recipient":        d.Recipient,
+		"view":             d.View.Label,
+		"record_uid":       d.RecordUID,
+		"granted_segments": d.Split.grantedCount,
+		"grant_sha256":     d.GrantSHA256,
+		"ledger_node":      d.LedgerNode,
 	})
 	return nil
 }
@@ -1572,8 +1567,8 @@ func (v *discloseVerification) result(rootGiven bool) object.Object {
 		"manifest_public_key": stringObj(v.manifestKey()),
 		"record_public_key":   stringObj(v.recordKey()),
 		"bytes_recoverable":   boolObj(false),
-		"does_not_cover":    stringArrayObj(discloseDoesNotCover),
-		"signature_note":    stringObj(discloseSignatureNote),
+		"does_not_cover":      stringArrayObj(discloseDoesNotCover),
+		"signature_note":      stringObj(discloseSignatureNote),
 	})
 }
 

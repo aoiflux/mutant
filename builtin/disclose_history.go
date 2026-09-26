@@ -12,7 +12,8 @@ package builtin
 // things, and `disclose_withdraw` returns all three as fields:
 //
 //   - it is attributed and permanent: a Withdrawal node, in its own signed
-//     commit, pointing at the disclosure it withdraws;
+//     commit, pointing at the disclosure it withdraws, at the actor who
+//     recorded it and at the authority it was made on;
 //   - it stops further grants: `disclose_to_passphrase` refuses to issue this
 //     record to this recipient again, and `disclose_bundle` refuses to
 //     package the withdrawn disclosure if it has not been packaged yet;
@@ -46,6 +47,21 @@ import (
 // is never compacted away, and it is read by a person.
 const maxWithdrawalReason = 4096
 
+// The values of a withdrawal's authority_basis. "self" is an examiner
+// withdrawing on their own authority, which is what leaving authorised_by out
+// says; "named" is an authority the examiner named. Neither is checked: the
+// authority is a name somebody typed, recorded beside the one who typed it.
+const (
+	withdrawalAuthoritySelf  = "self"
+	withdrawalAuthorityNamed = "named"
+	// withdrawalAuthorityUnrecorded is reported for a withdrawal recorded
+	// before a withdrawal said whose authority it was made on.
+	withdrawalAuthorityUnrecorded = "not recorded"
+)
+
+// withdrawOptions is what disclose_withdraw's options hash accepts.
+var withdrawOptions = []string{"authorised_by"}
+
 // disclosureRow is one disclosure as the history reports it, joined with its
 // withdrawal if there is one.
 type disclosureRow struct {
@@ -60,6 +76,10 @@ func (r disclosureRow) render() object.Object {
 		n, _ := strconv.ParseInt(get(key), 10, 64)
 		return intObj(n)
 	}
+	basis := r.withdrawal.get("withdrawal.authority_basis")
+	if r.withdrawn && basis == "" {
+		basis = withdrawalAuthorityUnrecorded
+	}
 	return makeHashObject(map[string]object.Object{
 		"disclosure_uid":    stringObj(get("disclosure.uid")),
 		"issued_at":         stringObj(get("disclosure.at")),
@@ -67,6 +87,7 @@ func (r disclosureRow) render() object.Object {
 		"view":              stringObj(get("disclosure.view")),
 		"record_uid":        stringObj(get("disclosure.record_uid")),
 		"examiner":          stringObj(get("disclosure.examiner")),
+		"actor_role":        stringObj(get("disclosure.actor_role")),
 		"method":            stringObj(get("disclosure.method")),
 		"segments":          count("disclosure.segments"),
 		"granted_segments":  count("disclosure.granted_segments"),
@@ -77,6 +98,11 @@ func (r disclosureRow) render() object.Object {
 		"withdrawn":         boolObj(r.withdrawn),
 		"withdrawn_at":      stringObj(r.withdrawal.get("withdrawal.at")),
 		"withdrawal_reason": stringObj(r.withdrawal.get("withdrawal.reason")),
+		// Empty on a disclosure that stands, and on a withdrawal recorded
+		// before roles and authorities were.
+		"withdrawal_role":            stringObj(r.withdrawal.get("withdrawal.actor_role")),
+		"withdrawal_authorised_by":   stringObj(r.withdrawal.get("withdrawal.authorised_by")),
+		"withdrawal_authority_basis": stringObj(basis),
 		// On every row, withdrawn or not: it is true of none of them.
 		"bytes_recoverable": boolObj(false),
 	})
@@ -114,13 +140,18 @@ func disclosureHistoryRows(session *ledgerSession) ([]disclosureRow, error) {
 // disclose_withdraw
 // ---------------------------------------------------------------------------
 
-// DiscloseWithdraw records that a disclosure is withdrawn: disclose_withdraw(ledger, disclosure, reason).
+// DiscloseWithdraw records that a disclosure is withdrawn:
+// disclose_withdraw(ledger, disclosure, reason, options?).
 func DiscloseWithdraw(args ...object.Object) object.Object {
 	op := BuiltinNameDiscloseWithdraw
-	if len(args) != 3 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
+	if len(args) != 3 && len(args) != 4 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3 or 4", len(args)))
 	}
-	ledger, errObj := ledgerHandleArg(args[0], op)
+	opts, errObj := secretOptionsArg(op, args, 4, withdrawOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	ledger, errObj := ledgerWriteHandleArg(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -143,8 +174,12 @@ func DiscloseWithdraw(args ...object.Object) object.Object {
 	case !utf8.ValidString(reason):
 		return resultAndError(nil, custodyDocumentName(op, "reason", reason))
 	}
+	authority, basis, errObj := withdrawalAuthority(op, ledger, opts)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
-	withdrawal, errObj := disclosureWriteWithdrawal(op, ledger, uid, reason)
+	withdrawal, errObj := disclosureWriteWithdrawal(op, ledger, uid, reason, authority, basis)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -162,10 +197,12 @@ func DiscloseWithdraw(args ...object.Object) object.Object {
 	}
 	custodyStore.Unlock()
 	custodyRecordArtifact(op, fmt.Sprintf("disclosure %s withdrawn: %s", uid, reason), map[string]any{
-		"disclosure_uid": uid,
-		"withdrawal_uid": withdrawal.get("withdrawal.uid"),
-		"reason":         reason,
-		"ledger_node":    int64(withdrawal.id),
+		"disclosure_uid":  uid,
+		"withdrawal_uid":  withdrawal.get("withdrawal.uid"),
+		"reason":          reason,
+		"ledger_node":     int64(withdrawal.id),
+		"authorised_by":   authority,
+		"authority_basis": basis,
 	})
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -176,6 +213,11 @@ func DiscloseWithdraw(args ...object.Object) object.Object {
 		"recipient":      stringObj(withdrawal.get("withdrawal.recipient")),
 		"record_uid":     stringObj(withdrawal.get("withdrawal.record_uid")),
 		"ledger_node":    intObj(int64(withdrawal.id)),
+		// Who recorded it and on whose authority, as asserted. Nothing
+		// checked either name.
+		"role":            stringObj(ledger.role.Name),
+		"authorised_by":   stringObj(authority),
+		"authority_basis": stringObj(basis),
 		// The three things a withdrawal is, each one a field.
 		"recorded":          boolObj(true),
 		"further_grants":    stringObj("refused: this record will not be disclosed to this recipient again, and the withdrawn disclosure will not be packaged"),
@@ -188,9 +230,38 @@ func DiscloseWithdraw(args ...object.Object) object.Object {
 	}), nil)
 }
 
+// withdrawalAuthority reads the authorised_by option. Left out, or naming the
+// examiner who is recording the withdrawal, the authority is that examiner's
+// own; otherwise it is the name given.
+func withdrawalAuthority(op string, session *ledgerSession, opts *formatOptions) (string, string, *object.Error) {
+	if _, present := opts.pairs["authorised_by"]; !present {
+		return session.actor, withdrawalAuthoritySelf, nil
+	}
+	named, errObj := opts.str("authorised_by", "")
+	if errObj != nil {
+		return "", "", errObj
+	}
+	authority := strings.TrimSpace(named)
+	switch {
+	case authority == "":
+		return "", "", newError("%s: authorised_by names whose authority a withdrawal was made on, and an "+
+			"empty name is nobody's. Leave it out to record that you withdrew on your own", op)
+	case len(authority) > maxWithdrawalReason:
+		return "", "", newError("%s: an authority's name is at most %d bytes, and this one is %d", op,
+			maxWithdrawalReason, len(authority))
+	}
+	if errObj := custodyDocumentName(op, "authority's name", authority); errObj != nil {
+		return "", "", errObj
+	}
+	if authority == session.actor {
+		return authority, withdrawalAuthoritySelf, nil
+	}
+	return authority, withdrawalAuthorityNamed, nil
+}
+
 // disclosureWriteWithdrawal commits one Withdrawal node and its edges, after
 // checking there is something to withdraw and that it has not been withdrawn.
-func disclosureWriteWithdrawal(op string, session *ledgerSession, uid, reason string) (disclosureNode, *object.Error) {
+func disclosureWriteWithdrawal(op string, session *ledgerSession, uid, reason, authority, basis string) (disclosureNode, *object.Error) {
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
 
@@ -226,13 +297,19 @@ func disclosureWriteWithdrawal(op string, session *ledgerSession, uid, reason st
 		"withdrawal.at":                now.UTC().Format(time.RFC3339Nano),
 		"withdrawal.unix_nano":         strconv.FormatInt(now.UnixNano(), 10),
 		"withdrawal.bytes_recoverable": "false",
+		"withdrawal.actor_role":        session.role.Name,
+		"withdrawal.authorised_by":     authority,
+		"withdrawal.authority_basis":   basis,
 	}
 
 	tx := disclosureBegin(session)
-	actorID, _, err := tx.findOrAdd(g, disclosureNodeActor, "actor.id", map[string]string{
-		"actor.id":   strconv.FormatUint(session.actorID, 10),
-		"actor.name": session.actor,
-	})
+	actorID, err := tx.actorNode(g, session.actor)
+	if err != nil {
+		return disclosureNode{}, newError("%s: %s", op, err.Error())
+	}
+	// The same node as the actor's when the authority is their own: one name,
+	// one Actor node, and two edges saying both things about it.
+	authorityID, err := tx.actorNode(g, authority)
 	if err != nil {
 		return disclosureNode{}, newError("%s: %s", op, err.Error())
 	}
@@ -243,11 +320,13 @@ func disclosureWriteWithdrawal(op string, session *ledgerSession, uid, reason st
 	for _, e := range []struct {
 		dst   store.NodeID
 		label store.EdgeType
+		props map[string]string
 	}{
-		{disclosure.id, disclosureEdgeWithdrew},
-		{actorID, disclosureEdgePerformedBy},
+		{disclosure.id, disclosureEdgeWithdrew, nil},
+		{actorID, disclosureEdgePerformedBy, disclosurePerformedBy(session)},
+		{authorityID, disclosureEdgeAuthorisedBy, map[string]string{"basis": basis}},
 	} {
-		if err := tx.edge(id, e.dst, e.label, nil); err != nil {
+		if err := tx.edge(id, e.dst, e.label, e.props); err != nil {
 			return disclosureNode{}, newError("%s: %s", op, err.Error())
 		}
 	}

@@ -161,18 +161,12 @@ func ViewDefine(args ...object.Object) object.Object {
 	// same reason class_define does it: custodyRecordArtifact takes the same
 	// lock and would deadlock.
 	now := view.DefinedAt
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   op,
-		Detail:  fmt.Sprintf("view %q declared over %d classes", label, len(labels)),
-		Data: map[string]any{
-			"label":       label,
-			"canonical":   canonical,
-			"grants":      strings.Join(labels, ", "),
-			"grant_count": int64(len(labels)),
-			"index":       int64(view.Index),
-		},
+	session.appendEvent(now, op, fmt.Sprintf("view %q declared over %d classes", label, len(labels)), map[string]any{
+		"label":       label,
+		"canonical":   canonical,
+		"grants":      strings.Join(labels, ", "),
+		"grant_count": int64(len(labels)),
+		"index":       int64(view.Index),
 	})
 
 	return resultAndError(makeHashObject(map[string]object.Object{

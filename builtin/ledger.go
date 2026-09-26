@@ -38,6 +38,12 @@ package builtin
 //
 // # The roles gap is on purpose, and custody will keep reporting it
 //
+// A role is recorded: `ledger_open` takes the examiner's asserted role, or the
+// open case's, and every redaction record and every disclosure-family record
+// carries it (see role.go for where, and for the commit field graphene drops).
+// What is not recorded is a grant saying anybody was permitted to act under
+// it, and that is the gap below.
+//
 // `CustodyFor` returns a gap reading "no role grants are recorded, so nothing
 // says who was permitted to write, redact or compact. Set Options.Roles to
 // record it." Turning the grant ledger on does not close it -- an empty grant
@@ -203,6 +209,11 @@ type ledgerSession struct {
 	actor   string
 	actorID uint64
 
+	// role is what the examiner asserted at ledger_open or at case_open, and
+	// roleSource says which; see ledgerRoleFor. Recorded, never checked.
+	role       caseRole
+	roleSource string
+
 	keyID     uint64
 	publicKey ed25519.PublicKey
 
@@ -273,6 +284,60 @@ func ledgerHandleArg(arg object.Object, op string) (*ledgerSession, *object.Erro
 		return nil, newError("%s: unknown ledger handle %d; ledger handles come from ledger_open and are not graph handles", op, handle.Value)
 	}
 	return session, nil
+}
+
+// ledgerWriteHandleArg resolves argument one of every builtin that writes to
+// the ledger -- a commit, a redaction, a compaction, a checkpoint -- and
+// refuses one opened by an auditor. It is called before anything else is
+// looked at, so an auditor is refused before a passphrase is asked for.
+func ledgerWriteHandleArg(arg object.Object, op string) (*ledgerSession, *object.Error) {
+	session, errObj := ledgerHandleArg(arg, op)
+	if errObj != nil {
+		return nil, errObj
+	}
+	if session.role.ID == roleIDAuditor {
+		return nil, newError("%s: %s opened this ledger as auditor, and an auditor reads what it audits and "+
+			"writes nothing into it. "+roleNotAccessControl, op, session.actor)
+	}
+	return session, nil
+}
+
+// txContext is what every commit to this ledger is attributed with.
+func (s *ledgerSession) txContext() store.TxContext {
+	return store.TxContext{ActorID: s.actorID, RoleID: s.role.ID, KeyID: s.keyID}
+}
+
+// The values of ledger_open's role_source.
+const (
+	ledgerRoleAsserted   = "asserted"
+	ledgerRoleInherited  = "case"
+	ledgerRoleUnasserted = "unasserted"
+)
+
+// ledgerRoleFor decides the role a ledger is opened under.
+//
+// Asserted in the options, it is that role. Left out, it is the open case's
+// role when the actor is the case's examiner -- the same person, so the same
+// hat -- and otherwise nobody said. A role that conflicts with one the same
+// actor holds elsewhere in this process is refused; see roleConflict.
+func ledgerRoleFor(op, actor string, opts *formatOptions) (caseRole, string, *object.Error) {
+	role, given, errObj := roleOption(op, opts)
+	if errObj != nil {
+		return caseRole{}, "", errObj
+	}
+	if errObj := roleConflict(op, actor, role, nil); errObj != nil {
+		return caseRole{}, "", errObj
+	}
+	if given {
+		return role, ledgerRoleAsserted, nil
+	}
+	custodyStore.RLock()
+	defer custodyStore.RUnlock()
+	if session := custodyStore.session; session != nil && !session.Closed && session.Examiner == actor &&
+		session.Role.asserted() {
+		return session.Role, ledgerRoleInherited, nil
+	}
+	return roleUnasserted, ledgerRoleUnasserted, nil
 }
 
 // ledgerMarkerPath is where the marker lives inside a store directory.
@@ -393,10 +458,18 @@ func ledgerPropertyBlob(props map[string][]byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// ledgerOpenOptions is the one option ledger_open takes. The posture is not an
+// option; see the file header.
+var ledgerOpenOptions = []string{"role"}
+
 // LedgerOpen opens a forensic ledger in the fixed strict posture.
 func LedgerOpen(args ...object.Object) object.Object {
-	if len(args) != 2 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
+	if len(args) != 2 && len(args) != 3 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
+	}
+	options, errObj := secretOptionsArg(BuiltinNameLedgerOpen, args, 3, ledgerOpenOptions...)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 	pathArg, ok := args[0].(*object.String)
 	if !ok {
@@ -423,6 +496,16 @@ func LedgerOpen(args ...object.Object) object.Object {
 	// nobody can rederive from the name the ledger reports.
 	if errObj := custodyDocumentName(BuiltinNameLedgerOpen, "actor name", actor); errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	role, roleSource, errObj := ledgerRoleFor(BuiltinNameLedgerOpen, actor, options)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	// Opening a directory that is not yet a ledger creates one, which is a
+	// write like any other.
+	if role.ID == roleIDAuditor && !ledgerIsMarked(path) {
+		return resultAndError(nil, newError("%s: %s is not a ledger yet, and opening it would create one; an "+
+			"auditor opens a ledger that exists. "+roleNotAccessControl, BuiltinNameLedgerOpen, path))
 	}
 
 	privateKey, publicKey, generated, _, err := security.EnsureLocalSigningKeyPair()
@@ -471,6 +554,8 @@ func LedgerOpen(args ...object.Object) object.Object {
 		path:                 path,
 		actor:                actor,
 		actorID:              actorID,
+		role:                 role,
+		roleSource:           roleSource,
 		keyID:                keyID,
 		publicKey:            publicKey,
 		verifier:             keyring,
@@ -482,11 +567,14 @@ func LedgerOpen(args ...object.Object) object.Object {
 	ledgerHandles.Store(handle, session)
 
 	custodyRecordArtifact(BuiltinNameLedgerOpen,
-		fmt.Sprintf("opened forensic ledger %s as %q", path, actor),
+		fmt.Sprintf("opened forensic ledger %s as %q acting as %s", path, actor, role.Name),
 		map[string]any{
 			"path":                     path,
 			"actor":                    actor,
 			"actor_id":                 fmt.Sprintf("%d", actorID),
+			"role":                     role.Name,
+			"role_id":                  fmt.Sprintf("%d", role.ID),
+			"role_source":              roleSource,
 			"key_id":                   fmt.Sprintf("%d", keyID),
 			"key_created_for_this_run": generated,
 		})
@@ -499,6 +587,12 @@ func LedgerOpen(args ...object.Object) object.Object {
 		"actor_id":   stringObj(fmt.Sprintf("%d", actorID)),
 		"key_id":     stringObj(fmt.Sprintf("%d", keyID)),
 		"public_key": stringObj(hex.EncodeToString(publicKey)),
+		// The role every commit through this handle records, where it came
+		// from, and -- always false -- whether anything checked it.
+		"role":               stringObj(role.Name),
+		"role_id":            stringObj(fmt.Sprintf("%d", role.ID)),
+		"role_source":        stringObj(roleSource),
+		"role_authenticated": boolObj(false),
 		// A signature by a key this run generated vouches for nothing that
 		// happened before this run.
 		"key_created_for_this_run": boolObj(generated),
@@ -594,6 +688,7 @@ func LedgerStats(args ...object.Object) object.Object {
 		"path":     stringObj(session.path),
 		"actor":    stringObj(session.actor),
 		"actor_id": stringObj(fmt.Sprintf("%d", session.actorID)),
+		"role":     stringObj(session.role.Name),
 	}
 	ledgerRootFields(session, out)
 
@@ -643,7 +738,7 @@ func LedgerCompact(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerCompact)
+	session, errObj := ledgerWriteHandleArg(args[0], BuiltinNameLedgerCompact)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -699,7 +794,7 @@ func LedgerAddNode(args ...object.Object) object.Object {
 	if len(args) != 2 && len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2 or 3", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerAddNode)
+	session, errObj := ledgerWriteHandleArg(args[0], BuiltinNameLedgerAddNode)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -728,7 +823,7 @@ func LedgerAddNode(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %s", BuiltinNameLedgerAddNode, err.Error()))
 	}
 
-	tx := session.graph.Begin().As(store.TxContext{ActorID: session.actorID, KeyID: session.keyID})
+	tx := session.graph.Begin().As(session.txContext())
 	nodeID := tx.AddNode(&store.Node{
 		Labels:     []store.NodeType{nodeType},
 		Properties: blob,
@@ -749,7 +844,7 @@ func LedgerAddEdge(args ...object.Object) object.Object {
 	if len(args) != 4 && len(args) != 5 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4 or 5", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerAddEdge)
+	session, errObj := ledgerWriteHandleArg(args[0], BuiltinNameLedgerAddEdge)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -783,7 +878,7 @@ func LedgerAddEdge(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %s", BuiltinNameLedgerAddEdge, err.Error()))
 	}
 
-	tx := session.graph.Begin().As(store.TxContext{ActorID: session.actorID, KeyID: session.keyID})
+	tx := session.graph.Begin().As(session.txContext())
 	edgeID := tx.AddEdge(&store.Edge{
 		Src:        store.NodeID(src.Value),
 		Dst:        store.NodeID(dst.Value),

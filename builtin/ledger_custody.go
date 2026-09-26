@@ -47,7 +47,9 @@ package builtin
 //
 // The third is a decision, not an oversight, and it never closes. See the
 // roles section of `builtin/ledger.go`: Mutant authenticates nobody, and an
-// empty grant ledger records no grants either.
+// empty grant ledger records no grants either. Roles are recorded -- every
+// redaction and disclosure-family record carries the one the examiner
+// asserted -- and that is attribution, not the permission this gap is about.
 //
 // So every gap comes back with graphene's `detail` verbatim and a `remedy`
 // beside it. Both, rather than a rewrite: a reader can see that the tool
@@ -334,7 +336,7 @@ func ledgerRemedy(gap disk.CustodyGap, state ledgerCustodyState) string {
 		}
 		return ""
 	case disk.LayerRoles:
-		return "none, by decision: this posture records no grants. Mutant authenticates nobody, and an empty grant ledger would manufacture the appearance of an authorisation model behind a name somebody typed. See ledger_open"
+		return "none, by decision: this posture records no grants. Roles are asserted and recorded on every redaction and disclosure record; nothing establishes that anyone was permitted to act under one. Mutant authenticates nobody, and a grant ledger would manufacture the appearance of an authorisation model behind a name somebody typed. See ledger_open"
 	case disk.LayerExternal:
 		return state.external
 	default:
@@ -613,7 +615,7 @@ func LedgerCheckpoint(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerCheckpoint)
+	session, errObj := ledgerWriteHandleArg(args[0], BuiltinNameLedgerCheckpoint)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}

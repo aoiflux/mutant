@@ -266,18 +266,12 @@ func RecordRelease(args ...object.Object) object.Object {
 			classes[i] = c.Labels[i]
 		}
 	}
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   op,
-		Detail:  fmt.Sprintf("released %s: %s", classifiedDescribe(buffer), reason),
-		Data: map[string]any{
-			"record_uid": c.RecordUID,
-			"classes":    strings.Join(classes, ", "),
-			"tags":       strings.Join(c.Tags, ","),
-			"bytes":      int64(len(buffer.Value)),
-			"reason":     reason,
-		},
+	session.appendEvent(now, op, fmt.Sprintf("released %s: %s", classifiedDescribe(buffer), reason), map[string]any{
+		"record_uid": c.RecordUID,
+		"classes":    strings.Join(classes, ", "),
+		"tags":       strings.Join(c.Tags, ","),
+		"bytes":      int64(len(buffer.Value)),
+		"reason":     reason,
 	})
 	custodyStore.Unlock()
 

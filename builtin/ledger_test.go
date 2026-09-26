@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,11 +137,23 @@ func TestALedgerOpensInAPostureAScriptCannotTurnOff(t *testing.T) {
 }
 
 // There is no way to spell "open this without signing", so there is no test
-// for one. What there is instead: the posture is fixed at two arguments.
-func TestLedgerOpenTakesNoOptionsHash(t *testing.T) {
-	_, errObj := unwrapPair(t, LedgerOpen(stringObj("x"), stringObj("y"), makeHashObject(nil)))
+// for one. What there is instead: the one option is the role, every other key
+// is refused before anything is opened, and there is no fourth argument.
+func TestLedgerOpenTakesARoleAndNoPosture(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, key := range []string{"sign", "signed", "strict", "verify", "redaction", "retention", "roles", "audit"} {
+		_, errObj := unwrapPair(t, LedgerOpen(stringObj("x"), stringObj("y"),
+			makeHashObject(map[string]object.Object{key: boolObj(false)})))
+		if errObj == nil || !strings.Contains(errObj.Message, "unknown option") {
+			t.Errorf("ledger_open took %q as an option: %v", key, errObj)
+		}
+	}
+	if _, err := os.Stat("x"); err == nil {
+		t.Fatal("a refused ledger_open created the directory anyway")
+	}
+	_, errObj := unwrapPair(t, LedgerOpen(stringObj("x"), stringObj("y"), makeHashObject(nil), makeHashObject(nil)))
 	if errObj == nil {
-		t.Fatal("ledger_open accepted a third argument; the posture is meant to be unreachable from a script")
+		t.Fatal("ledger_open accepted a fourth argument")
 	}
 }
 

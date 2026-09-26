@@ -44,6 +44,8 @@ var DisclosureFiles = []string{
 	"case_key_passphrase.go",
 	"builtin/custody.go",
 	"builtin/class.go",
+	// the roles an examiner asserts and a recipient is named under
+	"builtin/role.go",
 	// sealing, opening and reading records, and what a read is marked with
 	"builtin/record.go",
 	"builtin/record_read.go",

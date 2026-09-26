@@ -246,7 +246,25 @@ type disclosureTx struct {
 }
 
 func disclosureBegin(session *ledgerSession) *disclosureTx {
-	return &disclosureTx{tx: session.graph.Begin().As(store.TxContext{ActorID: session.actorID, KeyID: session.keyID})}
+	return &disclosureTx{tx: session.graph.Begin().As(session.txContext())}
+}
+
+// actorNode finds or adds the Actor node for an asserted name. The id is the
+// one ledger_open derives, so the actor who opened the ledger and an authority
+// named by the same string are the same node.
+func (d *disclosureTx) actorNode(g *graphene.Graph, name string) (store.NodeID, error) {
+	id, _, err := d.findOrAdd(g, disclosureNodeActor, "actor.id", map[string]string{
+		"actor.id":   strconv.FormatUint(ledgerIDFrom([]byte(name)), 10),
+		"actor.name": name,
+	})
+	return id, err
+}
+
+// disclosurePerformedBy is what every PERFORMED_BY edge carries: the role the
+// actor said they were acting under. On the edge, because one Actor node
+// stands for one name across every act, and the role belongs to the act.
+func disclosurePerformedBy(session *ledgerSession) map[string]string {
+	return map[string]string{"role": session.role.Name}
 }
 
 // node adds one node, its whole property map in the blob and only its lookup
@@ -457,6 +475,8 @@ type disclosureIssue struct {
 	caseUID  string
 	caseID   string
 	examiner string
+	// actorRole is the role of the ledger's actor, who records the disclosure.
+	actorRole string
 
 	recipient   string
 	recipientFP string
@@ -513,6 +533,7 @@ func disclosureNodeProps(issue *disclosureIssue) map[string]string {
 		"disclosure.grant_sha256":      issue.grantSHA256,
 		"disclosure.descriptors_root":  issue.descriptorsRoot,
 		"disclosure.examiner":          issue.examiner,
+		"disclosure.actor_role":        issue.actorRole,
 		"disclosure.at":                issue.at,
 		"disclosure.unix_nano":         strconv.FormatInt(issue.ns, 10),
 	}
@@ -597,10 +618,7 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 	if err != nil {
 		return 0, err
 	}
-	actorID, _, err := tx.findOrAdd(g, disclosureNodeActor, "actor.id", map[string]string{
-		"actor.id":   strconv.FormatUint(session.actorID, 10),
-		"actor.name": session.actor,
-	})
+	actorID, err := tx.actorNode(g, session.actor)
 	if err != nil {
 		return 0, err
 	}
@@ -661,7 +679,7 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 		{recordID, disclosureEdgeGrants, map[string]string{"granted_runs": disclosureRunsText(issue.runs)}},
 		{recipientID, disclosureEdgeDisclosedTo, nil},
 		{viewID, disclosureEdgeAuthorisedBy, nil},
-		{actorID, disclosureEdgePerformedBy, nil},
+		{actorID, disclosureEdgePerformedBy, disclosurePerformedBy(session)},
 	} {
 		if err := tx.edge(disclosureID, e.dst, e.label, e.props); err != nil {
 			return 0, err

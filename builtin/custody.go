@@ -147,6 +147,9 @@ type custodyEvent struct {
 	// native Go values so the manifest can be marshalled without reaching back
 	// into the object system.
 	Data any
+	// Role is the role the examiner asserted, stamped by appendEvent on every
+	// entry so that a timeline read on its own still says who acted as what.
+	Role string
 }
 
 // custodySession is one investigation.
@@ -157,6 +160,9 @@ type custodySession struct {
 	OpenedAt   time.Time
 	ClosedAt   time.Time
 	Closed     bool
+	// Role is what the examiner asserted at case_open, or roleUnasserted. It
+	// is recorded and never checked; see role.go.
+	Role caseRole
 
 	// evidence is keyed by resolved path; order preserves registration order so
 	// the manifest reads the way the investigation ran.
@@ -286,6 +292,20 @@ func (c caseClass) render() map[string]any {
 	}
 }
 
+// appendEvent adds one entry to the timeline, stamped with the examiner's
+// role. Every entry goes through here so that none is written without it. The
+// caller holds the custody lock.
+func (s *custodySession) appendEvent(at time.Time, event, detail string, data any) {
+	s.timeline = append(s.timeline, custodyEvent{
+		At:      at,
+		Elapsed: at.Sub(s.OpenedAt),
+		Event:   event,
+		Detail:  detail,
+		Data:    data,
+		Role:    s.Role.Name,
+	})
+}
+
 // custodyStore holds the one open case. A case is process-wide on purpose: a
 // `spawn`ed task gets its own VM but shares this package, so evidence a task
 // reads lands in the same manifest -- which is what an examiner means by "the
@@ -309,7 +329,7 @@ var custodyNow = time.Now
 // rather than ignored: a case opened with {"hash_policy": "sha256"} would
 // otherwise digest nothing and say so only after the evidence was opened.
 var (
-	caseOpenOptions     = []string{"hash"}
+	caseOpenOptions     = []string{"hash", "role"}
 	caseEvidenceOptions = []string{"hash"}
 )
 
@@ -355,6 +375,13 @@ func CaseOpen(args ...object.Object) object.Object {
 		return resultAndError(nil, newError(
 			"case_open: unknown hash policy %q; want \"none\", \"md5\", \"sha1\" or \"sha256\"", policy))
 	}
+	role, _, errObj := roleOption(BuiltinNameCaseOpen, opts)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if errObj := roleConflict(BuiltinNameCaseOpen, examiner, role, nil); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	custodyStore.Lock()
 	if custodyStore.session != nil && !custodyStore.session.Closed {
@@ -370,15 +397,12 @@ func CaseOpen(args ...object.Object) object.Object {
 		Examiner:   examiner,
 		HashPolicy: policy,
 		OpenedAt:   now,
+		Role:       role,
 		evidence:   map[string]*custodyEvidence{},
 		handles:    map[string][]string{},
 	}
-	session.timeline = append(session.timeline, custodyEvent{
-		At:    now,
-		Event: BuiltinNameCaseOpen,
-		Detail: fmt.Sprintf("case %s opened by %s; hash policy %s",
-			id, examiner, policy),
-	})
+	session.appendEvent(now, BuiltinNameCaseOpen, fmt.Sprintf("case %s opened by %s as %s; hash policy %s",
+		id, examiner, role.Name, policy), nil)
 	custodyStore.session = session
 	custodyStore.Unlock()
 	custodyActive.Store(true)
@@ -389,6 +413,9 @@ func CaseOpen(args ...object.Object) object.Object {
 		"hash_policy": stringObj(policy),
 		"opened_at":   stringObj(now.UTC().Format(time.RFC3339Nano)),
 		"status":      stringObj("open"),
+		"role":        stringObj(role.Name),
+		// Always false: the role is what the examiner typed.
+		"role_authenticated": boolObj(false),
 	}), nil)
 }
 
@@ -425,13 +452,7 @@ func CaseNote(args ...object.Object) object.Object {
 	}
 
 	now := custodyNow()
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   "note",
-		Detail:  textObj.Value,
-		Data:    data,
-	})
+	session.appendEvent(now, "note", textObj.Value, data)
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"event":      stringObj("note"),
@@ -467,14 +488,7 @@ func custodyRecordArtifact(event, detail string, data map[string]any) {
 		return
 	}
 
-	now := custodyNow()
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   event,
-		Detail:  detail,
-		Data:    data,
-	})
+	session.appendEvent(custodyNow(), event, detail, data)
 }
 
 // CaseEvidence brings a file under custody that no evidence opener will ever
@@ -559,12 +573,7 @@ func CaseEvidence(args ...object.Object) object.Object {
 		}
 		session.evidence[source.path] = record
 		session.order = append(session.order, source.path)
-		session.timeline = append(session.timeline, custodyEvent{
-			At:      now,
-			Elapsed: now.Sub(session.OpenedAt),
-			Event:   "evidence_registered",
-			Detail:  fmt.Sprintf("case_evidence registered %s", source.path),
-		})
+		session.appendEvent(now, "evidence_registered", fmt.Sprintf("case_evidence registered %s", source.path), nil)
 	}
 	if digest != "" && record.Digest == "" {
 		record.Digest = digest
@@ -695,15 +704,8 @@ func CaseVerify(args ...object.Object) object.Object {
 
 	custodyStore.Lock()
 	if custodyStore.session == session && !session.Closed {
-		now := custodyNow()
-		session.timeline = append(session.timeline, custodyEvent{
-			At:      now,
-			Elapsed: now.Sub(session.OpenedAt),
-			Event:   "verify",
-			Detail: fmt.Sprintf("%d sources checked: %d unchanged, %d changed, %d missing",
-				len(checks), counts["unchanged"], counts["changed"], counts["missing"]),
-			Data: report,
-		})
+		session.appendEvent(custodyNow(), "verify", fmt.Sprintf("%d sources checked: %d unchanged, %d changed, %d missing",
+			len(checks), counts["unchanged"], counts["changed"], counts["missing"]), report)
 	}
 	custodyStore.Unlock()
 
@@ -746,12 +748,8 @@ func CaseClose(args ...object.Object) object.Object {
 	now := custodyNow()
 	session.Closed = true
 	session.ClosedAt = now
-	session.timeline = append(session.timeline, custodyEvent{
-		At:      now,
-		Elapsed: now.Sub(session.OpenedAt),
-		Event:   BuiltinNameCaseClose,
-		Detail:  fmt.Sprintf("case %s closed after %s", session.ID, now.Sub(session.OpenedAt).Round(time.Millisecond)),
-	})
+	session.appendEvent(now, BuiltinNameCaseClose,
+		fmt.Sprintf("case %s closed after %s", session.ID, now.Sub(session.OpenedAt).Round(time.Millisecond)), nil)
 	manifest := session.manifest()
 
 	// The one place K_case dies. It is done here, under the lock the close
@@ -924,12 +922,7 @@ func custodyRecordOpenAt(builtinName, handle string, region fsRegion, paths ...s
 	}
 
 	for _, path := range registered {
-		session.timeline = append(session.timeline, custodyEvent{
-			At:      now,
-			Elapsed: now.Sub(session.OpenedAt),
-			Event:   "evidence_registered",
-			Detail:  fmt.Sprintf("%s opened %s", builtinName, path),
-		})
+		session.appendEvent(now, "evidence_registered", fmt.Sprintf("%s opened %s", builtinName, path), nil)
 	}
 }
 
@@ -1140,6 +1133,7 @@ func (s *custodySession) manifest() map[string]any {
 			"elapsed_ms": event.Elapsed.Milliseconds(),
 			"event":      event.Event,
 			"detail":     event.Detail,
+			"role":       event.Role,
 		}
 		if event.Data != nil {
 			entry["data"] = event.Data
@@ -1163,6 +1157,10 @@ func (s *custodySession) manifest() map[string]any {
 			"closed_at":   custodyOptionalTime(s.Closed, s.ClosedAt),
 			"status":      status,
 			"duration_ms": end.Sub(s.OpenedAt).Milliseconds(),
+			// What the examiner said they were acting as, and in a field beside
+			// it, that nothing checked it. See role.go.
+			"role":               s.Role.Name,
+			"role_authenticated": false,
 		},
 		"tool": map[string]any{
 			"version":    global.Version,
