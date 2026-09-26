@@ -650,6 +650,12 @@ exhaustive lists.
   an entry pointing at nothing. It now looks the node up first and refuses by
   name.
 
+- **Every disclosure write rewrote the ledger's label table.** The disclosure
+  family's label names were written and fsynced beside the ledger on every
+  disclosure, withdrawal and reclassification. They are now written on the
+  first of these after each `ledger_open`. Asking about a reclassification that
+  is already recorded went from about 4 ms to about 14 µs.
+
 - **Four examples reported the wrong numbers, and their recorded output locked
   them in.** `mini_timeline_builder` indexed `fs_stat`'s error field for every
   file, which is null for a file that stats cleanly, so its output was a run of

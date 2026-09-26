@@ -115,6 +115,23 @@ func disclosureTypeNames() (map[store.NodeType]string, map[store.EdgeType]string
 		}
 }
 
+// disclosureDeclareNames writes the family's label names beside the ledger on
+// the first disclosure write of a session, and not again: graphene rewrites
+// and fsyncs the whole table on every declaration, and nothing this program
+// does while the ledger is open takes a name out of it. The caller holds
+// disclosureLedgerMu.
+func disclosureDeclareNames(session *ledgerSession) error {
+	if session.disclosureNamesDeclared {
+		return nil
+	}
+	nodes, edges := disclosureTypeNames()
+	if err := session.graph.DeclareTypeNames(nodes, edges); err != nil {
+		return err
+	}
+	session.disclosureNamesDeclared = true
+	return nil
+}
+
 // disclosureLedgerMu serialises this family's ledger writes within the
 // process. A find-then-add is two calls, and two spawned tasks disclosing the
 // same record at once would otherwise both find no Record node and both add
@@ -563,8 +580,7 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 	defer disclosureLedgerMu.Unlock()
 
 	g := session.graph
-	nodes, edges := disclosureTypeNames()
-	if err := g.DeclareTypeNames(nodes, edges); err != nil {
+	if err := disclosureDeclareNames(session); err != nil {
 		return 0, err
 	}
 	// disclosurePreflight asked this before the grant was issued; asked again

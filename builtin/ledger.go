@@ -220,6 +220,11 @@ type ledgerSession struct {
 	// surfaces it.
 	keyCreatedForThisRun bool
 
+	// disclosureNamesDeclared is set once this session has written the
+	// disclosure family's label names beside the ledger. Read and set under
+	// disclosureLedgerMu.
+	disclosureNamesDeclared bool
+
 	openedAt time.Time
 }
 

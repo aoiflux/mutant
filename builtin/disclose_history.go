@@ -195,8 +195,7 @@ func disclosureWriteWithdrawal(op string, session *ledgerSession, uid, reason st
 	defer disclosureLedgerMu.Unlock()
 
 	g := session.graph
-	nodes, edges := disclosureTypeNames()
-	if err := g.DeclareTypeNames(nodes, edges); err != nil {
+	if err := disclosureDeclareNames(session); err != nil {
 		return disclosureNode{}, newError("%s: %s", op, err.Error())
 	}
 	disclosure, found, err := disclosureFind(g, disclosureNodeDisclosure, "disclosure.uid", uid)

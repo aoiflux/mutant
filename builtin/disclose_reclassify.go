@@ -260,8 +260,7 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 	defer disclosureLedgerMu.Unlock()
 
 	g := session.graph
-	nodes, edges := disclosureTypeNames()
-	if err := g.DeclareTypeNames(nodes, edges); err != nil {
+	if err := disclosureDeclareNames(session); err != nil {
 		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
 	}
 	newUID := strings.ToLower(current.header.RecordUID)
