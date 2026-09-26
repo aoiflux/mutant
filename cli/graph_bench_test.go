@@ -99,6 +99,10 @@ var benchQuestionArguments = map[string][]string{
 	"callees":  {"f10_3"},
 	"outline":  {"lib/m10.mut"},
 	"exported": {""},
+	"types":    {""},
+	"type":     {"S9", "no_such_type"},
+	"deps":     {"lib/m10.mut"},
+	"rdeps":    {"lib/m10.mut"},
 }
 
 // BenchmarkGraphQuery asks every question the way the command does, opening

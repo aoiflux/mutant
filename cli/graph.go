@@ -73,9 +73,27 @@ const (
 	edgeReferences
 	edgeImports
 	edgeUsesType
+
+	// Added in 2.6.0, after every label an earlier store can hold. See
+	// roleLabelNames.
+	edgeConstructs
+	edgeMatches
 )
 
+// labelNames is every label this build writes, and what DeclareTypeNames puts
+// beside the image.
 func labelNames() (map[store.NodeType]string, map[store.EdgeType]string) {
+	nodes, edges := baseLabelNames()
+	for label, name := range roleLabelNames() {
+		edges[label] = name
+	}
+	return nodes, edges
+}
+
+// baseLabelNames is the vocabulary every symbol graph has carried since the
+// first export, and the part of the label table a store must hold to be read
+// as one at all.
+func baseLabelNames() (map[store.NodeType]string, map[store.EdgeType]string) {
 	return map[store.NodeType]string{
 			nodeModule:      "Module",
 			nodeDeclaration: "Declaration",
@@ -95,6 +113,18 @@ func labelNames() (map[store.NodeType]string, map[store.EdgeType]string) {
 			edgeImports:    "IMPORTS",
 			edgeUsesType:   "USES_TYPE",
 		}
+}
+
+// roleLabelNames are the two labels 2.6.0 added: a further label on a
+// REFERENCES edge whose use builds the struct it names, or compares against
+// what it names in a match arm. They are kept apart from the base set so that
+// a store exported before them still opens -- it simply cannot say which of
+// its uses were constructions, and the questions that need to know say so.
+func roleLabelNames() map[store.EdgeType]string {
+	return map[store.EdgeType]string{
+		edgeConstructs: "CONSTRUCTS",
+		edgeMatches:    "MATCHES",
+	}
 }
 
 // kindLabel is the second label a declaration carries, beside Declaration.
@@ -159,6 +189,15 @@ type ExportSummary struct {
 	// nothing".
 	UnresolvedImports int
 
+	// TypeUses is how many of the references name a struct or enum another
+	// module declares. UnresolvedTypeUses is how many uses of a type have no
+	// edge at all, because the type is declared by a module compiled after the
+	// one using it, or by none -- the compiler refuses both. It is reported for
+	// the reason UnresolvedImports is: a type with no recorded uses otherwise
+	// reads as a type nobody uses.
+	TypeUses           int
+	UnresolvedTypeUses int
+
 	// Refusals are the program-wide rules the exported program breaks. They do
 	// not stop the export: a graph of a program that will not compile is
 	// exactly the graph someone is looking at when they are working out why.
@@ -187,6 +226,21 @@ type moduleProps struct {
 	Path    string `json:"path"`
 	Display string `json:"display"`
 	Name    string `json:"name"`
+
+	// UnresolvedTypeUses are this module's uses of a type that left no edge,
+	// written down rather than counted and forgotten, so that `type` can name
+	// them beside the uses that did resolve. Absent from a store exported
+	// before 2.6.0, which never looked.
+	UnresolvedTypeUses []typeMiss `json:"unresolved_type_uses,omitempty"`
+}
+
+// typeMiss is one use of a type that did not resolve: the name, where it is
+// written, and what it did there -- "construct" for a struct literal.
+type typeMiss struct {
+	Name   string `json:"name"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+	Role   string `json:"role"`
 }
 
 type refProps struct {
@@ -299,6 +353,10 @@ func ExportProgram(program *sema.Program, out string) (summary ExportSummary, er
 
 	summary.Modules = len(program.Modules)
 	summary.UnresolvedImports = writer.unresolved
+	summary.TypeUses = writer.typeUses
+	for _, mod := range program.Modules {
+		summary.UnresolvedTypeUses += len(mod.UnresolvedTypeUses)
+	}
 	summary.Declarations = writer.declarations
 	summary.References = writer.references
 	summary.Imports = writer.importEdges
@@ -350,6 +408,7 @@ type graphWriter struct {
 	references   int
 	importEdges  int
 	unresolved   int
+	typeUses     int
 }
 
 // declKey is the minted identity: where a declaration is, not what it is
@@ -364,12 +423,21 @@ func (w *graphWriter) nodes(out *graphene.BulkNodeWriter) error {
 	w.decls = make(map[string]map[sema.DeclID]store.NodeID, len(w.program.Modules))
 
 	for _, mod := range w.program.Modules {
-		blob, err := json.Marshal(moduleProps{
+		props := moduleProps{
 			Key:     mod.Key,
 			Path:    mod.Path,
 			Display: mod.Display,
 			Name:    moduleName(mod),
-		})
+		}
+		for _, miss := range mod.UnresolvedTypeUses {
+			props.UnresolvedTypeUses = append(props.UnresolvedTypeUses, typeMiss{
+				Name:   miss.Name,
+				Line:   miss.UseRange.Start.Line,
+				Column: miss.UseRange.Start.Column,
+				Role:   miss.Role.String(),
+			})
+		}
+		blob, err := json.Marshal(props)
 		if err != nil {
 			return err
 		}
@@ -555,15 +623,26 @@ func (w *graphWriter) declarationEdgesOf(out *graphene.BulkEdgeWriter, mod *sema
 // A use of a type carries USES_TYPE as a second label on the same edge rather
 // than as an edge of its own, which is what makes "everything that uses Point"
 // a lookup without letting it drift out of step with the references it is a
-// subset of. A call is a property on the edge for the same reason and the one
-// the plan gives: a separate set of call edges can disagree with the reference
-// set, and a field on the reference cannot.
+// subset of. CONSTRUCTS and MATCHES are further labels on the same edge for the
+// same reason, and so a construction is still a use. A call is a property on
+// the edge for the reason the plan gives: a separate set of call edges can
+// disagree with the reference set, and a field on the reference cannot.
+//
+// A reference can land in another module: a struct or enum is resolved across
+// modules in compile order, which is sema.Program's business, and the target
+// is then a declaration of the module that declares it. Every declaration of
+// every module is written before any edge, so the target is looked up by its
+// own module rather than this one.
 func (w *graphWriter) referenceEdgesOf(out *graphene.BulkEdgeWriter, mod *sema.ModuleGraph,
 	moduleID store.NodeID, byDecl map[sema.DeclID]store.NodeID) error {
 
 	for _, ref := range mod.Graph.References() {
-		target, known := byDecl[ref.Target]
+		target, known := w.decls[ref.Target.Module][ref.Target]
 		if !known {
+			continue
+		}
+		targetNode, found := w.declarationOf(ref.Target)
+		if !found {
 			continue
 		}
 
@@ -578,9 +657,18 @@ func (w *graphWriter) referenceEdgesOf(out *graphene.BulkEdgeWriter, mod *sema.M
 		}
 
 		labels := []store.EdgeType{edgeReferences}
-		if node, found := mod.Graph.NodeFor(ref.Target); found &&
-			(node.Kind == sema.KindStruct || node.Kind == sema.KindEnum) {
+		isType := targetNode.Kind == sema.KindStruct || targetNode.Kind == sema.KindEnum
+		if isType {
 			labels = append(labels, edgeUsesType)
+		}
+		switch ref.Role {
+		case sema.RoleConstruct:
+			labels = append(labels, edgeConstructs)
+		case sema.RolePattern:
+			labels = append(labels, edgeMatches)
+		}
+		if isType && ref.Target.Module != mod.Key {
+			w.typeUses++
 		}
 
 		blob, err := json.Marshal(refProps{
@@ -605,6 +693,16 @@ func (w *graphWriter) referenceEdgesOf(out *graphene.BulkEdgeWriter, mod *sema.M
 		w.references++
 	}
 	return nil
+}
+
+// declarationOf is the declaration a DeclID names, in whichever module
+// declares it.
+func (w *graphWriter) declarationOf(id sema.DeclID) (*sema.Node, bool) {
+	owner, known := w.program.ModuleFor(id.Module)
+	if !known {
+		return nil, false
+	}
+	return owner.Graph.NodeFor(id)
 }
 
 // readableScope renders a scope path for a human. The reserved roots carry a

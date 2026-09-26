@@ -217,7 +217,10 @@ type Ref struct {
 	Use      ast.Node
 	UseRange ast.Range
 
-	// Target is the declaration referred to.
+	// Target is the declaration referred to. In a graph BuildProgram built, a
+	// struct or enum, and a field or variant of one, may be declared by a
+	// module compiled earlier: Target.Module then names that module, and
+	// NodeFor on this graph does not find it -- the declaring module's does.
 	Target DeclID
 
 	// InCallPosition reports that Use is the Function of a CallExpression. It
@@ -241,6 +244,52 @@ type Ref struct {
 	// call is an edge From -> Target. That is what `mutant graph export`
 	// writes, and what a call hierarchy would read.
 	From *Node
+
+	// Role is what the use does with the declaration: names it, builds it, or
+	// compares against it in a match arm.
+	Role RefRole
+}
+
+// RefRole is what a use does with the declaration it names.
+//
+// Most uses just name it: read a value, call a function, reach a member. Two
+// are worth telling apart, because a question about a type is usually one of
+// them rather than "where is it mentioned". A struct literal builds the struct
+// it names -- `Point{x: 1}` is where Points come from -- and a name written in
+// a match arm's pattern is compared with the subject, which is where an enum's
+// variants are told apart.
+//
+// It is a field on the reference rather than a list of its own for the reason
+// InCallPosition is: a second list can drift out of step with the first, and a
+// field cannot.
+type RefRole uint8
+
+const (
+	// RoleUse is every use that is neither of the two below.
+	RoleUse RefRole = iota
+
+	// RoleConstruct is the type name of a struct literal: `Point` of
+	// `Point{x: 1}`, wherever the literal is written. The field names inside
+	// it are uses of the fields, not constructions of anything.
+	RoleConstruct
+
+	// RolePattern is a name written in a match arm's pattern: `Status` and
+	// `Ok` of `Status.Ok => ...`. The parser admits a literal or a dotted
+	// path there and nothing else, so every name a pattern holds is one the
+	// subject is compared with.
+	RolePattern
+)
+
+func (r RefRole) String() string {
+	switch r {
+	case RoleUse:
+		return "use"
+	case RoleConstruct:
+		return "construct"
+	case RolePattern:
+		return "pattern"
+	}
+	return "unknown"
 }
 
 // UnboundKind says what a name's absence means. It is about the position the
@@ -330,6 +379,14 @@ type Unbound struct {
 	// the same claim: the first is a macro special form the evaluator gives
 	// meaning to, the second is a name the compiler refuses.
 	InCall bool
+
+	// From and Role are what a Ref would have carried had the name resolved:
+	// the declaration the use sits inside, nil at the top level of the file,
+	// and what the use does. A miss is counted against the declaration that
+	// made it, and a struct literal of a type nobody declared is a
+	// construction that did not happen rather than a bare name.
+	From *Node
+	Role RefRole
 }
 
 // ImportEdge is one `import` statement.
@@ -430,6 +487,21 @@ type Scope struct {
 // constructor because a caller that skips it is choosing to get less, and that
 // should be visible at the call.
 func BuildFile(moduleKey string, program *ast.Program, w *Workspace, structOf StructOf) *Graph {
+	return buildFile(moduleKey, program, w, structOf, nil)
+}
+
+// typesBefore answers for the struct and enum names declared by the modules a
+// program compiles before this one: the declaration of that name and kind, and
+// the graph it is in, or nil when no earlier module declares one.
+//
+// It is what makes a struct literal of another module's type a reference
+// rather than a miss, and it is unexported because only BuildProgram can
+// answer it truthfully. A file on its own has no "before": which modules
+// precede it is decided by the loader's post-order, and a caller guessing at it
+// would resolve names the compiler refuses.
+type typesBefore func(name string, kind NodeKind) (*Node, *Graph)
+
+func buildFile(moduleKey string, program *ast.Program, w *Workspace, structOf StructOf, before typesBefore) *Graph {
 	g := &Graph{
 		Module: moduleKey,
 		Root:   &Scope{Path: ScopeTopLevel},
@@ -452,6 +524,7 @@ func BuildFile(moduleKey string, program *ast.Program, w *Workspace, structOf St
 		anon:     make(map[*Scope]int, 4),
 		targets:  targets,
 		structOf: structOf,
+		before:   before,
 	}
 	for _, stmt := range program.Statements {
 		b.statement(stmt)
@@ -524,6 +597,11 @@ type builder struct {
 	anon     map[*Scope]int
 	targets  map[string]string
 	structOf StructOf
+	before   typesBefore
+
+	// inPattern is set while the walk is inside a match arm's pattern, which
+	// is what makes a use there a RolePattern.
+	inPattern bool
 }
 
 func (b *builder) rangeOf(node ast.Node) (ast.Range, bool) {
@@ -630,17 +708,28 @@ func (b *builder) reference(ident *ast.Identifier, inCall bool) {
 	}
 	target := b.lookup(ident.Value)
 	if target == nil {
-		b.noteUnbound(ident, rng, UnboundValue, inCall)
+		b.noteUnbound(ident, rng, UnboundValue, inCall, b.role())
 		return
 	}
-	b.record(ident, rng, target.ID, inCall)
+	b.record(ident, rng, target.ID, inCall, b.role())
+}
+
+// role is what a use the walk has just reached does, when nothing about the
+// use itself says more: a construction is decided by the struct literal, and
+// everything else by whether the walk is inside a pattern.
+func (b *builder) role() RefRole {
+	if b.inPattern {
+		return RolePattern
+	}
+	return RoleUse
 }
 
 // noteUnbound records a use of a name this file declares nowhere. See Unbound
 // for why it is kept apart from the references.
-func (b *builder) noteUnbound(ident *ast.Identifier, rng ast.Range, kind UnboundKind, inCall bool) {
+func (b *builder) noteUnbound(ident *ast.Identifier, rng ast.Range, kind UnboundKind, inCall bool, role RefRole) {
 	b.g.unbound = append(b.g.unbound, Unbound{
 		Name: ident.Value, Kind: kind, Use: ident, UseRange: rng, InCall: inCall,
+		From: b.enclosing(), Role: role,
 	})
 }
 
@@ -651,7 +740,10 @@ func (b *builder) unboundReceiver(left *ast.Identifier, node *ast.FieldExpressio
 	if !ok {
 		return
 	}
-	miss := Unbound{Name: left.Value, Kind: UnboundReceiver, Use: left, UseRange: rng}
+	miss := Unbound{
+		Name: left.Value, Kind: UnboundReceiver, Use: left, UseRange: rng,
+		From: b.enclosing(), Role: b.role(),
+	}
 	if node.Field != nil {
 		miss.Member = node.Field.Value
 	}
@@ -666,10 +758,10 @@ func (b *builder) unboundReceiver(left *ast.Identifier, node *ast.FieldExpressio
 // and both of those are indexed at the end of the build. Keeping an unused
 // index is not free here -- it is an interface-keyed map write per identifier
 // in the file, on a walk that is already allocation-bound.
-func (b *builder) record(use ast.Node, rng ast.Range, target DeclID, inCall bool) {
+func (b *builder) record(use ast.Node, rng ast.Range, target DeclID, inCall bool, role RefRole) {
 	b.g.refList = append(b.g.refList, Ref{
 		Use: use, UseRange: rng, Target: target, InCallPosition: inCall,
-		From: b.enclosing(),
+		From: b.enclosing(), Role: role,
 	})
 }
 

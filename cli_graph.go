@@ -75,6 +75,17 @@ func runGraphExport(args []string) int {
 	fmt.Printf("  %d modules, %d declarations\n", summary.Modules, summary.Declarations)
 	fmt.Printf("  %d nodes, %d edges (%d references, %d imports)\n",
 		summary.Nodes, summary.Edges, summary.References, summary.Imports)
+	if summary.TypeUses > 0 {
+		fmt.Printf("  %d of the references name a struct or enum another module declares\n", summary.TypeUses)
+	}
+	// Not a refusal: the export writes the program as it is. But a use with no
+	// edge is one no answer will show as a use, and this is the one place to
+	// say so without being asked.
+	if summary.UnresolvedTypeUses > 0 {
+		fmt.Printf("  %d use(s) of a type left no edge: the type is declared only by a module "+
+			"compiled later, or by none, which the compiler refuses. `graph query types` lists them\n",
+			summary.UnresolvedTypeUses)
+	}
 
 	// Refusals are printed and the export still succeeded. The graph describes
 	// the program as written, and a program that will not compile is exactly
@@ -252,8 +263,11 @@ What is written:
 
   Edges: DECLARES (module to declaration), ENCLOSES (declaration to the
   declarations written inside it), REFERENCES (one per use, carrying the
-  position and whether it was a call), IMPORTS (module to module) and USES_TYPE,
-  which is a second label on the references that name a struct or an enum.
+  position and whether it was a call) and IMPORTS (module to module). Three
+  further labels ride on a REFERENCES edge: USES_TYPE when it names a struct or
+  an enum, CONSTRUCTS when a struct literal builds one, and MATCHES when a
+  match arm compares against it. A type another module declares is resolved as
+  the compiler resolves it, against the modules compiled first.
 
 The store is self-describing: the label names are written beside the image, so
 it stays readable without this program. Positions are file-local, matching the

@@ -158,6 +158,36 @@ func TestHoverOnEnumDeclarationListsVariants(t *testing.T) {
 	}
 }
 
+// A type card says how often this file builds the struct, or names the enum in
+// a match pattern -- the two things a reader hovering a type usually wants,
+// and what the symbol graph's CONSTRUCTS and MATCHES record program-wide. It
+// says "in this file", because a file's graph is all the editor has.
+func TestHoverOnATypeCountsItsConstructionsAndMatches(t *testing.T) {
+	s := New().Analyze("struct Point { x; };\n" +
+		"enum Side { Left, Right };\n" +
+		"let a = Point{x: 1};\n" +
+		"let b = fn() { return Point{x: 2}; };\n" +
+		"let pick = fn(side) { return match (side) { Side.Left | Side.Right => 1, }; };\n" +
+		"let c = Side.Left;\n")
+
+	point, _, ok := s.HoverText(lsp.Position{Line: 0, Character: 8})
+	if !ok || !strings.Contains(point, "_Built 2 times in this file._") {
+		t.Fatalf("the struct card does not count its two constructions:\n%s", point)
+	}
+	side, _, ok := s.HoverText(lsp.Position{Line: 1, Character: 6})
+	if !ok || !strings.Contains(side, "_Named in 2 match patterns in this file._") {
+		t.Fatalf("the enum card does not count the two patterns -- and only those:\n%s", side)
+	}
+
+	unused := New().Analyze("struct Lonely { x; };\nenum Quiet { One };\n")
+	lonely, _, _ := unused.HoverText(lsp.Position{Line: 0, Character: 8})
+	quiet, _, _ := unused.HoverText(lsp.Position{Line: 1, Character: 6})
+	if !strings.Contains(lonely, "_Not built anywhere in this file._") ||
+		!strings.Contains(quiet, "_Not named in any match pattern in this file._") {
+		t.Fatalf("a type nothing builds or matches does not say so:\n%s\n%s", lonely, quiet)
+	}
+}
+
 // TestHoverOnTypeNameUsageReachesTheSameCard checks a type name mentioned away
 // from its declaration — as a literal's type — gets the card rather than the
 // bare "identifier `Point` : Point" line it used to.

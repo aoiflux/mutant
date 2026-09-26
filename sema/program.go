@@ -20,7 +20,7 @@ import (
 //
 // # What it adds over calling BuildFile in a loop
 //
-// Two things, and both need every module present at once.
+// Three things, and all of them need more than one module in hand.
 //
 // The first is that an import alias only has a target if the module it names is
 // already known, so the facts for every file have to be recorded before any
@@ -32,6 +32,16 @@ import (
 // the same struct name anywhere in the program, and ByteCode.StructDefs is one
 // flat map. A per-module graph cannot see that, so it is decided here, and the
 // refusal is the compiler's own sentence rather than a second phrasing of it.
+//
+// The third follows from the second: a type used in one module and declared in
+// another. The compiler resolves `Loc{a: 1}` against every type the modules
+// compiled before this one declared, so the graphs are built in compile order
+// and each one's types are claimed only after it is built -- which makes the
+// table, while a module is being built, exactly what the compiler can see when
+// it compiles that module. A use it resolves is a Ref into the declaring
+// module, carried as a DeclID -- the one form Graph lets a reference to another
+// file take. A use of a type the program declares too late, or not at all, is a miss the
+// compiler refuses, and is counted in UnresolvedTypeUses.
 //
 // # What it does not do
 //
@@ -70,6 +80,17 @@ type ModuleGraph struct {
 	Path, Display string
 
 	Graph *Graph
+
+	// UnresolvedTypeUses are the uses in this module of a type it could not
+	// see: a struct literal whose type no module compiled before it declares,
+	// and an enum variant reached before the enum's module is compiled. The
+	// compiler refuses both, and a reader of the graph is owed the count --
+	// without it, a type with no recorded uses reads as a type nobody uses.
+	//
+	// An unbound `x.y` is here only when x is an enum somewhere in the program
+	// and y is one of its variants. `hash.sha256` is a builtin, not a use of
+	// an enum a later module happens to call `hash`.
+	UnresolvedTypeUses []Unbound
 }
 
 // ProgramFile is one parsed file, in the shape a loader already holds it.
@@ -126,6 +147,8 @@ func BuildProgram(files []ProgramFile, searchPaths []string) *Program {
 	}
 
 	// Pass two: the graphs, and the program-wide type table alongside them.
+	// A module's types are claimed after its graph is built and not before,
+	// which is what keeps typeBefore to the modules compiled ahead of it.
 	for _, file := range files {
 		if file.Program == nil {
 			continue
@@ -141,14 +164,64 @@ func BuildProgram(files []ProgramFile, searchPaths []string) *Program {
 			Key:     key,
 			Path:    file.Path,
 			Display: file.Display,
-			Graph:   BuildFile(key, file.Program, p.ws, nil),
+			Graph:   buildFile(key, file.Program, p.ws, nil, p.typeBefore),
 		}
 		p.Modules = append(p.Modules, module)
 		p.byKey[key] = module
 		p.claimTypeNames(module)
 	}
 
+	// Pass three: the type uses nothing resolved, which can only be told apart
+	// from other misses once every module's types are known.
+	for _, module := range p.Modules {
+		for _, miss := range module.Graph.UnboundUses() {
+			if p.isTypeUse(miss) {
+				module.UnresolvedTypeUses = append(module.UnresolvedTypeUses, miss)
+			}
+		}
+	}
+
 	return p
+}
+
+// typeBefore is the builder's view of the program-wide type table while one
+// module is being built. See the third point on Program.
+func (p *Program) typeBefore(name string, kind NodeKind) (*Node, *Graph) {
+	owner, claimed := p.types[name]
+	if !claimed || owner.Graph == nil {
+		return nil, nil
+	}
+	declared := owner.Graph.typeNamedKind(name, kind)
+	if declared == nil {
+		return nil, nil
+	}
+	return declared, owner.Graph
+}
+
+// isTypeUse reports whether a miss names a type. A struct literal always does:
+// its name is a type by where it is written. `Dir.S` does when Dir is an enum
+// the program declares and S one of its variants -- anything less and it is
+// more likely a builtin family or a typo than an enum reached too early.
+func (p *Program) isTypeUse(miss Unbound) bool {
+	switch miss.Kind {
+	case UnboundType:
+		return true
+	case UnboundReceiver:
+		owner, claimed := p.types[miss.Name]
+		if !claimed {
+			return false
+		}
+		enum := owner.Graph.typeNamedKind(miss.Name, KindEnum)
+		if enum == nil {
+			return false
+		}
+		for _, variant := range owner.Graph.membersOf(enum) {
+			if variant.Name == miss.Member {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // claimTypeNames files this module's struct and enum names in the program-wide

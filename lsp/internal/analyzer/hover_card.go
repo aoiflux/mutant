@@ -1,11 +1,13 @@
 package analyzer
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
 	mast "mutant/ast"
 	"mutant/builtin"
+	"mutant/sema"
 )
 
 // One hover card shape, for every callable.
@@ -232,7 +234,46 @@ func structCard(s *Snapshot, name string) (typeCard, bool) {
 		card.footer = append(card.footer,
 			"_Field types are inferred from this file's struct initializers._")
 	}
+	if built, ok := typeUsesInFile(s, name, sema.KindStruct, sema.RoleConstruct); ok {
+		card.footer = append(card.footer, countLine(built,
+			"_Not built anywhere in this file._", "_Built once in this file._", "_Built %d times in this file._"))
+	}
 	return card, true
+}
+
+// typeUsesInFile counts the uses in this file of the struct or enum declared
+// here under name that play one role: the struct literals that build it, or
+// the match patterns that name it.
+//
+// It is this file's count, and the card says so. A type built in another
+// module is built in that module's graph, and a file's graph is all the editor
+// builds per keystroke; the program-wide count is `mutant graph query type`'s
+// to give. A type this file does not declare has no count here at all, rather
+// than a zero that would read as "nobody builds it".
+func typeUsesInFile(s *Snapshot, name string, kind sema.NodeKind, role sema.RefRole) (int, bool) {
+	graph := s.Graph()
+	declared, _, found := graph.TypeNamed(name)
+	if !found || declared.Kind != kind {
+		return 0, false
+	}
+	count := 0
+	for _, ref := range graph.References() {
+		if ref.Target == declared.ID && ref.Role == role {
+			count++
+		}
+	}
+	return count, true
+}
+
+// countLine picks the sentence for a count: none, one, or several.
+func countLine(n int, none, one, several string) string {
+	switch n {
+	case 0:
+		return none
+	case 1:
+		return one
+	}
+	return fmt.Sprintf(several, n)
 }
 
 // enumCard lists an enum's variants with the ordinal each one carries.
@@ -256,6 +297,12 @@ func enumCard(s *Snapshot, name string) (typeCard, bool) {
 	}
 	if len(variants) > 0 {
 		card.footer = append(card.footer, "_Ordinals are assigned by declaration order._")
+	}
+	if matched, ok := typeUsesInFile(s, name, sema.KindEnum, sema.RolePattern); ok {
+		card.footer = append(card.footer, countLine(matched,
+			"_Not named in any match pattern in this file._",
+			"_Named in one match pattern in this file._",
+			"_Named in %d match patterns in this file._"))
 	}
 	return card, true
 }

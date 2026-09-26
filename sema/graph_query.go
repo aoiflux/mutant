@@ -404,15 +404,44 @@ func (b *builder) memberScope(segment string, owner *Node) *Scope {
 	return child
 }
 
-// lookupType finds a struct or enum by name. The most recent declaration wins,
-// matching the scope chain: in a file mid-edit with two `struct Point`, the
-// second is the one the cursor below it means.
+// lookupType finds a struct or enum by name: in this file as far as the walk
+// has reached, and then in the modules compiled before this one.
+//
+// That is the compiler's own reach, and for the compiler's reason. Its
+// structDefinitions and enumDefinitions are one table for the whole program,
+// filled as each type's statement compiles, and modules compile in the
+// loader's post-order -- so at any point in a module it can see every type of
+// every module before it and the ones this file has declared so far, and
+// nothing else. A struct literal of a type a later module declares is refused
+// ("undefined struct type") even though the program declares it, and the
+// graph records it as the miss it is.
+//
+// This file is asked first, but not because it would win a tie: a name two
+// modules both declare is refused program-wide, so there is no tie to break.
 func (b *builder) lookupType(name string, kind NodeKind) *Node {
-	if b.g.Types == nil || name == "" {
+	if name == "" {
 		return nil
 	}
-	for i := len(b.g.Types.order) - 1; i >= 0; i-- {
-		declared := b.g.Types.order[i]
+	if declared := b.g.typeNamedKind(name, kind); declared != nil {
+		return declared
+	}
+	if b.before == nil {
+		return nil
+	}
+	declared, _ := b.before(name, kind)
+	return declared
+}
+
+// typeNamedKind finds a struct or enum by name and kind. The most recent
+// declaration wins, matching the scope chain: in a file mid-edit with two
+// `struct Point`, the second is the one the cursor below it means -- and the
+// one the compiler, which overwrites a type redeclared in one module, uses.
+func (g *Graph) typeNamedKind(name string, kind NodeKind) *Node {
+	if g == nil || g.Types == nil || name == "" {
+		return nil
+	}
+	for i := len(g.Types.order) - 1; i >= 0; i-- {
+		declared := g.Types.order[i]
 		if declared.Name == name && declared.Kind == kind {
 			return declared
 		}
@@ -424,10 +453,22 @@ func (b *builder) lookupMember(declared *Node, member *ast.Identifier) *Node {
 	if declared == nil || member == nil {
 		return nil
 	}
-	for _, candidate := range b.g.membersOf(declared) {
+	for _, candidate := range b.membersOf(declared) {
 		if candidate.Name == member.Value {
 			return candidate
 		}
+	}
+	return nil
+}
+
+// membersOf is a type's fields or variants, read from the graph that declares
+// it -- which, for a type from an earlier module, is not this one.
+func (b *builder) membersOf(declared *Node) []*Node {
+	if declared.ID.Module == b.g.Module || b.before == nil {
+		return b.g.membersOf(declared)
+	}
+	if _, owner := b.before(declared.Name, declared.Kind); owner != nil {
+		return owner.membersOf(declared)
 	}
 	return nil
 }

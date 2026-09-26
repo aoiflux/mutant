@@ -100,6 +100,10 @@ func TestAskingAQuestionDoesNotChangeTheStore(t *testing.T) {
 		{"callees", "line"},
 		{"outline", "main.mut"},
 		{"exported", ""},
+		{"types", ""},
+		{"type", "label"},
+		{"deps", "main.mut"},
+		{"rdeps", "lib/stats.mut"},
 	} {
 		ask(t, dir, question.name, question.argument)
 	}
@@ -121,6 +125,9 @@ func TestEveryQuestionOnTheListCanBeAsked(t *testing.T) {
 		"callers": "show",
 		"callees": "line",
 		"outline": "main.mut",
+		"type":    "label",
+		"deps":    "main.mut",
+		"rdeps":   "lib/stats.mut",
 	}
 	for _, question := range QueryQuestions() {
 		argument := arguments[question.Name]
@@ -570,6 +577,9 @@ func TestAProgramThatDeclaresNothingCanStillBeAsked(t *testing.T) {
 		"callers": "anything",
 		"callees": "anything",
 		"outline": "main.mut",
+		"type":    "anything",
+		"deps":    "main.mut",
+		"rdeps":   "main.mut",
 	}
 	for _, question := range QueryQuestions() {
 		answer, err := QueryGraph(QueryOptions{
@@ -670,7 +680,7 @@ func TestOutlineSurvivesADepthAndACycleTheExporterWouldNeverWrite(t *testing.T) 
 				children[store.NodeID(i-1)] = []store.NodeID{store.NodeID(i)}
 			}
 		}
-		out := outlineRows(1, byID, children, 1, map[store.NodeID]bool{})
+		out := newOutliner(byID, children).rows(1, 1, "")
 		if len(out) != 22 {
 			t.Fatalf("expected 22 rows, got %d", len(out))
 		}
@@ -703,7 +713,7 @@ func TestOutlineSurvivesADepthAndACycleTheExporterWouldNeverWrite(t *testing.T) 
 			2: {1},
 		}
 		done := make(chan []string, 1)
-		go func() { done <- outlineRows(1, byID, children, 1, map[store.NodeID]bool{}) }()
+		go func() { done <- newOutliner(byID, children).rows(1, 1, "") }()
 		select {
 		case out := <-done:
 			if len(out) != 3 {
@@ -722,7 +732,7 @@ func TestOutlineSurvivesADepthAndACycleTheExporterWouldNeverWrite(t *testing.T) 
 		byID := map[store.NodeID]declProps{1: {Name: "a", Kind: "function", Line: 1, Column: 1}}
 		children := map[store.NodeID][]store.NodeID{1: {1}}
 		done := make(chan []string, 1)
-		go func() { done <- outlineRows(1, byID, children, 1, map[store.NodeID]bool{}) }()
+		go func() { done <- newOutliner(byID, children).rows(1, 1, "") }()
 		select {
 		case out := <-done:
 			if len(out) != 2 || !strings.Contains(out[1], "cycle") {
@@ -769,25 +779,32 @@ func TestEveryQuestionThatCanScanSaysSoWhenItDoes(t *testing.T) {
 			scanning[question.Name] = question.Cost
 		}
 	}
-	if len(scanning) != 2 {
-		t.Fatalf("expected `where` and `exported` to be the scanning questions, got %v", scanning)
+	// callers and callees read every record on a miss, to name the casings
+	// that exist, and were listed as index lookups while they did.
+	want := []string{"callees", "callers", "exported", "where"}
+	got := make([]string, 0, len(scanning))
+	for name := range scanning {
+		got = append(got, name)
 	}
-	if _, listed := scanning["where"]; !listed {
-		t.Fatal("`where` reads every record on a miss and is not declared as doing so")
-	}
-	if _, listed := scanning["exported"]; !listed {
-		t.Fatal("`exported` reads every record and is not declared as doing so")
+	sort.Strings(got)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("the scanning questions are %v, want %v", got, want)
 	}
 
-	// `where` on a name the index holds must NOT claim to have scanned.
-	hit := ask(t, dir, "where", "mean")
-	if strings.Contains(strings.Join(hit.Notes, " "), "every declaration record") {
-		t.Fatalf("`where` on an indexed name claimed to have scanned: %s", allRows(hit))
+	// A question on a name the index holds must NOT claim to have scanned,
+	// and one on a name it does not hold must say that it did.
+	for _, question := range []string{"where", "callers", "callees"} {
+		hit := ask(t, dir, question, "mean")
+		if strings.Contains(strings.Join(hit.Notes, " "), "every declaration record") {
+			t.Fatalf("`%s` on an indexed name claimed to have scanned: %s", question, allRows(hit))
+		}
 	}
-	for _, name := range []string{"Mean", "nothingIsCalledThis"} {
-		miss := ask(t, dir, "where", name)
-		if !strings.Contains(strings.Join(miss.Notes, " "), "every declaration record") {
-			t.Fatalf("`where %s` scanned and did not say so: %s", name, allRows(miss))
+	for _, question := range []string{"where", "callers", "callees"} {
+		for _, name := range []string{"Mean", "nothingIsCalledThis"} {
+			miss := ask(t, dir, question, name)
+			if !strings.Contains(strings.Join(miss.Notes, " "), "every declaration record") {
+				t.Fatalf("`%s %s` scanned and did not say so: %s", question, name, allRows(miss))
+			}
 		}
 	}
 	exported := ask(t, dir, "exported", "")

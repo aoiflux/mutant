@@ -214,10 +214,14 @@ func (b *builder) expression(expr ast.Expression, boundTo *Node) {
 				continue
 			}
 			// Patterns are walked so that go-to-definition on the `Status` of
-			// a `Status.Ok` arm reaches the enum declaration.
+			// a `Status.Ok` arm reaches the enum declaration, and every name
+			// in one is recorded as compared against rather than merely used.
+			outer := b.inPattern
+			b.inPattern = true
 			for _, pattern := range arm.Patterns {
 				b.expression(pattern, nil)
 			}
+			b.inPattern = outer
 			b.block(arm.Body)
 		}
 
@@ -279,8 +283,9 @@ func (b *builder) expression(expr ast.Expression, boundTo *Node) {
 // import alias and an enum name a reference. The field itself has three
 // outcomes:
 //
-//   - `Colour.Red`, where the left names an enum declared here, is a reference
-//     to the variant. It needs nothing but names, so the graph decides it.
+//   - `Colour.Red`, where the left names an enum declared here -- or, in a
+//     program, by a module compiled before this one -- is a reference to the
+//     variant. It needs nothing but names, so the graph decides it.
 //   - `p.x`, where the left holds a struct, is a reference to that struct's
 //     field -- but only the caller's StructOf can say which struct, so the
 //     graph asks and resolves the answer. Without an oracle it stays
@@ -303,11 +308,11 @@ func (b *builder) fieldExpression(node *ast.FieldExpression) {
 	// even where a `let Colour` also exists.
 	if enum := b.lookupType(left.Value, KindEnum); enum != nil {
 		if rng, ok := b.rangeOf(left); ok {
-			b.record(left, rng, enum.ID, false)
+			b.record(left, rng, enum.ID, false, b.role())
 		}
 		if variant := b.lookupMember(enum, node.Field); variant != nil {
 			if rng, ok := b.rangeOf(node.Field); ok {
-				b.record(node.Field, rng, variant.ID, false)
+				b.record(node.Field, rng, variant.ID, false, b.role())
 			}
 		}
 		return
@@ -319,7 +324,7 @@ func (b *builder) fieldExpression(node *ast.FieldExpression) {
 	// any Mutant program, and `str.upper` is str_upper.
 	if target := b.lookup(left.Value); target != nil {
 		if rng, ok := b.rangeOf(left); ok {
-			b.record(left, rng, target.ID, false)
+			b.record(left, rng, target.ID, false, b.role())
 		}
 		b.structField(left, node.Field)
 		return
@@ -345,7 +350,7 @@ func (b *builder) structField(left, field *ast.Identifier) {
 		return
 	}
 	if rng, ok := b.rangeOf(field); ok {
-		b.record(field, rng, member.ID, false)
+		b.record(field, rng, member.ID, false, b.role())
 	}
 }
 
@@ -358,10 +363,12 @@ func (b *builder) noteField(field *ast.Identifier) {
 // structLiteral records what `Point{x: 5}` refers to.
 //
 // The literal's name is a TYPE, so it is looked up in the type table and
-// nowhere else. A file with `let Point = 1;` and no struct Point has the name
-// bound and still cannot write the literal -- the compiler refuses it with
-// "undefined struct type: Point" -- so a miss here is recorded as a miss, and
-// the value table is not consulted to excuse it.
+// nowhere else -- this file's, and in a program the types of the modules
+// compiled before it, which is everything the compiler can see at this point.
+// A file with `let Point = 1;` and no struct Point has the name bound and
+// still cannot write the literal -- the compiler refuses it with "undefined
+// struct type: Point" -- so a miss here is recorded as a miss, and the value
+// table is not consulted to excuse it.
 //
 // A field name is not a use of anything until the struct is known, which is why
 // the miss is recorded for the type name only. `Nope{x: 1}` is one mistake, not
@@ -373,9 +380,9 @@ func (b *builder) structLiteral(node *ast.StructLiteral) {
 		declared = b.lookupType(node.Name.Value, KindStruct)
 		if rng, ok := b.rangeOf(node.Name); ok {
 			if declared != nil {
-				b.record(node.Name, rng, declared.ID, false)
+				b.record(node.Name, rng, declared.ID, false, RoleConstruct)
 			} else {
-				b.noteUnbound(node.Name, rng, UnboundType, false)
+				b.noteUnbound(node.Name, rng, UnboundType, false, RoleConstruct)
 			}
 		}
 	}
@@ -386,7 +393,7 @@ func (b *builder) structLiteral(node *ast.StructLiteral) {
 		if declared != nil {
 			if member := b.lookupMember(declared, field.Name); member != nil {
 				if rng, ok := b.rangeOf(field.Name); ok {
-					b.record(field.Name, rng, member.ID, false)
+					b.record(field.Name, rng, member.ID, false, b.role())
 				}
 			}
 		}

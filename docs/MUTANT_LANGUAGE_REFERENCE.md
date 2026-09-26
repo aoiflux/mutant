@@ -2486,7 +2486,7 @@ analyzer the language server uses, so editor and command-line results agree:
   a codebase that no single file can answer.
 - `mutant graph query --store <dir> <question> [argument]` — ask that store one
   of a fixed set of questions: `summary`, `modules`, `where`, `callers`,
-  `callees`, `outline`, `exported`.
+  `callees`, `outline`, `exported`, `types`, `type`, `deps`, `rdeps`.
 
 Directory arguments are walked recursively (skipping `.git`, `node_modules`, and
 `vendor`).
@@ -2523,11 +2523,24 @@ mutant graph export --out ./example_graph_data_symbols examples/modules/main.mut
 | `ENCLOSES` | declaration → declaration | which declaration a name is written inside |
 | `REFERENCES` | declaration → declaration | one per use, carrying its position and whether it was a call |
 | `IMPORTS` | module → module | one per resolved `import` |
-| `USES_TYPE` | declaration → struct or enum | a second label on the references that name a type |
+| `USES_TYPE` | declaration → struct or enum | a further label on the references that name a type |
+| `CONSTRUCTS` | declaration → struct | a further label on the references that build one: `Point{x: 1}` |
+| `MATCHES` | declaration → enum or variant | a further label on the references in a match arm's pattern |
 
 Each declaration also carries its kind as a second node label, so counting the
 functions in a program is a count rather than a traversal. The label names are
 written beside the store, so it stays readable without the `mutant` binary.
+
+**A struct or enum is followed across modules the way the compiler follows it.**
+Type names belong to the whole program, and the compiler resolves `Loc{a: 1}`
+against the types of every module compiled before the one it is in — which is
+every module that one imports, and some it does not. The export does the same,
+so a type built in `main.mut` from a struct `lib/geo.mut` declares is an edge
+into `lib/geo.mut`. A use the compiler would refuse — the type is declared only
+by a module compiled later, or by none — has no edge; the export prints how
+many there are, and `types` lists them. `CONSTRUCTS` and `MATCHES` are new in
+2.6.0: a store exported earlier still opens, and the questions about types say
+what it cannot tell rather than answering zero.
 
 Three things are worth knowing before relying on it:
 
@@ -2563,6 +2576,13 @@ mutant graph query --store ./example_graph_data_symbols callers report
 | `callees` | `<name>` | every name a declaration uses |
 | `outline` | `<module>` | the declarations of one module, nested as they are written |
 | `exported` | | every declaration another module could name |
+| `types` | | every struct and enum, and how often each is built, matched and used |
+| `type` | `<name>` | one struct or enum: its members, and every use, sorted into the ones that build it, match it, and the rest |
+| `deps` | `<module>` | every module one module imports, directly or through another, nearest first |
+| `rdeps` | `<module>` | every module that imports one module, directly or through another |
+
+`deps` and `rdeps` follow each import in its own direction and keep every one:
+a module imported twice under two aliases is listed with both.
 
 **There is no query language, and the fixed list is why.** graphene has none,
 so what makes a store answerable is what was indexed when it was written — and a
@@ -2572,9 +2592,10 @@ costs the unindexed key at zero and drives the query from it. So no word you
 type ever becomes a property key: the questions above are the shapes the
 export’s index was built for, and anything else is refused with the list.
 
-Two of them read every declaration record rather than an index — `exported`
-always, and `where` when its name matched nothing exactly — and each says so in
-the answer when it does. `mutant help graph` prints that list from the registry
+Four of them can read every declaration record rather than an index —
+`exported` always, and `where`, `callers` and `callees` when the name matched
+nothing exactly, to find the casings that do exist — and each says so in the
+answer when it does. `mutant help graph` prints that list from the registry
 rather than from prose, so it cannot drift from what the questions actually do.
 
 **Every answer carries its own limits beside it**, because several of them are
@@ -2587,9 +2608,13 @@ complete only for one module:
 - A name the export could not resolve leaves no node and no edge at all, so an
   answer derived from an edge being absent is "complete as far as the export
   got", never "complete".
+- A struct or enum is the exception: its uses are followed across modules, as
+  above. A field read — the `x` of `p.x` — is recorded against nothing, because
+  which struct `p` holds is inference, and the export does not infer.
 - The label counts in `summary` overlap: every declaration carries `Declaration`
-  **and** its kind, and a `USES_TYPE` edge is a `REFERENCES` edge with a second
-  label. Adding them up reports more nodes than the store has.
+  **and** its kind, and a `USES_TYPE`, `CONSTRUCTS` or `MATCHES` edge is a
+  `REFERENCES` edge with a further label. Adding them up reports more than the
+  store has.
 
 **Nothing that carries what the store says is written to.** The store is
 identified by its own label table before it is opened — a directory that is not

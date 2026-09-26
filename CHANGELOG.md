@@ -246,15 +246,22 @@ exhaustive lists.
 - **`mutant graph export` and `mutant graph query`.** `export` walks an entry
   file's whole import closure and writes a graphene store of its symbol graph: a
   node per module and per declaration, joined by `DECLARES`, `ENCLOSES`,
-  `REFERENCES`, `IMPORTS` and `USES_TYPE`. `query` reads it back through seven
-  named questions -- `summary`, `modules`, `where`, `callers`, `callees`,
-  `outline` and `exported` -- rather than a filter surface, because in this
-  engine a filter on an unindexed key matches nothing and returns no error. The
-  store is identified by its own label table before anything opens it, and a
-  store with no lock file is read live rather than have one created for it, so
-  the first question put to a restored store does not modify it. Each answer
-  says what it does not cover: `callers` is complete within a module and a floor
-  across one.
+  `REFERENCES` and `IMPORTS`, with `USES_TYPE`, `CONSTRUCTS` and `MATCHES` as
+  further labels on a reference that names a type, builds a struct or is
+  compared against in a match arm. A struct or enum another module declares is
+  resolved the way the compiler resolves it, against the modules compiled first;
+  a use the compiler would refuse has no edge, and the export says how many.
+  `query` reads the store back through eleven named questions -- `summary`,
+  `modules`, `where`, `callers`, `callees`, `outline`, `exported`, `types`,
+  `type`, `deps` and `rdeps` -- rather than a filter surface, because in this
+  engine a filter on an unindexed key matches nothing and returns no error.
+  `deps` and `rdeps` follow each import in its own direction and keep every
+  one, which graphene's own walks do not. The store is identified by its own
+  label table before anything opens it, and a store with no lock file is read
+  live rather than have one created for it, so the first question put to a
+  restored store does not modify it. Each answer says what it does not cover:
+  `callers` is complete within a module and a floor across one, and a question
+  that read every record to answer says so.
 
 - **Classified records.** `case_key_create`, `case_key_open`, `case_key_rotate`
   and `case_key_fingerprint` take a path, never key material; the passphrase is
@@ -640,8 +647,8 @@ exhaustive lists.
 
 - **`db_index_prop` reported success on a node that does not exist.** graphene
   does not look for the node before indexing it, so a mistyped or stale id wrote
-  an entry pointing at nothing. It now indexes through a transaction, whose
-  commit checks the node is live, and refuses by name.
+  an entry pointing at nothing. It now looks the node up first and refuses by
+  name.
 
 - **Four examples reported the wrong numbers, and their recorded output locked
   them in.** `mini_timeline_builder` indexed `fs_stat`'s error field for every
