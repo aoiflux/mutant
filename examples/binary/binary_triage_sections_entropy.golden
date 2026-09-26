@@ -2,5 +2,5 @@
 bin_pe_parse err:
 pe summary: {characteristics: 34, format: pe, machine: 34404, num_sections: 15, path: examples/data/sample_win.exe, timestamp: 0}
 bin_sections err:
-section_count: 3
+section_count: 15
 bin_entropy: {bytes: 3162624, entropy: 6.895605, path: examples/data/sample_win.exe} err:

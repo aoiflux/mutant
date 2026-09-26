@@ -1,7 +1,9 @@
 package builtin
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -9,7 +11,9 @@ import (
 	"github.com/aoiflux/graphene"
 	"github.com/aoiflux/graphene/disk"
 	"github.com/aoiflux/graphene/store"
+	"github.com/aoiflux/graphene/traversal"
 
+	"mutant/graphstore"
 	"mutant/object"
 )
 
@@ -30,11 +34,22 @@ var (
 	// that is not a concern here; a builtin that ever spans several calls would
 	// need graphene's own Begin/Commit rather than a lock.
 	dbHandles sync.Map
-	// dbDiskPaths maps the handle of each db_open_disk store to its path, so
-	// the end of a program can name a store it forgot to close. An in-memory
-	// graph has nothing on disk to leave unclean and is not in it.
-	dbDiskPaths sync.Map
+	// dbDiskStores maps the handle of each db_open_disk store to a
+	// *dbDiskStore, so the end of a program can name a store it forgot to
+	// close and db_stats can say how a store was opened. An in-memory graph has
+	// nothing on disk to leave unclean and is not in it.
+	dbDiskStores sync.Map
 )
+
+// dbDiskStore is what a disk-backed handle remembers about how it was opened.
+type dbDiskStore struct {
+	path string
+	// readOnly is set by db_open_disk's read_only option, and lockFree is the
+	// reason such a read took no lock, or empty when it took one. See
+	// graphstore.OpenForReading.
+	readOnly bool
+	lockFree string
+}
 
 const DATA = 0
 
@@ -150,20 +165,30 @@ func DbOpenDisk(args ...object.Object) object.Object {
 	}
 
 	opts := disk.Options{}
+	readOnly := false
 	if len(args) == 2 {
-		parsed, errObj := dbOpenOptions(args[1])
+		parsed, readOnlyOpt, errObj := dbOpenOptions(args[1])
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
-		opts = parsed
+		opts, readOnly = parsed, readOnlyOpt
 	}
 
-	g, err := graphene.OpenWithOptions(path.Value, opts)
+	opened := &dbDiskStore{path: path.Value, readOnly: readOnly}
+	var g *graphene.Graph
+	var err error
+	if readOnly {
+		// Never creates a store, never takes a writer's lock, and says when it
+		// could take no lock at all -- which db_stats then reports.
+		g, opened.lockFree, err = graphstore.OpenForReadingWith(path.Value, opts)
+	} else {
+		g, err = graphene.OpenWithOptions(path.Value, opts)
+	}
 	if err != nil {
 		return resultAndError(nil, newError("db_open_disk: %s", err.Error()))
 	}
 	handle := atomic.AddInt64(&dbHandleCounter, 1)
-	dbDiskPaths.Store(handle, path.Value)
+	dbDiskStores.Store(handle, opened)
 	dbHandles.Store(handle, g)
 	return resultAndError(intObj(handle), nil)
 }
@@ -181,47 +206,57 @@ func DbOpenDisk(args ...object.Object) object.Object {
 //
 // An unknown key is refused rather than ignored. A misspelled option that is
 // silently dropped reads as a store running under a budget it does not have.
-func dbOpenOptions(arg object.Object) (disk.Options, *object.Error) {
+//
+// read_only is the one option that is not a store option: it chooses how the
+// store is opened at all, so it comes back on its own.
+func dbOpenOptions(arg object.Object) (disk.Options, bool, *object.Error) {
 	opts := disk.Options{}
+	readOnly := false
 
 	hash, ok := arg.(*object.Hash)
 	if !ok {
-		return opts, newError("argument 2 to `db_open_disk` must be HASH, got %s", arg.Type())
+		return opts, false, newError("argument 2 to `db_open_disk` must be HASH, got %s", arg.Type())
 	}
 
 	for _, pair := range hash.Pairs {
 		key, ok := pair.Key.(*object.String)
 		if !ok {
-			return opts, newError("db_open_disk: option keys must be STRING, got %s", pair.Key.Type())
+			return opts, false, newError("db_open_disk: option keys must be STRING, got %s", pair.Key.Type())
 		}
 		switch key.Value {
 		case "memory_budget":
 			budget, ok := pair.Value.(*object.Integer)
 			if !ok {
-				return opts, newError("db_open_disk: memory_budget must be INTEGER, got %s", pair.Value.Type())
+				return opts, false, newError("db_open_disk: memory_budget must be INTEGER, got %s", pair.Value.Type())
 			}
 			if budget.Value < 0 {
-				return opts, newError("db_open_disk: memory_budget must not be negative, got %d", budget.Value)
+				return opts, false, newError("db_open_disk: memory_budget must not be negative, got %d", budget.Value)
 			}
 			opts.MemoryBudget = budget.Value
 		case "discover_memory_budget":
 			discover, ok := pair.Value.(*object.Boolean)
 			if !ok {
-				return opts, newError("db_open_disk: discover_memory_budget must be BOOLEAN, got %s", pair.Value.Type())
+				return opts, false, newError("db_open_disk: discover_memory_budget must be BOOLEAN, got %s", pair.Value.Type())
 			}
 			opts.DiscoverMemoryBudget = discover.Value
 		case "verify_on_open":
 			verify, ok := pair.Value.(*object.Boolean)
 			if !ok {
-				return opts, newError("db_open_disk: verify_on_open must be BOOLEAN, got %s", pair.Value.Type())
+				return opts, false, newError("db_open_disk: verify_on_open must be BOOLEAN, got %s", pair.Value.Type())
 			}
 			opts.VerifyOnOpen = verify.Value
+		case "read_only":
+			value, ok := pair.Value.(*object.Boolean)
+			if !ok {
+				return opts, false, newError("db_open_disk: read_only must be BOOLEAN, got %s", pair.Value.Type())
+			}
+			readOnly = value.Value
 		default:
-			return opts, newError("db_open_disk: unknown option %q; known options are memory_budget, discover_memory_budget, verify_on_open", key.Value)
+			return opts, false, newError("db_open_disk: unknown option %q; known options are memory_budget, discover_memory_budget, verify_on_open, read_only", key.Value)
 		}
 	}
 
-	return opts, nil
+	return opts, readOnly, nil
 }
 
 func DbClose(args ...object.Object) object.Object {
@@ -250,7 +285,7 @@ func DbClose(args ...object.Object) object.Object {
 	// handle is already out of dbHandles by this point and nothing can ask
 	// for them again.
 	dbTimelineForget(h.Value)
-	dbDiskPaths.Delete(h.Value)
+	dbDiskStores.Delete(h.Value)
 
 	if err := g.Close(); err != nil {
 		return resultAndError(nil, newError("db_close: %s", err.Error()))
@@ -385,8 +420,21 @@ func DbIndexProp(args ...object.Object) object.Object {
 	if !found {
 		return resultAndError(nil, newError("db_index_prop: invalid handle %d", h.Value))
 	}
-	err := g.IndexNodeProperty(store.NodeID(nodeID.Value), key.Value, []byte(val.Value))
-	if err != nil {
+	// graphene's IndexNodeProperty does not look for the node, so a mistyped
+	// or stale id wrote an entry pointing at nothing and this reported
+	// success. The node is looked for first.
+	//
+	// Not through a transaction, although a commit checks the node itself:
+	// on a disk store a commit is an fsync, and a direct write is an append
+	// made durable at the next one. Measured, that took one call from about
+	// 5us to 430us, and a script indexing ten thousand properties from under a
+	// second to over four -- to close a window between the check and the write
+	// that nothing can reach, because no db_* builtin deletes a node and
+	// graphene's lock keeps every other writer out of the store.
+	if _, err := g.GetNode(store.NodeID(nodeID.Value)); err != nil {
+		return resultAndError(nil, newError("db_index_prop: node %d does not exist, so nothing was indexed. Check the id against what db_add_node or db_add_artifact returned", nodeID.Value))
+	}
+	if err := g.IndexNodeProperty(store.NodeID(nodeID.Value), key.Value, []byte(val.Value)); err != nil {
 		return resultAndError(nil, newError("db_index_prop: %s", err.Error()))
 	}
 	return resultAndError(boolObj(true), nil)
@@ -443,9 +491,17 @@ func DbBFS(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 3 to `db_bfs` must be INTEGER, got %s", args[2].Type()))
 	}
-	dirStr, ok := args[3].(*object.String)
-	if !ok {
-		return resultAndError(nil, newError("argument 4 to `db_bfs` must be STRING, got %s", args[3].Type()))
+	// graphene reads a negative depth as zero and walks nothing past the
+	// origin, which answers a question the script did not ask.
+	if depth.Value < 0 {
+		return resultAndError(nil, newError("%s: depth must not be negative, got %d. 0 is the origin alone", BuiltinNameDbBfs, depth.Value))
+	}
+	if depth.Value > math.MaxInt32 {
+		return resultAndError(nil, newError("%s: depth %d is larger than this walk can be asked for", BuiltinNameDbBfs, depth.Value))
+	}
+	dir, errObj := dbDirectionArg(args[3], BuiltinNameDbBfs, 4)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	g, found := dbGet(h.Value)
@@ -453,19 +509,28 @@ func DbBFS(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_bfs: invalid handle %d", h.Value))
 	}
 
-	dir := dbParseDirection(dirStr.Value)
-	result, err := g.BFS(store.NodeID(originID.Value), int(depth.Value), dir, nil)
+	// graphstore.Walk rather than graphene's BFS, which keeps one edge per
+	// neighbour and so dropped all but one of any parallel edges without
+	// saying so; and under the walk budget, which graphene's BFS is not.
+	reach, err := graphstore.Walk(g, store.NodeID(originID.Value), int(depth.Value), dir, nil, graphstore.WalkBudget())
 	if err != nil {
+		var notFound *store.ErrNotFound
+		switch {
+		case errors.Is(err, store.ErrBudgetExceeded):
+			return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameDbBfs))
+		case errors.As(err, &notFound):
+			return resultAndError(nil, newError("%s: node %d does not exist", BuiltinNameDbBfs, originID.Value))
+		}
 		return resultAndError(nil, newError("db_bfs: %s", err.Error()))
 	}
 
-	nodeElems := make([]object.Object, 0, len(result.Nodes))
-	for _, n := range result.Nodes {
-		nodeElems = append(nodeElems, intObj(int64(n.ID)))
+	nodeElems := make([]object.Object, 0, len(reach.Nodes))
+	for _, id := range reach.Nodes {
+		nodeElems = append(nodeElems, intObj(int64(id)))
 	}
-	edgeElems := make([]object.Object, 0, len(result.Edges))
-	for _, e := range result.Edges {
-		edgeElems = append(edgeElems, intObj(int64(e.ID)))
+	edgeElems := make([]object.Object, 0, len(reach.Edges))
+	for _, id := range reach.Edges {
+		edgeElems = append(edgeElems, intObj(int64(id)))
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -496,8 +561,23 @@ func DbShortestPath(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("db_shortest_path: invalid handle %d", h.Value))
 	}
 
-	path, err := g.ShortestPath(store.NodeID(srcID.Value), store.NodeID(dstID.Value), nil)
-	if err != nil {
+	// Named before the search, so a missing endpoint is a refusal that says
+	// which one, and never the empty path that means "not connected".
+	for position, id := range []int64{srcID.Value, dstID.Value} {
+		if _, err := g.GetNode(store.NodeID(id)); err != nil {
+			return resultAndError(nil, newError("%s: node %d (argument %d) does not exist", BuiltinNameDbShortestPath, id, position+2))
+		}
+	}
+
+	path, err := g.ShortestPathCtx(ledgerContext(), store.NodeID(srcID.Value), store.NodeID(dstID.Value), nil, graphstore.WalkBudget())
+	switch {
+	case errors.Is(err, traversal.ErrNoPath):
+		// "Not connected" is an answer, and the one this builtin has always
+		// documented as an empty array; it was an error.
+		return resultAndError(&object.Array{Elements: []object.Object{}}, nil)
+	case errors.Is(err, store.ErrBudgetExceeded):
+		return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameDbShortestPath))
+	case err != nil:
 		return resultAndError(nil, newError("db_shortest_path: %s", err.Error()))
 	}
 
@@ -545,6 +625,17 @@ func DbStats(args ...object.Object) object.Object {
 		out["last_compact"] = stringObj(formatTime(stats.Storage.LastCompact))
 	}
 
+	// How the store was opened: read_only for db_open_disk's read_only
+	// option, and lock_free as the reason such a read could take no lock --
+	// empty when it took one, and always for a handle that can write.
+	out["read_only"] = boolObj(false)
+	out["lock_free"] = stringObj("")
+	if value, onDisk := dbDiskStores.Load(h.Value); onDisk {
+		opened := value.(*dbDiskStore)
+		out["read_only"] = boolObj(opened.readOnly)
+		out["lock_free"] = stringObj(opened.lockFree)
+	}
+
 	return resultAndError(makeHashObject(out), nil)
 }
 
@@ -584,10 +675,24 @@ func DbCompact(args ...object.Object) object.Object {
 	}
 
 	after, _ := dbDeltaRecords(g)
+
+	// The Merkle root of the image the compaction just wrote, and of the one
+	// it replaced. The same figures ledger_compact reports, and for the same
+	// reason: they are the store's identity at this moment, which a script can
+	// write down and a later verify can be held to. Empty for an in-memory
+	// handle, which writes no image.
+	snapshotRoot, prevRoot := "", ""
+	if forensic, ok := g.Forensics(); ok {
+		if roots, err := forensic.SnapshotRoots(); err == nil {
+			snapshotRoot, prevRoot = ledgerHash(roots.Snapshot), ledgerHash(roots.PrevRoot)
+		}
+	}
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"has_storage":          boolObj(hadStorage),
 		"delta_records_before": intObj(before),
 		"delta_records_after":  intObj(after),
+		"snapshot_root":        stringObj(snapshotRoot),
+		"prev_root":            stringObj(prevRoot),
 	}), nil)
 }
 
@@ -604,13 +709,37 @@ func dbDeltaRecords(g *graphene.Graph) (int64, bool) {
 	return int64(stats.Storage.DeltaRecords()), true
 }
 
-func dbParseDirection(s string) store.Direction {
-	switch s {
-	case "in":
-		return store.DirectionInbound
-	case "out":
-		return store.DirectionOutbound
-	default:
-		return store.DirectionBoth
+// dbDirections are the readings of an edge's direction that db_bfs and
+// db_relations take. Their metadata lists this, and the editor warns on a
+// literal outside it before the program runs.
+var dbDirections = []string{"out", "in", "both"}
+
+// dbDirectionArg reads a direction argument, and refuses a word it does not
+// know. It used to read any such word as "both", so a misspelled "outbound"
+// walked every edge in either direction and reported nothing wrong.
+func dbDirectionArg(arg object.Object, op string, position int) (store.Direction, *object.Error) {
+	word, ok := arg.(*object.String)
+	if !ok {
+		return 0, newError("argument %d to `%s` must be STRING, got %s", position, op, arg.Type())
 	}
+	switch choiceFold(word.Value) {
+	case "out":
+		return store.DirectionOutbound, nil
+	case "in":
+		return store.DirectionInbound, nil
+	case "both":
+		return store.DirectionBoth, nil
+	}
+	return 0, newError("%s: %q is not a direction. Use \"out\" for the edges leaving a node, \"in\" for those arriving at it, or \"both\"", op, word.Value)
+}
+
+// dbDirectionName is the word dbDirectionArg reads as dir.
+func dbDirectionName(dir store.Direction) string {
+	switch dir {
+	case store.DirectionOutbound:
+		return "out"
+	case store.DirectionInbound:
+		return "in"
+	}
+	return "both"
 }

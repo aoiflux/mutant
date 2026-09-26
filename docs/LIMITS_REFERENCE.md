@@ -15,7 +15,7 @@ A limit that is not listed here is a bare literal somewhere in the source, and
 `policy/limit_budget.go`. Values fixed by a file format or a protocol are not
 limits; they are marked `//mutant:format` and are not listed.
 
-9 limits in 4 packages.
+10 limits in 4 packages.
 
 ## `graphstore`
 
@@ -24,6 +24,7 @@ limits; they are marked `//mutant:format` and are not listed.
 | `WalkMaxEdges` | 8,000,000 | count | -- | WalkMaxEdges bounds the edges one walk may read. It is four times the node bound because a walk reads every edge of every node it visits, and a node worth walking from has more than one. | `graphstore/walk.go` |
 | `WalkMaxNodes` | 2,000,000 | count | -- | WalkMaxNodes bounds the nodes one walk may visit. A walk that reaches two million has read most of a large store, which is a question to narrow -- to a set of ids, or a lower depth -- rather than one to answer. | `graphstore/walk.go` |
 | `WalkMaxTime` | 1m0s | duration | -- | WalkMaxTime bounds one walk's wall time. It is set well above the platform's clock granularity on purpose: graphene's own note is that on Windows the runtime reads the interrupt time, which advances at the timer tick -- 15.6 ms by default -- so a deadline in the microseconds is a deadline in name only; a probe with MaxTime 1ns completed a 201-node walk and reported no error at all. | `graphstore/walk.go` |
+| `walkClockInterval` | 16 | count | -- | walkClockInterval is how many charges pass between two reads of the clock when a budget sets MaxTime. It is graphene's own cadence, for graphene's reason: a clock read on every step of a walk that charges once per node and once per edge cost it about a fifth of its time, and sixteen steps is five or six nodes of overshoot. | `graphstore/walk.go` |
 
 ## `policy/limitscan`
 

@@ -743,6 +743,11 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameLedgerDeclareUniqueEdge, &BuiltIn{LedgerDeclareUniqueEdge}},
 	{BuiltinNameLedgerDeclareComposite, &BuiltIn{LedgerDeclareComposite}},
 	{BuiltinNameLedgerIndexes, &BuiltIn{LedgerIndexes}},
+	{BuiltinNameDbFind, &BuiltIn{DbFind}},
+	{BuiltinNameDbNode, &BuiltIn{DbNode}},
+	{BuiltinNameDbRelations, &BuiltIn{DbRelations}},
+	{BuiltinNameDbSchema, &BuiltIn{DbSchema}},
+	{BuiltinNameDbVerify, &BuiltIn{DbVerify}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

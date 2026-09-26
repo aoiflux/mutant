@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **659 builtins** across **41 categories**.
+The standard library is **664 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -996,7 +996,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Filesystem](CAPABILITY_REFERENCE.md#filesystem-20) | 20 | Files/dirs plus file-level forensics (hash, entropy, magic, carve, deleted) |
 | [Network](CAPABILITY_REFERENCE.md#network-33) | 33 | Sockets, TLS/CA, HTTP inspection, WebSocket, scanning, pcap |
 | [Http](CAPABILITY_REFERENCE.md#http-11) | 11 | HTTP client + request/response parse/build |
-| [Graph Database](CAPABILITY_REFERENCE.md#graph-database-15) | 15 | Nodes/edges/relations, traversal, pathfinding, stats |
+| [Graph Database](CAPABILITY_REFERENCE.md#graph-database-20) | 20 | Nodes/edges/relations, reading them back by value, traversal, pathfinding, schema and index checks |
 | [Forensic Ledger](CAPABILITY_REFERENCE.md#forensic-ledger-39) | 39 | A graphene-backed signed ledger: strict store, inclusion and redaction proofs, custody and checkpoint anchoring, attributed redaction, indexed reads |
 | [Cache](CAPABILITY_REFERENCE.md#cache-8) | 8 | In-memory key/value cache with TTLs |
 | [Policy](CAPABILITY_REFERENCE.md#policy-5) | 5 | Allow/deny policy evaluation and tracing |

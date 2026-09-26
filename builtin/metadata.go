@@ -1,6 +1,9 @@
 package builtin
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // ParamKind names a value type a builtin parameter accepts. The values are
 // deliberately the object type names the language already shows users through
@@ -81,6 +84,29 @@ type BuiltinParamDoc struct {
 	// the elements are unconstrained, or simply not declared yet, and are never
 	// checked.
 	Elem []ParamKind
+
+	// OneOf is the closed set of words a STRING parameter takes -- db_bfs's
+	// direction, ledger_path's cost model -- for the builtins that refuse any
+	// other. Empty means the parameter takes any string. The builtin compares
+	// after folding case and surrounding space, and AcceptsChoice folds the
+	// same way, so the editor warns about exactly the words the builtin
+	// refuses.
+	OneOf []string
+}
+
+// choiceFold is how a builtin with a OneOf parameter reads its argument before
+// matching it: case and surrounding space do not decide a word.
+func choiceFold(word string) string {
+	return strings.ToLower(strings.TrimSpace(word))
+}
+
+// AcceptsChoice reports whether a STRING argument is one of the parameter's
+// words. It is true for every string when the parameter declares none.
+func (p BuiltinParamDoc) AcceptsChoice(word string) bool {
+	if len(p.OneOf) == 0 {
+		return true
+	}
+	return slices.Contains(p.OneOf, choiceFold(word))
 }
 
 // AcceptsElement reports whether an ARRAY parameter admits an element of the
@@ -280,6 +306,9 @@ type builtinParamDoc struct {
 	// only for the builtins that actually check them. Like kinds, it is a union
 	// and an empty one means "never checked".
 	elem []ParamKind
+	// oneOf is the closed set of words a STRING parameter takes; see
+	// BuiltinParamDoc.OneOf.
+	oneOf []string
 }
 
 // Stability is the promise a builtin's name and shape carry. It became
@@ -356,6 +385,13 @@ func param(name, doc string, kinds ...ParamKind) builtinParamDoc {
 // the element check would flag working code.
 func arrayParam(name, doc string, elem ...ParamKind) builtinParamDoc {
 	return builtinParamDoc{name: name, doc: doc, kinds: []ParamKind{ParamArray}, elem: elem}
+}
+
+// choiceParam builds a STRING parameter that takes only the given words, and
+// refuses any other. Pass the builtin's own list rather than a copy of it --
+// dbDirections, ledgerCostModelList() -- so the two cannot drift apart.
+func choiceParam(name, doc string, words []string) builtinParamDoc {
+	return builtinParamDoc{name: name, doc: doc, kinds: []ParamKind{ParamString}, oneOf: words}
 }
 
 // The twelve bytes_read_* / bytes_write_* builtins are generated from two
@@ -2184,22 +2220,22 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameNetResolve:    {signature: "net_resolve(host)", summary: "Resolves a host name to network addresses.", returns: pairRet("the addresses the host resolves to", ParamArray).ofElem(ParamString), params: []builtinParamDoc{param("host", "Host name to resolve.", ParamString)}},
 	BuiltinNameNetDial:       {signature: "net_dial(address, timeoutMs)", summary: "Connectivity probe: dials address, immediately closes, and returns {ok, latency_ms, error}. Does not return a usable connection (use net_connect for that).", params: []builtinParamDoc{param("address", "host:port endpoint.", ParamString), param("timeoutMs", "Dial timeout in ms.", ParamInt)}, returns: pairRet("whether the address answered, and how long it took", ParamHash).withFields("error", "latency_ms", "ok")},
 	BuiltinNameDbOpen:        {signature: "db_open()", summary: "Creates an in-memory graph database handle.", returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
-	BuiltinNameDbOpenDisk:    {signature: "db_open_disk(path, opts?)", summary: "Opens or creates a disk-backed graph database. opts is an optional {memory_budget, discover_memory_budget, verify_on_open} hash: memory_budget caps what the store holds, in bytes, and is a whole-store figure rather than a whole-process one, so leave room for the program using it; discover_memory_budget:true derives that cap from the cgroup or Job Object limit the process is already under, and an explicit memory_budget always wins over it; verify_on_open:true checks the property indexes against the records before the handle is returned. An unknown option key is an error rather than ignored. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open; reading is unaffected. The store's label table is read before it is opened, because graphene registers those names for the whole process: a directory whose table names one of the custom labels 0-127 that db_* writes unnamed -- a symbol graph from `mutant graph export` names custom 0 Module -- is refused, and so is one that gives a label of the disclosure ledger's schema another name, or whose table is torn. A forensic ledger is refused too; it is opened with ledger_open. A store the program never closes is closed at its end and named on stderr.", params: []builtinParamDoc{param("path", "Database file path.", ParamString), param("opts?", "Optional {memory_budget, discover_memory_budget, verify_on_open}.", ParamHash)}, returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
+	BuiltinNameDbOpenDisk:    {signature: "db_open_disk(path, opts?)", summary: "Opens or creates a disk-backed graph database. opts is an optional {memory_budget, discover_memory_budget, verify_on_open, read_only} hash: memory_budget caps what the store holds, in bytes, and is a whole-store figure rather than a whole-process one, so leave room for the program using it; discover_memory_budget:true derives that cap from the cgroup or Job Object limit the process is already under, and an explicit memory_budget always wins over it; verify_on_open:true checks the property indexes against the records before the handle is returned. read_only:true opens an existing store without changing it: it never creates one, runs beside other readers, is refused while a writer holds the store, and every write through the handle is an error; a store with no graphene.lock, or on write-protected media, is read without a lock, and db_stats' lock_free says why. An unknown option key is an error rather than ignored. Note that compacting a store with this build rewrites it in a newer on-disk format that older mutant builds cannot open; reading is unaffected. The store's label table is read before it is opened, because graphene registers those names for the whole process: a directory whose table names one of the custom labels 0-127 that db_* writes unnamed -- a symbol graph from `mutant graph export` names custom 0 Module -- is refused, and so is one that gives a label of the disclosure ledger's schema another name, or whose table is torn. A forensic ledger is refused too; it is opened with ledger_open. A store the program never closes is closed at its end and named on stderr.", params: []builtinParamDoc{param("path", "Database file path.", ParamString), param("opts?", "Optional {memory_budget, discover_memory_budget, verify_on_open, read_only}.", ParamHash)}, returns: pairRet("a handle for the other db_ builtins; close it with db_close", ParamInt)},
 	BuiltinNameDbClose:       {signature: "db_close(db)", summary: "Closes a graph database handle and flushes pending state.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("true once the handle has been closed and pending state flushed", ParamBool)},
 	BuiltinNameDbAddNode:     {signature: "db_add_node(db, nodeType?)", summary: "Adds a DATA node and returns its ID. nodeType is an optional integer/enum node type (0–127; 0 is the DATA type used when omitted). Property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeType?", "Optional integer/enum node type (0–127).", ParamInt, ParamEnum)}, returns: pairRet("the new node's ID", ParamInt)},
 	BuiltinNameDbAddEdge:     {signature: "db_add_edge(db, from, to, edgeType?)", summary: "Adds an edge between two node IDs. edgeType is an optional integer/enum edge type. Edge property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt), param("edgeType?", "Optional integer/enum edge type.", ParamInt, ParamEnum)}, returns: pairRet("the new edge's ID", ParamInt)},
-	BuiltinNameDbAddArtifact: {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node. type is a STRING; attrs is an optional properties hash that is indexed.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("type", "Artifact type string.", ParamString), param("attrs?", "Optional attributes hash (indexed).", ParamHash)}, returns: pairRet("the new artifact node", ParamHash)},
-	BuiltinNameDbAddRelation: {signature: "db_add_relation(db, from, to, relation)", summary: "Adds a named relation edge between two entity IDs. All four arguments are required; property hashes are not supported.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source entity ID.", ParamInt), param("to", "Destination entity ID.", ParamInt), param("relation", "Relation type string.", ParamString)}, returns: pairRet("the new relation edge", ParamHash)},
-	BuiltinNameDbIndexProp:   {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node. All four arguments are required.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeID", "Node ID to index.", ParamInt), param("key", "Property key.", ParamString), param("value", "Property value.", ParamString)}, returns: pairRet("true once the property has been indexed", ParamBool)},
+	BuiltinNameDbAddArtifact: {signature: "db_add_artifact(db, type, attrs?)", summary: "Adds a forensic artifact node, in one transaction with everything indexed about it. type is a STRING, indexed as artifact_type; attrs is an optional hash whose entries are indexed as attr_<key>, each as its printed value. A non-STRING attribute key is an error rather than skipped, and attrs refuses classified plaintext. db_node reads the node back and db_find looks it up by any of these.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("type", "Artifact type string.", ParamString), param("attrs?", "Optional attributes hash (indexed).", ParamHash)}, returns: pairRet("the new artifact node", ParamHash)},
+	BuiltinNameDbAddRelation: {signature: "db_add_relation(db, from, to, relation, attrs?)", summary: "Adds an edge between two node IDs that carries a named relation. The edge and its relation land in one transaction, the relation indexed on the edge under `relation`, so db_relations and db_schema read it back. attrs is an optional hash stored beside it as attr_<key>, each as its printed value; a non-STRING key is an error and attrs refuses classified plaintext. An empty relation, or one that is not valid UTF-8, is refused, and so is a node that does not exist. A store written before 2.6.0 holds no relation on these edges -- it went only to db_timeline's in-process journal -- and db_relations reports them as null.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt), param("relation", "What joins the two nodes: a non-empty name.", ParamString), param("attrs?", "Optional attributes hash, stored as attr_<key>.", ParamHash)}, returns: pairRet("the new relation edge", ParamHash).withFields("created", "dst", "edge_id", "indexed_props", "relation", "src")},
+	BuiltinNameDbIndexProp:   {signature: "db_index_prop(db, nodeID, key, value)", summary: "Indexes a property (key=value) on a node, in a transaction that fails, and indexes nothing, when the node does not exist. Indexing a key again adds a value rather than replacing the one already there; db_node shows every value a key holds and db_find finds the node under each. All four arguments are required.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeID", "Node ID to index.", ParamInt), param("key", "Property key.", ParamString), param("value", "Property value.", ParamString)}, returns: pairRet("true once the property has been indexed", ParamBool)},
 	BuiltinNameDbQueryNodes:  {signature: "db_query_nodes(db, nodeType?)", summary: "Returns node IDs, optionally filtered to a single node type (integer/enum).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("nodeType?", "Optional integer/enum node type filter.", ParamInt, ParamEnum)}, returns: pairRet("node IDs, optionally filtered to a single node type (integer/enum)", ParamArray).ofElem(ParamInt)},
 	// db_query delegates straight to DbQueryNodes, which requires an INTEGER
 	// handle (db.go); the handle kind is not visible in db_query's own body.
 	BuiltinNameDbQuery:        {signature: "db_query(db)", summary: "Returns all DATA-type node IDs (an alias for db_query_nodes with no type filter). There is no query-expression language.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("all DATA-type node IDs (an alias for db_query_nodes with no type filter)", ParamArray).ofElem(ParamInt)},
-	BuiltinNameDbBfs:          {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first traversal from origin up to depth. direction is \"in\", \"out\", or \"both\". All four arguments are required.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("origin", "Origin node ID.", ParamInt), param("depth", "Maximum traversal depth.", ParamInt), param("direction", "Edge direction: \"in\", \"out\", or \"both\".", ParamString)}, returns: pairRet("the nodes and edges the traversal reached", ParamHash).withFields("edges", "nodes")},
-	BuiltinNameDbShortestPath: {signature: "db_shortest_path(db, from, to)", summary: "Computes shortest path between two graph nodes.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt)}, returns: pairRet("the node IDs along the shortest path, empty when none exists", ParamArray).ofElem(ParamInt)},
+	BuiltinNameDbBfs:          {signature: "db_bfs(db, origin, depth, direction)", summary: "Breadth-first walk from origin up to depth hops. direction is \"out\", \"in\" or \"both\" -- case and surrounding space do not matter -- and any other word is an error. depth 0 is the origin alone, and a negative depth is an error. Every edge the walk crosses is returned, parallel edges included; graphene's own BFS keeps one edge per neighbour. The walk runs under the language's fixed traversal budget (docs/LIMITS_REFERENCE.md) and is refused rather than cut short when it reaches it. An origin that does not exist is an error. Returns (reach, err): nodes in the order reached, origin first, and edges in the order first crossed.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("origin", "Origin node ID.", ParamInt), param("depth", "Maximum hops from the origin, 0 or more.", ParamInt), choiceParam("direction", "Edge direction: \"out\", \"in\", or \"both\".", dbDirections)}, returns: pairRet("the nodes and edges the walk reached", ParamHash).withFields("edges", "nodes")},
+	BuiltinNameDbShortestPath: {signature: "db_shortest_path(db, from, to)", summary: "Finds a path with the fewest edges between two nodes and returns the node IDs along it, from first to last. Edges are walked in either direction, so the path may run against an edge; db_bfs with \"out\" answers what is reachable going forward. Two nodes that are not connected return an empty array, not an error; a node that does not exist is an error. Runs under the fixed traversal budget, and is refused rather than cut short when it reaches it.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt), param("from", "Source node ID.", ParamInt), param("to", "Destination node ID.", ParamInt)}, returns: pairRet("the node IDs along the shortest path, empty when none exists", ParamArray).ofElem(ParamInt)},
 	BuiltinNameDbTimeline:     {signature: "db_timeline(db)", summary: "Returns chronological timeline events recorded in the graph. Takes only the handle (no options argument).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("chronological timeline events recorded in the graph", ParamArray)},
-	BuiltinNameDbStats:        {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage}. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("graph database statistics: {nodes, edges, has_storage}", ParamHash)},
-	BuiltinNameDbCompact:      {signature: "db_compact(db)", summary: "Merges a disk-backed store's pending writes into its image and truncates the write-ahead log, which is what gives the memory back. Everything written since the last compaction stays resident and is replayed at every open, so a store that is never compacted grows in memory and open time with no error to signal it -- db_stats' delta_records and wal_bytes are the figures that say it is due. Compacting an in-memory handle is a no-op and reports has_storage false. Note that compacting with this build rewrites the store in a newer on-disk format that older mutant builds cannot open. Returns (report, err).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("what the compaction moved: {has_storage, delta_records_before, delta_records_after}", ParamHash).withFields("delta_records_after", "delta_records_before", "has_storage")},
+	BuiltinNameDbStats:        {signature: "db_stats(db)", summary: "Returns graph database statistics: {nodes, edges, has_storage, read_only, lock_free}. read_only is true for a store opened with db_open_disk's read_only option, and lock_free is the reason such a read could take no lock, empty when it took one. Disk-backed handles also report delta_records, csr_records, deleted_nodes, deleted_edges, wal_bytes, commit_seq and last_compact — growing delta_records/wal_bytes means the store is overdue for compaction.", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("graph database statistics: {nodes, edges, has_storage}", ParamHash)},
+	BuiltinNameDbCompact:      {signature: "db_compact(db)", summary: "Merges a disk-backed store's pending writes into its image and truncates the write-ahead log, which is what gives the memory back. Everything written since the last compaction stays resident and is replayed at every open, so a store that is never compacted grows in memory and open time with no error to signal it -- db_stats' delta_records and wal_bytes are the figures that say it is due. snapshot_root is the Merkle root of the image the compaction wrote and prev_root the root of the one it replaced -- the store's identity at this moment, which a script can record and a later check can be held to; both are empty for an in-memory handle. Compacting an in-memory handle is a no-op and reports has_storage false. Note that compacting with this build rewrites the store in a newer on-disk format that older mutant builds cannot open. Returns (report, err).", params: []builtinParamDoc{param("db", "Database handle.", ParamInt)}, returns: pairRet("what the compaction moved, and the roots it left: {has_storage, delta_records_before, delta_records_after, snapshot_root, prev_root}", ParamHash).withFields("delta_records_after", "delta_records_before", "has_storage", "prev_root", "snapshot_root")},
 	// The ledger family. Its own alignment group, which is also why the
 	// comment is here: these entries joined the section above otherwise, and
 	// gofmt would have rewritten the two db_ rows that have been formatted
@@ -2380,7 +2416,7 @@ var builtinDocs = map[string]builtinDoc{
 			param("ledger", "Handle from ledger_open.", ParamInt),
 			param("src", "Node ID to start from.", ParamInt),
 			param("dst", "Node ID to reach.", ParamInt),
-			param("costModel", "One of: hops, similarity, weight.", ParamString),
+			choiceParam("costModel", "One of: hops, similarity, weight.", ledgerCostModelList()),
 		},
 		returns: pairRet("the cheapest path under the named model, or found false", ParamHash).withFields("cost", "cost_model", "directed", "dst", "edges", "found", "hops", "nodes", "reversed_hops", "src")},
 	BuiltinNameLedgerSubgraph: {
@@ -2450,6 +2486,42 @@ var builtinDocs = map[string]builtinDoc{
 			param("ledger", "Handle from ledger_open.", ParamInt),
 		},
 		returns: pairRet("every declaration in force on both sides", ParamHash).withFields("composite_edge_keys", "composite_node_keys", "count", "ordered_edge_keys", "ordered_node_keys", "unique_edge_keys", "unique_edge_types", "unique_node_keys")},
+	BuiltinNameDbFind: {
+		signature: "db_find(db, key, value, nodeType?)", summary: "Returns the nodes whose indexed key holds value exactly, as {nodes, count, key_indexed}, ids in ascending order. nodeType restricts the answer to one type (0-127); with none, every type matches. key_indexed is false when the store's index has never held the key: graphene answers a query on such a key with nothing and no error, so an empty list alone cannot say whether nothing matched or nothing was ever indexed under that name. value is compared as bytes. Returns (found, err).",
+		params: []builtinParamDoc{
+			param("db", "Database handle.", ParamInt),
+			param("key", "Indexed property key.", ParamString),
+			param("value", "The value to match exactly.", ParamString, ParamBytes),
+			param("nodeType?", "Optional integer/enum node type (0-127).", ParamInt, ParamEnum),
+		},
+		returns: pairRet("the matching node IDs, and whether the key was ever indexed", ParamHash).withFields("count", "key_indexed", "nodes")},
+	BuiltinNameDbNode: {
+		signature: "db_node(db, id)", summary: "Reads one node back: {id, labels, properties, property_count, multi_valued, blob_bytes}. properties holds everything indexed on the node -- by db_add_artifact, db_index_prop or another writer -- as STRING values, or BYTES for a value that is not valid UTF-8. A key indexed more than once holds an ARRAY of every value and is named in multi_valued, because indexing a key again adds a value rather than replacing one. labels are the type numbers given to db_add_node. blob_bytes is the size of any property blob the record itself carries, which db_* never writes and this does not decode. A node that does not exist is an error. Returns (node, err).",
+		params: []builtinParamDoc{
+			param("db", "Database handle.", ParamInt),
+			param("id", "Node ID.", ParamInt),
+		},
+		returns: pairRet("the node and everything indexed about it", ParamHash).withFields("blob_bytes", "id", "labels", "multi_valued", "properties", "property_count")},
+	BuiltinNameDbRelations: {
+		signature: "db_relations(db, node, direction)", summary: "Lists one node's edges in a direction, in the order they were added: {node, direction, relations, count, unlabelled}, each relation {edge_id, src, dst, relation, labels, properties}. relation is the name db_add_relation stored, or null for an edge that carries none -- every edge db_add_edge wrote, and every db_add_relation edge written before 2.6.0, which kept its relation only in db_timeline's in-process journal and cannot be recovered; unlabelled counts them. A self-loop is listed once. direction is \"out\", \"in\" or \"both\"; any other word is an error, and so is a node that does not exist. Returns (relations, err).",
+		params: []builtinParamDoc{
+			param("db", "Database handle.", ParamInt),
+			param("node", "Node ID.", ParamInt),
+			choiceParam("direction", "Edge direction: \"out\", \"in\", or \"both\".", dbDirections),
+		},
+		returns: pairRet("the node's edges and the relation each carries", ParamHash).withFields("count", "direction", "node", "relations", "unlabelled")},
+	BuiltinNameDbSchema: {
+		signature: "db_schema(db)", summary: "Reports what a store holds: {nodes, edges, node_types, edge_types, node_keys, edge_keys, relations}. node_types and edge_types are [{type, count}] in type order; node_keys and edge_keys are the property keys the index has held, sorted -- on a disk store a key whose every entry has since been removed can still be listed; relations is [{relation, count}], how many edges carry each relation. Returns (schema, err).",
+		params: []builtinParamDoc{
+			param("db", "Database handle.", ParamInt),
+		},
+		returns: pairRet("the store's types, indexed keys and relations", ParamHash).withFields("edge_keys", "edge_types", "edges", "node_keys", "node_types", "nodes", "relations")},
+	BuiltinNameDbVerify: {
+		signature: "db_verify(db)", summary: "Cross-checks the store's indexes against its records: {checked, consistent, problem, values_checked}. checked is false for a store that cannot verify itself, and consistent is then false as well, never a pass. problem is the first inconsistency found, empty when there is none. values_checked is always false and is there to be read: the check covers the index's structure -- postings, adjacency, that no entry outlives its node or edge -- and not whether an indexed value still says what the script meant. Returns (report, err).",
+		params: []builtinParamDoc{
+			param("db", "Database handle.", ParamInt),
+		},
+		returns: pairRet("whether the indexes agree with the records", ParamHash).withFields("checked", "consistent", "problem", "values_checked")},
 	// A "bytes value" is a BYTES or a STRING: requireBytesStringArg
 	// (builtin/bytes.go) accepts both, and the family is shape-preserving --
 	// bytes_slice of a BYTES is a BYTES, of a STRING a STRING. Both kinds are
@@ -3130,6 +3202,7 @@ func exportParams(params []builtinParamDoc) []BuiltinParamDoc {
 			Optional: shape.Optional,
 			Variadic: shape.Variadic,
 			Elem:     p.elem,
+			OneOf:    p.oneOf,
 		})
 	}
 	return exported

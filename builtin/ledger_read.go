@@ -136,13 +136,14 @@ const (
 	ledgerPatternMaxNodes = 20
 )
 
-// ledgerBudgetRefusal turns graphene's budget error into one that says what
-// was refused and that nothing partial is being returned.
+// walkBudgetRefusal turns a walk's budget error into one that says what was
+// refused and that nothing partial is being returned. The ledger's walks and
+// the db_* ones share it, because they share the budget.
 //
 // The distinction matters more here than the limit does: a caller who reads
 // "budget exceeded" as "here is what I found so far" has the one belief this
 // error exists to prevent.
-func ledgerBudgetRefusal(err error, op string) *object.Error {
+func walkBudgetRefusal(err error, op string) *object.Error {
 	return newError("%s: the walk was stopped by this language's fixed traversal budget (%d nodes, %d edges, %s) and nothing partial is returned -- a truncated walk that reads like a complete one is the failure this refuses. graphene: %s. Narrow the question: scope it to a set of ids, or lower the depth",
 		op, graphstore.WalkMaxNodes, graphstore.WalkMaxEdges, graphstore.WalkMaxTime, err.Error())
 }
@@ -377,7 +378,7 @@ func LedgerProvenance(args ...object.Object) object.Object {
 	result, err := session.graph.ProvenanceChainCtx(ledgerContext(), origin, int(depthArg.Value), nil, graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
-			return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerProvenance))
+			return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerProvenance))
 		}
 		return resultAndError(nil, ledgerReadRefusal(session, err, origin, 0, BuiltinNameLedgerProvenance))
 	}
@@ -570,7 +571,7 @@ func LedgerPath(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 4 to `%s` must be STRING, got %s", BuiltinNameLedgerPath, args[3].Type()))
 	}
-	model := strings.ToLower(strings.TrimSpace(modelArg.Value))
+	model := choiceFold(modelArg.Value)
 	if _, ok := ledgerCostModels[model]; !ok {
 		return resultAndError(nil, newError("%s: %q is not a cost model. This language names its readings of an edge rather than taking a function, because a cost must be non-negative, deterministic and cheap and a function written here can be none of those. Use one of: %s", BuiltinNameLedgerPath, modelArg.Value, ledgerCostModelNames()))
 	}
@@ -600,7 +601,7 @@ func LedgerPath(args ...object.Object) object.Object {
 			"directed":      boolObj(true),
 		}), nil)
 	case errors.Is(err, store.ErrBudgetExceeded):
-		return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerPath))
+		return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerPath))
 	case err != nil:
 		if id, weight, ok := badEdge(); ok {
 			return resultAndError(nil, newError("%s: the %q cost model cannot read edge %d, whose weight is %g. %s. graphene: %s", BuiltinNameLedgerPath, model, id, weight, ledgerCostModels[model], err.Error()))
@@ -646,12 +647,18 @@ func LedgerPath(args ...object.Object) object.Object {
 }
 
 func ledgerCostModelNames() string {
+	return strings.Join(ledgerCostModelList(), ", ")
+}
+
+// ledgerCostModelList is the model names in order, which ledger_path's
+// metadata declares as the words its cost model takes.
+func ledgerCostModelList() []string {
 	names := make([]string, 0, len(ledgerCostModels))
 	for name := range ledgerCostModels {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return strings.Join(names, ", ")
+	return names
 }
 
 // ledgerNodeIDList reads an ARRAY of node ids, preserving order and reporting
@@ -946,7 +953,7 @@ func LedgerPatterns(args ...object.Object) object.Object {
 	matches, err := session.graph.FindPatternsCtx(ledgerContext(), pattern, scope, int(maxArg.Value), graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
-			return resultAndError(nil, ledgerBudgetRefusal(err, BuiltinNameLedgerPatterns))
+			return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerPatterns))
 		}
 		return resultAndError(nil, newError("%s: %s", BuiltinNameLedgerPatterns, err.Error()))
 	}

@@ -264,6 +264,10 @@ Current lint rules (rule id -> default severity):
 - `builtinArgType` -> warning (a builtin passed a kind its parameter cannot
   accept, for arguments whose type is certain -- a literal, or a name that is
   never reassigned)
+- `builtinArgChoice` -> warning (a string literal that is not one of the words
+  a parameter takes, from `builtin.ParamSpecs(name)[i].OneOf` -- the builtin's
+  own list, compared with its own case and space folding through
+  `AcceptsChoice`. Only literals: a name's value is never guessed at)
 - `builtinSingleReturn` -> warning (several names bound from a builtin that
   returns one value rather than a `(value, err)` pair; from
   `builtin.ReturnSpec(name).Pair`)

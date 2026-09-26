@@ -338,6 +338,34 @@ exhaustive lists.
   seven terminal prompts scripted and checks that the email taken off the image
   is identical to `examples/data/phish.eml`.
 
+- **A `db_*` store can be read back.** Everything the family wrote, nothing
+  could read: properties went into graphene's index with no builtin to look a
+  node up by one, and the only way to learn what a store held was to have been
+  the program that wrote it. Five builtins read it (659 → 664):
+  `db_find(db, key, value, nodeType?)` looks nodes up by one indexed value, and
+  says in `key_indexed` whether the key was ever indexed at all -- graphene
+  answers a lookup on an unknown key with nothing and no error, so an empty list
+  alone could not tell "no host has that address" from a misspelled key;
+  `db_node(db, id)` reads a node's type and every indexed property, and shows a
+  key indexed twice as both values rather than picking one; `db_relations(db,
+  node, direction)` lists a node's edges with the relation each carries;
+  `db_schema(db)` counts types, indexed keys and relations; and `db_verify(db)`
+  cross-checks the indexes against the records, reporting `checked` and
+  `consistent` apart so a store that cannot check itself never reads as a pass.
+  `db_open_disk` takes `read_only`, which opens a store without changing it --
+  never creating one, refused while a writer holds it, and read without a lock
+  when it has no `graphene.lock`, which `db_stats`' new `lock_free` field then
+  explains. `db_compact` reports the `snapshot_root` of the image it wrote and
+  the `prev_root` it replaced.
+
+- **The editor knows the words a builtin takes.** A parameter can now declare
+  the closed set of words it accepts -- `db_bfs` and `db_relations`' direction,
+  `ledger_path`'s cost model -- from the builtin's own list, and a new
+  `builtinArgChoice` rule warns about a string literal outside it before the
+  program runs. It compares the way the builtin does, ignoring case and
+  surrounding space, and looks only at literals.
+  `mutant.lint.rules.builtinArgChoice.severity` sets it.
+
 ### Changed
 
 - **A bare `--password` is refused.** 2.5.0 warned on it and promised the next
@@ -451,6 +479,38 @@ exhaustive lists.
   `measured`, which is false for a probe that could not run or whose check
   failed, and a run whose process protection measured nothing says so once on
   stderr. Process protection runs on Windows only, and the docs now say so.
+
+- **`db_add_relation` stores its relation.** It used to add a plain edge and
+  send the relation only to `db_timeline`'s journal, which lives in the process
+  and is cleared by `db_close`, so a reopened store -- or any reader but the
+  program that wrote it -- held the edges with no relation at all, while the
+  reference said they were labelled. The edge and its relation now land in one
+  transaction, the relation indexed on the edge where `db_relations` and
+  `db_schema` read it back. It takes an optional `attrs` hash, stored beside the
+  relation as `attr_<key>` and refused if it holds classified plaintext, and it
+  refuses an empty relation, one that is not valid UTF-8, and a node that does
+  not exist. **Stores written by earlier releases cannot be repaired:** the
+  labels were never in them, and `db_relations` reports those edges with
+  `relation: null` and counts them as `unlabelled`.
+
+- **`db_bfs` refuses a direction it does not know.** Any word other than `in`
+  or `out` used to mean `both`, so a misspelled `"outbound"` walked every edge
+  both ways and reported nothing wrong; a negative depth was walked as zero.
+  Both are errors now, and `OUT` or ` out ` are read as `out`. It returns every
+  edge it crosses: graphene's walk keeps one edge per neighbour, so of three
+  relations from a process to one file it returned one. It runs under the same
+  fixed traversal budget as the `ledger_*` walks, and is refused rather than cut
+  short when it reaches it.
+
+- **`db_shortest_path` returns an empty array for two nodes that are not
+  connected,** as its documentation always said; it returned an error. A node
+  that does not exist is still an error, and now says which argument named it.
+  It runs under the traversal budget, and its documentation says what it always
+  did: it walks edges in either direction.
+
+- **An attribute key that is not a string is refused.** `db_add_artifact` used
+  to skip such a key, and reported the node with fewer properties than the
+  script gave it and nothing to say which had gone.
 
 ### Fixed
 
@@ -577,6 +637,21 @@ exhaustive lists.
   reclassification in the run fail. A table that names the custom labels 0-127
   `db_*` writes, renames a disclosure label, or is torn is now refused before
   anything is opened.
+
+- **`db_index_prop` reported success on a node that does not exist.** graphene
+  does not look for the node before indexing it, so a mistyped or stale id wrote
+  an entry pointing at nothing. It now indexes through a transaction, whose
+  commit checks the node is live, and refuses by name.
+
+- **Four examples reported the wrong numbers, and their recorded output locked
+  them in.** `mini_timeline_builder` indexed `fs_stat`'s error field for every
+  file, which is null for a file that stats cleanly, so its output was a run of
+  argument errors; it now indexes an error only when there is one.
+  `incident_graph`, `binary_triage_sections_entropy` and
+  `memory_scan_to_detection` printed `len()` of a result hash -- a count of its
+  keys -- as the number of nodes reached, sections and PE headers: 2 nodes for
+  3, 3 sections for 15, 3 PE headers for 1. `incident_graph` now also looks the
+  process up with `db_find` and lists what it touched with `db_relations`.
 
 ### Security
 

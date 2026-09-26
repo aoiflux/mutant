@@ -1,10 +1,18 @@
 package builtin
 
 import (
+	"errors"
 	"sync"
+	"unicode/utf8"
+
+	"github.com/aoiflux/graphene/store"
 
 	"mutant/object"
 )
+
+// dbRelationKey is the edge property db_add_relation indexes a relation
+// under, and db_relations and db_schema read it back from.
+const dbRelationKey = "relation"
 
 var dbTimelineStore = struct {
 	sync.Mutex
@@ -33,18 +41,11 @@ func DbAddArtifact(args ...object.Object) object.Object {
 		if !ok {
 			return resultAndError(nil, newError("argument 3 to `db_add_artifact` must be HASH, got %s", args[2].Type()))
 		}
-		// Each attribute is stored as its Inspect rendering, which for a
-		// buffer is the whole buffer in hex, and graphene keeps property
-		// blobs in its write-ahead log.
 		if errObj := refuseClassified(BuiltinNameDbAddArtifact, args...); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
-		for _, pair := range attrs.Pairs {
-			keyObj, ok := pair.Key.(*object.String)
-			if !ok {
-				continue
-			}
-			props["attr_"+keyObj.Value] = []byte(pair.Value.Inspect())
+		if errObj := dbAttrProps(BuiltinNameDbAddArtifact, 3, attrs, props); errObj != nil {
+			return resultAndError(nil, errObj)
 		}
 	}
 
@@ -69,9 +70,22 @@ func DbAddArtifact(args ...object.Object) object.Object {
 	}), nil)
 }
 
+// DbAddRelation joins two nodes with an edge that carries its relation.
+//
+// It used to add a plain DATA edge and send the relation only to db_timeline's
+// journal, which lives in this process and db_close clears. A store reopened,
+// or read by anything but the program that wrote it, held edges with no
+// relation at all, while the reference said they were labelled. The edge and
+// its relation now land in one transaction: the relation indexed on the edge
+// under dbRelationKey, where db_relations and db_schema read it back, and each
+// attribute beside it as attr_<key>, the way db_add_artifact stores a node's.
+//
+// A relation is a name a reader matches on, so an empty one, or one that is
+// not valid UTF-8 -- which prints as the same replacement characters as a
+// different invalid one -- is refused rather than stored.
 func DbAddRelation(args ...object.Object) object.Object {
-	if len(args) != 4 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
+	if len(args) != 4 && len(args) != 5 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4 or 5", len(args)))
 	}
 	handleObj, ok := args[0].(*object.Integer)
 	if !ok {
@@ -89,15 +103,47 @@ func DbAddRelation(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 4 to `db_add_relation` must be STRING, got %s", args[3].Type()))
 	}
-
-	edgeResult := DbAddEdge(handleObj, srcObj, dstObj)
-	edgePayload, errObj := dbUnwrapPair(edgeResult)
-	if errObj != nil {
-		return resultAndError(nil, errObj)
+	if relObj.Value == "" {
+		return resultAndError(nil, newError("%s: the relation is empty; name what joins the two nodes", BuiltinNameDbAddRelation))
 	}
-	edgeID, ok := edgePayload.(*object.Integer)
-	if !ok {
-		return resultAndError(nil, newError("db_add_relation: unexpected edge id payload type %T", edgePayload))
+	if !utf8.ValidString(relObj.Value) {
+		return resultAndError(nil, newError("%s: the relation is not valid UTF-8, so it would print the same as a different one; name it in text", BuiltinNameDbAddRelation))
+	}
+
+	props := map[string][]byte{dbRelationKey: []byte(relObj.Value)}
+	if len(args) == 5 {
+		attrs, ok := args[4].(*object.Hash)
+		if !ok {
+			return resultAndError(nil, newError("argument 5 to `db_add_relation` must be HASH, got %s", args[4].Type()))
+		}
+		if errObj := refuseClassified(BuiltinNameDbAddRelation, args...); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		if errObj := dbAttrProps(BuiltinNameDbAddRelation, 5, attrs, props); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+	}
+
+	g, found := dbGet(handleObj.Value)
+	if !found {
+		return resultAndError(nil, newError("db_add_relation: invalid handle %d", handleObj.Value))
+	}
+	// One transaction, as dbAddIndexedNode does for a node: the edge and what
+	// is indexed about it land together or not at all. Its endpoints are
+	// checked at commit, under the store's lock.
+	tx := g.Begin()
+	edgeID := tx.AddEdge(&store.Edge{
+		Src:    store.NodeID(srcObj.Value),
+		Dst:    store.NodeID(dstObj.Value),
+		Labels: []store.EdgeType{store.CustomEdgeType(uint16(DATA))},
+	})
+	tx.IndexEdgeProperties(edgeID, props)
+	if err := tx.Commit(); err != nil {
+		var invalid *store.ErrInvalidEdge
+		if errors.As(err, &invalid) {
+			return resultAndError(nil, newError("%s: node %d does not exist, so no relation was added", BuiltinNameDbAddRelation, invalid.MissingID))
+		}
+		return resultAndError(nil, newError("db_add_relation: %s", err.Error()))
 	}
 
 	dbTimelineAppend(handleObj.Value, makeHashObject(map[string]object.Object{
@@ -105,16 +151,36 @@ func DbAddRelation(args ...object.Object) object.Object {
 		"src":      intObj(srcObj.Value),
 		"dst":      intObj(dstObj.Value),
 		"relation": stringObj(relObj.Value),
-		"edge_id":  intObj(edgeID.Value),
+		"edge_id":  intObj(int64(edgeID)),
 	}))
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"edge_id":  intObj(edgeID.Value),
-		"src":      intObj(srcObj.Value),
-		"dst":      intObj(dstObj.Value),
-		"relation": stringObj(relObj.Value),
-		"created":  boolObj(true),
+		"edge_id":       intObj(int64(edgeID)),
+		"src":           intObj(srcObj.Value),
+		"dst":           intObj(dstObj.Value),
+		"relation":      stringObj(relObj.Value),
+		"created":       boolObj(true),
+		"indexed_props": intObj(int64(len(props))),
 	}), nil)
+}
+
+// dbAttrProps adds each attribute of a script's attrs hash to props as
+// attr_<key>, stored as the value's Inspect rendering. For a buffer that is the
+// whole buffer in hex, and graphene keeps property entries in its write-ahead
+// log, so the caller refuses classified plaintext before this runs.
+//
+// A key that is not a STRING is refused. db_add_artifact used to skip one, and
+// reported the node with fewer properties than the script gave it and nothing
+// to say which had gone.
+func dbAttrProps(op string, position int, attrs *object.Hash, props map[string][]byte) *object.Error {
+	for _, pair := range attrs.Pairs {
+		keyObj, ok := pair.Key.(*object.String)
+		if !ok {
+			return newError("%s: argument %d has a %s key; attribute keys are property names and must be STRING", op, position, pair.Key.Type())
+		}
+		props["attr_"+keyObj.Value] = []byte(pair.Value.Inspect())
+	}
+	return nil
 }
 
 func DbQuery(args ...object.Object) object.Object {
@@ -155,21 +221,4 @@ func dbTimelineAppend(handle int64, event object.Object) {
 	dbTimelineStore.Lock()
 	dbTimelineStore.events[handle] = append(dbTimelineStore.events[handle], event)
 	dbTimelineStore.Unlock()
-}
-
-func dbUnwrapPair(value object.Object) (object.Object, *object.Error) {
-	pair, ok := value.(*object.MultiValue)
-	if !ok || len(pair.Values) != 2 {
-		return nil, newError("db wrapper expected MultiValue result")
-	}
-	result := pair.Values[0]
-	errValue := pair.Values[1]
-	if errValue == nil || errValue.Type() == object.NULL_OBJ {
-		return result, nil
-	}
-	errObj, ok := errValue.(*object.Error)
-	if !ok {
-		return nil, newError("db wrapper expected Error in second result slot")
-	}
-	return nil, errObj
 }

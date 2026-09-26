@@ -39,10 +39,10 @@ func CloseForgottenHandles() []string {
 			continue
 		}
 		dbTimelineForget(handle)
-		path, onDisk := dbDiskPaths.LoadAndDelete(handle)
+		opened, onDisk := dbDiskStores.LoadAndDelete(handle)
 		err := g.Close()
 		if onDisk {
-			notes = append(notes, forgottenNote("graph store", path.(string), handle, BuiltinNameDbClose, err))
+			notes = append(notes, forgottenNote("graph store", opened.(*dbDiskStore).path, handle, BuiltinNameDbClose, err))
 		}
 	}
 	return notes

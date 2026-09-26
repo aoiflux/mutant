@@ -47,6 +47,7 @@ type LintConfig struct {
 	PlatformSupport              LintSeverity
 	BuiltinArity                 LintSeverity
 	BuiltinArgType               LintSeverity
+	BuiltinArgChoice             LintSeverity
 	BuiltinSingleReturn          LintSeverity
 	BuiltinPairReturn            LintSeverity
 	BuiltinDeprecated            LintSeverity
@@ -95,6 +96,11 @@ func DefaultLintConfig() LintConfig {
 		// Passing a kind a builtin's parameter cannot accept is likewise a
 		// guaranteed runtime error that still compiles.
 		BuiltinArgType: LintSeverityWarning,
+		// So is a word outside a closed set -- db_bfs's direction, ledger_path's
+		// cost model. db_bfs used to read an unknown direction as "both" and
+		// walk every edge without saying so; it refuses one now, and this says
+		// so before the program runs.
+		BuiltinArgChoice: LintSeverityWarning,
 		// Binding two names from a builtin that returns one value is not a
 		// runtime error at all, which is what makes it worth reporting: the
 		// program runs and quietly does the wrong thing.
@@ -198,6 +204,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.BuiltinArity
 	case "builtinArgType":
 		severityName = c.BuiltinArgType
+	case "builtinArgChoice":
+		severityName = c.BuiltinArgChoice
 	case "builtinSingleReturn":
 		severityName = c.BuiltinSingleReturn
 	case "builtinPairReturn":
@@ -1514,10 +1522,11 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 
 	aritySeverity, arityEnabled := lintConfig.severityForRule("builtinArity")
 	argTypeSeverity, argTypeEnabled := lintConfig.severityForRule("builtinArgType")
+	choiceSeverity, choiceEnabled := lintConfig.severityForRule("builtinArgChoice")
 	returnSeverity, returnEnabled := lintConfig.severityForRule("builtinSingleReturn")
 	pairSeverity, pairEnabled := lintConfig.severityForRule("builtinPairReturn")
 	deprecatedSeverity, deprecatedEnabled := lintConfig.severityForRule("builtinDeprecated")
-	if !arityEnabled && !argTypeEnabled && !returnEnabled && !pairEnabled && !deprecatedEnabled {
+	if !arityEnabled && !argTypeEnabled && !choiceEnabled && !returnEnabled && !pairEnabled && !deprecatedEnabled {
 		return nil
 	}
 	if !arityEnabled {
@@ -1525,6 +1534,9 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 	}
 	if !argTypeEnabled {
 		argTypeSeverity = nil
+	}
+	if !choiceEnabled {
+		choiceSeverity = nil
 	}
 	if !returnEnabled {
 		returnSeverity = nil
@@ -1549,6 +1561,7 @@ func lintBuiltinCalls(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 		snapshot:        snapshot,
 		aritySeverity:   aritySeverity,
 		argTypeSeverity: argTypeSeverity,
+		choiceSeverity:  choiceSeverity,
 		returnSeverity:  returnSeverity,
 		pairSeverity:    pairSeverity,
 		deprecatedSev:   deprecatedSeverity,
@@ -1591,6 +1604,7 @@ type builtinCallCollector struct {
 	snapshot        *Snapshot
 	aritySeverity   *lsp.DiagnosticSeverity
 	argTypeSeverity *lsp.DiagnosticSeverity
+	choiceSeverity  *lsp.DiagnosticSeverity
 	returnSeverity  *lsp.DiagnosticSeverity
 	pairSeverity    *lsp.DiagnosticSeverity
 	deprecatedSev   *lsp.DiagnosticSeverity
@@ -1945,6 +1959,47 @@ func (c *builtinCallCollector) checkCall(name string, anchor mast.Node, args []m
 	}
 
 	c.checkArgumentTypes(name, args)
+	c.checkArgumentChoices(name, args)
+}
+
+// checkArgumentChoices flags a string literal that a parameter's closed set of
+// words does not include -- `db_bfs(h, n, 2, "outbound")` -- which the builtin
+// refuses when it runs (`builtinArgChoice`).
+//
+// Only a literal is looked at. A name holding a string has a type inference
+// can know, but not a value, and a guess about the value is how a rule starts
+// warning about programs that work. The words are the parameter's OneOf, which
+// is the builtin's own list, and AcceptsChoice folds case and surrounding space
+// the way the builtin does, so a word the builtin takes is never reported.
+func (c *builtinCallCollector) checkArgumentChoices(name string, args []mast.Expression) {
+	if c.choiceSeverity == nil || len(args) == 0 {
+		return
+	}
+	params, ok := builtin.ParamSpecs(name)
+	if !ok || len(params) == 0 || !argumentCountFitsParams(params, len(args)) {
+		return
+	}
+	for i, arg := range args {
+		literal, ok := arg.(*mast.StringLiteral)
+		if !ok || literal == nil {
+			continue
+		}
+		param, ok := paramForArgument(params, i)
+		if !ok || param.AcceptsChoice(literal.Value) {
+			continue
+		}
+		rng, ok := c.snapshot.Program.RangeOf(arg)
+		if !ok {
+			continue
+		}
+		c.result = append(c.result, lsp.Diagnostic{
+			Range:    localprotocol.ToLSPRange(rng),
+			Severity: c.choiceSeverity,
+			Source:   c.source,
+			Message: fmt.Sprintf("argument %d to `%s` is one of %s, not %q; the builtin refuses any other word when it runs.",
+				i+1, name, strings.Join(param.OneOf, ", "), literal.Value),
+		})
+	}
 }
 
 // checkArgumentTypes flags an argument whose kind the parameter in that position

@@ -54,6 +54,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "platformSupport", &config.PlatformSupport)
 	applyRuleSeverity(rulesMap, "builtinArity", &config.BuiltinArity)
 	applyRuleSeverity(rulesMap, "builtinArgType", &config.BuiltinArgType)
+	applyRuleSeverity(rulesMap, "builtinArgChoice", &config.BuiltinArgChoice)
 	applyRuleSeverity(rulesMap, "builtinSingleReturn", &config.BuiltinSingleReturn)
 	applyRuleSeverity(rulesMap, "builtinPairReturn", &config.BuiltinPairReturn)
 	applyRuleSeverity(rulesMap, "builtinDeprecated", &config.BuiltinDeprecated)

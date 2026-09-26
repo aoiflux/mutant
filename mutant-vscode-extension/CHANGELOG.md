@@ -27,11 +27,17 @@
   reported. The rule reads the runtime's own lists, so it cannot warn about a
   builtin that does not refuse. `mutant.lint.rules.classifiedPlaintext.severity`
   sets it.
-- **Every new builtin is highlighted and hoverable** -- 161 of them, across disk
+- **A new diagnostic: `builtinArgChoice`.** A string literal that is not one of
+  the words a builtin parameter takes -- `db_bfs(h, n, 2, "outbound")`, whose
+  direction is `out`, `in` or `both` -- is refused when the program runs; the
+  editor now says so at the argument. The words are the builtin's own list and
+  are compared the way the builtin compares them.
+  `mutant.lint.rules.builtinArgChoice.severity` sets it.
+- **Every new builtin is highlighted and hoverable** -- 166 of them, across disk
   image verification, partition-offset opening, deleted-file recovery, journals,
-  slack, the forensic ledger, classified records and disclosure -- with no change
-  here, because the grammar and the hover cards are both generated from the
-  registry.
+  slack, the forensic ledger, classified records, disclosure and reading a graph
+  store back -- with no change here, because the grammar and the hover cards are
+  both generated from the registry.
 
 ## 0.2.0
 

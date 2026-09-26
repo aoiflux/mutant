@@ -718,4 +718,13 @@ const (
 	BuiltinNameLedgerDeclareUniqueEdge = "ledger_declare_unique_edge"
 	BuiltinNameLedgerDeclareComposite  = "ledger_declare_composite"
 	BuiltinNameLedgerIndexes           = "ledger_indexes"
+
+	// reading a db_* store back: a node by an indexed value, a node and what
+	// is indexed about it, one node's relations, what the store holds, and
+	// whether its indexes agree with its records
+	BuiltinNameDbFind      = "db_find"
+	BuiltinNameDbNode      = "db_node"
+	BuiltinNameDbRelations = "db_relations"
+	BuiltinNameDbSchema    = "db_schema"
+	BuiltinNameDbVerify    = "db_verify"
 )

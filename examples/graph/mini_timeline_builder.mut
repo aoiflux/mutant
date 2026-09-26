@@ -87,7 +87,11 @@ for (let i = 0; i < timeline_file_count; i = i + 1) {
     let size_text, err = json_stringify(st ["size"]);
     check_err(err, "json_stringify size");
     check(db_index_prop(db, event_node, "size", size_text), "db_index_prop");
-    check(db_index_prop(db, event_node, "error", st ["error"]), "db_index_prop");
+    // fs_stat's error is null for a file it read, and an indexed value is a
+    // string, so only an error that happened is indexed.
+    if (type_of(st ["error"]) == "STRING") {
+        check(db_index_prop(db, event_node, "error", st ["error"]), "db_index_prop");
+    };
 
     check(db_add_edge(db, file_node, event_node, EDGE_HAS_EVENT), "db_add_edge");
 

@@ -1,7 +1,8 @@
 // incident_graph.mut — model an intrusion as a graph, then traverse it.
 //
 // Builds a small investigation graph (process -> file, process -> network),
-// indexes a property, runs BFS and shortest-path, and prints statistics.
+// indexes a property and looks the process up by it, runs BFS and
+// shortest-path, reads back what the process touched, and prints statistics.
 // Uses the in-memory graph; nothing is written to disk.
 
 let header = fn(title) { putln("=== " + title + " ==="); };
@@ -25,24 +26,42 @@ let run = fn() {
     db_add_relation(db, proc["node_id"], file["node_id"], "wrote");
     db_add_relation(db, proc["node_id"], net["node_id"], "connected_to");
 
-    // Index a property so it can be looked up later.
+    // Index a property, then look the process up by it.
     db_index_prop(db, proc["node_id"], "name", "powershell.exe");
+    let found, ferr = db_find(db, "name", "powershell.exe");
+    if (ferr) {
+        putln("[error] db_find:", ferr);
+    } else {
+        putln("nodes named powershell.exe:", found["count"]);
+    };
 
     // Traverse outward from the process (direction "out", up to depth 3).
     let reached, berr = db_bfs(db, proc["node_id"], 3, "out");
     if (berr) {
         putln("[error] db_bfs:", berr);
     } else {
-        putln("nodes reachable from the process:", len(reached));
+        putln("nodes reachable from the process:", len(reached["nodes"]));
     };
 
     // Shortest path from the process to the C2 endpoint. db_shortest_path returns
-    // an error (not an empty result) when no path exists.
+    // an empty array, not an error, when the two are not connected.
     let path, perr = db_shortest_path(db, proc["node_id"], net["node_id"]);
     if (perr) {
-        putln("no path to network node:", perr);
+        putln("[error] db_shortest_path:", perr);
+    } else if (len(path) == 0) {
+        putln("no path to network node");
     } else {
         putln("process -> network path length:", len(path));
+    };
+
+    // What the process touched: each outgoing edge and the relation it carries.
+    let touched, rerr = db_relations(db, proc["node_id"], "out");
+    if (rerr) {
+        putln("[error] db_relations:", rerr);
+    } else {
+        for (rel in touched["relations"]) {
+            putln("process", rel["relation"], "node", rel["dst"]);
+        };
     };
 
     // Statistics: node/edge counts (plus storage counters on disk-backed graphs).

@@ -1,7 +1,4 @@
 === mini_timeline_builder ===
 Builds a simple file metadata timeline using fs_stat and graph DB.
 seeded test dataset:  example_output/mini_timeline_builder/files.json
-[error]  db_index_prop:  ERROR:argument 4 to `db_index_prop` must be STRING, got NULL at examples/graph/mini_timeline_builder.mut:90:11 context=builtin.db_index_prop
-[error]  db_index_prop:  ERROR:argument 4 to `db_index_prop` must be STRING, got NULL at examples/graph/mini_timeline_builder.mut:90:11 context=builtin.db_index_prop
-[error]  db_index_prop:  ERROR:argument 4 to `db_index_prop` must be STRING, got NULL at examples/graph/mini_timeline_builder.mut:90:11 context=builtin.db_index_prop
 wrote report:  example_output/mini_timeline_builder/report.json

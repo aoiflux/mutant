@@ -1,5 +1,8 @@
 === incident_graph ===
-nodes reachable from the process: 2
+nodes named powershell.exe: 1
+nodes reachable from the process: 3
 process -> network path length: 2
+process wrote node 2
+process connected_to node 3
 graph nodes: 3  edges: 2
 true

@@ -6,7 +6,7 @@ let strings, err = mem_strings(dump, 5);
 putln("mem_strings count:", len(strings), "err:", err);
 
 let pe_hits, err = mem_find_pe(dump);
-putln("mem_find_pe count:", len(pe_hits), "err:", err);
+putln("mem_find_pe candidates:", pe_hits["candidates"], "confirmed:", pe_hits["confirmed"], "err:", err);
 
 let shell_hits, err = mem_find_shellcode(dump);
 putln("mem_find_shellcode count:", len(shell_hits), "err:", err);

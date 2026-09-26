@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/aoiflux/graphene/store"
+
 	"mutant/object"
 )
 
@@ -203,6 +205,88 @@ func BenchmarkDbCompact(b *testing.B) {
 
 		DbCompact(handle)
 	}
+}
+
+// BenchmarkDbAddRelation adds one labelled edge between two existing nodes.
+// On a disk store it is one transaction, so one fsync, where the plain edge
+// it used to be was an append made durable at the next sync; this is the
+// figure that says what storing the relation costs.
+func BenchmarkDbAddRelation(b *testing.B) {
+	relation := stringObj("wrote")
+
+	eachBackend(b, func(b *testing.B, handle *object.Integer) {
+		b.StopTimer()
+		src, dst := benchNode(b, handle), benchNode(b, handle)
+		b.StartTimer()
+
+		for i := 0; i < b.N; i++ {
+			DbAddRelation(handle, src, dst, relation)
+		}
+	})
+}
+
+// BenchmarkDbFind looks nodes up by an indexed value in a 100,000-node store:
+// a value one node holds, and one a hundred nodes share. The store is built in
+// one transaction straight through graphene, because a hundred thousand
+// db_add_artifact commits would measure the disk's fsync rate for minutes
+// before the lookup began.
+func BenchmarkDbFind(b *testing.B) {
+	eachBackend(b, func(b *testing.B, handle *object.Integer) {
+		b.StopTimer()
+		g, _ := dbGet(handle.Value)
+		tx := g.Begin()
+		for i := 0; i < 100_000; i++ {
+			id := tx.AddNode(&store.Node{Labels: []store.NodeType{dbDefaultNodeType()}})
+			tx.IndexNodeProperties(id, map[string][]byte{
+				"path": []byte(fmt.Sprintf("/evidence/%06d", i)),
+				"kind": []byte(fmt.Sprintf("kind-%03d", i%1000)),
+			})
+		}
+		if err := tx.Commit(); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+
+		for _, lookup := range []struct{ name, key, value string }{
+			{"one", "path", "/evidence/054321"},
+			{"hundred", "kind", "kind-321"},
+		} {
+			key, value := stringObj(lookup.key), stringObj(lookup.value)
+			b.Run(lookup.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					DbFind(handle, key, value)
+				}
+			})
+		}
+	})
+}
+
+// BenchmarkDbRelations lists the thousand labelled edges of one hub, each
+// with its relation read back from the index.
+func BenchmarkDbRelations(b *testing.B) {
+	direction := stringObj("out")
+
+	eachBackend(b, func(b *testing.B, handle *object.Integer) {
+		b.StopTimer()
+		g, _ := dbGet(handle.Value)
+		tx := g.Begin()
+		hub := tx.AddNode(&store.Node{Labels: []store.NodeType{dbDefaultNodeType()}})
+		for i := 0; i < 1000; i++ {
+			leaf := tx.AddNode(&store.Node{Labels: []store.NodeType{dbDefaultNodeType()}})
+			edge := tx.AddEdge(&store.Edge{Src: hub, Dst: leaf, Labels: []store.EdgeType{store.CustomEdgeType(uint16(DATA))}})
+			tx.IndexEdgeProperties(edge, map[string][]byte{dbRelationKey: []byte(fmt.Sprintf("rel-%d", i%7))})
+		}
+		if err := tx.Commit(); err != nil {
+			b.Fatal(err)
+		}
+		origin := intObj(int64(hub))
+		b.StartTimer()
+
+		for i := 0; i < b.N; i++ {
+			DbRelations(handle, origin, direction)
+		}
+	})
 }
 
 func benchNode(b *testing.B, handle *object.Integer) *object.Integer {

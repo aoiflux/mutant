@@ -65,6 +65,17 @@ const LockFileName = "graphene.lock"
 // anything opens it. Errors name the directory but not the caller; each caller
 // prefixes its own name.
 func OpenForReading(dir string) (*graphene.Graph, string, error) {
+	return OpenForReadingWith(dir, disk.Options{})
+}
+
+// OpenForReadingWith is OpenForReading with the rest of a store's open-time
+// options -- a memory ceiling, verification on open -- carried through to
+// whichever of the ways in is taken.
+//
+// ReadOnly, LiveReader and Constraints are not the caller's: they are what
+// choosing a way in means, and they are set here exactly as graphene's own
+// OpenReadOnly and OpenLive set them.
+func OpenForReadingWith(dir string, opts disk.Options) (*graphene.Graph, string, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -80,7 +91,7 @@ func OpenForReading(dir string) (*graphene.Graph, string, error) {
 	// would create one. Open live: it takes no lock and creates nothing.
 	lockPath := filepath.Join(dir, LockFileName)
 	if _, err := os.Stat(lockPath); errors.Is(err, fs.ErrNotExist) {
-		live, liveErr := graphene.OpenLive(dir)
+		live, liveErr := openLive(dir, opts)
 		if liveErr != nil {
 			return nil, "", liveErr
 		}
@@ -90,7 +101,9 @@ func OpenForReading(dir string) (*graphene.Graph, string, error) {
 			"deleted it from, and the two are not distinguishable from here", nil
 	}
 
-	g, err := graphene.OpenReadOnly(dir)
+	locked := opts
+	locked.ReadOnly, locked.LiveReader, locked.Constraints = true, false, disk.ConstraintDrop
+	g, err := graphene.OpenWithOptions(dir, locked)
 	if err == nil {
 		return g, "", nil
 	}
@@ -113,7 +126,7 @@ func OpenForReading(dir string) (*graphene.Graph, string, error) {
 			"graphene.lock records process %d as holding it without having closed it. Reading "+
 			"without a lock would read a store that is being written: %w", dir, owner.pid, err)
 	}
-	live, liveErr := graphene.OpenLive(dir)
+	live, liveErr := openLive(dir, opts)
 	if liveErr != nil {
 		// Both attempts failed, and it is the second that decided the outcome:
 		// the lock-free read is the one this exists to be able to do, so
@@ -125,6 +138,12 @@ func OpenForReading(dir string) (*graphene.Graph, string, error) {
 	return live, "the store is write-protected, so it was read without taking a lock. Its " +
 		"graphene.lock records no unclosed writer, so the reading is consistent -- but that is " +
 		"an inference from a record the last writer left, not a guarantee from the engine", nil
+}
+
+// openLive is graphene.OpenLive with the caller's other options kept.
+func openLive(dir string, opts disk.Options) (*graphene.Graph, error) {
+	opts.ReadOnly, opts.LiveReader, opts.Constraints = false, true, disk.ConstraintDrop
+	return graphene.OpenWithOptions(dir, opts)
 }
 
 // lockOwner is what graphene's last exclusive holder recorded about itself.

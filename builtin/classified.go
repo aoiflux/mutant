@@ -173,7 +173,7 @@ func ClassifiedSinks() []string {
 		BuiltinNameReportTable, BuiltinNameReportList,
 		BuiltinNameCaseNote, BuiltinNameCachePut,
 		BuiltinNameLedgerAddNode, BuiltinNameLedgerAddEdge,
-		BuiltinNameDbAddArtifact,
+		BuiltinNameDbAddArtifact, BuiltinNameDbAddRelation,
 	}
 }
 

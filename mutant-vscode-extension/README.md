@@ -64,6 +64,9 @@ VS Code language support for Mutant.
   calls to fixed-arity builtins
 - `mutant.lint.rules.builtinArgType.severity`: severity for arguments of a type
   a builtin parameter cannot accept
+- `mutant.lint.rules.builtinArgChoice.severity`: severity for a string literal
+  that is not one of the words a builtin parameter takes -- `db_bfs`'s direction,
+  `ledger_path`'s cost model -- which the builtin refuses when it runs
 - `mutant.lint.rules.builtinSingleReturn.severity`: severity for binding several
   names from a builtin that returns one value
 - `mutant.lint.rules.builtinDeprecated.severity`: severity for calling a builtin
