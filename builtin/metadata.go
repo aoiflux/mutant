@@ -1209,7 +1209,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the case as the ledger holds it", ParamHash).withFields("assignments", "case_id", "case_uid", "classes_read", "definitions_other_keys", "first_attach", "ledger", "lifecycle", "moves", "role", "role_authenticated", "source", "state", "views_read")},
 	BuiltinNameCaseTransition: {
 		signature: "case_transition(ledger, to, reason)",
-		summary:   "Moves the attached case along its lifecycle -- registered, active, in_review, concluded, retained, disposed -- by appending a lifecycle event to the ledger, hash-linked to the one before it and attributed to the examiner and the role they asserted. It makes the moves that are an examiner's decision alone: registered to active, and reopening a concluded case; a refusal names the state the case is in and the moves available from it. A state refuses what it cannot take: in review, sealing, definitions, reclassifications and disclosures; concluded or retained, sealing; disposed, everything but a withdrawal, which every state takes. Builtins that take the ledger ask the ledger for the state, and the rest ask the case attached in this run. Refused on a ledger opened as auditor. Returns (transition, err).",
+		summary:   "Moves the attached case along its lifecycle -- registered, active, in_review, concluded, retained, disposed -- by appending a lifecycle event to the ledger, hash-linked to the one before it and attributed to the examiner and the role they asserted. It makes the moves that are an examiner's decision alone: registered to active, and reopening a concluded case; a refusal names the state the case is in and the moves available from it. A state refuses what it cannot take: in review, sealing, definitions, reclassifications, disclosures and new evidence; concluded or retained, sealing and new evidence; disposed, everything but a withdrawal and the movement of an exhibit already taken in, which every state takes. Builtins that take the ledger ask the ledger for the state, and the rest ask the case attached in this run. Refused on a ledger opened as auditor. Returns (transition, err).",
 		params: []builtinParamDoc{
 			param("ledger", "The ledger the case is attached to.", ParamInt),
 			choiceParam("to", "The state to move the case to.", caseStates),
@@ -1226,6 +1226,63 @@ var builtinDocs = map[string]builtinDoc{
 			param("reason", "Why, in words a reader will see beside the assignment forever. Required.", ParamString),
 		},
 		returns: pairRet("the assignment", ParamHash).withFields("at", "by", "by_role", "case_id", "examiner", "in_force", "previous_role", "reason", "role", "role_authenticated", "seq", "uid")},
+	BuiltinNameEvidenceIntake: {
+		signature: "evidence_intake(ledger, exhibit, path, options?)",
+		summary:   "Takes an exhibit into the attached case's custody. The file is hashed with SHA-256 whatever the case's hash policy, and the ledger gets an EvidenceFile node that BELONGS_TO the case and the first event of the exhibit's custody chain, held by the examiner who took it in. Each custody event is hash-linked to the one before it, and every reader refuses a chain that forks, skips a state, or holds an event whose uid does not recompute. An exhibit the case returned is taken in again under its own name: the re-intake is the next event of the same chain, and the file is compared with the digest taken at the first intake. A mismatch is refused and nothing is recorded unless `{\"discrepancy\": \"...\"}` says what happened; `hash_checked` and `matches_intake` say what the comparison found, and a first intake is compared with nothing. An exhibit that is held, in transit or disposed of is not taken in again. The file is opened read-only to hash it and nothing else, and is registered in the run's custody too, so case_verify re-measures it. Needs the case attached with case_attach and the examiner assigned a role in it. A new exhibit is refused while the case is in review, concluded, retained or disposed; a returned one coming back is a movement of an exhibit the case has taken in, and like a release or an accept is taken in every state. Refused on a ledger opened as auditor. Returns (custody event, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("exhibit", "The exhibit's name in this case -- a bag or item number. Every later custody builtin names the exhibit by it.", ParamString),
+			param("path", "The file the exhibit is taken in as: a disk image, an export, a capture.", ParamString),
+			param("options?", "`{\"description\": \"...\", \"received_from\": \"...\"}` is kept in the ledger: the description beside the exhibit, given at its first intake only, and who it was received from beside each intake. `{\"discrepancy\": \"...\"}` takes back in a returned exhibit whose digest does not match the first intake, with the examiner's statement of why.", ParamHash),
+		},
+		returns: pairRet("the intake", ParamHash).withFields("at", "by", "by_role", "case_id", "description", "discrepancy", "evidence_uid", "exhibit", "hash", "hash_algo", "hash_checked", "holder", "intake_hash", "kind", "matches_intake", "path", "received_from", "role_authenticated", "seq", "size", "state", "uid")},
+	BuiltinNameEvidenceRelease: {
+		signature: "evidence_release(ledger, exhibit, to, reason)",
+		summary:   "Records the examiner who holds an exhibit releasing it to another examiner the case assigns a role, as the next event of its custody chain; the exhibit is then in transit until they accept it with evidence_accept. Recorded by the holder the ledger names, and to somebody assigned in the case, so a misspelt name is refused rather than left holding an exhibit nobody can accept -- that keeps the record consistent with itself and is not access control. Taken in every lifecycle state, because where an exhibit is, is a fact. Refused on a ledger opened as auditor. Returns (custody event, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("exhibit", "The exhibit's name in the case.", ParamString),
+			param("to", "The examiner it is released to, as they will assert their name at ledger_open.", ParamString),
+			param("reason", "Why, in words a reader will see beside the hand-off forever. Required.", ParamString),
+		},
+		returns: pairRet("the release", ParamHash).withFields("at", "by", "by_role", "case_id", "evidence_uid", "exhibit", "holder", "kind", "reason", "role_authenticated", "seq", "state", "to", "uid")},
+	BuiltinNameEvidenceAccept: {
+		signature: "evidence_accept(ledger, exhibit, path, options?)",
+		summary:   "Records the examiner an exhibit was released to taking it. The file they were handed is hashed with SHA-256 and compared with the digest taken at intake. A mismatch is refused and nothing is recorded, unless the examiner states what happened with `{\"discrepancy\": \"...\"}`: the accept is then recorded with both digests and the statement, and `matches_intake` is false. The file is opened read-only and registered in the run's custody. Taken in every lifecycle state; refused on a ledger opened as auditor. Returns (custody event, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("exhibit", "The exhibit's name in the case.", ParamString),
+			param("path", "The file as it was handed over.", ParamString),
+			param("options?", "`{\"discrepancy\": \"...\"}` accepts a file whose digest does not match the intake, with the examiner's statement of why. It may also record a discrepancy that is not in the bytes, such as a broken seal.", ParamHash),
+		},
+		returns: pairRet("the accept", ParamHash).withFields("at", "by", "by_role", "case_id", "discrepancy", "evidence_uid", "exhibit", "from", "hash", "hash_algo", "holder", "intake_hash", "kind", "matches_intake", "path", "role_authenticated", "seq", "state", "uid")},
+	BuiltinNameEvidenceReturn: {
+		signature: "evidence_return(ledger, exhibit, to, reason)",
+		summary:   "Records the holder of an exhibit returning it out of the case -- to its owner, or the agency that submitted it. A returned exhibit is not handed on; if it comes back, evidence_intake takes it in again under its own name and compares what came back with what was first taken in. Taken in every lifecycle state; refused on a ledger opened as auditor. Returns (custody event, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("exhibit", "The exhibit's name in the case.", ParamString),
+			param("to", "Who it is returned to. Need not be anybody the case assigns.", ParamString),
+			param("reason", "Why, in words a reader will see beside the return forever. Required.", ParamString),
+		},
+		returns: pairRet("the return", ParamHash).withFields("at", "by", "by_role", "case_id", "evidence_uid", "exhibit", "holder", "kind", "reason", "role_authenticated", "seq", "state", "to", "uid")},
+	BuiltinNameEvidenceDispose: {
+		signature: "evidence_dispose(ledger, exhibit, statement)",
+		summary:   "Records the holder of an exhibit disposing of it, in a statement of how. It deletes nothing -- not the file the exhibit was taken in from, not any copy -- and says so with `deleted: false`. Recorded by a case_owner or an administrator who holds the exhibit; the role is asserted, and the refusal says it is not access control. Ends the exhibit's custody chain: a disposed exhibit is not handed on or taken in again. Taken in every lifecycle state; refused on a ledger opened as auditor. Returns (custody event, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("exhibit", "The exhibit's name in the case.", ParamString),
+			param("statement", "How it was disposed of, and on whose authority. Required.", ParamString),
+		},
+		returns: pairRet("the disposal", ParamHash).withFields("at", "by", "by_role", "case_id", "deleted", "evidence_uid", "exhibit", "holder", "kind", "role_authenticated", "seq", "state", "statement", "uid")},
+	BuiltinNameEvidenceHistory: {
+		signature: "evidence_history(ledger, options?)",
+		summary:   "Reads the custody of every exhibit in a ledger, from each EvidenceFile node and its custody chain: where the exhibit is, who holds it, and every event with who recorded it and as what. Needs no case open, so an auditor reads it with the ledger alone. Each chain is checked as it is read -- that it does not fork, that every event's uid recomputes, that each event moves the exhibit from where the one before left it, that a hand-off is recorded by the holder and an accept by the person the exhibit was released to, and that every hash check agrees with its own digests -- and a chain that fails is refused rather than resolved. A hash check is two answers per event, `hash_checked` and `matches_intake`, and `discrepancies` counts the accepts and re-intakes whose file did not match the intake. Returns (history, err).",
+		params: []builtinParamDoc{
+			param("ledger", "A ledger handle from ledger_open.", ParamInt),
+			param("options?", "`{\"case_uid\": \"...\"}` reads one case; `{\"exhibit\": \"...\"}` reads the exhibits of that name.", ParamHash),
+		},
+		returns: pairRet("the custody of each exhibit", ParamHash).withFields("count", "disposed", "exhibits", "held", "in_transit", "returned", "source")},
 	BuiltinNameCaseKeyCreate: {
 		signature: "case_key_create(path, options?)",
 		summary:   "Mints the case key a classified record is sealed under and writes it to a file that must not already exist. The passphrase is asked for at the terminal and never appears in an argument: key material in program text is key material a traceback can print, and a Go string holding a secret cannot be wiped. Refuses an existing path, because writing a key over a key makes every record sealed under the old one unopenable.",
@@ -3407,6 +3464,9 @@ var capabilityCategories = []capabilityCategory{
 	// four case_key_ builtins; an entry here would be a second line producing
 	// the identical string, and one placed any later would be dead code.
 	{"class_", "chain of custody"},
+	// evidence_ is custody itself -- which exhibits a case holds and who holds
+	// each -- so it files with case_. No other prefix here begins "evidence".
+	{"evidence_", "chain of custody"},
 	// record_ is its own category and not "chain of custody". The custody
 	// family documents what happened to evidence; this one encrypts it, and a
 	// reader looking for what a classification costs should not have to find it

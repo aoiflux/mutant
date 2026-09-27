@@ -38,6 +38,7 @@ document describes is waiting to be built.
 | `disclose_withdraw`, `disclose_history`, `disclose_for_segment`, `disclose_reclassified` | **In force.** [`builtin/disclose_history.go`](../builtin/disclose_history.go), [`builtin/disclose_reclassify.go`](../builtin/disclose_reclassify.go) |
 | The graphene disclosure ledger, [Section 13](#13-the-disclosure-ledger) | **In force.** [`builtin/disclose_ledger.go`](../builtin/disclose_ledger.go) |
 | `case_attach`, `case_transition`, `case_assign`: the case's lifecycle, its assignments and its class and view definitions kept in the ledger | **In force.** [`builtin/case_lifecycle.go`](../builtin/case_lifecycle.go), [`builtin/case_chain.go`](../builtin/case_chain.go) |
+| `evidence_intake`, `evidence_release`, `evidence_accept`, `evidence_return`, `evidence_dispose`, `evidence_history`: the custody of each exhibit kept in the ledger | **In force.** [`builtin/case_evidence.go`](../builtin/case_evidence.go) |
 | `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
@@ -547,11 +548,14 @@ A case attached to the ledger with `case_attach` adds Role, Assignment and
 LifecycleEvent nodes and HOLDS_ROLE, ASSIGNED_TO, REVISES and TRANSITIONS edges,
 and a class or view defined while it is attached is an IN_CASE edge from its
 Classification or View node to the Case, carrying the definition and the key
-generation it was made under. The label table graphene keeps beside the ledger
-also names RoleBundle, CustodyEvent, ReviewRequest, ReviewDecision,
+generation it was made under. An exhibit taken in with `evidence_intake` is an
+EvidenceFile node (graphene's own built-in type) that BELONGS_TO the Case, and
+its custody is a chain of CustodyEvent nodes, each BELONGS_TO the exhibit and
+CUSTODIAN to whoever holds or is receiving it. The label table graphene keeps
+beside the ledger also names RoleBundle, ReviewRequest, ReviewDecision,
 RetentionEvent, ErasureEvent, ClassEvent, RedactionVersion and RedactionReview,
-and BUNDLES, ISSUED_UNDER, REDACTED_AS, CUSTODIAN, REVIEWS and ERASES: their
-numbers are fixed now, and nothing writes them yet.
+and BUNDLES, ISSUED_UNDER, REDACTED_AS, REVIEWS and ERASES: their numbers are
+fixed now, and nothing writes them yet.
 
 Four properties of it are worth stating:
 
@@ -564,8 +568,8 @@ Four properties of it are worth stating:
   present is found and reused; a Disclosure, Withdrawal or ReclassEvent is always
   new. A Record found under the same uid with a different file digest is
   refused, never reconciled by overwriting.
-- **A case's history is a chain, and a fork is refused.** Each lifecycle event
-  and each examiner's assignments are a chain: an event names its position and
+- **A case's history is a chain, and a fork is refused.** Each lifecycle event,
+  each examiner's assignments and each exhibit's custody are a chain: an event names its position and
   the uid of the one before it, and its own uid is a SHA-256 over everything it
   records. The head of the chain is what is in force. Two events after one
   event, an event whose uid does not recompute, and an event no walk from the

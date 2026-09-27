@@ -734,4 +734,14 @@ const (
 	BuiltinNameCaseAttach     = "case_attach"
 	BuiltinNameCaseTransition = "case_transition"
 	BuiltinNameCaseAssign     = "case_assign"
+
+	// custody of exhibits in the case's ledger: taken in, handed on,
+	// accepted against the intake digest, returned or disposed of, and read
+	// back
+	BuiltinNameEvidenceIntake  = "evidence_intake"
+	BuiltinNameEvidenceRelease = "evidence_release"
+	BuiltinNameEvidenceAccept  = "evidence_accept"
+	BuiltinNameEvidenceReturn  = "evidence_return"
+	BuiltinNameEvidenceDispose = "evidence_dispose"
+	BuiltinNameEvidenceHistory = "evidence_history"
 )

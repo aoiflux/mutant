@@ -37,12 +37,16 @@ package builtin
 // builtins that take the ledger -- which ask the ledger -- and the ones that
 // do not, which ask the case attached in this run:
 //
-//	in_review            no sealing, no definitions or reclassifications, no disclosures
-//	concluded, retained  no sealing
-//	disposed             nothing but a withdrawal
+//	in_review            no sealing, no definitions or reclassifications, no disclosures,
+//	                     no new evidence
+//	concluded, retained  no sealing, no new evidence
+//	disposed             nothing but a withdrawal and the movement of evidence
 //
 // A withdrawal is taken in every state: it stops further grants, which is
-// never the wrong thing to be able to do.
+// never the wrong thing to be able to do. So is the release, accept, return,
+// disposal or re-intake of an exhibit already taken in (case_evidence.go):
+// where a drive is, is a fact, and a record that could not say it moved would
+// be wrong.
 //
 // # Roles, again
 //
@@ -111,6 +115,7 @@ const (
 	caseActDefine
 	caseActDisclose
 	caseActAssign
+	caseActIntake
 )
 
 var caseActionNames = map[caseAction]string{
@@ -118,15 +123,16 @@ var caseActionNames = map[caseAction]string{
 	caseActDefine:   "definition of a class or a view, or record of a reclassification",
 	caseActDisclose: "disclosure",
 	caseActAssign:   "assignment of a role",
+	caseActIntake:   "intake of evidence",
 }
 
 // caseStateRefuses is what each state refuses. A state not listed refuses
 // nothing, and no state refuses a withdrawal.
 var caseStateRefuses = map[string][]caseAction{
-	caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose},
-	caseStateConcluded: {caseActSeal},
-	caseStateRetained:  {caseActSeal},
-	caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign},
+	caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake},
+	caseStateConcluded: {caseActSeal, caseActIntake},
+	caseStateRetained:  {caseActSeal, caseActIntake},
+	caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake},
 }
 
 var caseStateWhy = map[string]string{

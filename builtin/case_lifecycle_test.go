@@ -397,6 +397,25 @@ func TestEachStateRefusesWhatItSays(t *testing.T) {
 	}
 }
 
+// What each state refuses is written out here as well as in caseStateRefuses,
+// so that a refusal dropped from or added to that table fails this test
+// instead of changing what every test that asks caseStateBlocks expects.
+func TestEachStateRefusesAFixedSetOfActs(t *testing.T) {
+	want := map[string][]caseAction{
+		caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake},
+		caseStateConcluded: {caseActSeal, caseActIntake},
+		caseStateRetained:  {caseActSeal, caseActIntake},
+		caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake},
+	}
+	for _, state := range caseStates {
+		for action, name := range caseActionNames {
+			if got := caseStateBlocks(state, action); got != slices.Contains(want[state], action) {
+				t.Errorf("a case that is %s refuses the %s: %t", state, name, got)
+			}
+		}
+	}
+}
+
 // A builtin that takes the ledger asks the ledger, attached case or not: a
 // disclosure of a case the ledger has in review is refused before any
 // passphrase is asked for, and a withdrawal is taken in every state.

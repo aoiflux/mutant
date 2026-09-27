@@ -87,8 +87,9 @@ func caseChainUID(spec caseChainSpec, props map[string]string) string {
 }
 
 // caseChainRead returns a chain's events in order, first to head, or refuses
-// a chain this program could not have written. An empty chain is no events
-// and no error.
+// one that forks, holds an event with no position or out of its position,
+// holds one whose uid does not recompute, or holds one no walk from its first
+// event reaches. An empty chain is no events and no error.
 func caseChainRead(g *graphene.Graph, spec caseChainSpec, chain string) ([]caseChainEvent, error) {
 	ids, err := g.NodesByProperty(spec.key("chain"), []byte(chain))
 	if err != nil || len(ids) == 0 {

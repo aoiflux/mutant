@@ -582,33 +582,44 @@ func CaseEvidence(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("case_evidence: the case closed while the file was being read"))
 	}
 
-	now := custodyNow()
-	record, exists := session.evidence[source.path]
+	record := session.registerFileLocked(source, policy, digest, custodyNow(),
+		fmt.Sprintf("case_evidence registered %s", source.path))
+	if hashError != "" && record.Digest == "" {
+		record.HashError = hashError
+	}
+
+	return custodyManifestResult(BuiltinNameCaseEvidence, record.render())
+}
+
+// registerFileLocked brings a file on disk under the run's custody, or finds
+// it already there, and keeps a digest taken of it when none was kept yet.
+// case_evidence, evidence_intake and evidence_accept register through it, so
+// case_verify re-measures what each of them measured. The caller holds the
+// custody lock.
+func (s *custodySession) registerFileLocked(source custodySource, algo, digest string, now time.Time,
+	detail string) *custodyEvidence {
+	record, exists := s.evidence[source.path]
 	if !exists {
 		record = &custodyEvidence{
 			Path:       source.path,
 			Size:       source.size,
 			ModTime:    source.modTime,
 			OnDisk:     true,
-			Algo:       policy,
+			Algo:       algo,
 			Registered: now,
-			Elapsed:    now.Sub(session.OpenedAt),
+			Elapsed:    now.Sub(s.OpenedAt),
 			Touches:    map[string]*custodyTouch{},
 		}
-		session.evidence[source.path] = record
-		session.order = append(session.order, source.path)
-		session.appendEvent(now, "evidence_registered", fmt.Sprintf("case_evidence registered %s", source.path), nil)
+		s.evidence[source.path] = record
+		s.order = append(s.order, source.path)
+		s.appendEvent(now, "evidence_registered", detail, nil)
 	}
 	if digest != "" && record.Digest == "" {
 		record.Digest = digest
-		record.Algo = policy
+		record.Algo = algo
 		record.HashError = ""
 	}
-	if hashError != "" && record.Digest == "" {
-		record.HashError = hashError
-	}
-
-	return custodyManifestResult(BuiltinNameCaseEvidence, record.render())
+	return record
 }
 
 // CaseVerify re-measures every source under custody and reports what moved.

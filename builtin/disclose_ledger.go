@@ -211,9 +211,11 @@ var disclosureKeys = map[store.NodeType][]string{
 	disclosureNodeWithdrawal: {"withdrawal.uid", "withdrawal.disclosure_uid"},
 	disclosureNodeReclass:    {"reclass.uid", "reclass.pair", "reclass.superseded_uid"},
 
-	disclosureNodeRole:       {"role.name"},
-	disclosureNodeLifecycle:  {"lifecycle.uid", "lifecycle.chain"},
-	disclosureNodeAssignment: {"assignment.uid", "assignment.chain", "assignment.case_uid"},
+	disclosureNodeRole:         {"role.name"},
+	disclosureNodeLifecycle:    {"lifecycle.uid", "lifecycle.chain"},
+	disclosureNodeAssignment:   {"assignment.uid", "assignment.chain", "assignment.case_uid"},
+	disclosureNodeEvidence:     {"evidence.uid", "evidence.case_uid"},
+	disclosureNodeCustodyEvent: {"custody.uid", "custody.chain"},
 }
 
 // disclosureNode is one node of this schema as read back: its id and its

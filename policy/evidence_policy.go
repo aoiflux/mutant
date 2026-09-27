@@ -57,6 +57,9 @@ var EvidenceReadOnlyFiles = []string{
 	"builtin/fs_deleted_builtins.go",
 	// live subjects
 	"builtin/memory_forensics.go",
+	// custody of exhibits: a file taken in or accepted is hashed, and a
+	// disposal is a statement that deletes nothing
+	"builtin/case_evidence.go",
 }
 
 // EvidenceWriteException records a place in that code where a filesystem

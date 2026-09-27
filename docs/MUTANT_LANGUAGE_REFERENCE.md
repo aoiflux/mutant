@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **667 builtins** across **41 categories**.
+The standard library is **673 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1010,7 +1010,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Memory Forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
-| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-22) | 22 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, and the case's lifecycle and roles kept in its ledger |
+| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-28) | 28 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, and the custody of each exhibit |
 | [Classified Records](CAPABILITY_REFERENCE.md#classified-records-11) | 11 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, verifying with no key at all, and the one recorded way to let read plaintext out |
 | [Disclosure](CAPABILITY_REFERENCE.md#disclosure-10) | 10 | Named disclosure postures, the grants issued under them, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
@@ -2280,7 +2280,7 @@ Attach before you define anything. `case_transition(ledger, "active", reason)`
 moves the case along registered, active, in_review, concluded, retained and
 disposed, and each state refuses what it cannot take: nothing is sealed while a
 case is in review, concluded or retained, and a disposed case takes nothing but
-a withdrawal. `case_assign(ledger, "bob", "investigator", reason)` records a
+a withdrawal and the movement of an exhibit it already holds. `case_assign(ledger, "bob", "investigator", reason)` records a
 role in the case, and the ledger's assignments decide the role each examiner
 attaches under. Keys and grants are never read back from the ledger.
 
@@ -2292,6 +2292,30 @@ let ledger = info["handle"];
 case_attach(ledger);
 class_define("pii");
 case_transition(ledger, "active", "evidence received");
+```
+
+**An exhibit has a custody chain.** `evidence_intake(ledger, "EXH-1", path)`
+takes a file into the attached case: it is hashed with SHA-256 and the ledger
+records who holds it. `evidence_release(ledger, "EXH-1", "bob", reason)` hands
+it to another examiner the case assigns, and bob, in their own run, records
+taking it with `evidence_accept(ledger, "EXH-1", path)`, which hashes what they
+were handed and refuses a file that does not match the intake unless they state
+what happened with `{"discrepancy": "..."}`. `evidence_return` returns an
+exhibit out of the case; if it comes back, `evidence_intake` takes it in again
+under its own name, as the next step of the same chain, and holds what came
+back to the same test against what was first taken in. `evidence_dispose` ends
+the chain; a disposal is a statement and deletes nothing.
+`evidence_history(ledger)` reads every exhibit's custody back and needs no case
+open. The holder records where an exhibit goes, and every reader refuses a chain
+that forks, skips a step, has a hand-off recorded by anybody but the holder or
+an accept by anybody but the person it was released to, or has a hash check its
+own digests contradict.
+
+```mutant
+evidence_intake(ledger, "EXH-1", "evidence/laptop.E01", {"received_from": "DC Rao"});
+evidence_release(ledger, "EXH-1", "bob", "to the lab for imaging");
+let history, err = evidence_history(ledger, {"exhibit": "EXH-1"});
+putln(history["exhibits"][0]["where"]);
 ```
 
 **The seal is checkable by someone else.** `case_write` puts a SHA-256 over every

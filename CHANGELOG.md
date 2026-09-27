@@ -373,6 +373,27 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **An exhibit has a custody chain.** `evidence_intake(ledger, exhibit, path)`
+  takes a file into the attached case: it is hashed with SHA-256 whatever the
+  case's hash policy, written into the ledger as an EvidenceFile node that
+  belongs to the case, and held by the examiner who took it in.
+  `evidence_release(ledger, exhibit, to, reason)` hands it to another examiner
+  the case assigns, and `evidence_accept(ledger, exhibit, path)` records them
+  taking it after hashing what they were handed: a file that does not match the
+  intake is refused, and nothing recorded, unless they state what happened with
+  `{"discrepancy": ...}`. `evidence_return` returns an exhibit out of the case;
+  if it comes back, `evidence_intake` takes it in again under its own name, as
+  the next step of the same chain, and holds what came back to the same test
+  against the first intake. `evidence_dispose` records a disposal, by a
+  case_owner or an administrator; a disposal deletes nothing and is final. The
+  steps form a hash-linked custody chain every reader checks -- down to each
+  hand-off being recorded by the holder the ledger names, each accept by the
+  person it was released to, and each hash check agreeing with its own
+  digests -- and `evidence_history(ledger)` reads every exhibit's custody back
+  with no case open. A new exhibit is refused while the case is in review,
+  concluded, retained or disposed; the movement of one already taken in, a
+  returned one coming back included, is refused in no state.
+
 - **A case keeps its state in its ledger.** `case_attach(ledger)` binds the open
   case to a ledger. The first attach registers it -- a Case node, a `registered`
   lifecycle event and the examiner's assignment -- and a later run's attach
@@ -386,7 +407,7 @@ exhaustive lists.
   moves the case from registered to active and reopens a concluded one, and each
   state refuses what it cannot take: in review, sealing, definitions,
   reclassifications and disclosures; concluded or retained, sealing; disposed,
-  everything but a withdrawal. `case_assign(ledger, examiner, role, reason)`
+  everything but a withdrawal and the movement of an exhibit. `case_assign(ledger, examiner, role, reason)`
   records a role in the case or ends one with `none`, and `case_attach` refuses
   an examiner the ledger assigns no role or a different one. Lifecycle events
   and assignments are hash-linked chains, and a fork is refused by every reader.

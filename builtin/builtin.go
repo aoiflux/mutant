@@ -751,6 +751,12 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameCaseAttach, &BuiltIn{CaseAttach}},
 	{BuiltinNameCaseTransition, &BuiltIn{CaseTransition}},
 	{BuiltinNameCaseAssign, &BuiltIn{CaseAssign}},
+	{BuiltinNameEvidenceIntake, &BuiltIn{EvidenceIntake}},
+	{BuiltinNameEvidenceRelease, &BuiltIn{EvidenceRelease}},
+	{BuiltinNameEvidenceAccept, &BuiltIn{EvidenceAccept}},
+	{BuiltinNameEvidenceReturn, &BuiltIn{EvidenceReturn}},
+	{BuiltinNameEvidenceDispose, &BuiltIn{EvidenceDispose}},
+	{BuiltinNameEvidenceHistory, &BuiltIn{EvidenceHistory}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

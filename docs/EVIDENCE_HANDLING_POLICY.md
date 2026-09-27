@@ -47,6 +47,24 @@ It currently covers disk images and volumes (`raw`, `ewf`, `vhdi`, `ntfs`, `fat`
 `reg_*`, Amcache, Shimcache), archives (`zip_*`, `tar_*`), the Windows execution
 artifacts (MFT, EVTX, Prefetch, LNK, Jump Lists), browser and SQLite artifacts,
 bodyfiles, plists, syslog, email, deleted-file recovery, and live process memory.
+It also covers the custody builtins (`evidence_intake`, `evidence_accept` and
+the rest), which open the file an exhibit is taken in or handed over as only to
+hash it.
+
+### Custody is recorded, and deletes nothing
+
+An exhibit taken into a case with `evidence_intake` is held by the examiner who
+took it in; `evidence_release` puts it in transit to another examiner the case
+assigns, and `evidence_accept` records them taking it after hashing what they
+were handed. `evidence_return` returns it out of the case; if it comes back,
+`evidence_intake` takes it in again under its own name and hashes what came back
+against what was first taken in, so a returned exhibit is never taken back on
+trust. `evidence_dispose` ends its custody. Each step is written to the case's
+ledger -- a hand-off by the person the ledger says holds the exhibit, an accept
+by the person it was released to -- and every reader refuses a history that
+forks, skips a step, or has either recorded by anybody else. **A disposal is a
+statement.** It deletes nothing -- not the file the exhibit was taken in from,
+and not any copy -- and says so in its result.
 
 **A new evidence family belongs on that list.** Leaving it off is the one soft
 edge of this policy: nothing catches an omission automatically, which is why the
