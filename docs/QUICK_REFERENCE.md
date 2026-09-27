@@ -12,7 +12,8 @@ artifact, runtime, and risky builtins.
 - Signer pinning is enforced in secure mode when `--signer-auth` is enabled.
 - Trusted signer key comes from `--trusted-key <path>`, a file holding the
   hex-encoded public key. Without the flag, Mutant bootstraps and trusts a local
-  keypair under `<home>/.mutant/keys`.
+  keypair under `<home>/.mutant/keys`, where `<home>` comes from the account
+  database, never from `HOME` or `USERPROFILE`.
 - Compatibility mode verifies embedded signature validity only.
 
 2. Payload confidentiality

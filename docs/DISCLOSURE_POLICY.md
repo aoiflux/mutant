@@ -43,6 +43,7 @@ document describes is waiting to be built.
 | `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
 | `ledger_classify`, `ledger_classifications`, `ledger_under_view`: the classes a node a script wrote holds, and the ledger read under a view, which only the reads that read through one take | **In force.** [`builtin/ledger_classify.go`](../builtin/ledger_classify.go), [`builtin/ledger_view.go`](../builtin/ledger_view.go) |
 | `record_search`: a literal found in what one reader of a record could read -- under the grant it was opened with, or under a view -- recorded with the pattern as a keyed digest | **In force.** [`builtin/record_search.go`](../builtin/record_search.go) |
+| `ledger_redactions_review`: an examiner's review of redactions an older build made, which could have reached the disclosure records and which every grant from the ledger waits on, [Section 7](#7-three-operations-that-must-not-be-conflated) | **In force.** [`builtin/ledger_redaction_review.go`](../builtin/ledger_redaction_review.go) |
 | `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
@@ -440,6 +441,27 @@ index, and a redaction deletes the index entry with the record: a withdrawal
 redacted away would stop stopping grants. A disclosure record is corrected by a
 new record appended to it, never by removing an old one.
 
+A ledger redacted by a build from before that refusal is the case it cannot
+reach, and a redaction record cannot say afterwards whether a node it took was
+a withdrawal: it names what it removed by id and hash, never by label. Roles
+were first recorded by a build that already refused a disclosure record, and
+every build since records one on every redaction -- "unasserted" is a role of its
+own -- so a redaction recorded with no role was made by a build that may not
+have refused one. Every such redaction is in question, unless it stripped the
+properties of a node or an edge a script wrote that the ledger still holds,
+whose labels are still there to read. Until an examiner answers for them with
+`ledger_redactions_review`, `disclose_to_passphrase` issues no grant from the
+ledger; `disclose_history`, `disclose_for_segment`, `disclose_reclassified` and
+`redaction_versions` name them in `unguarded_redactions`, and `ledger_redactions`
+marks each one. The review is a record, not a check: whether a redaction removed
+a withdrawal is known to whoever made it. Record again first what can be -- a
+withdrawal with `disclose_withdraw` while its disclosure is still in the ledger,
+a reclassification with `disclose_reclassified`. A withdrawal whose disclosure
+was removed needs nothing: it names the record and the recipient itself, and
+still stops a new grant. No released version is affected: the ledger family is
+new in 2.6.0, so only a ledger redacted by a development build of it can hold
+such a redaction.
+
 ## 8. Key material never travels as an argument
 
 Four rules, all in force today.
@@ -684,9 +706,12 @@ CustodyEvent nodes, each BELONGS_TO the exhibit and CUSTODIAN to whoever holds
 or is receiving it. A node a script wrote is classified by a chain of ClassEvent
 nodes, each IN_CASE to the Case, PERFORMED_BY its actor and CLASSIFIED_AS each
 class it names; it names the node by property, and no edge joins the two. The
+ledger's reviews of its redactions (`ledger_redactions_review`, section 7) are
+one chain of RedactionReview nodes per ledger, each PERFORMED_BY its examiner and
+naming the redaction record it answers through by sequence number and hash. The
 label table graphene keeps beside the ledger also names ReviewRequest,
-ReviewDecision, RetentionEvent, ErasureEvent and RedactionReview, and REVIEWS
-and ERASES: their numbers are fixed now, and nothing writes them yet.
+ReviewDecision, RetentionEvent and ErasureEvent, and REVIEWS and ERASES: their
+numbers are fixed now, and nothing writes them yet.
 
 Four properties of it are worth stating:
 
@@ -701,8 +726,8 @@ Four properties of it are worth stating:
   refused, never reconciled by overwriting.
 - **A case's history is a chain, and a fork is refused.** Each lifecycle event,
   each examiner's or recipient's assignments, each exhibit's custody, each
-  view's versions of a redaction and each script node's classifications are a
-  chain: an event names its position and
+  view's versions of a redaction, each script node's classifications and the
+  ledger's reviews of its redactions are a chain: an event names its position and
   the uid of the one before it, and its own uid is a SHA-256 over everything it
   records. The head of the chain is what is in force. Two events after one
   event, an event whose uid does not recompute, and an event no walk from the

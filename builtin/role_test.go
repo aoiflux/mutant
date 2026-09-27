@@ -255,6 +255,7 @@ func TestAnAuditorWritesNothingIntoALedger(t *testing.T) {
 		BuiltinNameEvidenceIntake: true, BuiltinNameEvidenceRelease: true, BuiltinNameEvidenceAccept: true,
 		BuiltinNameEvidenceReturn: true, BuiltinNameEvidenceDispose: true,
 		BuiltinNameRoleAssign: true, BuiltinNameRedactionCommit: true, BuiltinNameLedgerClassify: true,
+		BuiltinNameLedgerRedactionsReview: true,
 	}
 	seen := 0
 	for name, doc := range builtinDocs {

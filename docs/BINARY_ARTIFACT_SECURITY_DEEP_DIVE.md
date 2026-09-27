@@ -61,8 +61,11 @@ Key files:
 
 Key dir:
 
-`<home>/.mutant/keys`, fixed. `SetLocalKeyStoreDirForTesting` redirects it for
-tests only.
+`<home>/.mutant/keys`, fixed. `<home>` is the home directory the account
+database records for the user running Mutant (the token's profile directory on
+Windows, `/etc/passwd` on Linux, the directory service on macOS), never `HOME`
+or `USERPROFILE`; an account the database does not list is refused.
+`SetLocalKeyStoreDirForTesting` redirects it for tests only.
 
 ## 4. Runtime Signature Decision Matrix
 

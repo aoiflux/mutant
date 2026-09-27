@@ -419,7 +419,8 @@ Build/signing key source:
 - The local persistent keypair under `<home>/.mutant/keys`, loaded or
   bootstrapped by `EnsureLocalSigningKeyPair`
   (`generator/generate.go` -> `loadOrBootstrapSigningPrivateKey`). Creating it
-  prints both paths to stderr.
+  prints both paths to stderr. `<home>` is the home directory the account
+  database records, never `HOME` or `USERPROFILE` (`ResolveLocalKeyStoreDir`).
 - A caller of `generator.Generate` may pass a `privateKey` directly. Nothing on
   the CLI path does.
 

@@ -510,18 +510,23 @@ func RedactionVersions(args ...object.Object) object.Object {
 	}
 	g := ledger.graph
 	fail := func(err error) object.Object { return resultAndError(nil, newError("%s: %s", op, err.Error())) }
+	unguarded, err := ledgerUnguardedRedactions(ledger)
+	if err != nil {
+		return fail(err)
+	}
 
 	out := map[string]object.Object{
-		"record_uid":       stringObj(recordUID),
-		"record_known":     boolObj(false),
-		"case_uid":         stringObj(""),
-		"line":             stringObj(""),
-		"versions":         &object.Array{Elements: []object.Object{}},
-		"count":            intObj(0),
-		"disclosures":      &object.Array{Elements: []object.Object{}},
-		"disclosure_count": intObj(0),
-		"stale":            intObj(0),
-		"unversioned":      intObj(0),
+		"record_uid":           stringObj(recordUID),
+		"unguarded_redactions": unguarded,
+		"record_known":         boolObj(false),
+		"case_uid":             stringObj(""),
+		"line":                 stringObj(""),
+		"versions":             &object.Array{Elements: []object.Object{}},
+		"count":                intObj(0),
+		"disclosures":          &object.Array{Elements: []object.Object{}},
+		"disclosure_count":     intObj(0),
+		"stale":                intObj(0),
+		"unversioned":          intObj(0),
 		"does_not_say": stringArrayObj([]string{
 			"whether the bytes a version releases are the right ones: a version records a redaction, it does not judge it",
 			"what the recipient of a stale disclosure has done with it: a later version reaches nobody's copy",

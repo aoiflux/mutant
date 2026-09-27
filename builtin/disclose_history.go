@@ -359,6 +359,10 @@ func DiscloseHistory(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
 	}
+	unguarded, err := ledgerUnguardedRedactions(ledger)
+	if err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 	rendered := make([]object.Object, 0, len(rows))
 	recipients := map[string]bool{}
 	records := map[string]bool{}
@@ -395,6 +399,10 @@ func DiscloseHistory(args ...object.Object) object.Object {
 		"records":     intObj(int64(len(records))),
 		"foreign":     intObj(foreign),
 		"ledger":      stringObj(ledger.path),
+		// Redactions made before the schema was guarded that no review
+		// answers for: any of them could have taken a disclosure or a
+		// withdrawal out of this history.
+		"unguarded_redactions": unguarded,
 		// A history is what this ledger recorded. A disclosure made with some
 		// other tool, or from some other ledger, is not in it, and nothing
 		// here could know.
@@ -436,6 +444,10 @@ func DiscloseForSegment(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: segments are numbered from 0, and %d is not one", op, index))
 	}
 
+	unguarded, err := ledgerUnguardedRedactions(ledger)
+	if err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 	record, known, err := disclosureFind(ledger.graph, disclosureNodeRecord, "record.uid", recordUID)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
@@ -448,6 +460,9 @@ func DiscloseForSegment(args ...object.Object) object.Object {
 		"length":       intObj(0),
 		"class":        stringObj(""),
 		"label":        stringObj(""),
+		// Asked before the record is looked for, so the answer that nobody
+		// holds any of it carries it too.
+		"unguarded_redactions": unguarded,
 	}
 	if !known {
 		// Not an error: "nobody, as far as this ledger knows" is an answer.

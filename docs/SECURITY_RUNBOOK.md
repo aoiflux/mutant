@@ -80,9 +80,11 @@ writes no telemetry file. Counters are readable in-process only, through
 
 1. Capture stderr output including `[security]` lines.
 2. **Record the exact command line that was run.** It is the complete record of
-   how the run was configured -- nothing is read from the environment or from a
-   config file, so the invocation and the artifact together fully determine the
-   behaviour.
+   how the run was configured -- Mutant reads no configuration from the
+   environment or from a config file. What the environment can still change (a
+   proxy, the program `PATH` finds, the temporary directory) is listed in
+   [CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md#what-the-environment-can-still-change);
+   if the run touched one of those, record that variable too.
 3. Record artifact hash and executable hash.
 4. Identify whether event is isolated or fleet-wide.
 

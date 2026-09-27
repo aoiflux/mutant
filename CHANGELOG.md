@@ -956,6 +956,24 @@ exhaustive lists.
   marked buffer left for them to find. Both builders now refuse one where it
   goes in, and the editor warns at the call.
 
+- **`HOME` or `USERPROFILE` chose the signing key, and the key `--signer-auth`
+  trusts.** The local keystore -- the key pair that signs every `.mu` artifact,
+  case manifest, ledger commit and `.mrec` record, and whose public half
+  `--signer-auth` trusts when no `--trusted-key` is named -- sat under the home
+  directory `os.UserHomeDir` returned, and that function reads those variables.
+  So one command line could sign with, and trust, a different key depending on
+  something the recorded invocation never shows. The home directory now comes
+  from the account database: the process token's profile directory on Windows,
+  the directory service on macOS, and `/etc/passwd` on Linux, read directly
+  because `os/user` built without cgo answers from `HOME` for an account that
+  file does not list. Such an account -- one only NSS or LDAP knows, or an
+  unnamed container uid -- is refused rather than guessed at. Anyone who pointed
+  either variable elsewhere to reach a keystore should move `.mutant/keys` under
+  the account's own home. The policy guard now also catches `os.UserHomeDir` and
+  the other standard-library calls that read the environment inside themselves,
+  and CONFIGURATION_POLICY lists every variable the Go runtime and Mutant's
+  libraries still read.
+
 ## [2.5.0] — 2026-09-17
 
 The v2.5 line — *trustworthy: structural correctness*. The theme is that every

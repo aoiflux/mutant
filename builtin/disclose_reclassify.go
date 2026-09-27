@@ -203,6 +203,13 @@ func DiscloseReclassified(args ...object.Object) object.Object {
 	}
 	custodyStore.RUnlock()
 
+	// Read before the write: a chain of reviews that cannot be read refuses
+	// the call, and a refusal after the write would report a failure that had
+	// recorded the reclassification anyway.
+	unguarded, err := ledgerUnguardedRedactions(ledger)
+	if err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 	event, recorded, errObj := reclassWrite(op, ledger, facts, current, previous, changes, labels)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
@@ -249,6 +256,8 @@ func DiscloseReclassified(args ...object.Object) object.Object {
 		"affected_count":     intObj(int64(len(affected))),
 		"now_withheld_bytes": intObj(int64(changedHeld)),
 		"bytes_recoverable":  boolObj(false),
+		// Any of these could have taken a disclosure out of affected.
+		"unguarded_redactions": unguarded,
 		"does_not_say": stringArrayObj([]string{
 			"whether a class changed upward or downward: nothing in this tool orders one class above another, and that judgement is the examiner's",
 			"that a recipient has read, kept or passed on what they hold",

@@ -90,7 +90,8 @@ sequenceDiagram
 
 Every switch is a command-line flag. Mutant reads no environment variable for
 configuration, so this section is the complete control surface. See
-[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md).
+[CONFIGURATION_POLICY.md](CONFIGURATION_POLICY.md), which also lists the
+variables the Go runtime and Mutant's libraries still read on its behalf.
 
 0. Mode-flag validation
 

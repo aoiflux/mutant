@@ -29,7 +29,10 @@ value is observed, never obeyed.**
 Sandbox and VM detection, debugger and injection indicators, and the
 `process_env` forensic builtin all read the environment. None of them let the
 environment change a decision a user asked for. Each site is allowlisted
-individually with a justification.
+individually with a justification. The same holds for the few places the
+standard library reads it on Mutant's behalf -- a name the REPL prints, the
+temporary directory -- and section 3 lists what the environment can still
+change.
 
 **Rule 3 — writing the environment is permitted only when invoking a build-time
 child `go build`.**
@@ -55,10 +58,14 @@ If yes, it is prohibited — use a flag.
 | `SANDBOXIE` | Sandboxie, when it wraps a process | **Permitted.** Mutant observes it as evidence of where it is running. |
 | `LD_PRELOAD` | whoever injected a library | **Permitted.** An indicator of compromise, read and reported. |
 | `GOOS` | Mutant, for a child `go build` | **Permitted.** Written, not read; no flag exists. |
+| `HOME`, `USERPROFILE` | the shell or the launcher | **Not read.** The keystore once followed them; since 2.6.0 its location comes from the account database. |
+| `TMPDIR` | the operating system | **Permitted.** It says where working files sit, never what Mutant reports. |
 
 Every prohibited row above once existed and has been removed. Their names are
 not reproduced here: a name in the documentation is exactly what leads someone
-to try setting it, and none of them has done anything for some time.
+to try setting it, and none of them has done anything for some time. The
+`HOME` row is not one of them: those variables belong to the system, and
+Mutant stopped reading them (M26-DOC3-001).
 
 The test is about *direction of authority*, not about the `os` package. Mutant
 reading `SANDBOXIE` is Mutant looking at its surroundings. Mutant obeying a
@@ -82,7 +89,7 @@ nothing to forget on a second machine.
 
 ## 3. What is permitted, and where
 
-Three categories. Every site is listed in `policy.EnvAccessAllowlist`
+Six categories. Every site is listed in `policy.EnvAccessAllowlist`
 ([policy/env_policy.go](../policy/env_policy.go)) with a line budget, so a new
 read added *inside* an already-allowlisted function still fails the guard.
 
@@ -124,7 +131,68 @@ value is reported, never acted on. This is the product, not a setting.
 `builtin/fingerprint_builtins_test.go` — `TestImphashOnWindowsPE`. Each appends
 `GOOS`/`GOARCH`/`CGO_ENABLED` to a child `go build`'s environment. Removing them
 would break cross-target releases and the WASM REPL, and there is no flag
-equivalent.
+equivalent. `buildReleaseRuntimeBinary` also builds in the temporary directory,
+as the scratch sites below do.
+
+### Display — a value Mutant prints
+
+`repl/repl.go` — `welcome`. The REPL greeting prints the account's display
+name. Built without cgo on Linux, `os/user` answers for a uid that is not in
+`/etc/passwd` from `USER` and `HOME`. That answer has no display name, so the
+greeting names no one, and nothing else uses it. With either variable unset
+that lookup fails and the REPL panics (M26-TOOL-031).
+
+### Scratch — working files in the temporary directory
+
+`builtin/sqlite_builtins.go` — `withSQLiteCopy`, the copy of a database an
+`sqlite_*` builtin queries, so the evidence file is never opened for writing;
+`cmd/sweep/main.go` — `resolveMutantBinary` and `newScratch`, the binary and the
+copy of the examples the sweep runs. Each creates its files in the operating
+system's temporary directory (`TMPDIR`; `TMP`, `TEMP` or `USERPROFILE` on
+Windows) and deletes them when the work is done. Where they sit changes no
+result.
+
+### Regression tests — proving a variable is not obeyed
+
+`security/key_bootstrap_test.go` — `TestTheKeystoreDoesNotFollowTheEnvironment`
+points `HOME` and `USERPROFILE` at two directories in turn and requires the
+keystore not to move. Setting a variable to show that nothing follows it is the
+rule's own test, and the guard allows it only in a test file.
+
+### What the environment can still change
+
+Mutant reads no variable of its own, and the guard holds every read in its code
+to the sites above. What remains is read on Mutant's behalf by the Go runtime,
+the standard library and the libraries Mutant links. This is the complete list
+for 2.6.0, from a survey on 2026-09-28 of every package linked into `mutant` and
+`mlsp` for Windows, Linux and macOS:
+
+| Variables | What they change | Status |
+| --- | --- | --- |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lower-case forms | the proxy `http_get`, `http_post` and `http_request` connect through, and the one a Rego policy's `http.send` uses | defects: M26-NET-010, M26-DAT-030 |
+| `HTTP_SEND_TIMEOUT` | how long a Rego policy's `http.send` waits | defect: M26-DAT-030 |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` (Linux) | the certificate authorities those requests, `net_tls_connect` and `net_tls_upgrade_client` trust | defect: M26-NET-010 |
+| `HOST_PROC` (Linux) | the directory `process_list`, `process_env`, `process_hash`, `process_modules`, `process_open_files` and `process_threads` read as `/proc` | defect: M26-NET-025 |
+| `PATH` (with `PATHEXT` on Windows) | which program runs when Mutant starts one by name: `go` for `mutant release`, the shell `exec_string` and `cmd_run` start, the system tools the sandbox and debugger probes call, `clear` in the REPL | accepted: whoever sets `PATH` already chooses every program the session runs |
+| every variable | is inherited by each child process, so the Go toolchain's own variables (`GOFLAGS`, `GOTOOLCHAIN`, `GOPROXY` and the rest) apply to the `go build` that `mutant release` runs | accepted: a child is configured the way that program is configured |
+| `TMPDIR` (`TMP`, `TEMP`, `USERPROFILE` on Windows), `SQLITE_TMPDIR` | where working files and SQLite's temporary files go | accepted: see Scratch above |
+| `TZ` (Linux and macOS) | the offset local times are printed with, as in `time_now` and the modification times the `fs_*` listings give | accepted: the instant printed does not change |
+| `PWD` (Linux and macOS) | how an absolute path Mutant makes from a relative one is spelled, when the working directory was reached through a symbolic link | accepted: Go uses it only when it names the working directory |
+| `GODEBUG`, `GOGC`, `GOMEMLIMIT`, `GOMAXPROCS`, `GOTRACEBACK` | the Go runtime's memory, scheduling and crash output, and standard-library defaults, among them TLS, X.509 and archive-path checks | accepted: every Go program reads them before its first line runs |
+
+Everything else a linked library reads is on a path Mutant does not take, or
+changes nothing it reports: Lua's `os.getenv` is removed before a script runs,
+the evtx message resolver and the PE parser behind it are never called, gRPC,
+protobuf, logrus, SQLite's memory auditor and OPA's WebAssembly compiler read
+settings only for features Mutant does not use, and `net/http`'s
+`DEBUG_HTTP2_GOROUTINES` turns on internal assertions and nothing else.
+
+The home directory is not on the list. The keystore takes it from the account
+database: the token's profile directory on Windows, the directory service on
+macOS, `/etc/passwd` on Linux, read directly because `os/user` built without
+cgo answers from `HOME` for an account that file does not list. Such an account
+-- one only NSS or LDAP knows, or an unnamed container uid -- is refused, not
+located through `HOME`.
 
 ## 4. What replaces configuration
 
@@ -209,7 +277,13 @@ parses every `.go` file in the repository and fails on:
   allowlist consulted);
 - any `Getenv` / `LookupEnv` / `Setenv` / `Unsetenv` / `ExpandEnv` / `Environ` /
   `Clearenv` selector outside `policy.EnvAccessAllowlist`;
-- a dot-import of `os` or `syscall`;
+- a standard-library call that reads the environment inside itself, under
+  whatever name the file imports its package by: `os.UserHomeDir`,
+  `os.UserCacheDir`, `os.UserConfigDir` and `os.TempDir`; `os.MkdirTemp`,
+  `os.CreateTemp`, `ioutil.TempDir` and `ioutil.TempFile` with an empty
+  directory; and, in a file that builds for Linux without cgo, `user.Current`,
+  `user.Lookup` and `user.LookupId`;
+- a dot-import of `os`, `os/user` or `syscall`;
 - an assignment to a `.Env` field, or a `Cmd` composite literal with an `Env:`
   key, outside the allowlist;
 - an allowlist entry whose line budget no longer matches, and an allowlist entry
@@ -225,12 +299,18 @@ behind `//go:build windows|linux|darwin`.
 belong there — use a flag — or the allowlist needs an entry and the commit needs
 to say why.
 
-### Known gap
+### Known gaps
 
 The guard is Go-only. The VS Code extension's `.mjs` build scripts are not
 machine-checked by it, and since the project runs no CI, nothing checks them on
 a schedule either. The extension's own build-target variable was removed in
 favour of a `--target` argument, but nothing prevents a new one being added.
+
+The guard sees only the calls it names. A library that reads the environment by
+itself -- `net/http`'s proxy default, gopsutil's `HOST_PROC` -- is invisible to
+it, and so is a new dependency that does the same. The list in
+[What the environment can still change](#what-the-environment-can-still-change)
+is kept by hand (M26-TEST-013).
 
 ## 6. Limits
 

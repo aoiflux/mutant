@@ -70,6 +70,9 @@ var DisclosureFiles = []string{
 	// the classes a script's ledger node holds, and the ledger read under a view
 	"builtin/ledger_classify.go",
 	"builtin/ledger_view.go",
+	// the review of redactions made before the disclosure schema was guarded,
+	// which every grant waits on
+	"builtin/ledger_redaction_review.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

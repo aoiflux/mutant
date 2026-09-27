@@ -3,10 +3,12 @@ package policy
 import (
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -55,6 +57,39 @@ var envFuncs = map[string]bool{
 	"Environ":   true,
 	"Clearenv":  true,
 }
+
+// libraryEnvReads are standard-library functions that read the environment
+// inside themselves (M26-DOC3-001: the keystore followed HOME through
+// os.UserHomeDir, which no Getenv selector shows). These are matched by
+// package as well as name, through whatever name the file imports the package
+// under, because t.TempDir, or a method of the same name on anything else, is
+// not them.
+var libraryEnvReads = map[string]map[string]bool{
+	"os": {"UserHomeDir": true, "UserCacheDir": true, "UserConfigDir": true, "TempDir": true},
+}
+
+// tempDirDefaults create a file or directory in os.TempDir when their directory
+// argument is empty, which is how the temporary-directory variables are read in
+// practice.
+var tempDirDefaults = map[string]map[string]bool{
+	"os":        {"MkdirTemp": true, "CreateTemp": true},
+	"io/ioutil": {"TempDir": true, "TempFile": true},
+}
+
+// userLookups answer for the current user from $HOME and $USER when os/user is
+// built without cgo on Linux and the uid is missing from /etc/passwd (os/user's
+// lookup_stubs.go); Lookup and LookupId return Current's answer for the
+// caller's own name or uid. Nowhere else do they read the environment, so they
+// are flagged only in files that build for Linux without cgo.
+var userLookups = map[string]bool{"Current": true, "Lookup": true, "LookupId": true}
+
+// linuxWithoutCgo is the build Mutant ships for Linux, and the one in which
+// userLookups read the environment.
+var linuxWithoutCgo = func() build.Context {
+	ctx := build.Default
+	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = "linux", "amd64", false
+	return ctx
+}()
 
 type finding struct {
 	file string // repo-relative, forward slashes
@@ -113,89 +148,14 @@ func scan(t *testing.T) (names []finding, access []finding, scanned map[string]b
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", rel, err)
 		}
-
-		funcs := functionSpans(file)
-		enclosing := func(pos token.Pos) string {
-			for _, fn := range funcs {
-				if pos >= fn.start && pos <= fn.end {
-					return fn.name
-				}
-			}
-			return ""
+		onLinux, err := linuxWithoutCgo.MatchFile(filepath.Dir(path), filepath.Base(path))
+		if err != nil {
+			return fmt.Errorf("match %s against the Linux build: %w", rel, err)
 		}
 
-		seen := map[int]bool{} // dedupe access findings by line
-		addAccess := func(pos token.Pos, what string) {
-			line := fset.Position(pos).Line
-			if seen[line] {
-				return
-			}
-			seen[line] = true
-			access = append(access, finding{rel, line, enclosing(pos), what})
-		}
-
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.BasicLit:
-				if node.Kind != token.STRING {
-					return true
-				}
-				value, err := strconv.Unquote(node.Value)
-				if err != nil {
-					return true
-				}
-				if mutantEnvName.MatchString(value) {
-					pos := fset.Position(node.Pos())
-					names = append(names, finding{rel, pos.Line, enclosing(node.Pos()), value})
-				}
-
-			case *ast.SelectorExpr:
-				// Walking every SelectorExpr rather than only CallExpr.Fun is what
-				// catches the function-value shape, where the function is passed
-				// rather than called: addWindowsEnvIndicators(os.LookupEnv, add).
-				if envFuncs[node.Sel.Name] {
-					addAccess(node.Pos(), node.Sel.Name)
-				}
-
-			case *ast.ImportSpec:
-				// A dot-import would make os.Getenv appear as a bare Ident, which
-				// the SelectorExpr rule structurally cannot see.
-				if node.Name != nil && node.Name.Name == "." {
-					path, err := strconv.Unquote(node.Path.Value)
-					if err == nil && (path == "os" || path == "syscall") {
-						addAccess(node.Pos(), "dot-import of "+path)
-					}
-				}
-
-			case *ast.AssignStmt:
-				// Assignment only. The fn.Env / macro.Env *reads* in evaluator/ are
-				// not environment access, and must not fire.
-				for _, lhs := range node.Lhs {
-					if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Env" {
-						addAccess(sel.Pos(), "assignment to .Env")
-					}
-				}
-
-			case *ast.CompositeLit:
-				// Narrowed to a Cmd literal so object.Function{Env: env} does not
-				// fire. A locally defined struct with an Env field would be missed,
-				// but any such construction still needs an os.Environ() the
-				// SelectorExpr rule catches.
-				if !isCmdType(node.Type) {
-					return true
-				}
-				for _, elt := range node.Elts {
-					kv, ok := elt.(*ast.KeyValueExpr)
-					if !ok {
-						continue
-					}
-					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Env" {
-						addAccess(kv.Pos(), "Env field in a Cmd literal")
-					}
-				}
-			}
-			return true
-		})
+		fileNames, fileAccess := inspectFile(fset, rel, file, onLinux)
+		names = append(names, fileNames...)
+		access = append(access, fileAccess...)
 		return nil
 	})
 	if err != nil {
@@ -213,6 +173,142 @@ func scan(t *testing.T) (names []finding, access []finding, scanned map[string]b
 	}
 
 	return names, access, scanned
+}
+
+// inspectFile returns the Mutant-prefixed name literals and the environment
+// accesses in one parsed file. onLinux says whether the file builds for Linux
+// without cgo, the only build in which userLookups read the environment.
+func inspectFile(fset *token.FileSet, rel string, file *ast.File, onLinux bool) (names, access []finding) {
+	funcs := functionSpans(file)
+	enclosing := func(pos token.Pos) string {
+		for _, fn := range funcs {
+			if pos >= fn.start && pos <= fn.end {
+				return fn.name
+			}
+		}
+		return ""
+	}
+
+	seen := map[int]bool{} // dedupe access findings by line
+	addAccess := func(pos token.Pos, what string) {
+		line := fset.Position(pos).Line
+		if seen[line] {
+			return
+		}
+		seen[line] = true
+		access = append(access, finding{rel, line, enclosing(pos), what})
+	}
+
+	imported := importedAs(file)
+	packageFunc := func(expr ast.Expr) (string, string) {
+		sel, ok := expr.(*ast.SelectorExpr)
+		if !ok {
+			return "", ""
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return "", ""
+		}
+		return imported[pkg.Name], sel.Sel.Name
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.BasicLit:
+			if node.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(node.Value)
+			if err != nil {
+				return true
+			}
+			if mutantEnvName.MatchString(value) {
+				pos := fset.Position(node.Pos())
+				names = append(names, finding{rel, pos.Line, enclosing(node.Pos()), value})
+			}
+
+		case *ast.SelectorExpr:
+			// Walking every SelectorExpr rather than only CallExpr.Fun is what
+			// catches the function-value shape, where the function is passed
+			// rather than called: addWindowsEnvIndicators(os.LookupEnv, add).
+			if envFuncs[node.Sel.Name] {
+				addAccess(node.Pos(), node.Sel.Name)
+			}
+			pkg, name := packageFunc(node)
+			if libraryEnvReads[pkg][name] || (onLinux && pkg == "os/user" && userLookups[name]) {
+				addAccess(node.Pos(), path.Base(pkg)+"."+name)
+			}
+
+		case *ast.CallExpr:
+			if pkg, name := packageFunc(node.Fun); tempDirDefaults[pkg][name] && len(node.Args) > 0 {
+				if dir, ok := node.Args[0].(*ast.BasicLit); ok && dir.Kind == token.STRING {
+					if value, err := strconv.Unquote(dir.Value); err == nil && value == "" {
+						addAccess(node.Pos(), path.Base(pkg)+"."+name+" in the default temporary directory")
+					}
+				}
+			}
+
+		case *ast.ImportSpec:
+			// A dot-import would make os.Getenv appear as a bare Ident, which
+			// the SelectorExpr rule structurally cannot see.
+			if node.Name != nil && node.Name.Name == "." {
+				importPath, err := strconv.Unquote(node.Path.Value)
+				if err == nil && (importPath == "os" || importPath == "syscall" || importPath == "os/user") {
+					addAccess(node.Pos(), "dot-import of "+importPath)
+				}
+			}
+
+		case *ast.AssignStmt:
+			// Assignment only. The fn.Env / macro.Env *reads* in evaluator/ are
+			// not environment access, and must not fire.
+			for _, lhs := range node.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Env" {
+					addAccess(sel.Pos(), "assignment to .Env")
+				}
+			}
+
+		case *ast.CompositeLit:
+			// Narrowed to a Cmd literal so object.Function{Env: env} does not
+			// fire. A locally defined struct with an Env field would be missed,
+			// but any such construction still needs an os.Environ() the
+			// SelectorExpr rule catches.
+			if !isCmdType(node.Type) {
+				return true
+			}
+			for _, elt := range node.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Env" {
+					addAccess(kv.Pos(), "Env field in a Cmd literal")
+				}
+			}
+		}
+		return true
+	})
+	return names, access
+}
+
+// importedAs maps each name a file refers to an imported package by -- its
+// alias, or the last element of its path -- to that package's import path.
+// Blank and dot imports bind no name.
+func importedAs(file *ast.File) map[string]string {
+	imported := map[string]string{}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name != "_" && name != "." {
+			imported[name] = importPath
+		}
+	}
+	return imported
 }
 
 type funcSpan struct {
@@ -309,11 +405,14 @@ func TestNoEnvironmentAccessOutsideAllowlist(t *testing.T) {
 			fmt.Fprintf(&b, "  %s\n", u)
 		}
 		fmt.Fprintf(&b, "\nMutant takes no configuration from environment variables. An access is\n"+
-			"permitted only in one of three categories:\n"+
-			"  detection -- Mutant observing where it is running (sandbox, VM, debugger)\n"+
-			"  evidence  -- Mutant reporting on a subject process\n"+
-			"  toolchain -- writing GOOS/GOARCH/CGO_ENABLED for a child `go build`\n"+
-			"If this is configuration, use a CLI flag. If it is one of the three, add an\n"+
+			"permitted only in one of six categories:\n"+
+			"  detection  -- Mutant observing where it is running (sandbox, VM, debugger)\n"+
+			"  evidence   -- Mutant reporting on a subject process\n"+
+			"  toolchain  -- writing GOOS/GOARCH/CGO_ENABLED for a child `go build`\n"+
+			"  display    -- a value Mutant prints and never acts on\n"+
+			"  scratch    -- the temporary directory, for files removed before the call returns\n"+
+			"  regression -- a test setting a variable to prove Mutant does not obey it\n"+
+			"If this is configuration, use a CLI flag. If it is one of the six, add an\n"+
 			"entry to policy.EnvAccessAllowlist and say why in the commit. See %s.", policyDoc)
 		t.Fatal(b.String())
 	}
@@ -356,7 +455,10 @@ func TestEnvAllowlistHasNoStaleEntries(t *testing.T) {
 // Every entry must be classified, so a reader can tell at a glance which of the
 // three arguments is being made.
 func TestEnvAllowlistEntriesAreWellFormed(t *testing.T) {
-	valid := map[string]bool{"detection": true, "evidence": true, "toolchain": true}
+	valid := map[string]bool{
+		"detection": true, "evidence": true, "toolchain": true,
+		"display": true, "scratch": true, "regression": true,
+	}
 	seen := map[string]bool{}
 
 	for _, entry := range EnvAccessAllowlist {
@@ -367,7 +469,12 @@ func TestEnvAllowlistEntriesAreWellFormed(t *testing.T) {
 		seen[id] = true
 
 		if !valid[entry.Category] {
-			t.Errorf("%s: category %q is not one of detection, evidence, toolchain", id, entry.Category)
+			t.Errorf("%s: category %q is not one of detection, evidence, toolchain, display, scratch, regression",
+				id, entry.Category)
+		}
+		if entry.Category == "regression" && !strings.HasSuffix(entry.File, "_test.go") {
+			t.Errorf("%s: a regression entry is a test that sets a variable to prove it is not obeyed; "+
+				"%s is not a test file", id, entry.File)
 		}
 		if entry.Lines < 1 {
 			t.Errorf("%s: Lines is %d; an entry that permits nothing should be deleted", id, entry.Lines)
@@ -402,5 +509,94 @@ func TestGuardScansTheRepository(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(repositoryRoot, policyDoc)); err != nil {
 		t.Errorf("every failure message points at %s, which is missing: %v", policyDoc, err)
+	}
+}
+
+// The keystore once followed HOME through os.UserHomeDir, a read no Getenv
+// selector shows (M26-DOC3-001). The guard must see every standard-library
+// call that reads the environment inside itself, under any import name, and
+// must not mistake t.TempDir, or a temporary file in a directory the caller
+// names, for one.
+func TestTheGuardSeesLibraryCallsThatReadTheEnvironment(t *testing.T) {
+	const src = `package fixture
+
+import (
+	stdos "os"
+	"os/user"
+	"testing"
+)
+
+func reads(dir string) {
+	stdos.UserHomeDir()
+	stdos.UserCacheDir()
+	configDir := stdos.UserConfigDir
+	stdos.TempDir()
+	stdos.MkdirTemp("", "x-*")
+	stdos.CreateTemp("", "x-*")
+	stdos.MkdirTemp(dir, "x-*")
+	user.Current()
+	user.LookupId("0")
+	_ = configDir
+}
+
+func fine(t *testing.T) {
+	t.TempDir()
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	always := []string{
+		"os.UserHomeDir", "os.UserCacheDir", "os.UserConfigDir", "os.TempDir",
+		"os.MkdirTemp in the default temporary directory",
+		"os.CreateTemp in the default temporary directory",
+	}
+	for _, onLinux := range []bool{true, false} {
+		want := append([]string(nil), always...)
+		if onLinux {
+			want = append(want, "user.Current", "user.LookupId")
+		}
+		_, access := inspectFile(fset, "fixture.go", file, onLinux)
+		var got []string
+		for _, a := range access {
+			if a.fn != "reads" {
+				t.Errorf("onLinux=%v: %s is not an environment read", onLinux, a)
+			}
+			got = append(got, a.what)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("onLinux=%v: the guard saw\n  %s\nwant\n  %s", onLinux,
+				strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+		}
+	}
+}
+
+// os/user reads the environment only where it is built without cgo for Linux,
+// so the guard asks the Linux build whether a file is in it: a file that only
+// ever builds for macOS, Windows or with cgo has no such read.
+func TestTheUserLookupRuleFollowsTheLinuxBuild(t *testing.T) {
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		src     string
+		inBuild bool
+	}{
+		"plain.go":       {"package p\n", true},
+		"lookup_unix.go": {"//go:build unix\n\npackage p\n", true},
+		"home_darwin.go": {"package p\n", false},
+		"tagged.go":      {"//go:build windows\n\npackage p\n", false},
+		"with_cgo.go":    {"//go:build cgo\n\npackage p\n", false},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(tc.src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := linuxWithoutCgo.MatchFile(dir, name)
+		if err != nil || got != tc.inBuild {
+			t.Errorf("%s in the Linux build without cgo: %v, %v; want %v", name, got, err, tc.inBuild)
+		}
 	}
 }

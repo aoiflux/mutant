@@ -12,9 +12,11 @@ package policy
 //
 // Mutant takes no configuration from the environment. The only permitted
 // accesses are ones where the value is observed rather than obeyed -- sandbox
-// and debugger detection, the process_env forensic builtin -- plus writing
-// GOOS/GOARCH/CGO_ENABLED for a build-time child `go build`, which the Go
-// toolchain accepts no other way.
+// and debugger detection, the process_env forensic builtin, a name the REPL
+// prints -- plus writing GOOS/GOARCH/CGO_ENABLED for a build-time child
+// `go build`, which the Go toolchain accepts no other way, working files in the
+// temporary directory, whose location changes no result, and a test that sets
+// a variable to prove nothing obeys it.
 //
 // Anything not listed here fails TestNoEnvironmentAccessOutsideAllowlist.
 type EnvAccessException struct {
@@ -26,7 +28,8 @@ type EnvAccessException struct {
 	// environment. Pinning the count means a new access added inside an
 	// already-allowlisted function still fails the guard.
 	Lines int
-	// Category is one of "detection", "evidence" or "toolchain".
+	// Category is one of "detection", "evidence", "toolchain", "display",
+	// "scratch" or "regression".
 	Category string
 	// Why explains what makes this access something other than configuration.
 	Why string
@@ -35,9 +38,10 @@ type EnvAccessException struct {
 // EnvAccessAllowlist is the complete set of permitted environment accesses.
 //
 // Adding an entry is a policy decision, not a formality: it must be a value
-// Mutant observes or reports rather than obeys, or a build-time `go build`
-// invocation. If a Mutant user could set the variable to change what Mutant
-// does, the answer is a CLI flag instead.
+// Mutant observes, reports or prints rather than obeys, a build-time `go build`
+// invocation, a place for working files that no result depends on, or a test
+// proving a variable is not obeyed. If a Mutant user could set the variable to
+// change what Mutant does, the answer is a CLI flag instead.
 var EnvAccessAllowlist = []EnvAccessException{
 	// detection -- Mutant observing where it is running. This is core Mutant
 	// infrastructure, not configuration: the variables are set by Sandboxie, WSL,
@@ -86,9 +90,10 @@ var EnvAccessAllowlist = []EnvAccessException{
 	// command-line equivalent; the Go toolchain reads them from the child
 	// environment or not at all.
 	{
-		File: "generator/release_assets.go", Func: "buildReleaseRuntimeBinary", Lines: 1,
+		File: "generator/release_assets.go", Func: "buildReleaseRuntimeBinary", Lines: 2,
 		Category: "toolchain",
-		Why:      "Cross-target release builds pass GOOS/GOARCH/CGO_ENABLED to a child go build.",
+		Why: "Cross-target release builds pass GOOS/GOARCH/CGO_ENABLED to a child go build, which writes " +
+			"into a temporary directory removed before the function returns.",
 	},
 	{
 		File: "cmd/wasmreplserve/main.go", Func: "ensureWasmBinary", Lines: 1,
@@ -99,5 +104,43 @@ var EnvAccessAllowlist = []EnvAccessException{
 		File: "builtin/fingerprint_builtins_test.go", Func: "TestImphashOnWindowsPE", Lines: 1,
 		Category: "toolchain",
 		Why:      "Cross-compiles a throwaway Windows PE to fingerprint; needs GOOS/GOARCH on the child build.",
+	},
+
+	// display -- a value Mutant prints and never acts on.
+	{
+		File: "repl/repl.go", Func: "welcome", Lines: 1,
+		Category: "display",
+		Why: "The REPL greeting prints the account's display name. Built without cgo on Linux, user.Current " +
+			"answers for a uid missing from /etc/passwd from $USER and $HOME, with no display name, and only " +
+			"the greeting uses it. (Its panic when either is unset is M26-TOOL-031.)",
+	},
+
+	// scratch -- the temporary directory (TMPDIR; TMP, TEMP or USERPROFILE on
+	// Windows), for working files deleted when the work is done. Where they sit
+	// changes no result.
+	{
+		File: "builtin/sqlite_builtins.go", Func: "withSQLiteCopy", Lines: 1,
+		Category: "scratch",
+		Why: "The copy of a database an sqlite_* builtin queries, so the evidence file is never opened for " +
+			"writing; removed before the builtin returns.",
+	},
+	{
+		File: "cmd/sweep/main.go", Func: "resolveMutantBinary", Lines: 1,
+		Category: "scratch",
+		Why:      "The example sweep builds the mutant binary it runs into a temporary directory, removed when the sweep ends.",
+	},
+	{
+		File: "cmd/sweep/main.go", Func: "newScratch", Lines: 1,
+		Category: "scratch",
+		Why: "The example sweep runs the examples in a temporary copy of their tree, removed when the sweep " +
+			"ends unless --keep asks for it.",
+	},
+
+	// regression -- a test that sets a variable in its own process to prove
+	// that nothing follows it.
+	{
+		File: "security/key_bootstrap_test.go", Func: "TestTheKeystoreDoesNotFollowTheEnvironment", Lines: 1,
+		Category: "regression",
+		Why:      "Points HOME and USERPROFILE at two directories in turn and requires the keystore not to move (M26-DOC3-001).",
 	},
 }

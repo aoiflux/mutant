@@ -123,7 +123,7 @@ var categorySections = []categorySection{
 	{
 		category: "forensic ledger",
 		heading:  "Forensic Ledger",
-		blurb:    "The same graph engine under a posture that cannot be turned off: every commit signed and attributed, a log containing an unsigned commit refused on replay, the image verified before it loads, the redaction ledger on, and every retired segment kept. The one option in the family is the role `ledger_open` records, because every other setting is a decision about what the resulting document may claim. Ledger handles are their own space -- no `db_` builtin resolves one -- and a ledger directory refuses to open as an ordinary graph. `ledger_under_view` hands out a second handle through which the reads show only what a view shows, and every other builtin refuses it.",
+		blurb:    "The same graph engine under a posture that cannot be turned off: every commit signed and attributed, a log containing an unsigned commit refused on replay, the image verified before it loads, the redaction ledger on, and every retired segment kept. The one option in the family is the role `ledger_open` records, because every other setting is a decision about what the resulting document may claim. Ledger handles are their own space -- no `db_` builtin resolves one -- and a ledger directory refuses to open as an ordinary graph. `ledger_under_view` hands out a second handle through which the reads show only what a view shows, and every other builtin refuses it. A redaction an older build made could have reached the disclosure records without its record saying so; `ledger_redactions_review` records that an examiner has answered for such redactions, and no grant is issued from the ledger until one has.",
 	},
 	{
 		category: "cache",

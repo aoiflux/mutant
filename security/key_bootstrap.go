@@ -15,14 +15,23 @@ func SetLocalKeyStoreDirForTesting(dir string) {
 	localKeyStoreDirOverride = strings.TrimSpace(dir)
 }
 
+// ResolveLocalKeyStoreDir returns the directory that holds the local signing
+// key pair: .mutant/keys under the home directory the operating system's
+// account database records for the user Mutant runs as.
+//
+// Never HOME or USERPROFILE. The pair signs every artifact, case manifest,
+// ledger commit and record, and its public half is the key --signer-auth trusts
+// when no --trusted-key is named, so a variable nobody records would choose
+// which key signs and which signer is trusted (M26-DOC3-001). A user the account
+// database cannot answer for is refused, not guessed at.
 func ResolveLocalKeyStoreDir() (string, error) {
 	if localKeyStoreDirOverride != "" {
 		return localKeyStoreDirOverride, nil
 	}
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := accountHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", fmt.Errorf("resolve the local keystore: %w", err)
 	}
 
 	return filepath.Join(homeDir, ".mutant", "keys"), nil

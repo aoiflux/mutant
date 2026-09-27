@@ -683,18 +683,27 @@ func LedgerRedactions(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	records, err := session.store.Redactions()
+	reviews, err := ledgerRedactionReviewsRead(session)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", BuiltinNameLedgerRedactions, err.Error()))
 	}
+	records := reviews.records
 
 	elements := make([]object.Object, 0, len(records))
 	head := ""
 	for _, record := range records {
-		out := make(map[string]object.Object, 18)
+		out := make(map[string]object.Object, 19)
 		ledgerRecordInto(session, record, out)
+		// Recorded with no role, by a build that may not have refused a
+		// redaction of the disclosure schema, and not provably of what a
+		// script wrote (ledger_redaction_review.go).
+		out["unguarded"] = boolObj(reviews.unguarded[record.Seq])
 		elements = append(elements, makeHashObject(out))
 		head = ledgerHash(record.Hash)
+	}
+	reviewsReason := ""
+	if reviews.chainErr != nil {
+		reviewsReason = reviews.chainErr.Error()
 	}
 
 	// The keyring this ledger was opened with, so a signature that does not
@@ -719,6 +728,14 @@ func LedgerRedactions(args ...object.Object) object.Object {
 		// reason a redaction was performed, which is the field beside it.
 		"chain_intact": boolObj(chainErr == nil),
 		"chain_reason": stringObj(reason),
+		// How far ledger_redactions_review has answered for the unguarded
+		// redactions, and those it has not. A chain of reviews that cannot be
+		// read counts for nothing, and the redactions are listed anyway: this
+		// is where an examiner looks to find out why.
+		"reviewed_through":     intObj(int64(reviews.through)),
+		"unguarded_redactions": ledgerSeqArray(reviews.pending),
+		"reviews_intact":       boolObj(reviews.chainErr == nil),
+		"reviews_reason":       stringObj(reviewsReason),
 	}), nil)
 }
 

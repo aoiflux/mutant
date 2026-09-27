@@ -761,4 +761,8 @@ const (
 
 	// searching a record as one of its readers could read it
 	BuiltinNameRecordSearch = "record_search"
+
+	// an examiner's review of the redactions a ledger received before its
+	// disclosure schema was out of a redaction's reach
+	BuiltinNameLedgerRedactionsReview = "ledger_redactions_review"
 )

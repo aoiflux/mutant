@@ -223,6 +223,7 @@ var disclosureKeys = map[store.NodeType][]string{
 	disclosureNodeCustodyEvent:     {"custody.uid", "custody.chain"},
 	disclosureNodeRedactionVersion: {"redaction.uid", "redaction.chain", "redaction.line"},
 	disclosureNodeClassEvent:       {"classify.uid", "classify.chain", "classify.case_uid", "classify.target"},
+	disclosureNodeRedactionReview:  {"redaction_review.uid", "redaction_review.chain"},
 }
 
 // disclosureNode is one node of this schema as read back: its id and its
@@ -690,11 +691,18 @@ func disclosureRecipientFingerprint(name string) string {
 
 // disclosureRefusal says why the ledger rules out disclosing this record to
 // this recipient, or returns the recipient's assignment in force: the case's
-// lifecycle state takes no disclosure; the record was reclassified, so its
-// classification is not the one in force; an earlier disclosure of it to them
-// was withdrawn; or the ledger assigns them no recipient role in the case.
-func disclosureRefusal(g *graphene.Graph, record *recordSession, recipient string) (caseAssignment, error) {
+// lifecycle state takes no disclosure; the ledger holds redactions made before
+// its disclosure schema was guarded that no review answers for, any of which
+// could have removed what the checks after it read (M26-CUS-021); the record
+// was reclassified, so its classification is not the one in force; an earlier
+// disclosure of it to them was withdrawn; or the ledger assigns them no
+// recipient role in the case.
+func disclosureRefusal(session *ledgerSession, record *recordSession, recipient string) (caseAssignment, error) {
+	g := session.graph
 	if err := caseLedgerStateRefusal(g, record.header.CaseUID, caseActDisclose); err != nil {
+		return caseAssignment{}, err
+	}
+	if err := ledgerUnreviewedRefusal(session); err != nil {
 		return caseAssignment{}, err
 	}
 	recordUID := strings.ToLower(record.header.RecordUID)
@@ -742,7 +750,7 @@ func disclosurePreflight(op string, session *ledgerSession, record *recordSessio
 		return disclosureBasis{}, errObj
 	}
 	disclosureLedgerMu.Lock()
-	assignment, err := disclosureRefusal(session.graph, record, recipient)
+	assignment, err := disclosureRefusal(session, record, recipient)
 	if err == nil {
 		// Read now for the reason the rest is: a version chain the ledger
 		// cannot give an account of refuses the disclosure at the write, and
@@ -773,7 +781,7 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 	// disclosurePreflight asked this before the grant was issued; asked again
 	// under the lock for a withdrawal, a reclassification or a change to the
 	// recipient's assignment recorded since.
-	assignment, err := disclosureRefusal(g, issue.record, issue.recipient)
+	assignment, err := disclosureRefusal(session, issue.record, issue.recipient)
 	if err != nil {
 		return 0, err
 	}
@@ -890,32 +898,21 @@ func disclosureWithdrawalOf(g *graphene.Graph, uid string) (disclosureNode, bool
 
 // disclosureWithdrawnFor reports the uid and time of a withdrawn disclosure of
 // this record to this recipient, or "" when there is none.
+//
+// Asked of the Withdrawal nodes, which name the record and the recipient
+// themselves, and not through the Disclosure each withdraws: a disclosure a
+// redaction removed before the schema was guarded (M26-CUS-021) took its
+// index entries with it, and its withdrawal, still in the ledger, still stops
+// a new grant.
 func disclosureWithdrawnFor(g *graphene.Graph, recordUID, recipientFP string) (string, error) {
-	ids, err := g.NodesByProperty("disclosure.recipient_fp", []byte(recipientFP))
-	if err != nil || len(ids) == 0 {
-		return "", err
-	}
-	nodes, _, err := g.GetNodes(ids)
+	withdrawals, err := disclosureAll(g, disclosureNodeWithdrawal)
 	if err != nil {
 		return "", err
 	}
-	for _, node := range nodes {
-		if !node.HasLabel(disclosureNodeDisclosure) {
-			continue
-		}
-		decoded, err := disclosureDecode(node)
-		if err != nil {
-			return "", err
-		}
-		if decoded.get("disclosure.record_uid") != recordUID {
-			continue
-		}
-		withdrawal, found, err := disclosureWithdrawalOf(g, decoded.get("disclosure.uid"))
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return fmt.Sprintf("disclosure %s, withdrawn at %s", decoded.get("disclosure.uid"),
+	for _, withdrawal := range withdrawals {
+		if withdrawal.get("withdrawal.record_uid") == recordUID &&
+			disclosureRecipientFingerprint(withdrawal.get("withdrawal.recipient")) == recipientFP {
+			return fmt.Sprintf("disclosure %s, withdrawn at %s", withdrawal.get("withdrawal.disclosure_uid"),
 				withdrawal.get("withdrawal.at")), nil
 		}
 	}
