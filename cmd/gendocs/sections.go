@@ -123,7 +123,7 @@ var categorySections = []categorySection{
 	{
 		category: "forensic ledger",
 		heading:  "Forensic Ledger",
-		blurb:    "The same graph engine under a posture that cannot be turned off: every commit signed and attributed, a log containing an unsigned commit refused on replay, the image verified before it loads, the redaction ledger on, and every retired segment kept. There is no options hash anywhere in the family, because each setting is a decision about what the resulting document may claim. Ledger handles are their own space -- no `db_` builtin resolves one -- and a ledger directory refuses to open as an ordinary graph.",
+		blurb:    "The same graph engine under a posture that cannot be turned off: every commit signed and attributed, a log containing an unsigned commit refused on replay, the image verified before it loads, the redaction ledger on, and every retired segment kept. The one option in the family is the role `ledger_open` records, because every other setting is a decision about what the resulting document may claim. Ledger handles are their own space -- no `db_` builtin resolves one -- and a ledger directory refuses to open as an ordinary graph. `ledger_under_view` hands out a second handle through which the reads show only what a view shows, and every other builtin refuses it.",
 	},
 	{
 		category: "cache",

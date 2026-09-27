@@ -752,4 +752,10 @@ const (
 	BuiltinNameRoleList          = "role_list"
 	BuiltinNameRedactionCommit   = "redaction_commit"
 	BuiltinNameRedactionVersions = "redaction_versions"
+
+	// ledger classification: which of a case's classes a node a script wrote
+	// holds, and the ledger read under a view
+	BuiltinNameLedgerClassify        = "ledger_classify"
+	BuiltinNameLedgerClassifications = "ledger_classifications"
+	BuiltinNameLedgerUnderView       = "ledger_under_view"
 )

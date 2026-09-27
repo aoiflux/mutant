@@ -592,15 +592,21 @@ func viewResolve(op, name string) (caseView, map[string]caseClass, *object.Error
 			return view, labels, nil
 		}
 	}
+	return caseView{}, nil, viewUndeclared(op, session, name)
+}
+
+// viewUndeclared is the refusal for a view name nobody declared. The caller
+// holds the store lock.
+func viewUndeclared(op string, session *custodySession, name string) *object.Error {
 	declared := make([]string, 0, len(session.views))
 	for _, view := range session.views {
 		declared = append(declared, view.Label)
 	}
 	if len(declared) == 0 {
-		return caseView{}, nil, newError("%s: %q is not a declared view, and this case has declared none. "+
+		return newError("%s: %q is not a declared view, and this case has declared none. "+
 			"Call `view_define(label, classes)` first, so that what a recipient gets is a named posture "+
 			"in the manifest rather than a list assembled at the call", op, name)
 	}
-	return caseView{}, nil, newError("%s: %q is not a declared view. This case declares %s",
+	return newError("%s: %q is not a declared view. This case declares %s",
 		op, name, strings.Join(declared, ", "))
 }

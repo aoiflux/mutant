@@ -65,6 +65,9 @@ var DisclosureFiles = []string{
 	// versions of a record's redaction
 	"builtin/recipient_role.go",
 	"builtin/redaction_version.go",
+	// the classes a script's ledger node holds, and the ledger read under a view
+	"builtin/ledger_classify.go",
+	"builtin/ledger_view.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

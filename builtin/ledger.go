@@ -278,10 +278,21 @@ func ledgerGet(handle int64) (*ledgerSession, bool) {
 // because the likeliest reason a handle does not resolve here is that it is a
 // db_open_disk handle, and a script that mixed them up needs to be told which
 // of the two spaces it is in.
+//
+// A handle from ledger_under_view is refused by name. The reads that read
+// under a view resolve their handle with ledgerReadHandleArg instead, so this
+// is what keeps every other builtin -- every writer, and every one added later
+// -- from reading or writing the whole ledger through a handle that says it is
+// filtered (ledger_view.go).
 func ledgerHandleArg(arg object.Object, op string) (*ledgerSession, *object.Error) {
 	handle, ok := arg.(*object.Integer)
 	if !ok {
 		return nil, newError("argument 1 to `%s` must be INTEGER, got %s", op, arg.Type())
+	}
+	if value, found := ledgerHandles.Load(handle.Value); found {
+		if view, isView := value.(*ledgerView); isView {
+			return nil, ledgerViewRefusal(op, handle.Value, view)
+		}
 	}
 	session, found := ledgerGet(handle.Value)
 	if !found {
@@ -628,6 +639,11 @@ func LedgerClose(args ...object.Object) object.Object {
 	value, found := ledgerHandles.LoadAndDelete(handle.Value)
 	if !found {
 		return resultAndError(nil, newError("%s: unknown ledger handle %d", BuiltinNameLedgerClose, handle.Value))
+	}
+	// A handle under a view holds nothing open, so dropping it leaves the
+	// ledger and every other handle to it as they were.
+	if _, isView := value.(*ledgerView); isView {
+		return resultAndError(boolObj(true), nil)
 	}
 	session, ok := value.(*ledgerSession)
 	if !ok {

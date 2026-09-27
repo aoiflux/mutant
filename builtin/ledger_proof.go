@@ -231,10 +231,11 @@ func LedgerProveNode(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerProveNode)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerProveNode)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	session := reading.session
 	idArg, ok := args[1].(*object.Integer)
 	if !ok {
 		return resultAndError(nil, newError("argument 2 to `%s` must be INTEGER, got %s", BuiltinNameLedgerProveNode, args[1].Type()))
@@ -243,6 +244,24 @@ func LedgerProveNode(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: node ids start at 1, got %d", BuiltinNameLedgerProveNode, idArg.Value))
 	}
 	nodeID := store.NodeID(idArg.Value)
+
+	// Under a view, a node the view does not show is refused before anything
+	// is proved, with the answer every read under a view gives: which of the
+	// proof's three refusals would have come back says what the view withholds.
+	// A proof of a node it shows still carries the snapshot's size and the
+	// leaf's position, as every inclusion proof does; one that could not be
+	// checked against the published root would prove nothing.
+	if reading.view != nil {
+		g, done, errObj := reading.reader(BuiltinNameLedgerProveNode)
+		if errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		_, err := g.GetNode(nodeID)
+		done()
+		if err != nil {
+			return resultAndError(nil, reading.missing(err, nodeID, 0, BuiltinNameLedgerProveNode))
+		}
+	}
 
 	proof, err := session.store.ProveNode(nodeID)
 	if err != nil {
@@ -266,6 +285,7 @@ func LedgerProveNode(args ...object.Object) object.Object {
 		"leaf_index":  intObj(int64(proof.Proof.Index)),
 		"tree_size":   intObj(int64(proof.Proof.Size)),
 		"siblings":    intObj(int64(len(proof.Proof.Siblings))),
+		"view":        stringObj(reading.viewLabel()),
 	}
 	// Unprefixed: these came out of the store, not out of a file somebody
 	// handed over. snapshot_root is the one to retain or publish -- without it
@@ -280,6 +300,7 @@ func LedgerProveNode(args ...object.Object) object.Object {
 			"node_id":       fmt.Sprintf("%d", nodeID),
 			"snapshot_root": ledgerHash(proof.Roots.Snapshot),
 			"proof_bytes":   len(blob),
+			"view":          reading.viewLabel(),
 		})
 
 	return resultAndError(makeHashObject(out), nil)

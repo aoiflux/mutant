@@ -27,6 +27,10 @@
 // which views it may be given. A grant to anybody else is refused before a key
 // is issued.
 //
+// The examiner's own findings go into the same ledger, classified like the
+// record's bytes, and are read back under each recipient's view: each is shown
+// what its view shows of them, and a finding nobody classified, nobody is.
+//
 // Interactive. The case key and each grant are protected by a passphrase asked
 // for at the terminal, never taken from an argument or the environment, so run
 // it from a terminal -- on Windows from PowerShell rather than Git Bash:
@@ -340,6 +344,51 @@ let run = fn() {
             " in force:", v["in_force"]);
     });
     putln("stale disclosures:", versions["stale"]);
+
+    // --- the findings, as each recipient's view shows them -------------------
+    // What the examiner found goes into the ledger too, classified like the
+    // record's bytes. A read under a view shows what the view shows and nothing
+    // else, so a report built from it carries only what its recipient may be
+    // given -- and a finding nobody classified, no view shows.
+    let add_finding = fn(name, note) {
+        let written, err = ledger_add_node(ledger, {"finding": name, "note": note}, 1);
+        if (check_err(err, "ledger_add_node " + name)) { return 0; };
+        return written["id"];
+    };
+    let lure_found = add_finding("lure", "an overdue-invoice pretext from a lookalike domain");
+    let victim_found = add_finding("victim", "the complainant's mailbox, in the To: header");
+    let payload_found = add_finding("payload", "the attachment: a dropper, base64 in the body");
+    let hunch_found = add_finding("hunch", "the same sender as an earlier case, not yet shown");
+    let _, err = ledger_add_edge(ledger, lure_found, victim_found, {"relation": "targets"}, 1);
+    if (check_err(err, "ledger_add_edge targets")) { return false; };
+    let _, err = ledger_add_edge(ledger, lure_found, payload_found, {"relation": "carries"}, 1);
+    if (check_err(err, "ledger_add_edge carries")) { return false; };
+    let _, err = ledger_classify(ledger, lure_found, "open", "the pretext anyone on the case may read");
+    if (check_err(err, "ledger_classify lure")) { return false; };
+    let classified, err = ledger_classify(ledger, victim_found, "pii", "it names the complainant");
+    if (check_err(err, "ledger_classify victim")) { return false; };
+    putln("the victim finding is shown under:", str_join(classified["shown_under"], ", "));
+    let _, err = ledger_classify(ledger, payload_found, "restricted", "it describes live malicious code");
+    if (check_err(err, "ledger_classify payload")) { return false; };
+
+    each(["counsel", "malware-desk"], fn(view) {
+        let under, err = ledger_under_view(ledger, view);
+        if (check_err(err, "ledger_under_view " + view)) { return false; };
+        let shown, err = ledger_query_nodes(under["handle"], {"types": [1]});
+        if (check_err(err, "ledger_query_nodes under " + view)) { return false; };
+        let names = map(shown["ids"], fn(id) {
+            let node, err = ledger_node(under["handle"], id);
+            if (check_err(err, "ledger_node")) { return ""; };
+            let name, err = bytes_to_string(node["properties"]["finding"], "utf8");
+            if (check_err(err, "bytes_to_string")) { return ""; };
+            return name;
+        });
+        putln("under", view + ":", shown["count"], "of 4 findings shown:", str_join(names, ", "));
+        let _, hidden = ledger_node(under["handle"], hunch_found);
+        if (hidden) { putln("   the hunch nobody classified is not shown"); };
+        let _, err = ledger_close(under["handle"]);
+        check_err(err, "ledger_close under " + view);
+    });
 
     // --- close ---------------------------------------------------------------
     let _, err = record_close(record);

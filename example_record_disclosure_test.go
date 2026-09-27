@@ -126,6 +126,13 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 		"redaction: counsel version 1  released: 0+1275,1453+18  in force: true",
 		"redaction: malware-desk version 1  released: 0+551,570+901  in force: true",
 		"stale disclosures: 0",
+		// The examiner's findings, each read under a recipient's view: the
+		// lure and what that view's class covers, and never the finding
+		// nobody classified.
+		"the victim finding is shown under: counsel",
+		"under counsel: 2 of 4 findings shown: lure, victim",
+		"under malware-desk: 2 of 4 findings shown: lure, payload",
+		"the hunch nobody classified is not shown",
 		"signed: true",
 	} {
 		if !strings.Contains(printed, want) {

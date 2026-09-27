@@ -131,7 +131,7 @@ const (
 
 var caseActionNames = map[caseAction]string{
 	caseActSeal:     "sealing of a record",
-	caseActDefine:   "definition of a class, a view or a role's bundle, or record of a reclassification",
+	caseActDefine:   "definition of a class, a view or a role's bundle, or record of a classification or a reclassification",
 	caseActDisclose: "disclosure",
 	caseActAssign:   "assignment of a role",
 	caseActIntake:   "intake of evidence",

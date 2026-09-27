@@ -32,12 +32,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
 	"strconv"
 
-	"github.com/aoiflux/graphene"
 	"github.com/aoiflux/graphene/store"
 )
 
@@ -86,22 +86,36 @@ func caseChainUID(spec caseChainSpec, props map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// caseChainSource is what a chain is read from: the ledger's graph, or a
+// snapshot of it (a read under a view reads its classifications from the
+// snapshot it answers from).
+type caseChainSource interface {
+	NodesByProperty(key string, value []byte) ([]store.NodeID, error)
+	GetNode(id store.NodeID) (*store.Node, error)
+}
+
 // caseChainRead returns a chain's events in order, first to head, or refuses
 // one that forks, holds an event with no position or out of its position,
 // holds one whose uid does not recompute, or holds one no walk from its first
 // event reaches. An empty chain is no events and no error.
-func caseChainRead(g *graphene.Graph, spec caseChainSpec, chain string) ([]caseChainEvent, error) {
+func caseChainRead(g caseChainSource, spec caseChainSpec, chain string) ([]caseChainEvent, error) {
 	ids, err := g.NodesByProperty(spec.key("chain"), []byte(chain))
 	if err != nil || len(ids) == 0 {
 		return nil, err
 	}
-	nodes, _, err := g.GetNodes(ids)
-	if err != nil {
-		return nil, err
-	}
 	byPrev := map[string][]caseChainEvent{}
 	count := 0
-	for _, node := range nodes {
+	for _, id := range ids {
+		node, err := g.GetNode(id)
+		var notFound *store.ErrNotFound
+		switch {
+		case errors.As(err, &notFound):
+			// Gone between the index and the read, which graphene's GetNodes
+			// reports as missing rather than as an error.
+			continue
+		case err != nil:
+			return nil, err
+		}
 		if !node.HasLabel(spec.label) {
 			continue
 		}

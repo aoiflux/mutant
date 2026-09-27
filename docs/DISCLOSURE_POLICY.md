@@ -41,6 +41,7 @@ document describes is waiting to be built.
 | `evidence_intake`, `evidence_release`, `evidence_accept`, `evidence_return`, `evidence_dispose`, `evidence_history`: the custody of each exhibit kept in the ledger | **In force.** [`builtin/case_evidence.go`](../builtin/case_evidence.go) |
 | `role_define`, `role_assign`, `role_list`: recipient roles, the views each may be granted, and the refusal of a disclosure its recipient's role does not allow | **In force.** [`builtin/recipient_role.go`](../builtin/recipient_role.go) |
 | `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
+| `ledger_classify`, `ledger_classifications`, `ledger_under_view`: the classes a node a script wrote holds, and the ledger read under a view, which only the reads that read through one take | **In force.** [`builtin/ledger_classify.go`](../builtin/ledger_classify.go), [`builtin/ledger_view.go`](../builtin/ledger_view.go) |
 | `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
@@ -312,6 +313,44 @@ be reviewed first. `redaction_versions(ledger, record_uid)` calls every
 disclosure issued under a version since superseded `stale`: its recipient holds
 a redaction this evidence is no longer disclosed under. Like a withdrawal, that
 reaches nobody's copy.
+
+### A ledger read under a view shows what the view shows
+
+**What a script wrote into the ledger is classified like a record.**
+`ledger_classify(ledger, node, classes, reason)` records which of the case's
+declared classes a node a script wrote holds -- one, several, or none -- as the
+next event of a hash-linked chain of that node's classifications, kept in the
+ledger with the rest of the case. The event names the node by id and no edge
+joins them, so redacting the node never reaches into this schema.
+`ledger_classifications` lists them.
+
+**`ledger_under_view(ledger, view)` returns a handle through which the ledger is
+read as the view shows it.** The reads that take it -- `ledger_node`,
+`ledger_edge`, `ledger_provenance`, `ledger_path`, `ledger_subgraph`,
+`ledger_patterns`, `ledger_query_nodes` and `ledger_prove_node` -- show a script
+node only when its classification is within the classes the view grants, the
+case's Case and Record nodes, and the Classification nodes of the classes it
+grants; and an edge only between two nodes it shows, when it is a script's edge,
+an IN_CASE or a CLASSIFIED_AS. A node nobody classified, and one classified as
+holding nothing, is shown by no view. A walk never crosses a node the view
+withholds, so its `complete`, `found` and `stopped_at` are claims about what the
+view shows, and each of those reads says which view answered.
+
+Nothing a read under a view returns counts what it withheld, and a node it
+withholds, one the ledger never held and one a redaction removed get the same
+answer: a count, or a different refusal, would itself say something about the
+withheld nodes. `ledger_query_nodes` says nothing about the index under a view
+for the same reason. The one number no view takes out is in an inclusion proof,
+which carries the snapshot's size and the leaf's position as every such proof
+does: a proof that could not be checked against the published root would prove
+nothing.
+
+**It fails closed.** Every other builtin that takes a ledger -- every writer,
+and any builtin added later until somebody decides it may read through a
+view -- refuses the handle by name, and `ledger_close` drops it without closing
+the ledger. It is not access control: the program holding it holds the
+ledger's own handle too. What it limits is what a report built from its reads
+can carry to the view's recipient.
 
 ## 6. A record without its case is evidentially mute
 
@@ -596,10 +635,12 @@ edges a disclosure has, GRANTS to the record and AUTHORISED_BY to the view. An
 exhibit taken in with `evidence_intake` is an EvidenceFile node (graphene's own
 built-in type) that BELONGS_TO the Case, and its custody is a chain of
 CustodyEvent nodes, each BELONGS_TO the exhibit and CUSTODIAN to whoever holds
-or is receiving it. The label table graphene keeps beside the ledger also names
-ReviewRequest, ReviewDecision, RetentionEvent, ErasureEvent, ClassEvent and
-RedactionReview, and REVIEWS and ERASES: their numbers are fixed now, and
-nothing writes them yet.
+or is receiving it. A node a script wrote is classified by a chain of ClassEvent
+nodes, each IN_CASE to the Case, PERFORMED_BY its actor and CLASSIFIED_AS each
+class it names; it names the node by property, and no edge joins the two. The
+label table graphene keeps beside the ledger also names ReviewRequest,
+ReviewDecision, RetentionEvent, ErasureEvent and RedactionReview, and REVIEWS
+and ERASES: their numbers are fixed now, and nothing writes them yet.
 
 Four properties of it are worth stating:
 
@@ -613,8 +654,9 @@ Four properties of it are worth stating:
   new. A Record found under the same uid with a different file digest is
   refused, never reconciled by overwriting.
 - **A case's history is a chain, and a fork is refused.** Each lifecycle event,
-  each examiner's or recipient's assignments, each exhibit's custody and each
-  view's versions of a redaction are a chain: an event names its position and
+  each examiner's or recipient's assignments, each exhibit's custody, each
+  view's versions of a redaction and each script node's classifications are a
+  chain: an event names its position and
   the uid of the one before it, and its own uid is a SHA-256 over everything it
   records. The head of the chain is what is in force. Two events after one
   event, an event whose uid does not recompute, and an event no walk from the

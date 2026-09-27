@@ -62,7 +62,10 @@ package builtin
 //	// for full-graph searches to avoid loading all node IDs.
 //
 // A script asking "find me any two connected things" is told there are none.
-// `ledger_patterns` refuses that pattern instead.
+// `ledger_patterns` refuses that pattern instead -- and one with a node on no
+// edge of the pattern, which matches every candidate on its own: over a scope,
+// graphene takes the scope's ids as that node's candidates without reading
+// them, and a match named an id the ledger did not hold (M26-CUS-024).
 //
 // # And one that is not silent, because it is a crash
 //
@@ -278,7 +281,7 @@ func LedgerNode(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerNode)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerNode)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -286,10 +289,15 @@ func LedgerNode(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	g, done, errObj := reading.reader(BuiltinNameLedgerNode)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
 
-	node, err := session.graph.GetNode(nodeID)
+	node, err := g.GetNode(nodeID)
 	if err != nil {
-		return resultAndError(nil, ledgerReadRefusal(session, err, nodeID, 0, BuiltinNameLedgerNode))
+		return resultAndError(nil, reading.missing(err, nodeID, 0, BuiltinNameLedgerNode))
 	}
 	rendered, err := ledgerNodeObject(node)
 	if err != nil {
@@ -303,7 +311,7 @@ func LedgerEdge(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerEdge)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerEdge)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -311,10 +319,15 @@ func LedgerEdge(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	g, done, errObj := reading.reader(BuiltinNameLedgerEdge)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
 
-	edge, err := session.graph.GetEdge(edgeID)
+	edge, err := g.GetEdge(edgeID)
 	if err != nil {
-		return resultAndError(nil, ledgerReadRefusal(session, err, 0, edgeID, BuiltinNameLedgerEdge))
+		return resultAndError(nil, reading.missing(err, 0, edgeID, BuiltinNameLedgerEdge))
 	}
 	rendered, err := ledgerEdgeObject(edge)
 	if err != nil {
@@ -326,9 +339,11 @@ func LedgerEdge(args ...object.Object) object.Object {
 // ledgerInboundParents returns the distinct nodes one inbound hop from id.
 //
 // Distinct, because two edges between the same pair are one ancestry for the
-// purpose of asking whether a chain had a choice to make.
-func ledgerInboundParents(session *ledgerSession, id store.NodeID) ([]store.NodeID, error) {
-	edges, err := session.graph.EdgesOf(id, store.DirectionInbound, nil)
+// purpose of asking whether a chain had a choice to make. Read through the
+// reader the walk read through, so under a view a parent the view does not
+// show is neither a branch nor a reason the walk stopped.
+func ledgerInboundParents(g store.GraphReader, id store.NodeID) ([]store.NodeID, error) {
+	edges, err := g.EdgesOf(id, store.DirectionInbound, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +365,7 @@ func LedgerProvenance(args ...object.Object) object.Object {
 	if len(args) != 3 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=3", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerProvenance)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerProvenance)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -369,18 +384,24 @@ func LedgerProvenance(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: maxDepth %d is larger than this walk can be asked for", BuiltinNameLedgerProvenance, depthArg.Value))
 	}
 
+	g, done, errObj := reading.reader(BuiltinNameLedgerProvenance)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
+
 	// Checked before the walk so that a missing origin is refused with the
 	// redaction-aware message rather than graphene's bare "node not found".
-	if _, err := session.graph.GetNode(origin); err != nil {
-		return resultAndError(nil, ledgerReadRefusal(session, err, origin, 0, BuiltinNameLedgerProvenance))
+	if _, err := g.GetNode(origin); err != nil {
+		return resultAndError(nil, reading.missing(err, origin, 0, BuiltinNameLedgerProvenance))
 	}
 
-	result, err := session.graph.ProvenanceChainCtx(ledgerContext(), origin, int(depthArg.Value), nil, graphstore.WalkBudget())
+	result, err := traversal.ProvenanceChainCtx(ledgerContext(), g, origin, int(depthArg.Value), nil, graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
 			return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerProvenance))
 		}
-		return resultAndError(nil, ledgerReadRefusal(session, err, origin, 0, BuiltinNameLedgerProvenance))
+		return resultAndError(nil, reading.missing(err, origin, 0, BuiltinNameLedgerProvenance))
 	}
 
 	chain := make([]object.Object, 0, len(result.Chain))
@@ -400,7 +421,7 @@ func LedgerProvenance(args ...object.Object) object.Object {
 	stoppedAt := "root"
 	if len(result.Chain) > 0 {
 		last := result.Chain[len(result.Chain)-1].ID
-		parents, err := ledgerInboundParents(session, last)
+		parents, err := ledgerInboundParents(g, last)
 		if err != nil {
 			return resultAndError(nil, newError("%s: reading the inbound edges of node %d to decide why the walk stopped: %s", BuiltinNameLedgerProvenance, last, err.Error()))
 		}
@@ -418,7 +439,7 @@ func LedgerProvenance(args ...object.Object) object.Object {
 	// Every place the chain had more than one ancestry and reported one.
 	branchPoints := make([]object.Object, 0)
 	for i, node := range result.Chain {
-		parents, err := ledgerInboundParents(session, node.ID)
+		parents, err := ledgerInboundParents(g, node.ID)
 		if err != nil {
 			return resultAndError(nil, newError("%s: reading the inbound edges of node %d: %s", BuiltinNameLedgerProvenance, node.ID, err.Error()))
 		}
@@ -463,6 +484,8 @@ func LedgerProvenance(args ...object.Object) object.Object {
 		"complete":           boolObj(stoppedAt == "root"),
 		"branch_points":      &object.Array{Elements: branchPoints},
 		"branch_point_count": intObj(int64(len(branchPoints))),
+		// Under a view, root and complete are about what the view shows.
+		"view": stringObj(reading.viewLabel()),
 	}), nil)
 }
 
@@ -555,7 +578,7 @@ func LedgerPath(args ...object.Object) object.Object {
 	if len(args) != 4 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerPath)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerPath)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -576,18 +599,25 @@ func LedgerPath(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %q is not a cost model. This language names its readings of an edge rather than taking a function, because a cost must be non-negative, deterministic and cheap and a function written here can be none of those. Use one of: %s", BuiltinNameLedgerPath, modelArg.Value, ledgerCostModelNames()))
 	}
 
+	g, done, errObj := reading.reader(BuiltinNameLedgerPath)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
+
 	for position, id := range []store.NodeID{src, dst} {
-		if _, err := session.graph.GetNode(id); err != nil {
-			refusal := ledgerReadRefusal(session, err, id, 0, BuiltinNameLedgerPath)
+		if _, err := g.GetNode(id); err != nil {
+			refusal := reading.missing(err, id, 0, BuiltinNameLedgerPath)
 			return resultAndError(nil, newError("%s (argument %d)", refusal.Message, position+2))
 		}
 	}
 
 	cost, badEdge := ledgerCostFor(model)
-	result, err := session.graph.ShortestWeightedPathCtx(ledgerContext(), src, dst, nil, cost, graphstore.WalkBudget())
+	result, err := traversal.ShortestWeightedPathCtx(ledgerContext(), g, src, dst, nil, cost, graphstore.WalkBudget())
 	switch {
 	case errors.Is(err, traversal.ErrNoPath):
-		// An answer, not a failure. See the header.
+		// An answer, not a failure. See the header. Under a view it is the
+		// answer about what the view shows.
 		return resultAndError(makeHashObject(map[string]object.Object{
 			"found":         boolObj(false),
 			"src":           intObj(int64(src)),
@@ -599,6 +629,7 @@ func LedgerPath(args ...object.Object) object.Object {
 			"edges":         &object.Array{Elements: []object.Object{}},
 			"reversed_hops": &object.Array{Elements: []object.Object{}},
 			"directed":      boolObj(true),
+			"view":          stringObj(reading.viewLabel()),
 		}), nil)
 	case errors.Is(err, store.ErrBudgetExceeded):
 		return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerPath))
@@ -643,6 +674,7 @@ func LedgerPath(args ...object.Object) object.Object {
 		"edges":         &object.Array{Elements: edges},
 		"reversed_hops": &object.Array{Elements: reversed},
 		"directed":      boolObj(len(reversed) == 0),
+		"view":          stringObj(reading.viewLabel()),
 	}), nil)
 }
 
@@ -690,12 +722,48 @@ func ledgerNodeIDList(arg object.Object, op string, position int) ([]store.NodeI
 	return ids, duplicates, nil
 }
 
+// ledgerInducedSubgraph is graphene's InducedSubgraph over a reader: the nodes
+// in the order given, and every edge whose two ends are both among them, each
+// once. graphene's is a method of the Graph and cannot read under a view.
+func ledgerInducedSubgraph(g store.GraphReader, ids []store.NodeID) ([]*store.Node, []*store.Edge, error) {
+	inSet := make(map[store.NodeID]struct{}, len(ids))
+	for _, id := range ids {
+		inSet[id] = struct{}{}
+	}
+	nodes := make([]*store.Node, 0, len(ids))
+	for _, id := range ids {
+		node, err := g.GetNode(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	seen := make(map[store.EdgeID]struct{})
+	var edges []*store.Edge
+	for _, id := range ids {
+		outbound, err := g.EdgesOf(id, store.DirectionOutbound, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, edge := range outbound {
+			if _, done := seen[edge.ID]; done {
+				continue
+			}
+			if _, in := inSet[edge.Dst]; in {
+				seen[edge.ID] = struct{}{}
+				edges = append(edges, edge)
+			}
+		}
+	}
+	return nodes, edges, nil
+}
+
 // LedgerSubgraph returns the entities named and every relationship among them.
 func LedgerSubgraph(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerSubgraph)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerSubgraph)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -706,6 +774,11 @@ func LedgerSubgraph(args ...object.Object) object.Object {
 	if len(ids) == 0 {
 		return resultAndError(nil, newError("%s: the id list is empty. An induced subgraph over nothing is not an empty subgraph, it is a question with no subject", BuiltinNameLedgerSubgraph))
 	}
+	g, done, errObj := reading.reader(BuiltinNameLedgerSubgraph)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
 
 	// Every id is checked first. graphene's InducedSubgraph fetches nodes in
 	// order and returns the first error, so one absent id fails the whole call
@@ -716,7 +789,7 @@ func LedgerSubgraph(args ...object.Object) object.Object {
 	var firstErr error
 	var firstMissing store.NodeID
 	for _, id := range ids {
-		if _, err := session.graph.GetNode(id); err != nil {
+		if _, err := g.GetNode(id); err != nil {
 			if firstErr == nil {
 				firstErr, firstMissing = err, id
 			}
@@ -724,16 +797,20 @@ func LedgerSubgraph(args ...object.Object) object.Object {
 		}
 	}
 	if firstErr != nil {
-		refusal := ledgerReadRefusal(session, firstErr, firstMissing, 0, BuiltinNameLedgerSubgraph)
+		refusal := reading.missing(firstErr, firstMissing, 0, BuiltinNameLedgerSubgraph)
 		if len(missing) > 1 {
-			return resultAndError(nil, newError("%s. %d of the %d ids given are not in this ledger; an induced subgraph is the claim that these are all the relationships among these entities, which a missing entity makes false rather than incomplete", refusal.Message, len(missing), len(ids)))
+			where := "are not in this ledger"
+			if reading.view != nil {
+				where = fmt.Sprintf("are not visible under view %q", reading.viewLabel())
+			}
+			return resultAndError(nil, newError("%s. %d of the %d ids given %s; an induced subgraph is the claim that these are all the relationships among these entities, which a missing entity makes false rather than incomplete", refusal.Message, len(missing), len(ids), where))
 		}
 		return resultAndError(nil, refusal)
 	}
 
-	nodeRecords, edgeRecords, err := session.graph.InducedSubgraph(ids)
+	nodeRecords, edgeRecords, err := ledgerInducedSubgraph(g, ids)
 	if err != nil {
-		return resultAndError(nil, ledgerReadRefusal(session, err, 0, 0, BuiltinNameLedgerSubgraph))
+		return resultAndError(nil, reading.missing(err, 0, 0, BuiltinNameLedgerSubgraph))
 	}
 
 	nodes := make([]object.Object, 0, len(nodeRecords))
@@ -760,6 +837,7 @@ func LedgerSubgraph(args ...object.Object) object.Object {
 		"edge_count": intObj(int64(len(edges))),
 		"requested":  intObj(int64(len(ids) + duplicates)),
 		"duplicates": intObj(int64(duplicates)),
+		"view":       stringObj(reading.viewLabel()),
 	}), nil)
 }
 
@@ -887,6 +965,19 @@ func ledgerPatternFrom(arg object.Object, scope []store.NodeID, op string) (*tra
 	if len(pattern.Edges) == 0 {
 		return nil, newError("%s: the pattern has no edges. Every node then matches independently and the result is the cross product of their candidate sets, which is not a subgraph match", op)
 	}
+	// The same for one node (M26-CUS-024): a node on no edge matches every
+	// candidate on its own, and an unlabelled one over a scope takes the
+	// scope's ids as they come, unread -- so a match could name an id the
+	// ledger does not hold.
+	onEdge := make([]bool, len(pattern.Nodes))
+	for _, edge := range pattern.Edges {
+		onEdge[edge.SrcPatternID], onEdge[edge.DstPatternID] = true, true
+	}
+	for i, on := range onEdge {
+		if !on {
+			return nil, newError("%s: pattern node %d is on no edge of the pattern. It would match every candidate on its own, making the result a cross product rather than a subgraph match, and over a scope graphene takes the scope's ids as its candidates without reading them, so a match could name an id this ledger does not hold. Join it to the pattern, or leave it out", op, i)
+		}
+	}
 	return pattern, nil
 }
 
@@ -914,7 +1005,7 @@ func LedgerPatterns(args ...object.Object) object.Object {
 	if len(args) != 4 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=4", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerPatterns)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerPatterns)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -949,8 +1040,17 @@ func LedgerPatterns(args ...object.Object) object.Object {
 	if maxArg.Value < 0 {
 		return resultAndError(nil, newError("%s: maxMatches must not be negative, got %d. Use 0 for no cap", BuiltinNameLedgerPatterns, maxArg.Value))
 	}
+	// Under a view a scope's ids go to graphene as given, and one the view
+	// does not show is in no match: every pattern node is on an edge, and
+	// every edge is checked through the view's reader, which shows none of
+	// that node's.
+	g, done, errObj := reading.reader(BuiltinNameLedgerPatterns)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
 
-	matches, err := session.graph.FindPatternsCtx(ledgerContext(), pattern, scope, int(maxArg.Value), graphstore.WalkBudget())
+	matches, err := traversal.FindSubgraphMatchesCtx(ledgerContext(), g, pattern, scope, int(maxArg.Value), graphstore.WalkBudget())
 	if err != nil {
 		if errors.Is(err, store.ErrBudgetExceeded) {
 			return resultAndError(nil, walkBudgetRefusal(err, BuiltinNameLedgerPatterns))
@@ -980,6 +1080,7 @@ func LedgerPatterns(args ...object.Object) object.Object {
 		"scoped":       boolObj(scoped),
 		"scope_size":   intObj(int64(len(scope))),
 		"pattern_size": intObj(int64(len(pattern.Nodes))),
+		"view":         stringObj(reading.viewLabel()),
 	}), nil)
 }
 
@@ -1220,7 +1321,7 @@ func LedgerQueryNodes(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
 	}
-	session, errObj := ledgerHandleArg(args[0], BuiltinNameLedgerQueryNodes)
+	reading, errObj := ledgerReadHandleArg(args[0], BuiltinNameLedgerQueryNodes)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1228,8 +1329,13 @@ func LedgerQueryNodes(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	g, done, errObj := reading.reader(BuiltinNameLedgerQueryNodes)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	defer done()
 
-	ids, err := session.graph.QueryNodeIDs(query)
+	ids, err := g.QueryNodeIDs(query)
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", BuiltinNameLedgerQueryNodes, err.Error()))
 	}
@@ -1238,12 +1344,19 @@ func LedgerQueryNodes(args ...object.Object) object.Object {
 	for _, id := range ids {
 		elements = append(elements, intObj(int64(id)))
 	}
-	comparison, keys := ledgerComparisonFor(session, ranged)
+	// The rule is the declaration's, which says nothing about any node.
+	comparison, keys := ledgerComparisonFor(reading.session, ranged)
 	rangeKeys := make([]object.Object, 0, len(keys))
 	for _, key := range keys {
 		rangeKeys = append(rangeKeys, stringObj(key))
 	}
-	unindexed, known := ledgerUnindexedKeys(session, query.Filters)
+	// Under a view nothing is said about the index: that a key is indexed
+	// nowhere says no withheld node holds it, and the opposite says one does.
+	var unindexed []string
+	known := false
+	if reading.view == nil {
+		unindexed, known = ledgerUnindexedKeys(reading.session, query.Filters)
+	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"ids":              &object.Array{Elements: elements},
@@ -1256,6 +1369,7 @@ func LedgerQueryNodes(args ...object.Object) object.Object {
 		"offset":           intObj(int64(query.Offset)),
 		"unindexed_keys":   ledgerStringArray(unindexed),
 		"index_keys_known": boolObj(known),
+		"view":             stringObj(reading.viewLabel()),
 	}), nil)
 }
 

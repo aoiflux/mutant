@@ -373,6 +373,26 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A script's ledger nodes can be classified, and the ledger read under a
+  view.** `ledger_classify(ledger, node, classes, reason)` records which of the
+  open case's declared classes a node a script wrote holds -- one, several, or
+  none, which no view shows -- as a hash-linked chain of that node's
+  classifications in the ledger. The chain names the node by id and no edge
+  joins them, so a classified node can still be redacted.
+  `ledger_classifications(ledger, node?)` lists them with the views that show
+  each node, and with the ledger alone lists every case's.
+  `ledger_under_view(ledger, view)` returns a second handle through which
+  `ledger_node`, `ledger_edge`, `ledger_provenance`, `ledger_path`,
+  `ledger_subgraph`, `ledger_patterns`, `ledger_query_nodes` and
+  `ledger_prove_node` show only what the view shows: the script nodes
+  classified within the classes it grants, the case's Case and Record nodes,
+  the Classification nodes it grants, and the edges among them. No walk crosses
+  a node the view withholds, a withheld node and one the ledger never held get
+  the same answer, and nothing counts what was withheld. Every other builtin
+  that takes a ledger refuses the handle by name, and `ledger_close` drops it.
+  It is not access control: the program holding it holds the ledger's own
+  handle too.
+
 - **A disclosure is issued against the recipient's role.** `role_define(role,
   views)` gives a recipient role -- `legal`, `external_partner`,
   `restricted_viewer`, or `reviewer` or `auditor`, who are on both sides -- its
@@ -621,6 +641,14 @@ exhaustive lists.
   case manifest, the package and `disclose_history`, and `disclose_verify`
   checks the package's role and version against the ledger's record.
 
+- **The ledger's walks, matches, queries and proofs say which view answered.**
+  `ledger_provenance`, `ledger_path`, `ledger_subgraph`, `ledger_patterns`,
+  `ledger_query_nodes` and `ledger_prove_node` return `view`: empty on the
+  ledger's own handle, and under a handle from `ledger_under_view` the view's
+  name, because there `complete`, `found` and `stopped_at` are claims about what
+  the view shows. `ledger_close` takes such a handle and drops it, leaving the
+  ledger open.
+
 ### Fixed
 
 - **A withdrawal could leave its examiner unable to write to the ledger.** A
@@ -799,6 +827,14 @@ exhaustive lists.
   in the ledger it was attached to. `disclose_to_passphrase`,
   `disclose_reclassified`, `role_assign` and `redaction_commit` now refuse a
   ledger other than the one the case is attached to.
+
+- **`ledger_patterns` could report a match naming a node the ledger does not
+  hold.** It refused a pattern with no edges, since every node then matches on
+  its own, but accepted one with a single node on no edge, which matched every
+  candidate on its own -- and over a scope, graphene takes the scope's ids as an
+  unlabelled node's candidates without reading them, so a match could name any
+  id in the scope. A pattern node on no edge of the pattern is now refused, and
+  the refusal names it.
 
 ### Security
 

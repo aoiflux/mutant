@@ -312,6 +312,47 @@ func TestAPatternEdgeNamingAMissingNodeIsRefusedBeforeItPanics(t *testing.T) {
 	}
 }
 
+// M26-CUS-024. A pattern node no pattern edge touches is not part of a subgraph
+// match: it matches every candidate on its own, and over a scope graphene takes
+// the scope's ids as its candidates without reading them -- so a match named
+// an id the ledger does not hold. Refused, as a pattern with no edges is.
+func TestAPatternNodeNoEdgeTouchesIsRefused(t *testing.T) {
+	handle, _, _, _, _, _ := readableTestLedger(t)
+	node := func(i int64, labels ...int64) object.Object {
+		fields := map[string]object.Object{"id": intObj(i)}
+		if len(labels) > 0 {
+			fields["labels"] = idArray(labels...)
+		}
+		return makeHashObject(fields)
+	}
+	edge := func(src, dst int64) object.Object {
+		return makeHashObject(map[string]object.Object{"src": intObj(src), "dst": intObj(dst)})
+	}
+	pattern := func(nodes []object.Object, edges ...object.Object) *object.Hash {
+		return makeHashObject(map[string]object.Object{"nodes": &object.Array{Elements: nodes},
+			"edges": &object.Array{Elements: edges}})
+	}
+	for _, c := range []struct {
+		name    string
+		pattern *object.Hash
+		scope   object.Object
+	}{
+		{"unlabelled, over a scope naming an id the ledger does not hold",
+			pattern([]object.Object{node(0), node(1), node(2)}, edge(0, 1)), idArray(1, 2, 3, 999999)},
+		{"labelled, over the whole graph",
+			pattern([]object.Object{node(0, 2), node(1, 3), node(2, 2)}, edge(0, 1)), intObj(0)},
+	} {
+		message := ledgerRefusal(t, BuiltinNameLedgerPatterns, LedgerPatterns(intObj(handle), c.pattern, c.scope, intObj(0)))
+		if !strings.Contains(message, "pattern node 2 is on no edge of the pattern") ||
+			!strings.Contains(message, "a match could name an id this ledger does not hold") {
+			t.Errorf("%s: %s", c.name, message)
+		}
+	}
+	// An edge from a node to itself joins it.
+	looped := pattern([]object.Object{node(0, 2), node(1, 3), node(2, 2)}, edge(0, 1), edge(2, 2))
+	mustLedgerHash(t, BuiltinNameLedgerPatterns, LedgerPatterns(intObj(handle), looped, intObj(0), intObj(0)))
+}
+
 // TestAPatternNodeIdMustEqualItsPosition -- graphene matches by position and
 // never reads the id, so disagreeing ids match a different shape in silence.
 func TestAPatternNodeIdMustEqualItsPosition(t *testing.T) {
@@ -387,6 +428,44 @@ func TestAnInducedSubgraphOverAMissingEntityIsRefused(t *testing.T) {
 		&object.Array{Elements: []object.Object{intObj(image), intObj(424242)}}))
 	if !strings.Contains(message, "424242") {
 		t.Errorf("the refusal does not name the missing id: %s", message)
+	}
+}
+
+// TestAnInducedSubgraphHoldsOnlyTheEdgesAmongItsEntities -- an edge with one
+// end outside the ids given joins them to something nobody asked about,
+// whichever way it points, so it is not one of the relationships among them.
+func TestAnInducedSubgraphHoldsOnlyTheEdgesAmongItsEntities(t *testing.T) {
+	handle, image, file, artefact, other, _ := readableTestLedger(t)
+
+	for _, tc := range []struct {
+		ids  []int64
+		want [][2]int64
+	}{
+		// file -> artefact leaves the set; other -> artefact never touches it.
+		{[]int64{image, file}, [][2]int64{{image, file}}},
+		// image -> file comes into the set from outside it.
+		{[]int64{file, artefact, other}, [][2]int64{{file, artefact}, {other, artefact}}},
+	} {
+		ids := make([]object.Object, 0, len(tc.ids))
+		for _, id := range tc.ids {
+			ids = append(ids, intObj(id))
+		}
+		result := mustLedgerHash(t, BuiltinNameLedgerSubgraph, LedgerSubgraph(intObj(handle), &object.Array{Elements: ids}))
+		got := map[[2]int64]bool{}
+		for _, element := range mustHashArrayValue(t, result, "edges") {
+			edge, isHash := element.(*object.Hash)
+			if !isHash {
+				t.Fatalf("an edge of the subgraph is a %T", element)
+			}
+			got[[2]int64{mustHashIntValue(t, edge, "src"), mustHashIntValue(t, edge, "dst")}] = true
+		}
+		missing := false
+		for _, want := range tc.want {
+			missing = missing || !got[want]
+		}
+		if missing || len(got) != len(tc.want) || mustHashIntValue(t, result, "edge_count") != int64(len(tc.want)) {
+			t.Errorf("the subgraph over %v holds the edges %v, want exactly %v", tc.ids, got, tc.want)
+		}
 	}
 }
 
