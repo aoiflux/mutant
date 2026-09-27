@@ -11,12 +11,15 @@ package builtin
 //
 // # The order, and why it is the order
 //
-// `disclose_to_passphrase` decides what a view grants from a record, issues the
-// grant, seals it under a passphrase typed at the terminal, and writes the
-// disclosure into the ledger -- in that order, and the grant is handed back only
-// after the ledger commit has succeeded. A disclosure that was granted and not
-// recorded is the one outcome this family exists to prevent: the recipient
-// would hold the keys and nothing would say so.
+// `disclose_to_passphrase` first asks everything that could refuse it -- the
+// case's state, a reclassification, a withdrawal, and whether the recipient
+// holds a role whose bundle holds the view (recipient_role.go) -- and only then
+// decides what the view grants from the record, issues the grant, seals it
+// under a passphrase typed at the terminal, and writes the disclosure into the
+// ledger, in that order. The grant is handed back only after the ledger commit
+// has succeeded. A disclosure that was granted and not recorded is the one
+// outcome this family exists to prevent: the recipient would hold the keys and
+// nothing would say so.
 //
 // `disclose_bundle` then lays the package down the way `case_bundle` does:
 // the record, the grant, the ledger proof and the report first; their digests
@@ -114,8 +117,15 @@ type caseDisclosure struct {
 	UID       string
 	Issued    time.Time
 	Recipient string
-	View      caseView
-	Labels    map[string]string // tag -> label, for every tag the record carries
+	// RecipientRole is the role the ledger assigned the recipient, whose
+	// bundle holds View.
+	RecipientRole string
+	View          caseView
+	Labels        map[string]string // tag -> label, for every tag the record carries
+	// RedactionUID and RedactionVersion name the version of the record's
+	// redaction under View that the grant carries out.
+	RedactionUID     string
+	RedactionVersion uint64
 
 	RecordUID    string
 	RecordPath   string
@@ -155,7 +165,9 @@ func (d *caseDisclosure) render() map[string]any {
 		"uid":               d.UID,
 		"issued_at":         d.Issued.UTC().Format(time.RFC3339Nano),
 		"recipient":         d.Recipient,
+		"recipient_role":    d.RecipientRole,
 		"view":              d.View.Label,
+		"redaction_version": int64(d.RedactionVersion),
 		"record_uid":        d.RecordUID,
 		"record_sha256":     d.RecordSHA256,
 		"grant_sha256":      d.GrantSHA256,
@@ -358,8 +370,9 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	if err := disclosurePreflight(ledger, record, recipient); err != nil {
-		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	basis, errObj := disclosurePreflight(op, ledger, record, recipient, view)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	// The same partition view_preview reports, so the preview an examiner
@@ -435,9 +448,11 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 		actorRole:       ledger.role.Name,
 		recipient:       recipient,
 		recipientFP:     disclosureRecipientFingerprint(recipient),
+		basis:           basis,
 		view:            view,
 		viewFP:          disclosureViewFingerprint(view),
 		classLabel:      classLabel,
+		partition:       redactionPartitionOf(record, split),
 		record:          record,
 		recordSHA256:    recordSHA,
 		recordBytes:     recordBytes,
@@ -461,51 +476,60 @@ func DiscloseToPassphrase(args ...object.Object) object.Object {
 	}
 
 	disclosure := &caseDisclosure{
-		UID:          uidHex,
-		Issued:       now,
-		Recipient:    recipient,
-		View:         view,
-		Labels:       classLabel,
-		RecordUID:    record.header.RecordUID,
-		RecordPath:   record.path,
-		RecordSHA256: recordSHA,
-		RecordBytes:  recordBytes,
-		Total:        int64(total),
-		Grant:        grantBytes,
-		GrantSHA256:  issue.grantSHA256,
-		Runs:         issue.runs,
-		Split:        split,
-		Header:       record.header,
-		Footer:       record.footer,
-		Signed:       record.signed && record.signatureValid,
-		LedgerPath:   ledger.path,
-		LedgerNode:   int64(nodeID),
-		LedgerProps:  disclosureNodeProps(issue),
-		Actor:        ledger.actor,
-		ActorID:      ledger.actorID,
-		LedgerKeyNew: ledger.keyCreatedForThisRun,
+		UID:              uidHex,
+		Issued:           now,
+		Recipient:        recipient,
+		RecipientRole:    basis.role.Name,
+		View:             view,
+		Labels:           classLabel,
+		RedactionUID:     issue.redactionUID,
+		RedactionVersion: issue.redactionVersion,
+		RecordUID:        record.header.RecordUID,
+		RecordPath:       record.path,
+		RecordSHA256:     recordSHA,
+		RecordBytes:      recordBytes,
+		Total:            int64(total),
+		Grant:            grantBytes,
+		GrantSHA256:      issue.grantSHA256,
+		Runs:             issue.runs,
+		Split:            split,
+		Header:           record.header,
+		Footer:           record.footer,
+		Signed:           record.signed && record.signatureValid,
+		LedgerPath:       ledger.path,
+		LedgerNode:       int64(nodeID),
+		LedgerProps:      disclosureNodeProps(issue),
+		Actor:            ledger.actor,
+		ActorID:          ledger.actorID,
+		LedgerKeyNew:     ledger.keyCreatedForThisRun,
 	}
 	if errObj := disclosureRemember(op, disclosure); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
-		"disclosure_uid":    stringObj(uidHex),
-		"recipient":         stringObj(recipient),
-		"view":              stringObj(view.Label),
-		"record_uid":        stringObj(record.header.RecordUID),
-		"record_sha256":     stringObj(recordSHA),
-		"segments":          intObj(int64(total)),
-		"granted_segments":  intObj(split.grantedCount),
-		"withheld_segments": intObj(int64(total) - split.grantedCount),
-		"granted_bytes":     intObj(int64(split.grantedBytes)),
-		"withheld_bytes":    intObj(int64(split.withheldBytes)),
-		"granted_runs":      viewRunRows(split.grantedRuns, labels),
-		"withheld_runs":     viewRunRows(split.withheldRuns, labels),
-		"grant_sha256":      stringObj(issue.grantSHA256),
-		"grant_bytes":       intObj(int64(len(grantBytes))),
-		"ledger_node":       intObj(int64(nodeID)),
-		"method":            stringObj(discloseMethodPassphrase),
+		"disclosure_uid": stringObj(uidHex),
+		"recipient":      stringObj(recipient),
+		// Asserted like every role, and recorded beside the grant: the role
+		// the ledger assigns the recipient, whose bundle holds the view.
+		"recipient_role":     stringObj(basis.role.Name),
+		"role_authenticated": boolObj(false),
+		"view":               stringObj(view.Label),
+		"redaction_version":  intObj(int64(issue.redactionVersion)),
+		"redaction_uid":      stringObj(issue.redactionUID),
+		"record_uid":         stringObj(record.header.RecordUID),
+		"record_sha256":      stringObj(recordSHA),
+		"segments":           intObj(int64(total)),
+		"granted_segments":   intObj(split.grantedCount),
+		"withheld_segments":  intObj(int64(total) - split.grantedCount),
+		"granted_bytes":      intObj(int64(split.grantedBytes)),
+		"withheld_bytes":     intObj(int64(split.withheldBytes)),
+		"granted_runs":       viewRunRows(split.grantedRuns, labels),
+		"withheld_runs":      viewRunRows(split.withheldRuns, labels),
+		"grant_sha256":       stringObj(issue.grantSHA256),
+		"grant_bytes":        intObj(int64(len(grantBytes))),
+		"ledger_node":        intObj(int64(nodeID)),
+		"method":             stringObj(discloseMethodPassphrase),
 		// Said on the way out, where the script author will see it: nothing
 		// that happens after this call reaches the recipient's copy.
 		"bytes_recoverable": boolObj(false),
@@ -527,15 +551,18 @@ func disclosureRemember(op string, d *caseDisclosure) *object.Error {
 			"could be held for bundling: %s", op, d.UID, errObj.Message)
 	}
 	session.disclosures = append(session.disclosures, d)
-	session.appendEvent(d.Issued, op, fmt.Sprintf("disclosure %s issued to %q under view %q: %d of %d segments of record %s",
-		d.UID, d.Recipient, d.View.Label, d.Split.grantedCount, d.Total, d.RecordUID), map[string]any{
-		"disclosure_uid":   d.UID,
-		"recipient":        d.Recipient,
-		"view":             d.View.Label,
-		"record_uid":       d.RecordUID,
-		"granted_segments": d.Split.grantedCount,
-		"grant_sha256":     d.GrantSHA256,
-		"ledger_node":      d.LedgerNode,
+	session.appendEvent(d.Issued, op, fmt.Sprintf("disclosure %s issued to %q (%s) under view %q, redaction version %d: "+
+		"%d of %d segments of record %s", d.UID, d.Recipient, d.RecipientRole, d.View.Label, d.RedactionVersion,
+		d.Split.grantedCount, d.Total, d.RecordUID), map[string]any{
+		"disclosure_uid":    d.UID,
+		"recipient":         d.Recipient,
+		"recipient_role":    d.RecipientRole,
+		"view":              d.View.Label,
+		"redaction_version": int64(d.RedactionVersion),
+		"record_uid":        d.RecordUID,
+		"granted_segments":  d.Split.grantedCount,
+		"grant_sha256":      d.GrantSHA256,
+		"ledger_node":       d.LedgerNode,
 	})
 	return nil
 }
@@ -850,8 +877,13 @@ func disclosureManifest(d *caseDisclosure, uid string, nodeID store.NodeID) map[
 			"method":       discloseMethodPassphrase,
 			"recipient":    d.Recipient,
 			"recipient_fp": disclosureRecipientFingerprint(d.Recipient),
-			"examiner":     d.LedgerProps["disclosure.examiner"],
-			"case_uid":     d.LedgerProps["disclosure.case_uid"],
+			// Asserted, and recorded in the ledger beside the disclosure; the
+			// signature note says what that is worth.
+			"recipient_role":    d.RecipientRole,
+			"examiner":          d.LedgerProps["disclosure.examiner"],
+			"case_uid":          d.LedgerProps["disclosure.case_uid"],
+			"redaction_uid":     d.RedactionUID,
+			"redaction_version": int64(d.RedactionVersion),
 		},
 		"view": map[string]any{
 			"label":  d.View.Label,
@@ -920,8 +952,10 @@ func disclosureReport(m map[string]any) string {
 	record := manifestMap(m, "record")
 	var out strings.Builder
 	fmt.Fprintf(&out, "# Disclosure %s\n\n", stringField(disclosure, "uid"))
-	fmt.Fprintf(&out, "Issued %s by %s to %s, under the view \"%s\".\n\n", stringField(disclosure, "issued_at"),
-		stringField(disclosure, "examiner"), stringField(disclosure, "recipient"), stringField(view, "label"))
+	fmt.Fprintf(&out, "Issued %s by %s to %s, as %s, under the view \"%s\" -- version %v of this record's "+
+		"redaction under it.\n\n", stringField(disclosure, "issued_at"), stringField(disclosure, "examiner"),
+		stringField(disclosure, "recipient"), stringField(disclosure, "recipient_role"), stringField(view, "label"),
+		disclosure["redaction_version"])
 	fmt.Fprintf(&out, "The record `%s` (%s, sha256 `%s`) is in this package byte for byte as it is held under "+
 		"custody. The grant beside it opens %v of its %v segments -- %v bytes -- and nothing else. %v bytes are "+
 		"withheld: they are in the record, and no material in this package opens them.\n\n",
@@ -1416,6 +1450,8 @@ func (v *discloseVerification) checkLedgerMatchesPackage() {
 	agree("disclosure.recipient_fp", "the fingerprint of the manifest's recipient",
 		disclosureRecipientFingerprint(stringField(disclosure, "recipient")))
 	agree("disclosure.examiner", "the manifest's examiner", stringField(disclosure, "examiner"))
+	agree("disclosure.role", "the manifest's recipient role", stringField(disclosure, "recipient_role"))
+	agree("disclosure.redaction_uid", "the manifest's redaction version", stringField(disclosure, "redaction_uid"))
 	agree("disclosure.method", "the manifest's method", stringField(disclosure, "method"))
 	agree("disclosure.view", "the manifest's view", stringField(view, "label"))
 	agree("disclosure.view_fp", "the manifest's view fingerprint", stringField(view, "fp"))

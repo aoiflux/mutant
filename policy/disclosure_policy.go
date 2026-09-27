@@ -61,6 +61,10 @@ var DisclosureFiles = []string{
 	"builtin/case_lifecycle.go",
 	"builtin/case_chain.go",
 	"builtin/case_evidence.go",
+	// recipient roles, whose bundles name views under the case key, and the
+	// versions of a record's redaction
+	"builtin/recipient_role.go",
+	"builtin/redaction_version.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

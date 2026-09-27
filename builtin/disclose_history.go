@@ -81,9 +81,14 @@ func (r disclosureRow) render() object.Object {
 		basis = withdrawalAuthorityUnrecorded
 	}
 	return makeHashObject(map[string]object.Object{
-		"disclosure_uid":    stringObj(get("disclosure.uid")),
-		"issued_at":         stringObj(get("disclosure.at")),
-		"recipient":         stringObj(get("disclosure.recipient")),
+		"disclosure_uid": stringObj(get("disclosure.uid")),
+		"issued_at":      stringObj(get("disclosure.at")),
+		"recipient":      stringObj(get("disclosure.recipient")),
+		// Empty on a disclosure issued before recipients held roles and
+		// redactions had versions.
+		"recipient_role":    stringObj(get("disclosure.role")),
+		"redaction_uid":     stringObj(get("disclosure.redaction_uid")),
+		"redaction_version": count("disclosure.redaction_version"),
 		"view":              stringObj(get("disclosure.view")),
 		"record_uid":        stringObj(get("disclosure.record_uid")),
 		"examiner":          stringObj(get("disclosure.examiner")),

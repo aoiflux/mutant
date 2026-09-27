@@ -99,5 +99,6 @@ func TestDbOpenDiskRefusesALabelTableThatWouldChangeWhatAWriteMeans(t *testing.T
 
 	// And the disclosure family still writes afterwards in this process.
 	f := newDiscloseFixture(t)
+	f.assign(t, "Counsel")
 	mustHash(t, DiscloseToPassphrase(intObj(f.ledger), f.record, stringObj("counsel"), object.Object(stringObj("Counsel"))))
 }

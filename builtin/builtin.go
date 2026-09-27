@@ -757,6 +757,11 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameEvidenceReturn, &BuiltIn{EvidenceReturn}},
 	{BuiltinNameEvidenceDispose, &BuiltIn{EvidenceDispose}},
 	{BuiltinNameEvidenceHistory, &BuiltIn{EvidenceHistory}},
+	{BuiltinNameRoleDefine, &BuiltIn{RoleDefine}},
+	{BuiltinNameRoleAssign, &BuiltIn{RoleAssign}},
+	{BuiltinNameRoleList, &BuiltIn{RoleList}},
+	{BuiltinNameRedactionCommit, &BuiltIn{RedactionCommit}},
+	{BuiltinNameRedactionVersions, &BuiltIn{RedactionVersions}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

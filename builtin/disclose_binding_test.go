@@ -151,6 +151,26 @@ func TestAPackageTheLedgerDoesNotRecordFailsVerification(t *testing.T) {
 		}
 	})
 
+	t.Run("another recipient role and redaction version", func(t *testing.T) {
+		dir := copyPackage(t, counselDir)
+		manifest := readDisclosureManifest(t, dir)
+		disclosure := manifestMap(manifest, "disclosure")
+		disclosure["recipient_role"] = "restricted_viewer"
+		disclosure["redaction_uid"] = strings.Repeat("0", 64)
+		resealAsStranger(t, dir, manifest)
+
+		result := f.verify(t, dir, stringObj(root))
+		if discloseBool(t, result, "verified") {
+			t.Fatalf("a package relabelled for another role verified: %v", discloseChecks(t, result))
+		}
+		outcome := discloseChecks(t, result)["ledger_matches_package"]
+		for _, want := range []string{"disclosure.role", "disclosure.redaction_uid"} {
+			if !strings.Contains(outcome, want) {
+				t.Errorf("ledger_matches_package does not name %s: %q", want, outcome)
+			}
+		}
+	})
+
 	t.Run("another disclosure's grant under this one's ledger record", func(t *testing.T) {
 		dir := copyPackage(t, regulatorDir)
 		counsel := readDisclosureManifest(t, counselDir)

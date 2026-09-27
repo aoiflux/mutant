@@ -402,10 +402,10 @@ func TestEachStateRefusesWhatItSays(t *testing.T) {
 // instead of changing what every test that asks caseStateBlocks expects.
 func TestEachStateRefusesAFixedSetOfActs(t *testing.T) {
 	want := map[string][]caseAction{
-		caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake},
+		caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake, caseActRedact},
 		caseStateConcluded: {caseActSeal, caseActIntake},
 		caseStateRetained:  {caseActSeal, caseActIntake},
-		caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake},
+		caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact},
 	}
 	for _, state := range caseStates {
 		for action, name := range caseActionNames {
@@ -436,6 +436,57 @@ func TestADisclosureAsksTheLedgerForTheCaseState(t *testing.T) {
 	forceLifecycle(t, ledger, openCaseUID(t), caseStateConcluded, caseStateRetained, caseStateDisposed)
 	mustHash(t, DiscloseWithdraw(intObj(f.ledger), stringObj(mustHashStringValue(t, issued, "disclosure_uid")),
 		stringObj("the case is disposed")))
+}
+
+// M26-CUS-023. A builtin that takes the ledger asks that ledger for the case's
+// state, so a case attached to one ledger and written through another was
+// asked the other -- which records no lifecycle and refuses nothing -- and a
+// disclosure or a reclassification made while the case was in review went
+// ahead. A case's acts are recorded in the ledger it is attached to.
+func TestACaseIsNotWrittenThroughAnotherLedger(t *testing.T) {
+	run := openLifecycleRun(t, "examiner", "case_owner", "", "")
+	run.attach(t)
+	mustHash(t, ClassDefine(stringObj("open")))
+	mustHash(t, ClassDefine(stringObj("pii")))
+	mustHash(t, ViewDefine(stringObj("counsel"), viewArray("open", "pii")))
+	source, dest, _ := recordFixture(t)
+	seal := func(dest string, offset int64) object.Object {
+		mustHash(t, RecordSeal(stringObj(source), stringObj(dest), recordArray(
+			mustHash(t, RecordClassifyRange(intObj(offset), intObj(20), stringObj("pii")))), recordSealOpts(nil)))
+		handle := mustHashValue(t, mustHash(t, RecordOpen(stringObj(dest))), "handle")
+		t.Cleanup(func() { RecordClose(handle) })
+		return handle
+	}
+	record := seal(dest, 10)
+	reclassified := seal(filepath.Join(t.TempDir(), "reclassified.mrec"), 40)
+	forceLifecycle(t, run.session(t), openCaseUID(t), caseStateActive, caseStateInReview)
+
+	opened, errObj := ledgerOpenAs(t, filepath.Join(t.TempDir(), "other"), "examiner", "")
+	if errObj != nil {
+		t.Fatal(errObj.Message)
+	}
+	other := intObj(mustHashIntValue(t, opened, "handle"))
+	t.Cleanup(func() { LedgerClose(other) })
+	mustRefuse(t, "a disclosure through another ledger", DiscloseToPassphrase(other, record, stringObj("counsel"),
+		stringObj("Counsel")), "attached to ledger "+run.ledgerDir)
+	mustRefuse(t, "a reclassification through another ledger", DiscloseReclassified(other, reclassified, record),
+		"attached to ledger "+run.ledgerDir)
+	mustRefuse(t, "a recipient's role through another ledger", RoleAssign(other, stringObj("Counsel"),
+		stringObj("legal"), stringObj("x")), "attached to ledger "+run.ledgerDir)
+	mustRefuse(t, "a redaction version through another ledger", RedactionCommit(other, record, stringObj("counsel"),
+		stringObj("x")), "attached to ledger "+run.ledgerDir)
+
+	// The case's own ledger, closed and opened again, is another handle: the
+	// case is attached through it before anything is written through it.
+	LedgerClose(intObj(run.ledger))
+	reopened, errObj := ledgerOpenAs(t, run.ledgerDir, "examiner", "")
+	if errObj != nil {
+		t.Fatal(errObj.Message)
+	}
+	again := intObj(mustHashIntValue(t, reopened, "handle"))
+	t.Cleanup(func() { LedgerClose(again) })
+	mustRefuse(t, "a disclosure through a reopened handle", DiscloseToPassphrase(again, record, stringObj("counsel"),
+		stringObj("Counsel")), "through a handle that has since been closed")
 }
 
 // A chain with two events after one event, an event whose uid does not
@@ -546,6 +597,7 @@ func TestOneNameIsOneActorNodeWithinATransaction(t *testing.T) {
 		strconv.FormatUint(ledgerIDFrom([]byte("second examiner")), 10)); err != nil {
 		t.Fatalf("the withdrawal left the ledger unreadable for its examiner: %v", err)
 	}
+	mustHash(t, RoleAssign(handle, stringObj("The regulator"), stringObj("legal"), stringObj("the regulator")))
 	purposeStub(t, map[string]string{BuiltinNameDiscloseToPassphrase: testGrantPassphrase})
 	mustHash(t, DiscloseToPassphrase(handle, f.record, stringObj("regulator"), stringObj("The regulator")))
 }

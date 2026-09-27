@@ -75,6 +75,7 @@ func TestARefusedDisclosureIssuesNoKeyAndAsksForNoPassphrase(t *testing.T) {
 	// The counters see a disclosure that goes ahead, so a zero above is a
 	// refusal and not a counter that was never reached.
 	f := newDiscloseFixture(t)
+	f.assign(t, "Counsel")
 	issued, prompts := countDisclosureWork(t)
 	mustHash(t, DiscloseToPassphrase(intObj(f.ledger), f.record, stringObj("counsel"), stringObj("Counsel")))
 	if *issued != 1 || *prompts == 0 {

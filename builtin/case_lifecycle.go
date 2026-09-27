@@ -37,8 +37,8 @@ package builtin
 // builtins that take the ledger -- which ask the ledger -- and the ones that
 // do not, which ask the case attached in this run:
 //
-//	in_review            no sealing, no definitions or reclassifications, no disclosures,
-//	                     no new evidence
+//	in_review            no sealing, no definitions or reclassifications, no disclosures
+//	                     or redaction versions, no new evidence
 //	concluded, retained  no sealing, no new evidence
 //	disposed             nothing but a withdrawal and the movement of evidence
 //
@@ -55,7 +55,16 @@ package builtin
 // run asserts, because the two records would then disagree about the same
 // person; it is not access control, and the refusal says so. Anybody attached
 // can assign anybody: who may assign is a policy of the organisation, and this
-// program does not hold one.
+// program does not hold one. A recipient's role is an assignment too, on the
+// recipient side and in a chain of its own (recipient_role.go); the examiner
+// readers here never see one.
+//
+// # One ledger
+//
+// A case attached to a ledger is written through that ledger and no other. A
+// builtin that takes the ledger asks it for the case's state, and another
+// ledger records no lifecycle for the case, so asked there it would refuse
+// nothing (M26-CUS-023).
 //
 // # Lock order
 //
@@ -67,6 +76,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -116,23 +126,25 @@ const (
 	caseActDisclose
 	caseActAssign
 	caseActIntake
+	caseActRedact
 )
 
 var caseActionNames = map[caseAction]string{
 	caseActSeal:     "sealing of a record",
-	caseActDefine:   "definition of a class or a view, or record of a reclassification",
+	caseActDefine:   "definition of a class, a view or a role's bundle, or record of a reclassification",
 	caseActDisclose: "disclosure",
 	caseActAssign:   "assignment of a role",
 	caseActIntake:   "intake of evidence",
+	caseActRedact:   "commitment of a redaction version",
 }
 
 // caseStateRefuses is what each state refuses. A state not listed refuses
 // nothing, and no state refuses a withdrawal.
 var caseStateRefuses = map[string][]caseAction{
-	caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake},
+	caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake, caseActRedact},
 	caseStateConcluded: {caseActSeal, caseActIntake},
 	caseStateRetained:  {caseActSeal, caseActIntake},
-	caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake},
+	caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact},
 }
 
 var caseStateWhy = map[string]string{
@@ -145,6 +157,22 @@ var caseStateWhy = map[string]string{
 
 // caseAssignmentEnded is the role an assignment names when it ends one.
 const caseAssignmentEnded = "none"
+
+// The sides an assignment is on: an examiner working the case, or a recipient
+// a disclosure may be issued to. An assignment written before recipients were
+// assigned names no side, and is an examiner's.
+const (
+	caseAssignmentExaminer  = "examiner"
+	caseAssignmentRecipient = "recipient"
+)
+
+// assignmentSide is the side an assignment event is on.
+func assignmentSide(event disclosureNode) string {
+	if side := event.get("assignment.side"); side != "" {
+		return side
+	}
+	return caseAssignmentExaminer
+}
 
 // caseAssignRoles are the words case_assign's role takes.
 func caseAssignRoles() []string { return append(ExaminerRoles(), caseAssignmentEnded) }
@@ -224,14 +252,39 @@ func caseAssignmentChainKey(caseUID, subject string) string {
 // caseAssignmentsRead reads the latest assignment of every examiner the ledger
 // assigns in a case, ordered by name.
 func caseAssignmentsRead(g *graphene.Graph, caseUID string) ([]caseAssignment, error) {
-	caseUID = strings.ToLower(caseUID)
-	ids, err := g.NodesByProperty("assignment.case_uid", []byte(caseUID))
-	if err != nil || len(ids) == 0 {
-		return nil, err
+	return assignmentsRead(g, strings.ToLower(caseUID), caseAssignmentExaminer)
+}
+
+// assignmentChainKey is the chain one subject's assignments on one side of one
+// case are kept in.
+func assignmentChainKey(side, caseUID, subject string) string {
+	if side == caseAssignmentRecipient {
+		return recipientAssignmentChainKey(caseUID, subject)
 	}
-	nodes, _, err := g.GetNodes(ids)
-	if err != nil {
-		return nil, err
+	return caseAssignmentChainKey(caseUID, subject)
+}
+
+// assignmentsRead reads the latest assignment of every subject the ledger
+// assigns on one side, in one case or -- caseUID empty -- in every case,
+// ordered by case and then by name. A chain is the subject's own and on one
+// side throughout, or it is refused: an examiner's chain holding a recipient's
+// assignment would let one record say two things about who holds a role.
+func assignmentsRead(g *graphene.Graph, caseUID, side string) ([]caseAssignment, error) {
+	var nodes []*store.Node
+	if caseUID == "" {
+		all, err := g.QueryNodes(store.NodeQuery{Types: []store.NodeType{disclosureNodeAssignment}})
+		if err != nil {
+			return nil, err
+		}
+		nodes = all
+	} else {
+		ids, err := g.NodesByProperty("assignment.case_uid", []byte(caseUID))
+		if err != nil || len(ids) == 0 {
+			return nil, err
+		}
+		if nodes, _, err = g.GetNodes(ids); err != nil {
+			return nil, err
+		}
 	}
 	chains := map[string]bool{}
 	for _, node := range nodes {
@@ -242,26 +295,61 @@ func caseAssignmentsRead(g *graphene.Graph, caseUID string) ([]caseAssignment, e
 		if err != nil {
 			return nil, fmt.Errorf("assignment node %d: %w", node.ID, err)
 		}
-		chains[decoded.get("assignment.chain")] = true
+		if assignmentSide(decoded) == side {
+			chains[decoded.get("assignment.chain")] = true
+		}
 	}
 	out := make([]caseAssignment, 0, len(chains))
 	for chain := range chains {
-		events, err := caseChainRead(g, caseAssignmentChain, chain)
+		assignment, found, err := assignmentChainRead(g, chain, caseUID, side)
 		if err != nil {
 			return nil, err
 		}
-		head := caseChainHead(events)
-		if head == nil {
-			continue
+		if found {
+			out = append(out, assignment)
 		}
-		subject := head.get("assignment.subject")
-		if caseAssignmentChainKey(caseUID, subject) != chain {
-			return nil, fmt.Errorf("assignment node %d names %q in a chain that is not theirs", head.id, subject)
-		}
-		out = append(out, caseAssignment{subject: subject, role: head.get("assignment.role"), head: *head})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].subject < out[j].subject })
+	sort.Slice(out, func(i, j int) bool {
+		if a, b := out[i].head.get("assignment.case_uid"), out[j].head.get("assignment.case_uid"); a != b {
+			return a < b
+		}
+		return out[i].subject < out[j].subject
+	})
 	return out, nil
+}
+
+// assignmentChainRead reads one assignment chain and returns its head, after
+// checking every event is on side and in one case -- caseUID, unless it is
+// empty -- and that the chain is its subject's.
+func assignmentChainRead(g *graphene.Graph, chain, caseUID, side string) (caseAssignment, bool, error) {
+	events, err := caseChainRead(g, caseAssignmentChain, chain)
+	if err != nil {
+		return caseAssignment{}, false, err
+	}
+	head := caseChainHead(events)
+	if head == nil {
+		return caseAssignment{}, false, nil
+	}
+	if caseUID == "" {
+		caseUID = head.get("assignment.case_uid")
+	}
+	for _, event := range events {
+		switch {
+		case assignmentSide(event.disclosureNode) != side:
+			return caseAssignment{}, false, fmt.Errorf("assignment node %d is on the %s side, in a chain of %s "+
+				"assignments; one chain says one thing about one person", event.id,
+				assignmentSide(event.disclosureNode), side)
+		case event.get("assignment.case_uid") != caseUID:
+			return caseAssignment{}, false, fmt.Errorf("assignment node %d names case %s, in a chain of case %s",
+				event.id, event.get("assignment.case_uid"), caseUID)
+		}
+	}
+	subject := head.get("assignment.subject")
+	if assignmentChainKey(side, caseUID, subject) != chain {
+		return caseAssignment{}, false, fmt.Errorf("assignment node %d names %q in a chain that is not theirs",
+			head.id, subject)
+	}
+	return caseAssignment{subject: subject, role: head.get("assignment.role"), head: *head}, true, nil
 }
 
 // caseAssignmentOf returns an examiner's latest assignment.
@@ -274,21 +362,23 @@ func caseAssignmentOf(assignments []caseAssignment, subject string) (caseAssignm
 	return caseAssignment{}, false
 }
 
-// caseDefinitions is what a later attach reads back of a case's classes and
-// views.
+// caseDefinitions is what a later attach reads back of a case's classes,
+// views and recipient role bundles.
 type caseDefinitions struct {
 	classes []caseClass
 	views   []caseView
+	bundles []caseBundle
 	// otherKeys counts definitions made under a key generation that is not
 	// the open one, which are not read back: their tags are not this key's.
 	otherKeys int
 }
 
-// caseDefinitionsRead reads the classes and views declared in a case under
-// the key generation fingerprint names, from the IN_CASE edges class_define
-// and view_define write while a case is attached. Each class is tagged again
-// under tagKey and compared with the tag the ledger holds; each view's
-// fingerprint is recomputed from what it grants.
+// caseDefinitionsRead reads the classes, views and role bundles declared in a
+// case under the key generation fingerprint names, from the IN_CASE edges
+// class_define, view_define and role_define write while a case is attached.
+// Each class is tagged again under tagKey and compared with the tag the ledger
+// holds; each view's fingerprint is recomputed from what it grants, and each
+// bundle's from the views it holds.
 func caseDefinitionsRead(ledger *ledgerSession, caseNode store.NodeID, fingerprint string,
 	tagKey []byte) (caseDefinitions, error) {
 	edges, err := ledger.store.EdgesOf(caseNode, store.DirectionInbound, []store.EdgeType{disclosureEdgeInCase})
@@ -299,7 +389,7 @@ func caseDefinitionsRead(ledger *ledgerSession, caseNode store.NodeID, fingerpri
 		props map[string]string
 		node  disclosureNode
 	}
-	var classDefs, viewDefs []definition
+	var classDefs, viewDefs, bundleDefs []definition
 	var out caseDefinitions
 	for _, edge := range edges {
 		raw, err := ledgerDecodeProperties(edge.Properties)
@@ -331,6 +421,8 @@ func caseDefinitionsRead(ledger *ledgerSession, caseNode store.NodeID, fingerpri
 			classDefs = append(classDefs, definition{props, decoded})
 		case kind == "view" && node.HasLabel(disclosureNodeView):
 			viewDefs = append(viewDefs, definition{props, decoded})
+		case kind == "role" && node.HasLabel(disclosureNodeRoleBundle):
+			bundleDefs = append(bundleDefs, definition{props, decoded})
 		default:
 			return caseDefinitions{}, fmt.Errorf("definition edge %d says it defines a %s and starts at a node "+
 				"that is not one", edge.ID, kind)
@@ -419,6 +511,44 @@ func caseDefinitionsRead(ledger *ledgerSession, caseNode store.NodeID, fingerpri
 		}
 		out.views = append(out.views, view)
 	}
+
+	byFP := make(map[string]caseView, len(out.views))
+	for _, view := range out.views {
+		byFP[disclosureViewFingerprint(view)] = view
+	}
+	seenRoles := map[string]bool{}
+	byIndex(bundleDefs)
+	for i, d := range bundleDefs {
+		at, err := index(d, "role bundle", i)
+		if err != nil {
+			return caseDefinitions{}, err
+		}
+		name := d.props["def.label"]
+		role, known := roleNamed(name)
+		if !known || !role.recipientSide() || role.Name != name || d.node.get("bundle.role") != name ||
+			seenRoles[name] {
+			return caseDefinitions{}, fmt.Errorf("the ledger's definition of a bundle for %q does not name a "+
+				"recipient role, does not match the bundle it points at, or defines it twice", name)
+		}
+		seenRoles[name] = true
+		bundle := caseBundle{Role: role, Description: d.props["def.description"], Index: i, DefinedAt: at,
+			FromLedger: true, InLedger: true}
+		if fps := d.node.get("bundle.view_fps"); fps != "" {
+			for _, fp := range strings.Split(fps, ",") {
+				view, found := byFP[fp]
+				if !found {
+					return caseDefinitions{}, fmt.Errorf("the ledger says role %s's bundle holds a view (fp %s) "+
+						"that this case did not define under the open key", name, fp)
+				}
+				bundle.add(view)
+			}
+		}
+		if bundle.fingerprint() != d.node.get("bundle.fp") {
+			return caseDefinitions{}, fmt.Errorf("role %s's bundle fingerprint in the ledger is not the one the "+
+				"views it holds give", name)
+		}
+		out.bundles = append(out.bundles, bundle)
+	}
 	return out, nil
 }
 
@@ -483,6 +613,38 @@ func (s *custodySession) attachedLedgerLocked(op string) (*ledgerSession, *objec
 			s.ID, s.attached.path)
 	}
 	return s.attached.ledger, nil
+}
+
+// ledgerElsewhereLocked refuses a ledger other than the one the case is
+// attached to, and lets any ledger through when it is attached to none
+// (M26-CUS-023). A builtin that takes the ledger asks it for the case's state,
+// and another ledger records no lifecycle for the case: asked there, it would
+// refuse nothing, and the case's record would be split between two ledgers.
+// The caller holds the custody lock.
+func (s *custodySession) ledgerElsewhereLocked(op string, ledger *ledgerSession) *object.Error {
+	switch {
+	case s.attached == nil || s.attached.ledger == ledger:
+		return nil
+	case s.attached.path == ledger.path:
+		return newError("%s: case %s is attached to ledger %s through a handle that has since been closed; "+
+			"case_attach this one, so the case is written through the handle it is attached by", op, s.ID,
+			s.attached.path)
+	}
+	return newError("%s: case %s is attached to ledger %s, and what is done in the case is recorded there; "+
+		"this handle is the ledger at %s", op, s.ID, s.attached.path, ledger.path)
+}
+
+// caseLedgerElsewhere is ledgerElsewhereLocked for a caller that does not
+// hold the custody lock. With no case open there is nothing to refuse here;
+// the caller refuses that on its own account.
+func caseLedgerElsewhere(op string, ledger *ledgerSession) *object.Error {
+	custodyStore.RLock()
+	defer custodyStore.RUnlock()
+	session := custodyStore.session
+	if session == nil || session.Closed {
+		return nil
+	}
+	return session.ledgerElsewhereLocked(op, ledger)
 }
 
 // attachedToLocked refuses unless the case is attached to this ledger.
@@ -566,29 +728,39 @@ func (w *caseWriter) lifecycle(head *caseChainEvent, from, to, reason string) (c
 	return event, w.tx.edge(id, w.actorN, disclosureEdgePerformedBy, disclosurePerformedBy(w.ledger))
 }
 
-// assign appends an assignment of subject to role -- caseAssignmentEnded to
-// end one -- after head.
+// assign appends an examiner's assignment of subject to role --
+// caseAssignmentEnded to end one -- after head.
 func (w *caseWriter) assign(head *caseChainEvent, subject, role, reason string) (caseChainEvent, error) {
+	subjectN, err := w.tx.actorNode(w.g, subject)
+	if err != nil {
+		return caseChainEvent{}, err
+	}
+	return w.assignment(head, caseAssignmentExaminer, subject, subjectN, role, reason, nil)
+}
+
+// assignment appends an assignment on side of subject, whose node is subjectN,
+// to role -- caseAssignmentEnded to end one -- after head. extra is written
+// beside the properties every assignment carries.
+func (w *caseWriter) assignment(head *caseChainEvent, side, subject string, subjectN store.NodeID, role,
+	reason string, extra map[string]string) (caseChainEvent, error) {
 	roleID := uint64(0)
 	if named, ok := roleNamed(role); ok {
 		roleID = uint64(named.ID)
 	}
-	id, event, err := w.tx.chainAppend(caseAssignmentChain, caseAssignmentChainKey(w.caseUID, subject), head,
-		map[string]string{
-			"assignment.case_uid":  w.caseUID,
-			"assignment.subject":   subject,
-			"assignment.role":      role,
-			"assignment.role_id":   strconv.FormatUint(roleID, 10),
-			"assignment.reason":    reason,
-			"assignment.by":        w.ledger.actor,
-			"assignment.by_role":   w.ledger.role.Name,
-			"assignment.at":        w.at.UTC().Format(time.RFC3339Nano),
-			"assignment.unix_nano": strconv.FormatInt(w.at.UnixNano(), 10),
-		})
-	if err != nil {
-		return caseChainEvent{}, err
+	props := map[string]string{
+		"assignment.case_uid":  w.caseUID,
+		"assignment.side":      side,
+		"assignment.subject":   subject,
+		"assignment.role":      role,
+		"assignment.role_id":   strconv.FormatUint(roleID, 10),
+		"assignment.reason":    reason,
+		"assignment.by":        w.ledger.actor,
+		"assignment.by_role":   w.ledger.role.Name,
+		"assignment.at":        w.at.UTC().Format(time.RFC3339Nano),
+		"assignment.unix_nano": strconv.FormatInt(w.at.UnixNano(), 10),
 	}
-	subjectN, err := w.tx.actorNode(w.g, subject)
+	maps.Copy(props, extra)
+	id, event, err := w.tx.chainAppend(caseAssignmentChain, assignmentChainKey(side, w.caseUID, subject), head, props)
 	if err != nil {
 		return caseChainEvent{}, err
 	}
@@ -779,10 +951,10 @@ func CaseAttach(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %s asserted no role, and a case's ledger records who holds "+
 			"which role in it. Assert one at case_open or ledger_open", op, ledger.actor))
 	}
-	if !reattach && (len(session.classes) > 0 || len(session.views) > 0) {
-		return resultAndError(nil, newError("%s: this run has defined %d classes and %d views that are not in "+
-			"the ledger. Attach before defining, so that every definition the case holds is one the ledger "+
-			"holds", op, len(session.classes), len(session.views)))
+	if !reattach && (len(session.classes) > 0 || len(session.views) > 0 || len(session.bundles) > 0) {
+		return resultAndError(nil, newError("%s: this run has defined %d classes, %d views and %d role bundles "+
+			"that are not in the ledger. Attach before defining, so that every definition the case holds is one "+
+			"the ledger holds", op, len(session.classes), len(session.views), len(session.bundles)))
 	}
 
 	disclosureLedgerMu.Lock()
@@ -856,7 +1028,7 @@ func CaseAttach(args ...object.Object) object.Object {
 	session.attached = &caseAttachment{ledger: ledger, path: ledger.path, state: state,
 		head: *caseChainHead(events), first: first, attachedAt: now, assignments: assignments}
 	if !reattach {
-		session.classes, session.views = defs.classes, defs.views
+		session.classes, session.views, session.bundles = defs.classes, defs.views, defs.bundles
 	}
 	detail := fmt.Sprintf("case %s attached to ledger %s: %s", session.ID, ledger.path, state)
 	if first {
@@ -870,6 +1042,7 @@ func CaseAttach(args ...object.Object) object.Object {
 		"first_attach":  first,
 		"classes_read":  int64(len(defs.classes)),
 		"views_read":    int64(len(defs.views)),
+		"bundles_read":  int64(len(defs.bundles)),
 	})
 
 	lifecycle := make([]object.Object, 0, len(events))
@@ -887,6 +1060,7 @@ func CaseAttach(args ...object.Object) object.Object {
 		"assignments":            caseAssignmentRows(assignments),
 		"classes_read":           intObj(int64(len(defs.classes))),
 		"views_read":             intObj(int64(len(defs.views))),
+		"bundles_read":           intObj(int64(len(defs.bundles))),
 		"definitions_other_keys": intObj(int64(defs.otherKeys)),
 		"role":                   stringObj(ledger.role.Name),
 		"role_authenticated":     boolObj(false),
@@ -1171,5 +1345,6 @@ func (s *custodySession) ledgerStateRecord() map[string]any {
 		"assignments":    assignments,
 		"classes_read":   fromLedger(len(s.classes), func(i int) bool { return s.classes[i].FromLedger }),
 		"views_read":     fromLedger(len(s.views), func(i int) bool { return s.views[i].FromLedger }),
+		"bundles_read":   fromLedger(len(s.bundles), func(i int) bool { return s.bundles[i].FromLedger }),
 	}
 }

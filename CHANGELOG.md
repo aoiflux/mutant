@@ -373,6 +373,29 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A disclosure is issued against the recipient's role.** `role_define(role,
+  views)` gives a recipient role -- `legal`, `external_partner`,
+  `restricted_viewer`, or `reviewer` or `auditor`, who are on both sides -- its
+  bundle: the views it may be granted, possibly none, which it then says in
+  `grants_nothing`. `role_assign(ledger, recipient, role, reason)` records that
+  a named recipient holds one, or ends it with `none`, as a hash-linked chain of
+  their assignments kept apart from the examiners', and `role_list(ledger?)`
+  reports the bundles and who holds which role -- with the ledger alone, every
+  case's. A bundle defined while the case is attached is written into its
+  ledger and read back by a later attach. Roles are asserted, like an
+  examiner's: a refusal a role causes keeps the record consistent, and the
+  passphrase on a grant is still the only thing that stops anybody reading.
+
+- **Redaction versions.** Every disclosure names the version of its record's
+  redaction under its view -- what the view releases from the evidence, as
+  plaintext byte ranges -- in a hash-linked chain per view that follows the
+  evidence through its reclassifications. A version is written only when what
+  the view releases changes, by the disclosure that first issues it or ahead of
+  one by `redaction_commit(ledger, record, view, reason)`, so that it can be
+  reviewed first. `redaction_versions(ledger, record_uid)` lists them with the
+  disclosures issued under each, and calls every disclosure issued under a
+  version since superseded `stale`. It needs no case open.
+
 - **An exhibit has a custody chain.** `evidence_intake(ledger, exhibit, path)`
   takes a file into the attached case: it is hashed with SHA-256 whatever the
   case's hash policy, written into the ledger as an EvidenceFile node that
@@ -586,6 +609,18 @@ exhaustive lists.
   actor's name came from (`actor_source`), and `disclose_history` reports the
   role each disclosure and withdrawal was made under.
 
+- **`disclose_to_passphrase` needs the recipient to hold a role whose bundle
+  holds the view.** A disclosure to a recipient the ledger assigns no recipient
+  role in force, whose role has no bundle, or whose bundle does not hold the
+  view is refused -- before any key material is derived or any passphrase asked
+  for, and again under the ledger lock before the write. A script that
+  disclosed before 2.6.0 needs a `role_define` and a `role_assign` first;
+  `examples/forensics/record_disclosure.mut` shows both. The grant is still
+  exactly the view. The recipient's role, the assignment, the bundle and the
+  redaction version the disclosure carries out are recorded in the ledger, the
+  case manifest, the package and `disclose_history`, and `disclose_verify`
+  checks the package's role and version against the ledger's record.
+
 ### Fixed
 
 - **A withdrawal could leave its examiner unable to write to the ledger.** A
@@ -756,6 +791,14 @@ exhaustive lists.
   the ledger. The name is now the one behind the record's own actor id: this
   session's, or the one a disclosure-family Actor node pairs with it, and
   otherwise empty, with `actor_source` saying which.
+
+- **A case could be written through a ledger it was not attached to.** A
+  builtin that takes the ledger asks it for the case's state, and another
+  ledger records no lifecycle for the case, so a disclosure or a
+  reclassification written through one went ahead while the case was in review
+  in the ledger it was attached to. `disclose_to_passphrase`,
+  `disclose_reclassified`, `role_assign` and `redaction_commit` now refuse a
+  ledger other than the one the case is attached to.
 
 ### Security
 

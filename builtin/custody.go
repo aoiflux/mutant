@@ -212,6 +212,10 @@ type custodySession struct {
 	// lived inside a record could not be reviewed before a record existed.
 	views []caseView
 
+	// bundles are the recipient roles' bundles: for each role, the views a
+	// recipient holding it may be granted. See recipient_role.go.
+	bundles []caseBundle
+
 	// disclosures are the grants issued in this case, in the order they were
 	// issued. The ledger is the authoritative record of each one; this is the
 	// run's copy, which holds the sealed grant until disclose_bundle writes it
@@ -1103,6 +1107,10 @@ func (s *custodySession) classificationRecord() map[string]any {
 	for _, view := range s.views {
 		views = append(views, view.render())
 	}
+	bundles := make([]any, 0, len(s.bundles))
+	for _, bundle := range s.bundles {
+		bundles = append(bundles, bundle.render())
+	}
 	record := map[string]any{
 		"keyed":   s.keyed,
 		"classes": classes,
@@ -1113,6 +1121,11 @@ func (s *custodySession) classificationRecord() map[string]any {
 		// what "counsel" grants is a reader who will not turn it.
 		"views":      views,
 		"view_count": int64(len(s.views)),
+		// Which of those views each recipient role may be granted. Here for
+		// the reason the views are: a bundle only means anything against the
+		// views it names.
+		"role_bundles":      bundles,
+		"role_bundle_count": int64(len(s.bundles)),
 		// Every disclosure issued under those views in this run, with the
 		// record, the recipient and the granted set. `bytes_recoverable` is
 		// false on each row because it is false of every disclosure there is.

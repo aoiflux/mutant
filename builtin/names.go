@@ -744,4 +744,12 @@ const (
 	BuiltinNameEvidenceReturn  = "evidence_return"
 	BuiltinNameEvidenceDispose = "evidence_dispose"
 	BuiltinNameEvidenceHistory = "evidence_history"
+
+	// recipient roles: the views each role may be granted, and who holds
+	// which; and the versions of a record's redaction a disclosure names
+	BuiltinNameRoleDefine        = "role_define"
+	BuiltinNameRoleAssign        = "role_assign"
+	BuiltinNameRoleList          = "role_list"
+	BuiltinNameRedactionCommit   = "redaction_commit"
+	BuiltinNameRedactionVersions = "redaction_versions"
 )

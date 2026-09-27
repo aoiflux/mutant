@@ -162,6 +162,11 @@ func DiscloseReclassified(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	// Recorded in the ledger the case is attached to, or asked of a ledger
+	// that knows no lifecycle for it (M26-CUS-023).
+	if errObj := caseLedgerElsewhere(op, ledger); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	newUID := strings.ToLower(current.header.RecordUID)
 	oldUID := strings.ToLower(previous.header.RecordUID)
 	switch {

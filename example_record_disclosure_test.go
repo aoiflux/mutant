@@ -119,9 +119,13 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 		"verified with no root: false",
 		"finding: ledger_inclusion:",
 		"counsel reads the record with 178 of 1471 bytes withheld",
-		// The ledger's answer to who holds what.
-		"view: counsel  segments: 0-2,4  bytes recoverable: false",
-		"view: malware-desk  segments: 0,2-4  bytes recoverable: false",
+		// The ledger's answer to who holds what, and as what.
+		"ledger: outside counsel for the complainant  as legal  view: counsel  segments: 0-2,4  bytes recoverable: false",
+		"ledger: CERT malware desk  as external_partner  view: malware-desk  segments: 0,2-4  bytes recoverable: false",
+		// Each view's redaction of the record, and nothing stale.
+		"redaction: counsel version 1  released: 0+1275,1453+18  in force: true",
+		"redaction: malware-desk version 1  released: 0+551,570+901  in force: true",
+		"stale disclosures: 0",
 		"signed: true",
 	} {
 		if !strings.Contains(printed, want) {

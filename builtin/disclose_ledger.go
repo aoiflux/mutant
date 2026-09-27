@@ -37,12 +37,13 @@ package builtin
 // # Nodes are written once
 //
 // Every node here is written by AddNode and never updated. A Record, a View, a
-// Recipient or a Classification that is already in the ledger is found and
-// reused; a Disclosure and a Withdrawal are always new. graphene keeps no
-// history of an update and the next compaction would erase the prior value, so
-// an update would be a way to change what a disclosure record says with no
-// trace -- and a Record found under the same uid with a different file digest
-// is refused rather than reconciled.
+// Recipient, a RoleBundle or a Classification that is already in the ledger is
+// found and reused; a Disclosure and a Withdrawal are always new, and a
+// RedactionVersion is new only when what it records has changed. graphene
+// keeps no history of an update and the next compaction would erase the prior
+// value, so an update would be a way to change what a disclosure record says
+// with no trace -- and a Record found under the same uid with a different file
+// digest is refused rather than reconciled.
 
 import (
 	"encoding/hex"
@@ -52,9 +53,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoiflux/graphene"
 	"github.com/aoiflux/graphene/store"
+
+	"mutant/object"
 )
 
 // disclosureTypeBase is the schema's first custom type offset.
@@ -211,11 +215,13 @@ var disclosureKeys = map[store.NodeType][]string{
 	disclosureNodeWithdrawal: {"withdrawal.uid", "withdrawal.disclosure_uid"},
 	disclosureNodeReclass:    {"reclass.uid", "reclass.pair", "reclass.superseded_uid"},
 
-	disclosureNodeRole:         {"role.name"},
-	disclosureNodeLifecycle:    {"lifecycle.uid", "lifecycle.chain"},
-	disclosureNodeAssignment:   {"assignment.uid", "assignment.chain", "assignment.case_uid"},
-	disclosureNodeEvidence:     {"evidence.uid", "evidence.case_uid"},
-	disclosureNodeCustodyEvent: {"custody.uid", "custody.chain"},
+	disclosureNodeRole:             {"role.name"},
+	disclosureNodeRoleBundle:       {"bundle.fp"},
+	disclosureNodeLifecycle:        {"lifecycle.uid", "lifecycle.chain"},
+	disclosureNodeAssignment:       {"assignment.uid", "assignment.chain", "assignment.case_uid"},
+	disclosureNodeEvidence:         {"evidence.uid", "evidence.case_uid"},
+	disclosureNodeCustodyEvent:     {"custody.uid", "custody.chain"},
+	disclosureNodeRedactionVersion: {"redaction.uid", "redaction.chain", "redaction.line"},
 }
 
 // disclosureNode is one node of this schema as read back: its id and its
@@ -585,10 +591,19 @@ type disclosureIssue struct {
 
 	recipient   string
 	recipientFP string
+	// basis is the recipient's assignment and the bundle of the role it
+	// names, as the preflight read them.
+	basis disclosureBasis
 
 	view       caseView
 	viewFP     string
 	classLabel map[string]string // tag -> label, for every tag written
+	partition  redactionPartition
+	// redactionUID and redactionVersion name the version of the record's
+	// redaction the disclosure is issued under. disclosureWriteIssue sets
+	// them, reusing the version in force or writing the next.
+	redactionUID     string
+	redactionVersion uint64
 
 	record        *recordSession
 	recordSHA256  string
@@ -641,6 +656,14 @@ func disclosureNodeProps(issue *disclosureIssue) map[string]string {
 		"disclosure.actor_role":        issue.actorRole,
 		"disclosure.at":                issue.at,
 		"disclosure.unix_nano":         strconv.FormatInt(issue.ns, 10),
+		// The recipient's side: the role the ledger assigned them, the
+		// assignment that says so, the bundle the view was found in, and the
+		// version of the record's redaction the grant carries out.
+		"disclosure.role":              issue.basis.role.Name,
+		"disclosure.assignment_uid":    issue.basis.assignment.head.uid,
+		"disclosure.role_bundle_fp":    issue.basis.bundle.fingerprint(),
+		"disclosure.redaction_uid":     issue.redactionUID,
+		"disclosure.redaction_version": strconv.FormatUint(issue.redactionVersion, 10),
 	}
 }
 
@@ -665,45 +688,79 @@ func disclosureRecipientFingerprint(name string) string {
 }
 
 // disclosureRefusal says why the ledger rules out disclosing this record to
-// this recipient, or returns nil: the case's lifecycle state takes no
-// disclosure, the record was reclassified, so its classification is not the
-// one in force, or an earlier disclosure of it to them was withdrawn.
-func disclosureRefusal(g *graphene.Graph, record *recordSession, recipient, recipientFP string) error {
+// this recipient, or returns the recipient's assignment in force: the case's
+// lifecycle state takes no disclosure; the record was reclassified, so its
+// classification is not the one in force; an earlier disclosure of it to them
+// was withdrawn; or the ledger assigns them no recipient role in the case.
+func disclosureRefusal(g *graphene.Graph, record *recordSession, recipient string) (caseAssignment, error) {
 	if err := caseLedgerStateRefusal(g, record.header.CaseUID, caseActDisclose); err != nil {
-		return err
+		return caseAssignment{}, err
 	}
 	recordUID := strings.ToLower(record.header.RecordUID)
 	if event, superseded, err := disclosureFind(g, disclosureNodeReclass, "reclass.superseded_uid", recordUID); err != nil {
-		return err
+		return caseAssignment{}, err
 	} else if superseded {
-		return fmt.Errorf("record %s was reclassified by record %s at %s, so its classification is not "+
-			"the one in force. Disclose the record that superseded it", record.header.RecordUID,
-			event.get("reclass.record_uid"), event.get("reclass.at"))
+		return caseAssignment{}, fmt.Errorf("record %s was reclassified by record %s at %s, so its "+
+			"classification is not the one in force. Disclose the record that superseded it",
+			record.header.RecordUID, event.get("reclass.record_uid"), event.get("reclass.at"))
 	}
-	if withdrawn, err := disclosureWithdrawnFor(g, recordUID, recipientFP); err != nil {
-		return err
+	if withdrawn, err := disclosureWithdrawnFor(g, recordUID, disclosureRecipientFingerprint(recipient)); err != nil {
+		return caseAssignment{}, err
 	} else if withdrawn != "" {
-		return fmt.Errorf("an earlier disclosure of record %s to %q was withdrawn (%s), and a withdrawal "+
-			"is how further grants are stopped. To disclose to them again, seal a new record -- which is "+
-			"what a changed classification is anyway -- and disclose that",
+		return caseAssignment{}, fmt.Errorf("an earlier disclosure of record %s to %q was withdrawn (%s), and a "+
+			"withdrawal is how further grants are stopped. To disclose to them again, seal a new record -- "+
+			"which is what a changed classification is anyway -- and disclose that",
 			record.header.RecordUID, recipient, withdrawn)
 	}
-	return nil
+	assignment, found, err := recipientAssignmentOf(g, record.header.CaseUID, recipient)
+	switch {
+	case err != nil:
+		return caseAssignment{}, err
+	case !found:
+		return caseAssignment{}, fmt.Errorf("the ledger assigns %q no recipient role in this case, and a grant "+
+			"is issued against the bundle of the role its recipient holds, so a recipient nobody assigned is "+
+			"granted nothing. role_assign(ledger, recipient, role, reason) records one, for the name exactly "+
+			"as it is given here. %s", recipient, roleNotAccessControl)
+	case assignment.role == caseAssignmentEnded:
+		return caseAssignment{}, fmt.Errorf("%q's recipient role in this case was ended at %s (%q), and a "+
+			"recipient who holds none is granted nothing. %s", recipient, assignment.head.get("assignment.at"),
+			assignment.head.get("assignment.reason"), roleNotAccessControl)
+	}
+	return assignment, nil
 }
 
-// disclosurePreflight asks the ledger for a refusal before anything is spent
-// on the disclosure: before a grant's key material is derived, and before the
+// disclosurePreflight asks for every refusal before anything is spent on the
+// disclosure: before a grant's key material is derived, and before the
 // examiner is asked to choose a passphrase for it. DISCLOSURE_POLICY promises
-// that a withdrawal is checked before any new key is issued.
-func disclosurePreflight(session *ledgerSession, record *recordSession, recipient string) error {
+// that a withdrawal is checked before any new key is issued, and a recipient
+// whose role may not be given the view is refused at the same point.
+func disclosurePreflight(op string, session *ledgerSession, record *recordSession, recipient string,
+	view caseView) (disclosureBasis, *object.Error) {
+	bundles, errObj := disclosureRecipientTerms(op, session)
+	if errObj != nil {
+		return disclosureBasis{}, errObj
+	}
 	disclosureLedgerMu.Lock()
-	defer disclosureLedgerMu.Unlock()
-	return disclosureRefusal(session.graph, record, recipient, disclosureRecipientFingerprint(recipient))
+	assignment, err := disclosureRefusal(session.graph, record, recipient)
+	if err == nil {
+		// Read now for the reason the rest is: a version chain the ledger
+		// cannot give an account of refuses the disclosure at the write, and
+		// is found here instead, before the key.
+		_, _, _, err = redactionResolve(session, record.header.CaseUID, record.header.RecordUID, view,
+			redactionPartition{})
+	}
+	disclosureLedgerMu.Unlock()
+	if err != nil {
+		return disclosureBasis{}, newError("%s: %s", op, err.Error())
+	}
+	return disclosureBasisFor(op, recipient, assignment, view, bundles)
 }
 
-// disclosureWriteIssue commits one disclosure: the Disclosure node, whatever
-// Case, Actor, Record, Classification, View and Recipient nodes the ledger does
-// not already hold, and the edges between them, in one signed transaction.
+// disclosureWriteIssue commits one disclosure: the Disclosure node; whatever
+// Case, Actor, Record, Classification, View, Recipient and RoleBundle nodes
+// the ledger does not already hold; the version of the record's redaction it
+// is issued under, when the one in force does not divide the record as this
+// grant does; and the edges between them, in one signed transaction.
 func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store.NodeID, error) {
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
@@ -713,24 +770,29 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 		return 0, err
 	}
 	// disclosurePreflight asked this before the grant was issued; asked again
-	// under the lock for a withdrawal or reclassification recorded since.
-	if err := disclosureRefusal(g, issue.record, issue.recipient, issue.recipientFP); err != nil {
-		return 0, err
-	}
-
-	tx := disclosureBegin(session)
-	caseID, _, err := tx.findOrAdd(g, disclosureNodeCase, "case.uid", map[string]string{
-		"case.uid": issue.caseUID,
-		"case.id":  issue.caseID,
-	})
+	// under the lock for a withdrawal, a reclassification or a change to the
+	// recipient's assignment recorded since.
+	assignment, err := disclosureRefusal(g, issue.record, issue.recipient)
 	if err != nil {
 		return 0, err
 	}
-	actorID, err := tx.actorNode(g, session.actor)
+	if assignment.head.uid != issue.basis.assignment.head.uid {
+		return 0, fmt.Errorf("the ledger's assignment of %q changed while this disclosure was prepared: it now "+
+			"names them %s, recorded at %s, and the disclosure was checked against %s. Nothing was issued; "+
+			"disclose again", issue.recipient, assignment.role, assignment.head.get("assignment.at"),
+			issue.basis.assignment.role)
+	}
+	recordUID := strings.ToLower(issue.record.header.RecordUID)
+	line, versions, version, err := redactionResolve(session, issue.caseUID, recordUID, issue.view, issue.partition)
 	if err != nil {
 		return 0, err
 	}
 
+	w, err := caseBeginWrite(session, issue.caseUID, issue.caseID, time.Unix(0, issue.ns))
+	if err != nil {
+		return 0, err
+	}
+	tx := w.tx
 	classNode := tx.classNodes(g, issue.classLabel)
 	recordID, err := tx.recordNode(g, disclosureRecordFacts{
 		record:       issue.record,
@@ -738,7 +800,7 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 		bytes:        issue.recordBytes,
 		headerSHA256: issue.headerSHA256,
 		classes:      issue.recordClasses,
-	}, caseID, classNode)
+	}, w.caseN, classNode)
 	if err != nil {
 		return 0, err
 	}
@@ -755,6 +817,25 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 	if err != nil {
 		return 0, err
 	}
+	bundleID, err := tx.bundleNode(g, issue.basis.bundle, classNode)
+	if err != nil {
+		return 0, err
+	}
+	if version == nil {
+		next, err := w.redactionAppend(caseChainHead(versions), redactionTerms{
+			line:      line,
+			view:      issue.view,
+			record:    issue.record,
+			partition: issue.partition,
+			runs:      issue.runs,
+			reason:    "issued with disclosure " + issue.uid,
+		}, recordID, viewID)
+		if err != nil {
+			return 0, err
+		}
+		version = &next
+	}
+	issue.redactionUID, issue.redactionVersion = version.uid, version.seq
 
 	disclosureID, err := tx.node(disclosureNodeDisclosure, disclosureNodeProps(issue))
 	if err != nil {
@@ -765,11 +846,13 @@ func disclosureWriteIssue(session *ledgerSession, issue *disclosureIssue) (store
 		label store.EdgeType
 		props map[string]string
 	}{
-		{caseID, disclosureEdgeInCase, nil},
+		{w.caseN, disclosureEdgeInCase, nil},
 		{recordID, disclosureEdgeGrants, map[string]string{"granted_runs": disclosureRunsText(issue.runs)}},
 		{recipientID, disclosureEdgeDisclosedTo, nil},
 		{viewID, disclosureEdgeAuthorisedBy, nil},
-		{actorID, disclosureEdgePerformedBy, disclosurePerformedBy(session)},
+		{w.actorN, disclosureEdgePerformedBy, disclosurePerformedBy(session)},
+		{bundleID, disclosureEdgeIssuedUnder, nil},
+		{version.id, disclosureEdgeRedactedAs, nil},
 	} {
 		if err := tx.edge(disclosureID, e.dst, e.label, e.props); err != nil {
 			return 0, err

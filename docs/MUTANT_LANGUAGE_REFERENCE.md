@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **673 builtins** across **41 categories**.
+The standard library is **678 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1012,7 +1012,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
 | [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-28) | 28 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, and the custody of each exhibit |
 | [Classified Records](CAPABILITY_REFERENCE.md#classified-records-11) | 11 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, verifying with no key at all, and the one recorded way to let read plaintext out |
-| [Disclosure](CAPABILITY_REFERENCE.md#disclosure-10) | 10 | Named disclosure postures, the grants issued under them, the package a recipient verifies, and who holds which bytes after the fact |
+| [Disclosure](CAPABILITY_REFERENCE.md#disclosure-15) | 15 | Named disclosure postures, the recipient roles that may be given them, the grants issued under them and the redaction versions they carry out, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
 | [Disk Image Forensics](CAPABILITY_REFERENCE.md#disk-image-forensics-34) | 34 | Raw/EWF/VHD(X) images, MBR/GPT tables |
@@ -2463,6 +2463,20 @@ is counted in `unnamed_classes` rather than passed off as unclassified, and a
 `does_not_say` field records that a preview establishes what would be disclosed
 and not whether the classification behind it was right.
 
+**A grant goes to a recipient under a role.** `role_define(role, views)` says
+which views a recipient role may be granted -- its bundle -- and
+`role_assign(ledger, recipient, role, reason)` records that a named recipient
+holds one, as the next event of a hash-linked chain of their assignments. A
+disclosure is refused unless the ledger assigns its recipient a role in force,
+the case bundles that role, and the bundle holds the view: nobody is given
+anything by default, and a bundle defined empty says so in `grants_nothing`.
+The recipient roles are fixed -- `legal`, `external_partner`,
+`restricted_viewer`, and `reviewer` and `auditor`, who are on both sides -- and
+asserted like an examiner's: the refusal keeps the record consistent with the
+role it names, and the passphrase on a grant is still the only thing that stops
+anybody reading. `role_list` reports the bundles and, given a ledger, who holds
+which role.
+
 The `disclose_*` family carries a view out. `disclose_to_passphrase(ledger,
 record, view, recipient)` issues a grant -- the key material for exactly the
 segments the view selects, and nothing from which any other segment's could be
@@ -2478,9 +2492,18 @@ no case and no case key. `disclose_withdraw` stops further grants and says, in
 `disclose_for_segment` and `disclose_reclassified` answer who was given what,
 and who holds bytes whose class has since changed.
 [`examples/forensics/record_disclosure.mut`](../examples/forensics/record_disclosure.mut)
-runs the whole cycle on one exhibit -- seal, preview, two disclosures that each
-withhold what the other grants, both packages, and the recipient's check -- and
-asks at the terminal for every passphrase it needs.
+runs the whole cycle on one exhibit -- seal, preview, a role for each recipient,
+two disclosures that each withhold what the other grants, both packages, and the
+recipient's check -- and asks at the terminal for every passphrase it needs.
+
+Every disclosure names the version of the record's redaction it carries out:
+what its view releases from the evidence, as plaintext byte ranges. A version
+is written only when that changes, so a reclassification that moves bytes
+between two classes a view releases writes none, and
+`redaction_commit(ledger, record, view, reason)` writes one ahead of any
+disclosure, so that it can be reviewed first. `redaction_versions(ledger,
+record_uid)` lists them, and calls every disclosure issued under a version since
+superseded `stale`.
 
 ## Quick Example
 

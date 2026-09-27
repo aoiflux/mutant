@@ -15,13 +15,15 @@ A limit that is not listed here is a bare literal somewhere in the source, and
 `policy/limit_budget.go`. Values fixed by a file format or a protocol are not
 limits; they are marked `//mutant:format` and are not listed.
 
-11 limits in 5 packages.
+13 limits in 5 packages.
 
 ## `builtin`
 
 | Limit | Value | Unit | Flag | Why | File |
 | --- | --- | --- | --- | --- | --- |
 | `maxCaseReason` | 4 KiB | bytes | -- | maxCaseReason bounds a reason or a name written into a case record. It is written into a signed commit that is never compacted away, so it is a sentence and not a document. | `builtin/case_lifecycle.go` |
+| `maxRedactionLine` | 4,096 | count | -- | maxRedactionLine bounds the walk back through a record's reclassifications. Each step is a reclassification an examiner recorded, so a line longer than this is not one anybody recorded by hand, and the walk refuses it rather than following it. | `builtin/redaction_version.go` |
+| `maxRoleBundleViews` | 256 | count | -- | maxRoleBundleViews bounds one bundle's view list. A bundle cannot usefully hold more views than a case would ever declare, and a longer list is one with repeats in it, which are refused on their own account anyway. | `builtin/recipient_role.go` |
 
 ## `graphstore`
 

@@ -433,6 +433,8 @@ func TestEveryChoiceParameterIsTheBuiltinsOwnList(t *testing.T) {
 		BuiltinNameLedgerPath + ".costModel":  ledgerCostModelList(),
 		BuiltinNameCaseTransition + ".to":     caseStates,
 		BuiltinNameCaseAssign + ".role":       caseAssignRoles(),
+		BuiltinNameRoleDefine + ".role":       RecipientRoles(),
+		BuiltinNameRoleAssign + ".role":       recipientAssignRoles(),
 	}
 	seen := map[string]bool{}
 	for _, def := range Builtins {

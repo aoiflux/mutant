@@ -22,6 +22,11 @@
 // and `restricted`: the whole email except the victim. Both receive the same
 // record file, byte for byte. What differs is which segment keys each one holds.
 //
+// Each recipient is named in the ledger under a recipient role first -- counsel
+// as `legal`, the desk as an `external_partner` -- and each role's bundle says
+// which views it may be given. A grant to anybody else is refused before a key
+// is issued.
+//
 // Interactive. The case key and each grant are protected by a passphrase asked
 // for at the terminal, never taken from an argument or the environment, so run
 // it from a terminal -- on Windows from PowerShell rather than Git Bash:
@@ -236,6 +241,15 @@ let run = fn() {
         print_runs("withheld:", preview["withheld_runs"]);
     }
 
+    // --- who may be given which ----------------------------------------------
+    // A grant goes to a recipient under a role, and the role's bundle says which
+    // views it may be given at all. Nobody is given anything by default: a role
+    // with no bundle, or a bundle without the view, is refused.
+    let _, err = role_define("legal", ["counsel"]);
+    if (check_err(err, "role_define legal")) { return false; };
+    let _, err = role_define("external_partner", ["malware-desk"]);
+    if (check_err(err, "role_define external_partner")) { return false; };
+
     // --- disclose ------------------------------------------------------------
     // Each disclosure is written into the ledger, signed and attributed, before
     // the grant is handed back; one the ledger could not record was not issued.
@@ -243,14 +257,23 @@ let run = fn() {
     if (check_err(err, "ledger_open")) { return false; };
     let ledger = info["handle"];
 
-    let to_counsel, err = disclose_to_passphrase(ledger, record, "counsel", "outside counsel for the complainant");
+    // Who each recipient is, recorded in the ledger before anything is issued
+    // to them. A name is exact: the disclosure names them the same way.
+    let counsel = "outside counsel for the complainant";
+    let desk = "CERT malware desk";
+    let _, err = role_assign(ledger, counsel, "legal", "instructed by the complainant");
+    if (check_err(err, "role_assign counsel")) { return false; };
+    let _, err = role_assign(ledger, desk, "external_partner", "the case's malware analysis partner");
+    if (check_err(err, "role_assign malware desk")) { return false; };
+
+    let to_counsel, err = disclose_to_passphrase(ledger, record, "counsel", counsel);
     if (check_err(err, "disclose_to_passphrase counsel")) { return false; };
-    let to_desk, err = disclose_to_passphrase(ledger, record, "malware-desk", "CERT malware desk");
+    let to_desk, err = disclose_to_passphrase(ledger, record, "malware-desk", desk);
     if (check_err(err, "disclose_to_passphrase malware-desk")) { return false; };
-    putln("to counsel:", to_counsel["granted_segments"], "of", to_counsel["segments"],
-        "segments, in a sealed grant file of", to_counsel["grant_bytes"], "bytes");
-    putln("to the malware desk:", to_desk["granted_segments"], "of", to_desk["segments"],
-        "segments, in a sealed grant file of", to_desk["grant_bytes"], "bytes");
+    putln("to counsel (" + to_counsel["recipient_role"] + "):", to_counsel["granted_segments"], "of",
+        to_counsel["segments"], "segments, in a sealed grant file of", to_counsel["grant_bytes"], "bytes");
+    putln("to the malware desk (" + to_desk["recipient_role"] + "):", to_desk["granted_segments"], "of",
+        to_desk["segments"], "segments, in a sealed grant file of", to_desk["grant_bytes"], "bytes");
 
     // --- package -------------------------------------------------------------
     // A package's inclusion proof resolves against a snapshot, so the ledger is
@@ -303,9 +326,20 @@ let run = fn() {
     let history, err = disclose_history(ledger);
     if (check_err(err, "disclose_history")) { return false; };
     each(history["disclosures"], fn(d) {
-        putln("ledger:", d["recipient"], " view:", d["view"], " segments:", d["granted_runs"],
-            " bytes recoverable:", d["bytes_recoverable"]);
+        putln("ledger:", d["recipient"], " as", d["recipient_role"], " view:", d["view"], " segments:",
+            d["granted_runs"], " bytes recoverable:", d["bytes_recoverable"]);
     });
+
+    // Each disclosure names the version of the record's redaction it carries
+    // out. A reclassification that changed what a view releases would write
+    // the next version, and these two would then be stale.
+    let versions, err = redaction_versions(ledger, sealed["record_uid"]);
+    if (check_err(err, "redaction_versions")) { return false; };
+    each(versions["versions"], fn(v) {
+        putln("redaction:", v["view"], "version", v["version"], " released:", v["granted"],
+            " in force:", v["in_force"]);
+    });
+    putln("stale disclosures:", versions["stale"]);
 
     // --- close ---------------------------------------------------------------
     let _, err = record_close(record);

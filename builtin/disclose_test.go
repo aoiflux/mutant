@@ -55,7 +55,8 @@ const (
 //	class    open open pii  restr restr pii  open open
 //
 // counsel grants open and pii (segments 0-2 and 5-7), regulator grants
-// restricted (3-4).
+// restricted (3-4). The legal role's bundle holds both views, and issue names
+// each recipient legal before their first disclosure.
 type discloseFixture struct {
 	source     string
 	recordPath string
@@ -63,6 +64,7 @@ type discloseFixture struct {
 	ledger     int64
 	ledgerDir  string
 	plaintext  []byte
+	assigned   map[string]bool
 }
 
 func newDiscloseFixture(t *testing.T) *discloseFixture {
@@ -89,16 +91,36 @@ func newDiscloseFixture(t *testing.T) *discloseFixture {
 	t.Cleanup(func() { RecordClose(handle) })
 	mustHash(t, ViewDefine(stringObj("counsel"), viewArray("open", "pii")))
 	mustHash(t, ViewDefine(stringObj("regulator"), viewArray("restricted")))
+	mustHash(t, RoleDefine(stringObj("legal"), viewArray("counsel", "regulator")))
 	ledger, ledgerDir := openTestLedger(t, "examiner")
 	return &discloseFixture{source: source, recordPath: dest, record: handle, ledger: ledger, ledgerDir: ledgerDir,
-		plaintext: plaintext}
+		plaintext: plaintext, assigned: map[string]bool{}}
 }
 
-// issue discloses under a view and returns the result.
+// assign names a recipient legal in the fixture's ledger, once.
+func (f *discloseFixture) assign(t *testing.T, recipient string) {
+	t.Helper()
+	if f.assigned[recipient] {
+		return
+	}
+	mustHash(t, RoleAssign(intObj(f.ledger), stringObj(recipient), stringObj("legal"),
+		stringObj("a recipient of the fixture's disclosures")))
+	f.assigned[recipient] = true
+}
+
+// issue discloses under a view and returns the result, assigning the
+// recipient first if the fixture has not.
 func (f *discloseFixture) issue(t *testing.T, view, recipient string) *object.Hash {
 	t.Helper()
+	return f.issueFrom(t, f.record, view, recipient)
+}
+
+// issueFrom is issue for another record of the fixture's evidence.
+func (f *discloseFixture) issueFrom(t *testing.T, record object.Object, view, recipient string) *object.Hash {
+	t.Helper()
+	f.assign(t, recipient)
 	purposeStub(t, map[string]string{BuiltinNameDiscloseToPassphrase: testGrantPassphrase})
-	return mustHash(t, DiscloseToPassphrase(intObj(f.ledger), f.record, stringObj(view), stringObj(recipient)))
+	return mustHash(t, DiscloseToPassphrase(intObj(f.ledger), record, stringObj(view), stringObj(recipient)))
 }
 
 // bundle compacts the ledger and writes the package, returning its directory
@@ -507,6 +529,7 @@ func TestAScriptCannotForgeADisclosureInTheLedger(t *testing.T) {
 // run says it was.
 func TestADisclosureTheLedgerCouldNotRecordWasNotIssued(t *testing.T) {
 	f := newDiscloseFixture(t)
+	f.assign(t, "Counsel")
 	session, _ := ledgerGet(f.ledger)
 	if err := session.graph.Close(); err != nil {
 		t.Fatal(err)
@@ -800,6 +823,7 @@ func TestAReclassificationFindsWhoHoldsWhatChanged(t *testing.T) {
 	if errObj == nil || !strings.Contains(errObj.Message, "was reclassified by record "+newUID) {
 		t.Fatalf("a superseded record was disclosed: %v", errObj)
 	}
+	f.assign(t, "Someone new")
 	mustHash(t, DiscloseToPassphrase(intObj(f.ledger), newRecord, stringObj("counsel"), stringObj("Someone new")))
 }
 

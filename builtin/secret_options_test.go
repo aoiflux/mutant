@@ -13,7 +13,8 @@ import (
 // secretOptionFamilies are the builtins that handle a case, its key, its
 // classes, its records or their disclosure: the ones DISCLOSURE_POLICY section 8
 // speaks for when it says an option named for a secret is refused by name.
-var secretOptionFamilies = []string{"case_", "class_", "record_", "view_", "disclose_", "evidence_"}
+var secretOptionFamilies = []string{"case_", "class_", "record_", "view_", "disclose_", "evidence_", "role_",
+	"redaction_"}
 
 // optionsPosition is the 1-based position of a builtin's options hash, or 0.
 func optionsPosition(doc builtinDoc) int {

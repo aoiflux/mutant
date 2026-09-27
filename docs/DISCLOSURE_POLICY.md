@@ -39,6 +39,8 @@ document describes is waiting to be built.
 | The graphene disclosure ledger, [Section 13](#13-the-disclosure-ledger) | **In force.** [`builtin/disclose_ledger.go`](../builtin/disclose_ledger.go) |
 | `case_attach`, `case_transition`, `case_assign`: the case's lifecycle, its assignments and its class and view definitions kept in the ledger | **In force.** [`builtin/case_lifecycle.go`](../builtin/case_lifecycle.go), [`builtin/case_chain.go`](../builtin/case_chain.go) |
 | `evidence_intake`, `evidence_release`, `evidence_accept`, `evidence_return`, `evidence_dispose`, `evidence_history`: the custody of each exhibit kept in the ledger | **In force.** [`builtin/case_evidence.go`](../builtin/case_evidence.go) |
+| `role_define`, `role_assign`, `role_list`: recipient roles, the views each may be granted, and the refusal of a disclosure its recipient's role does not allow | **In force.** [`builtin/recipient_role.go`](../builtin/recipient_role.go) |
+| `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
 | `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
@@ -275,6 +277,42 @@ make:
   `granted_bytes` would otherwise have every reason to think the rest was not
   handed over at all.
 
+### A recipient role is a bundle of views, and a redaction has versions
+
+**A grant goes to a recipient under a role, and the role limits which views it
+may be.** `role_define(role, views)` gives a recipient role -- `legal`,
+`external_partner`, `restricted_viewer`, or `reviewer` or `auditor`, who are on
+both sides -- its bundle: the views it may be granted. `role_assign(ledger,
+recipient, role, reason)` records that a named recipient holds one, as the next
+event of a hash-linked chain of their assignments. `disclose_to_passphrase`
+refuses unless the ledger assigns the recipient a role in force, the case
+bundles that role, and the bundle holds the view -- before any key material is
+derived or any passphrase asked for -- and asks again under the ledger lock
+before it writes. Nobody is given anything by default: a recipient nobody
+assigned, a role nobody bundled and a bundle defined empty all grant nothing,
+and the last says so in `grants_nothing`.
+
+The grant is still exactly the view, so `view_preview` still describes the
+disclosure; a bundle neither widens nor narrows a view, it says which views a
+role may be given at all. And the role is asserted, as an examiner's is: the
+examiner who wants to disclose to somebody can assign them a role to do it.
+What the rule buys is that the ledger then says so, in a signed commit beside
+the disclosure, and that a disclosure the case's own definitions do not allow
+is refused rather than recorded. It is not access control; the passphrase on
+the grant is.
+
+**Every disclosure names the version of its record's redaction.** A redaction is
+what a view releases from a piece of evidence, as plaintext byte ranges, and its
+versions are a chain per view that follows the evidence through its
+reclassifications. A version is written only when what the view releases
+changes -- a reclassification that moves bytes between two classes the view
+releases writes none -- by the disclosure that first issues it, or ahead of any
+disclosure by `redaction_commit(ledger, record, view, reason)`, so that it can
+be reviewed first. `redaction_versions(ledger, record_uid)` calls every
+disclosure issued under a version since superseded `stale`: its recipient holds
+a redaction this evidence is no longer disclosed under. Like a withdrawal, that
+reaches nobody's copy.
+
 ## 6. A record without its case is evidentially mute
 
 A classification is a name and a tag. The name is what an examiner writes in a
@@ -330,10 +368,11 @@ Four rules, all in force today.
   a file named in program text, and **never from an environment variable** — see
   [`docs/CONFIGURATION_POLICY.md`](CONFIGURATION_POLICY.md), which makes that a
   machine-checked rule for the whole tree. Every `case_*`, `class_*`,
-  `record_*`, `view_*` and `disclose_*` builtin that takes an options hash
-  refuses a key named `passphrase`, `password`, `secret` or `key` **by name**,
-  before it looks at any other argument, because "unknown option" reads as a
-  misspelling and the point is that the option is forbidden.
+  `record_*`, `view_*`, `role_*`, `disclose_*` and `evidence_*` builtin that
+  takes an options hash refuses a key named `passphrase`, `password`, `secret`
+  or `key` **by name**, before it looks at any other argument, because
+  "unknown option" reads as a misspelling and the point is that the option is
+  forbidden.
 - **Plaintext is `ParamBytes`, never `ParamString`.** A Go string cannot be
   zeroed, and the runtime copies and retains one at will. See
   [`object/bytesObj.go`](../object/bytesObj.go).
@@ -546,16 +585,21 @@ whose authority it was made on. PERFORMED_BY carries the role its actor asserted
 
 A case attached to the ledger with `case_attach` adds Role, Assignment and
 LifecycleEvent nodes and HOLDS_ROLE, ASSIGNED_TO, REVISES and TRANSITIONS edges,
-and a class or view defined while it is attached is an IN_CASE edge from its
-Classification or View node to the Case, carrying the definition and the key
-generation it was made under. An exhibit taken in with `evidence_intake` is an
-EvidenceFile node (graphene's own built-in type) that BELONGS_TO the Case, and
-its custody is a chain of CustodyEvent nodes, each BELONGS_TO the exhibit and
-CUSTODIAN to whoever holds or is receiving it. The label table graphene keeps
-beside the ledger also names RoleBundle, ReviewRequest, ReviewDecision,
-RetentionEvent, ErasureEvent, ClassEvent, RedactionVersion and RedactionReview,
-and BUNDLES, ISSUED_UNDER, REDACTED_AS, REVIEWS and ERASES: their numbers are
-fixed now, and nothing writes them yet.
+and a class, view or role bundle defined while it is attached is an IN_CASE
+edge from its Classification, View or RoleBundle node to the Case, carrying the
+definition and the key generation it was made under. A recipient's role is an
+Assignment on the recipient side, ASSIGNED_TO their Recipient node. A role's
+bundle is a RoleBundle node that BUNDLES each View it holds, and a disclosure is
+ISSUED_UNDER the bundle its recipient's role had and REDACTED_AS the
+RedactionVersion of its record's redaction under its view -- a node with the
+edges a disclosure has, GRANTS to the record and AUTHORISED_BY to the view. An
+exhibit taken in with `evidence_intake` is an EvidenceFile node (graphene's own
+built-in type) that BELONGS_TO the Case, and its custody is a chain of
+CustodyEvent nodes, each BELONGS_TO the exhibit and CUSTODIAN to whoever holds
+or is receiving it. The label table graphene keeps beside the ledger also names
+ReviewRequest, ReviewDecision, RetentionEvent, ErasureEvent, ClassEvent and
+RedactionReview, and REVIEWS and ERASES: their numbers are fixed now, and
+nothing writes them yet.
 
 Four properties of it are worth stating:
 
@@ -569,7 +613,8 @@ Four properties of it are worth stating:
   new. A Record found under the same uid with a different file digest is
   refused, never reconciled by overwriting.
 - **A case's history is a chain, and a fork is refused.** Each lifecycle event,
-  each examiner's assignments and each exhibit's custody are a chain: an event names its position and
+  each examiner's or recipient's assignments, each exhibit's custody and each
+  view's versions of a redaction are a chain: an event names its position and
   the uid of the one before it, and its own uid is a SHA-256 over everything it
   records. The head of the chain is what is in force. Two events after one
   event, an event whose uid does not recompute, and an event no walk from the
