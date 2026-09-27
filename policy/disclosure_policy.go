@@ -46,9 +46,11 @@ var DisclosureFiles = []string{
 	"builtin/class.go",
 	// the roles an examiner asserts and a recipient is named under
 	"builtin/role.go",
-	// sealing, opening and reading records, and what a read is marked with
+	// sealing, opening, reading and searching records, and what a read is
+	// marked with
 	"builtin/record.go",
 	"builtin/record_read.go",
+	"builtin/record_search.go",
 	"builtin/classified.go",
 	// views and disclosures
 	"builtin/view.go",

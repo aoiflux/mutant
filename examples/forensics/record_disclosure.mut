@@ -22,6 +22,9 @@
 // and `restricted`: the whole email except the victim. Both receive the same
 // record file, byte for byte. What differs is which segment keys each one holds.
 //
+// Before anything is disclosed, the record is searched as each recipient would
+// be able to search it: a search under a view reads only what that view opens.
+//
 // Each recipient is named in the ledger under a recipient role first -- counsel
 // as `legal`, the desk as an `external_partner` -- and each role's bundle says
 // which views it may be given. A grant to anybody else is refused before a key
@@ -244,6 +247,33 @@ let run = fn() {
             preview["withheld_bytes"], "withheld");
         print_runs("withheld:", preview["withheld_runs"]);
     }
+
+    // --- searching as each view reads ----------------------------------------
+    // A search under a view reads only the segments a grant under that view
+    // would open, so it finds what that view's recipient could find and
+    // nothing else. The domain is in the email four times; the malware desk's
+    // view withholds the one inside the victim's address, and a match needing
+    // one withheld byte is never reported. `complete` says the count covers
+    // what was read, not the record. The case timeline records each search,
+    // with the pattern only as a digest keyed to the case key.
+    for (view in ["counsel", "malware-desk"]) {
+        let found, err = record_search(record, "example.org", {"view": view});
+        if (check_err(err, "record_search " + view)) { return false; };
+        putln("search under", view + ":", found["count"], "found in", found["searched_segments"], "of",
+            found["segments"], "segments  complete:", found["complete"]);
+        each(found["hits"], fn(hit) {
+            putln("   at", hit["offset"], " class:", hit["classes"][0]["label"]);
+        });
+    }
+
+    // Each hit carries the bytes around it, and they are plaintext, marked as
+    // a read is: held in a name and handed to a sink, they are refused like
+    // the address above, and the editor flags this fs_write too.
+    let by_name, err = record_search(record, "finance", {"view": "counsel", "context": 12});
+    if (check_err(err, "record_search finance")) { return false; };
+    let around = by_name["hits"][0]["context"];
+    let _, err = fs_write(output_directory + "/hit.txt", around);
+    putln("writing a hit's context out:", err);
 
     // --- who may be given which ----------------------------------------------
     // A grant goes to a recipient under a role, and the role's bundle says which

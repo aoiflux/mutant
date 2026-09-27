@@ -765,6 +765,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameLedgerClassify, &BuiltIn{LedgerClassify}},
 	{BuiltinNameLedgerClassifications, &BuiltIn{LedgerClassifications}},
 	{BuiltinNameLedgerUnderView, &BuiltIn{LedgerUnderView}},
+	{BuiltinNameRecordSearch, &BuiltIn{RecordSearch}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()

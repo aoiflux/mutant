@@ -758,4 +758,7 @@ const (
 	BuiltinNameLedgerClassify        = "ledger_classify"
 	BuiltinNameLedgerClassifications = "ledger_classifications"
 	BuiltinNameLedgerUnderView       = "ledger_under_view"
+
+	// searching a record as one of its readers could read it
+	BuiltinNameRecordSearch = "record_search"
 )

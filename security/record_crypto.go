@@ -81,6 +81,10 @@ const (
 	// HKDFInfoSegment derives one segment's key and nonce together, from a
 	// digest of the whole of that segment's additional data.
 	HKDFInfoSegment = "mutant-record-segment-v1"
+	// HKDFInfoSearchPattern derives the key a searched pattern's digest is
+	// keyed under, so that a case timeline can name what was searched for
+	// without confirming a guess to anyone who does not hold the case key.
+	HKDFInfoSearchPattern = "mutant-search-pattern-digest-v1"
 
 	// ClassTagDomain prefixes the label inside the class tag's HMAC message, so
 	// the tag cannot be confused with any other HMAC this tree computes.
@@ -528,6 +532,31 @@ func TagForClass(classTagKey []byte, canonicalLabel string) (ClassTag, error) {
 	mac.Write([]byte(canonicalLabel))
 	copy(tag[:], mac.Sum(nil))
 	return tag, nil
+}
+
+// SearchPatternDigest names a searched pattern without revealing it: an HMAC
+// of the pattern under a key drawn from the case key for this purpose alone.
+//
+// A bare SHA-256 would not do. A search pattern is usually a word, a name or a
+// number, and a published digest of something guessable confirms every guess
+// made against it -- the reason a record's own whole-plaintext digest is
+// sealed in its footer rather than written beside the ciphertext. Keyed, the
+// digest lets a holder of the case key check a candidate pattern against a
+// timeline, and tells everybody else nothing.
+func SearchPatternDigest(caseKey, pattern []byte) ([sha256.Size]byte, error) {
+	var out [sha256.Size]byte
+	if len(caseKey) != KeySize {
+		return out, fmt.Errorf("a case key must be %d bytes, got %d", KeySize, len(caseKey))
+	}
+	key, err := expandFrom(caseKey, nil, HKDFInfoSearchPattern, sha256.Size)
+	if err != nil {
+		return out, err
+	}
+	defer SecureZero(key)
+	mac := hmac.New(sha256.New, key)
+	mac.Write(pattern)
+	copy(out[:], mac.Sum(nil))
+	return out, nil
 }
 
 // RecordWrappingKey derives the key that wraps one record's key. The record uid

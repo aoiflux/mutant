@@ -3,17 +3,18 @@ package builtin
 // Classified plaintext, and the places it is not allowed to leave by accident.
 //
 // `record_read` and `record_read_partial` return plaintext out of a classified
-// record, and from that moment the plaintext is an ordinary buffer: one
+// record, and so does `record_search`, as the context around each hit. From
+// that moment the plaintext is an ordinary buffer: one
 // `putln(secret)` prints all of it, because Inspect renders a buffer as its
 // entire hex. So the buffer carries a mark -- object.Bytes.Classified -- and the
 // builtins that send a value out of the process refuse one that carries it:
 // putln and putf, fs_write and fs_append, http_post and http_request,
 // report_write and report_render, report_table and report_list (which render a
 // cell as it is added, so the check has to happen there), case_note,
-// cache_put, and ledger_add_node,
-// ledger_add_edge and db_add_artifact (graphene must never hold evidence
-// plaintext: its property blobs sit in the write-ahead log, and a ledger is
-// written to be handed over).
+// cache_put, and ledger_add_node, ledger_add_edge, db_add_artifact and
+// db_add_relation (graphene must never hold evidence plaintext: its property
+// blobs sit in the write-ahead log, and a ledger is written to be handed
+// over).
 //
 // A builtin whose parameter is STRING alone -- net_conn_write, ws_write_frame,
 // exec_string, cmd_add, net_dns_query, lua_run_string -- cannot be handed a
@@ -33,9 +34,11 @@ package builtin
 // to a new buffer through bytes_slice and through `a + b` of two buffers
 // (object.JoinClassification), and nothing else. A conversion to a string, to
 // hex, to base64 or to JSON produces a value without it, and so does a loop
-// that rebuilds the buffer byte by byte. This catches accidents, not
-// adversaries -- which is the agreed enforcement: at run time, with no taint
-// analysis in the compiler.
+// that rebuilds the buffer byte by byte. Nor is an integer marked: the offset
+// of a record_search hit, beside the pattern that matched there, says what the
+// record holds at that offset. This catches accidents, not adversaries --
+// which is the agreed enforcement: at run time, with no taint analysis in the
+// compiler.
 //
 // The deliberate path out is `record_release(buffer, reason)`, which returns
 // an unmarked copy and records in the case timeline that the examiner chose to
@@ -178,10 +181,11 @@ func ClassifiedSinks() []string {
 }
 
 // ClassifiedSources returns the builtins whose result carries the mark:
-// record_read's buffer, and the `bytes` entry of record_read_partial's hash.
-// Held to the code that sets the mark by TestClassifiedSourcesAreTheBuiltinsThatMark.
+// record_read's buffer, the `bytes` entry of record_read_partial's hash, and
+// the `context` of each of record_search's hits. Held to the code that sets
+// the mark by TestClassifiedSourcesAreTheBuiltinsThatMark.
 func ClassifiedSources() []string {
-	return []string{BuiltinNameRecordRead, BuiltinNameRecordReadPartial}
+	return []string{BuiltinNameRecordRead, BuiltinNameRecordReadPartial, BuiltinNameRecordSearch}
 }
 
 // refuseClassified is the sink check: nil when no argument holds classified
@@ -245,7 +249,8 @@ func RecordRelease(args ...object.Object) object.Object {
 		// from a release, and the timeline would record one that did not
 		// happen.
 		return resultAndError(nil, newError("%s: this buffer carries no classification, so there is nothing "+
-			"to release. Only plaintext read by record_read or record_read_partial is marked", op))
+			"to release. Only plaintext read by record_read or record_read_partial, and the context of a "+
+			"record_search hit, is marked", op))
 	}
 
 	custodyStore.Lock()

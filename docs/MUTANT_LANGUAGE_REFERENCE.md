@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **681 builtins** across **41 categories**.
+The standard library is **682 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1011,7 +1011,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
 | [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-28) | 28 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, and the custody of each exhibit |
-| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-11) | 11 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, verifying with no key at all, and the one recorded way to let read plaintext out |
+| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-12) | 12 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, searching what one reader could read, verifying with no key at all, and the one recorded way to let read plaintext out |
 | [Disclosure](CAPABILITY_REFERENCE.md#disclosure-15) | 15 | Named disclosure postures, the recipient roles that may be given them, the grants issued under them and the redaction versions they carry out, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
@@ -2430,12 +2430,29 @@ the property a recipient who was granted nothing still has, and it reports in a
 refuses a span it cannot fully decrypt and names the segments that stood in the
 way; `record_read_partial` is the separate contract that returns those as data.
 
-Plaintext either read returns is marked with the record it came from and the
-classes it crossed, and every builtin that sends a value out of the process --
+`record_search(record, pattern, options?)` finds a literal in what one reader of
+a record could read. Opened under a grant, that is the segments the grant opens;
+opened with the case key, the search names a view (`{"view": "counsel"}`) and
+reads exactly the segments a grant under it would open, and no other segment is
+read from the file. A match that would need even one byte the search did not
+read is never reported, so `count` covers the searched bytes and `complete` says
+whether that was every segment. Each hit carries its offset, the segments and
+classes it lies in, and up to `context` bytes either side (32 unless asked,
+never past what was readable, never zero-filled). The case timeline records the
+search with the pattern only as a digest keyed to the case key.
+
+```mutant
+let found, err = record_search(record, "example.org", {"view": "counsel"});
+putln(found["count"], "found; complete:", found["complete"]);
+```
+
+Plaintext any of these returns -- a search's as the context of each hit -- is
+marked with the record it came from and the classes it crossed, and every
+builtin that sends a value out of the process --
 `putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
 `report_write`, `report_render`, `report_table`, `report_list`, `case_note`,
-`cache_put`, `ledger_add_node`, `ledger_add_edge` and `db_add_artifact` --
-refuses a marked buffer, whether it is
+`cache_put`, `ledger_add_node`, `ledger_add_edge`, `db_add_artifact` and
+`db_add_relation` -- refuses a marked buffer, whether it is
 passed directly or sits anywhere inside an array, hash or struct. The refusal
 names the record, the classes and the length, and not one byte. `bytes_slice`
 carries the mark to the slice it returns, and `+` of two buffers to the joined

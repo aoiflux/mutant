@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +100,34 @@ putln(Finding { address: address });`,
 			`let address, err = record_read(r, 551, 19);
 putln("address:", address, address);`,
 			"argument 2 holds `address`",
+		},
+		{
+			// A search's hit holds the plaintext around the match.
+			"the context of a search hit",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+putln(found["hits"][0]["context"]);`,
+			"argument 1 holds the plaintext `record_search`",
+		},
+		{
+			"a search hit held in a name, its context written to a file",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+let hit = found["hits"][1];
+let _, werr = fs_write("hit.txt", hit["context"]);`,
+			"`fs_write` refuses classified plaintext, and argument 2 holds the plaintext `record_search`",
+		},
+		{
+			// A hit is a hash, and the run time looks inside it.
+			"a whole search hit",
+			`putln(record_search(r, "example.org", {"view": "counsel"})["hits"][2]);`,
+			"argument 1 holds a search hit holding the plaintext `record_search`",
+		},
+		{
+			"a search's hits held in a name, and a context taken from them",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+let hits = found["hits"];
+let context = hits[0]["context"];
+case_note("seen", context);`,
+			"`case_note` refuses classified plaintext, and argument 2 holds `context`, the plaintext `record_search`",
 		},
 	}
 
@@ -200,6 +229,58 @@ putln(address + other);`,
 			`let address, err = record_read(r, 551, 19);
 let show = fn() { putln(address); };`,
 		},
+		{
+			// A search that found nothing holds no plaintext, so neither its
+			// result nor its hits are certainly plaintext.
+			"a search's whole result",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+putln(found);`,
+		},
+		{
+			"a search's hits",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+putln(found["hits"]);`,
+		},
+		{
+			"what a search counted",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+putln(found["count"], found["complete"], found["withheld_segments"]);`,
+		},
+		{
+			// A hit's offset and classes are integers and names.
+			"a search hit's offset and classes",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+let hit = found["hits"][0];
+putln(hit["offset"], hit["classes"], hit["context_offset"]);`,
+		},
+		{
+			// The loop variable is not a `let`, so the rule cannot see what it
+			// holds; the run time still refuses.
+			"a search hit reached by a loop",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+for (hit in found["hits"]) { putln(hit["context"]); }`,
+		},
+		{
+			"a context entry of a hash that is not a search's",
+			`let entry = {"hits": [{"context": "x"}]};
+putln(entry["hits"][0]["context"]);`,
+		},
+		{
+			"the hits of a builtin that is not a search",
+			`let other, err = fs_read("notes.txt");
+putln(other["hits"][0]["context"]);`,
+		},
+		{
+			// A failure names a segment and a reason, and holds no plaintext.
+			"a search's failures",
+			`let found, err = record_search(r, "example.org", {"view": "counsel"});
+putln(found["failures"][0]);`,
+		},
+		{
+			"a shadowed record_search",
+			`let record_search = fn(r, p, o) { return {"hits": [{"context": "nothing"}]}; };
+putln(record_search(r, "example.org", {})["hits"][0]["context"]);`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -231,24 +312,25 @@ func TestTheDisclosureExampleIsFlaggedWhereItMeansToBeRefused(t *testing.T) {
 	}
 	src := string(data)
 
+	// The two deliberate refusals: a read's plaintext, and a search hit's
+	// context, each written to a file.
+	refused := []string{
+		`fs_write(output_directory + "/address.txt", address)`,
+		`fs_write(output_directory + "/hit.txt", around)`,
+	}
 	got := classifiedDiagnostics(t, src, DefaultLintConfig())
-	if len(got) != 1 {
-		t.Fatalf("got %d classifiedPlaintext diagnostics in the example, want 1: %v", len(got), got)
+	if len(got) != len(refused) {
+		t.Fatalf("got %d classifiedPlaintext diagnostics in the example, want %d: %v", len(got), len(refused), got)
 	}
-
-	const refused = `fs_write(output_directory + "/address.txt", address)`
-	want := -1
-	for i, line := range strings.Split(src, "\n") {
-		if strings.Contains(line, refused) {
-			want = i
-			break
+	lines := strings.Split(src, "\n")
+	for i, call := range refused {
+		want := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, call) })
+		if want < 0 {
+			t.Fatalf("the example no longer contains %q", call)
 		}
-	}
-	if want < 0 {
-		t.Fatalf("the example no longer contains %q", refused)
-	}
-	if int(got[0].Range.Start.Line) != want {
-		t.Errorf("the diagnostic is on line %d, want %d (the deliberate fs_write): %s",
-			got[0].Range.Start.Line+1, want+1, got[0].Message)
+		if int(got[i].Range.Start.Line) != want {
+			t.Errorf("diagnostic %d is on line %d, want %d (the deliberate %s): %s",
+				i+1, got[i].Range.Start.Line+1, want+1, call, got[i].Message)
+		}
 	}
 }

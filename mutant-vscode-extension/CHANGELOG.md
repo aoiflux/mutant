@@ -33,6 +33,10 @@
   editor now says so at the argument. The words are the builtin's own list and
   are compared the way the builtin compares them.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
+- **`classifiedPlaintext` follows a search.** A hit of `record_search`, or the
+  context it carries, handed to a builtin that refuses it is flagged at the
+  line. A search's whole result and its `hits` are not, because a search that
+  found nothing holds no plaintext.
 - **Every new builtin is highlighted and hoverable** -- 166 of them, across disk
   image verification, partition-offset opening, deleted-file recovery, journals,
   slack, the forensic ledger, classified records, disclosure and reading a graph

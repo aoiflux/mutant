@@ -423,8 +423,10 @@ policy.
   `cache_open` are deliberately not openers: those are the analyst's own files)
 - `classifiedPlaintext` -> warning (plaintext read out of a classified record
   -- `record_read`'s buffer, `record_read_partial`'s `bytes`, a `bytes_slice` of
-  either, or an array, hash or struct literal holding one -- handed to a builtin
-  that refuses it. The run time is the enforcement and is exact; this is the
+  either, one of `record_search`'s hits or its `context`, or an array, hash or
+  struct literal holding one -- handed to a builtin that refuses it. A search's
+  whole result and its `hits` are not reported: they hold plaintext only when
+  the search found something. The run time is the enforcement and is exact; this is the
   other half of the owner's "runtime + LSP lint" decision, the same finding at
   the line before a passphrase has been typed. The sink and source lists are
   the run time's own, `builtin.ClassifiedSinks` and `builtin.ClassifiedSources`,

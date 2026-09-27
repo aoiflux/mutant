@@ -114,6 +114,16 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 		// Each view withholds exactly the other's class.
 		"bytes 1275 + 178  class: restricted",
 		"bytes 551 + 19  class: pii",
+		// A search under each view finds what that view reads: the desk's
+		// withholds the domain inside the victim's address.
+		"search under counsel: 4 found in 4 of 5 segments  complete: false",
+		"   at 559  class: pii",
+		"search under malware-desk: 3 found in 4 of 5 segments  complete: false",
+		// A hit's context kept its mark through a variable -- the VM stores
+		// every variable encrypted, and the mark rides beside the ciphertext --
+		// and it holds open bytes before the match and pii from it on.
+		`fs_write: argument 2 holds 31 bytes of plaintext read from record`,
+		`classified "open" and "pii"`,
 		// The recipient's side.
 		"checks passed: 11 of 11",
 		"verified with no root: false",
@@ -148,5 +158,20 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 	}
 	if *asked != 7 {
 		t.Errorf("the terminal was asked %d times, want 7:\n%s", *asked, prompts.String())
+	}
+
+	// The manifest's timeline records every search, and names neither pattern:
+	// each is there only as a digest keyed to the case key.
+	manifest, err := os.ReadFile(filepath.Join(work, "example_output", "record_disclosure", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(manifest), `"pattern_digest"`); got != 3 {
+		t.Errorf("the manifest records %d searches, want 3", got)
+	}
+	for _, pattern := range []string{"example.org", "finance"} {
+		if strings.Contains(string(manifest), pattern) {
+			t.Errorf("the manifest names the pattern %q", pattern)
+		}
 	}
 }

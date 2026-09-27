@@ -373,6 +373,30 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A record can be searched as one of its readers could read it.**
+  `record_search(record, pattern, options?)` finds a literal -- BYTES, or a
+  STRING's UTF-8 bytes -- in what one reader of a record could read. Opened
+  under a grant, that is the segments the grant opens; opened with the case
+  key, the search must name a view and reads exactly the segments a grant under
+  it would open, the partition `view_preview` reports. No other segment is read
+  from the file. A match that would need even one byte the search did not read
+  is never reported, and every offset the pattern occurs at is, overlapping
+  ones included and across segment boundaries, in time proportional to what
+  was read. Each hit carries its offset, the segments and classes it lies in,
+  and a `context` of up to `context` bytes either side (default 32, at most
+  4096), clipped where the readable bytes stop and never zero-filled, and
+  marked like a read's output: the sinks refuse it and `record_release` lets it
+  go. `count` is every match, `hits` the first `max_hits` of them (default 100,
+  at most 1000), `complete` whether every segment was searched, and a segment
+  the reader should open and cannot is listed in `failures` rather than
+  counted as withheld. `ignore_ascii_case` folds ASCII capitals and nothing
+  else. The open case's timeline records every search, with the pattern only
+  as a digest keyed to the case key -- a bare SHA-256 of a guessable term would
+  confirm every guess -- and with no case key open, in no form at all. Literal
+  only: a regular expression read a segment at a time would miss matches
+  without saying so. The editor's `classifiedPlaintext` rule warns about a hit,
+  or its context, handed to a builtin that refuses it.
+
 - **A script's ledger nodes can be classified, and the ledger read under a
   view.** `ledger_classify(ledger, node, classes, reason)` records which of the
   open case's declared classes a node a script wrote holds -- one, several, or
@@ -835,6 +859,14 @@ exhaustive lists.
   unlabelled node's candidates without reading them, so a match could name any
   id in the scope. A pattern node on no edge of the pattern is now refused, and
   the refusal names it.
+
+- **The documentation names every builtin that refuses classified
+  plaintext.** `record_release`'s documentation, the disclosure policy and the
+  classified-records source all stopped their list of the builtins that refuse
+  a marked buffer at `db_add_artifact`, although `db_add_relation` refuses one
+  too; `record_release`'s also left out `report_table` and `report_list`. A test
+  now holds `record_release`'s documentation to the list the run time is held
+  to.
 
 ### Security
 

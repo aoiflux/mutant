@@ -163,3 +163,15 @@ func TestClassifiedSourcesAreTheBuiltinsThatMark(t *testing.T) {
 		t.Errorf("the functions that mark plaintext are\n  %v\nbut ClassifiedSources names\n  %v", got, want)
 	}
 }
+
+// record_release's documentation is where a reader learns which builtins
+// refuse classified plaintext and where it comes from, so it names every sink
+// and every source the lists above are held to.
+func TestTheReleaseDocumentationNamesEverySinkAndSource(t *testing.T) {
+	summary := builtinDocs[BuiltinNameRecordRelease].summary
+	for _, name := range append(ClassifiedSinks(), ClassifiedSources()...) {
+		if !strings.Contains(summary, name) {
+			t.Errorf("record_release's documentation does not name %s", name)
+		}
+	}
+}

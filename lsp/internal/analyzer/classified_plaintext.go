@@ -23,13 +23,17 @@ package analyzer
 //   - a name this scope binds exactly once, to one of these;
 //   - bytes_slice of one of these, which carries the mark to the slice;
 //   - the `bytes` entry of record_read_partial's hash;
+//   - one of record_search's hits -- `found["hits"][i]` -- or the `context`
+//     entry of one, found through names bound once as the rest are;
 //   - an array, hash or struct literal holding one of these, because the run
 //     time looks inside containers too.
 //
 // Anything else is quiet -- a value that came back from a user function, a
 // name bound twice, `a + b`, which carries the mark only when both sides are
-// buffers. record_release is not in the list, so its result is never reported:
-// it is the deliberate way out.
+// buffers, and record_search's result or its `hits`, which hold plaintext only
+// when the search found something. A hit reached by a loop or a callback is
+// quiet too: the name it is bound to is not a `let`. record_release is not in
+// the list, so its result is never reported: it is the deliberate way out.
 
 import (
 	"fmt"
@@ -147,6 +151,11 @@ func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held 
 		if !isBuiltin {
 			return "", "", false
 		}
+		// A search's result holds plaintext only in the context of a hit, and
+		// a search can find nothing, so the result itself is not certain.
+		if name == builtin.BuiltinNameRecordSearch {
+			return "", "", false
+		}
 		if _, isSource := f.sources[name]; isSource {
 			return name, "the plaintext", true
 		}
@@ -162,10 +171,18 @@ func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held 
 		if node == nil {
 			return "", "", false
 		}
+		// A hit of a search holds its context, and the context is the
+		// plaintext. Every other entry of a hit is an integer or a class.
+		if f.searchHits(node.Left, depth+1) {
+			return builtin.BuiltinNameRecordSearch, "a search hit holding the plaintext", true
+		}
+		key, literal := literalString(node.Index)
+		if literal && key == "context" && f.searchHit(node.Left, depth+1) {
+			return builtin.BuiltinNameRecordSearch, "the plaintext", true
+		}
 		// Only record_read_partial's hash has a `bytes` entry holding the
 		// buffer. An index into record_read's buffer is one byte, an integer,
 		// and carries nothing.
-		key, literal := literalString(node.Index)
 		if !literal || key != "bytes" {
 			return "", "", false
 		}
@@ -209,4 +226,72 @@ func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held 
 		}
 	}
 	return "", "", false
+}
+
+// searchResult reports whether an expression is certainly a record_search
+// result: the call itself, or a name this scope binds once to one.
+func (f classifiedFinder) searchResult(expr mast.Expression, depth int) bool {
+	if expr == nil || depth > classifiedResolveDepth {
+		return false
+	}
+	switch node := expr.(type) {
+	case *mast.Identifier:
+		if node == nil {
+			return false
+		}
+		bound, found := f.bindings[node.Value]
+		return found && f.searchResult(bound, depth+1)
+	case *mast.CallExpression:
+		if node == nil {
+			return false
+		}
+		name, _, isBuiltin := builtinCallee(node.Function, f.isShadowed)
+		return isBuiltin && name == builtin.BuiltinNameRecordSearch
+	}
+	return false
+}
+
+// searchHits reports whether an expression is certainly a search's hits: the
+// `hits` entry of a result, or a name bound once to it.
+func (f classifiedFinder) searchHits(expr mast.Expression, depth int) bool {
+	if expr == nil || depth > classifiedResolveDepth {
+		return false
+	}
+	switch node := expr.(type) {
+	case *mast.Identifier:
+		if node == nil {
+			return false
+		}
+		bound, found := f.bindings[node.Value]
+		return found && f.searchHits(bound, depth+1)
+	case *mast.IndexExpression:
+		if node == nil {
+			return false
+		}
+		key, literal := literalString(node.Index)
+		return literal && key == "hits" && f.searchResult(node.Left, depth+1)
+	}
+	return false
+}
+
+// searchHit reports whether an expression is certainly one of a search's
+// hits: an index into its hits, or a name bound once to one.
+func (f classifiedFinder) searchHit(expr mast.Expression, depth int) bool {
+	if expr == nil || depth > classifiedResolveDepth {
+		return false
+	}
+	switch node := expr.(type) {
+	case *mast.Identifier:
+		if node == nil {
+			return false
+		}
+		bound, found := f.bindings[node.Value]
+		return found && f.searchHit(bound, depth+1)
+	case *mast.IndexExpression:
+		if node == nil {
+			return false
+		}
+		return f.searchHits(node.Left, depth+1)
+	}
+	return false
 }

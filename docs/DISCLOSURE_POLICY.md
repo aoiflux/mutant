@@ -42,6 +42,7 @@ document describes is waiting to be built.
 | `role_define`, `role_assign`, `role_list`: recipient roles, the views each may be granted, and the refusal of a disclosure its recipient's role does not allow | **In force.** [`builtin/recipient_role.go`](../builtin/recipient_role.go) |
 | `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
 | `ledger_classify`, `ledger_classifications`, `ledger_under_view`: the classes a node a script wrote holds, and the ledger read under a view, which only the reads that read through one take | **In force.** [`builtin/ledger_classify.go`](../builtin/ledger_classify.go), [`builtin/ledger_view.go`](../builtin/ledger_view.go) |
+| `record_search`: a literal found in what one reader of a record could read -- under the grant it was opened with, or under a view -- recorded with the pattern as a keyed digest | **In force.** [`builtin/record_search.go`](../builtin/record_search.go) |
 | `disclose_to`: a grant sealed to a recipient's public key rather than a passphrase | **Not built, by decision.** Grants are sealed under a passphrase and nothing else -- see [Section 12](#12-what-a-grant-is-and-how-it-travels) |
 | `object.Bytes.Classified`, the sink checks, and `record_release` | **In force.** [`builtin/classified.go`](../builtin/classified.go), [`object/bytesObj.go`](../object/bytesObj.go) |
 | The machine guard, [Section 10](#10-the-guard) | **In force.** [`policy/disclosure_policy.go`](../policy/disclosure_policy.go), [`policy/disclosure_guard_test.go`](../policy/disclosure_guard_test.go) |
@@ -352,6 +353,48 @@ the ledger. It is not access control: the program holding it holds the
 ledger's own handle too. What it limits is what a report built from its reads
 can carry to the view's recipient.
 
+### A search reads what its reader could read
+
+**`record_search(record, pattern, options?)` answers where a literal occurs in
+what one reader of a record could read, and names the reader.** A record opened
+under a grant is searched as its recipient holds it: the segments the grant
+opens. A record opened with the case key opens every segment, so a search of it
+must name a view, and then reads exactly the segments a grant under that view
+would open -- the partition `view_preview` reports and `disclose_to_passphrase`
+grants. A segment outside that set is never read from the file, let alone
+decrypted, so the search finds what that recipient could find and nothing else.
+
+A match that would need even one byte the search did not read is not reported,
+and nothing marks where one could have been. The matcher carries a partial
+match across the boundary between two segments it reads, so a pattern the
+segmenting happened to split is still found. `count` covers the bytes searched
+and nothing else, and `complete` says whether that was the whole record: a
+count of zero from a search that was not complete says nothing about the
+segments it did not read. A segment the reader should open and cannot is a
+finding, listed in `failures`, and never counted as withheld.
+
+Each hit's `context` -- the readable bytes around the match, clipped where they
+stop and never zero-filled -- is plaintext, and carries the `Classified` mark of
+[Section 10](#10-the-guard) with the class of every byte in it. The offsets and
+counts are integers and carry no mark: an offset beside the pattern that matched
+there says what the record holds at that offset, as surely as the context does.
+
+**The timeline records the search, and not the pattern.** A search term is often
+the most sensitive thing about a search -- a name, an account, a password found
+elsewhere -- and a bare SHA-256 of a term anybody could guess confirms every
+guess made against it, which is why a record's own whole-plaintext digest is
+sealed in its footer rather than published beside the ciphertext. The pattern is
+written as an HMAC under a key drawn from the case key for that purpose alone:
+a holder of the case key can check a candidate term against the timeline, and
+nobody else learns anything from it. With no case key open -- a recipient
+searching a grant in a case of their own that has none -- the search is recorded
+and the pattern is written in no form at all.
+
+The search is literal, with ASCII capitals folded only when asked. A regular
+expression over a record read a segment at a time either holds unbounded state
+across segments or misses a match longer than its window, and a search that
+misses without saying so is worse than one that cannot be asked.
+
 ## 6. A record without its case is evidentially mute
 
 A classification is a name and a tag. The name is what an examiner writes in a
@@ -497,13 +540,15 @@ guard in `policy/`.
 
 **The run-time half.** `object.Bytes` carries a `Classified` mark — the record
 uid, and the tag and label of each class the read crossed — set by `record_read`
-and `record_read_partial`, kept when the buffer is held in a variable, and
+and `record_read_partial`, and on the context of each `record_search` hit, kept
+when the buffer is held in a variable, and
 carried by `bytes_slice` and by `+` of two buffers, which marks the joined
 buffer with every record and class either side came from. It is checked **at the
 sink call sites**, in [`builtin/classified.go`](../builtin/classified.go):
 `putln`, `putf`, `fs_write`, `fs_append`, `http_post`, `http_request`,
 `report_write`, `report_render`, `report_table`, `report_list`, `case_note`,
-`cache_put`, `ledger_add_node`, `ledger_add_edge` and `db_add_artifact` refuse
+`cache_put`, `ledger_add_node`, `ledger_add_edge`, `db_add_artifact` and
+`db_add_relation` refuse
 an argument that holds a marked buffer, directly or anywhere inside an array,
 hash, struct, enum payload or captured variable, and a value nested too deep to
 check is refused rather than passed. `report_table` and `report_list` are on the
@@ -529,7 +574,8 @@ Its limits belong next to its existence, in the same paragraph, wherever it is
 documented: the mark travels through `bytes_slice` and `+` of two buffers and
 nothing else, so a conversion to a string, to hex, to base64 or to JSON
 produces a value without it, and so does a loop that rebuilds the buffer a byte
-at a time. **It catches
+at a time. No integer is marked, either: the offset of a `record_search` hit,
+beside the pattern, says what the record holds there. **It catches
 accidents, not adversaries.**
 
 ## 11. What this is not
