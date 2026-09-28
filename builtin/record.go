@@ -96,7 +96,10 @@ type recordSession struct {
 	signed         bool
 	signatureValid bool
 	signatureNote  string
-	openedAt       time.Time
+	// erased is true of a copy record_erase erased: its header's wrapped key
+	// and nonce are zeros, and nothing opens it under the case key.
+	erased   bool
+	openedAt time.Time
 }
 
 // openSegment decrypts one segment under whatever this record was opened with.
@@ -438,6 +441,10 @@ func recordCaseIdentity(op string) (recordIdentity, *object.Error) {
 		return recordIdentity{}, errObj
 	}
 	if session.caseKey == nil {
+		if session.keyErased {
+			return recordIdentity{}, newError("%s: every generation of case %s's key was erased with "+
+				"case_key_erase, so no record is sealed or opened under it", op, session.ID)
+		}
 		return recordIdentity{}, newError("%s: no case key is open; call `case_key_open(path)` first. A "+
 			"record's key is wrapped under the case key, and without one there is nothing to wrap it to", op)
 	}
@@ -1001,6 +1008,17 @@ func recordLoad(op, path string) (*recordSession, *object.Error) {
 	}
 	session.signed, session.signatureValid, session.signatureNote =
 		security.VerifyRecordSignature(footer, headerRaw, root)
+	// An erased copy's signature fails for a reason it can name: it covered
+	// the bytes the erasure overwrote. Named only when the segments still fold
+	// to the footer's root, so a copy changed anywhere else keeps the failure
+	// that says so.
+	session.erased = header.RecordKeyErased()
+	if session.erased && session.signed && !session.signatureValid &&
+		strings.EqualFold(footer.SegmentsRoot, hex.EncodeToString(root[:])) {
+		session.signatureNote = "the key in this copy was erased, and the signature covered the bytes the erasure " +
+			"overwrote, so it cannot hold for an erased copy. The segments still fold to the footer's root; the " +
+			"digests the ledger's record of the erasure gives for this file are what show the rest of it unchanged"
+	}
 	return session, nil
 }
 
@@ -1067,9 +1085,12 @@ func RecordVerify(args ...object.Object) object.Object {
 		// that nothing here orders one class above another.
 		"rounds_to": stringObj(session.header.RoundsTo),
 		// Two bits and never one: an unsigned record is not a forged one.
-		"signed":                   boolObj(session.signed),
-		"signature_valid":          boolObj(session.signatureValid),
-		"signature_note":           stringObj(session.signatureNote),
+		"signed":          boolObj(session.signed),
+		"signature_valid": boolObj(session.signatureValid),
+		"signature_note":  stringObj(session.signatureNote),
+		// A copy whose key record_erase destroyed: nothing opens it under the
+		// case key, and its signature no longer holds.
+		"erased":                   boolObj(session.erased),
 		"public_key":               stringObj(session.footer.PublicKey),
 		"key_created_for_this_run": boolObj(session.footer.KeyCreatedForThisRun),
 		"segments_root":            stringObj(session.footer.SegmentsRoot),
@@ -1137,6 +1158,11 @@ func RecordOpen(args ...object.Object) object.Object {
 		return fail("%s: %s belongs to case %s and the open case is %s. A record's segments are bound to "+
 			"the case that sealed them, so this key cannot open it and could not have sealed it",
 			op, path, session.header.CaseUID[:16], identity.caseUID[:16])
+	}
+	if session.erased {
+		return fail("%s: the key in %s was erased, so nothing opens this copy of record %s under the case key. "+
+			"Another copy still opens, and a grant still opens the segments it names", op, path,
+			session.header.RecordUID)
 	}
 
 	recordUID, err := security.RecordUIDFromSlice(mustHexBytes(session.header.RecordUID))

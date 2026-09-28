@@ -1,0 +1,16 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 6/10  the contradictions");
+
+if (quilldrop.ready(quilldrop.body)) {
+    let rows, _ = bodyfile_parse(quilldrop.body);
+    for (r in rows) {
+        if (r["mtime"] < r["crtime"]) {
+            putln("  older than its own birth:", r["name"]);
+        }
+        let there, _ = fs_exists(quilldrop.path(r["name"]));
+        if (!there) {
+            putln("  in the timeline, not on disk:", r["name"]);
+        }
+    }
+}

@@ -77,6 +77,9 @@ var DisclosureFiles = []string{
 	// long the case is kept and what holds it
 	"builtin/case_review.go",
 	"builtin/case_retention.go",
+	// the erasure of a record's key and of the case key, which holds the case
+	// key to check what it erases, and the disposal of a case
+	"builtin/case_erasure.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

@@ -1,23 +1,23 @@
 #!/usr/bin/env sh
+#
 # Build the QUILLDROP evidence corpus (Linux / macOS).
 #
-#   sh examples/workshop/evidence/build_evidence.sh
+#   ./examples/workshop/evidence/build_evidence.sh
 #
 # Run from the repository root. Requires fsagen on PATH:
 #   go install github.com/aoiflux/fsagen@latest
 #
-# Note: Mark-of-the-Web and alternate data streams are NTFS features. On ext4 or
-# APFS the corpus still builds and five of the six tools are unaffected;
-# 07_dropzone.mut reports the MoTW stream as absent, which is the honest answer.
+# Mark-of-the-Web and the alternate data stream are NTFS features. On ext4 or
+# APFS the corpus still builds and nine of the ten steps are unaffected; beat 3
+# reports that the stream is not there, which is the honest answer.
 
-set -eu
+set -e
 
 SEED=88412
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd)
 PLAYBOOK="$HERE/quilldrop.playbook.yaml"
-ROOT="$HERE/case_quilldrop"
-BODYFILE="$HERE/case_quilldrop.body"
-CSV_TL="$HERE/case_quilldrop.csv"
+ROOT="$(dirname "$HERE")/case"
+BODYFILE="$(dirname "$HERE")/case_quilldrop.body"
 
 if ! command -v fsagen >/dev/null 2>&1; then
     echo "fsagen not found on PATH."
@@ -31,20 +31,15 @@ if [ -d "$ROOT" ]; then
 fi
 
 echo "generating corpus (seed $SEED)..."
-fsagen --seed "$SEED" --playbook "$PLAYBOOK" --timeline "$BODYFILE" "$ROOT"
-
-# --timeline alone regenerates from the existing corpus; it does not rebuild it.
-echo "generating CSV timeline..."
-fsagen --timeline "$CSV_TL" "$ROOT"
-
-COUNT=$(find "$ROOT" -type f | wc -l | tr -d ' ')
+fsagen --seed "$SEED" --playbook "$PLAYBOOK" \
+       --timeline "$BODYFILE" --timeline-format bodyfile --timeline-source modelled \
+       "$ROOT"
 
 echo ""
 echo "evidence ready"
 echo "  corpus   : $ROOT"
-echo "  files    : $COUNT"
-echo "  bodyfile : $BODYFILE"
-echo "  csv      : $CSV_TL"
+echo "  files    : $(find "$ROOT" -type f | wc -l)"
+echo "  bodyfile : $BODYFILE ($(wc -l < "$BODYFILE") rows)"
 echo ""
-echo "Now run the first tool:"
-echo "  mutant examples/workshop/07_dropzone.mut    (it asks for a password)"
+echo "Now run the first step:"
+echo "  ./examples/workshop/run.sh 01_scene"

@@ -1,0 +1,14 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 2/10  the lure");
+
+if (quilldrop.ready(quilldrop.root)) {
+    let raw, _ = fs_read(quilldrop.path("Users/r.mehta/Inbox/invoice.eml"));
+    let msg, _ = email_parse(raw);
+    putln("  from", msg["from"]);
+    putln("  subject", msg["subject"]);
+    putln("  links", extract_iocs(msg["text"])["urls"]);
+    for (a in msg["attachments"]) {
+        putln("  attached", a["filename"]);
+    }
+}

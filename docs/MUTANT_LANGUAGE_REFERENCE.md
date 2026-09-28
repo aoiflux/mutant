@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **690 builtins** across **41 categories**.
+The standard library is **693 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1010,8 +1010,8 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Memory Forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
-| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-35) | 35 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, the custody of each exhibit, the reviews of the case and what it holds, and how long it is kept and what holds it |
-| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-12) | 12 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, searching what one reader could read, verifying with no key at all, and the one recorded way to let read plaintext out |
+| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-37) | 37 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key and its erasure, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, the custody of each exhibit, the reviews of the case and what it holds, how long it is kept and what holds it, and what was erased in it |
+| [Classified Records](CAPABILITY_REFERENCE.md#classified-records-13) | 13 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, searching what one reader could read, verifying with no key at all, the one recorded way to let read plaintext out, and erasing the key in one copy |
 | [Disclosure](CAPABILITY_REFERENCE.md#disclosure-15) | 15 | Named disclosure postures, the recipient roles that may be given them, the grants issued under them and the redaction versions they carry out, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
 | [Filesystem Forensics](CAPABILITY_REFERENCE.md#filesystem-forensics-115) | 115 | NTFS/FAT/exFAT/ext/HFS+/XFS parsers, $MFT |
@@ -2336,6 +2336,25 @@ force `evidence_dispose` refuses, until `retention_release` lifts it.
 case_write("IR-2026-014.manifest.json");
 let request, err = review_request(ledger, "case", "ready for peer review", {"manifest": "IR-2026-014.manifest.json"});
 retention_hold(ledger, "litigation is pending", {"authority": "Legal"});
+```
+
+**A key is erased, and a case is disposed of.** `record_erase(ledger, path,
+reason)` overwrites the record key in one copy's header and checks that nothing
+in the file still unwraps. Every other copy of the record still opens, and a
+grant still opens the segments it names, and the result says so in
+`does_not_erase`. `case_key_erase(ledger, key_path, reason)` is the erasure that
+reaches every copy: it overwrites the key file and removes it, so nothing wrapped
+under any generation of it opens with the case key; `{"generation": n}` erases
+one earlier generation instead. A retained case is then disposed of with
+`case_transition(ledger, "disposed", reason)`, which is refused -- naming all of
+what is missing -- until no hold is in force, the retention period has run,
+every exhibit is returned or disposed of, and the case key is erased.
+`erasure_list` reads the erasures back with the ledger alone.
+
+```mutant
+let preview, err = record_erase(ledger, "IR-2026-014/disk.mrec", "court order 77", {"preview": true});
+case_key_erase(ledger, "IR-2026-014.key", "the retention period ran");
+case_transition(ledger, "disposed", "nothing is left to keep");
 ```
 
 **The seal is checkable by someone else.** `case_write` puts a SHA-256 over every

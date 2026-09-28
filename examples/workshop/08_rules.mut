@@ -1,0 +1,15 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 8/10  the rules");
+
+if (quilldrop.ready(quilldrop.body)) {
+    let rows, _ = bodyfile_parse(quilldrop.body);
+    let events, _ = events_from(rows, "bodyfile");
+    let yaml, _ = fs_read("examples/workshop/quilldrop.sigma.yaml");
+    let found, _ = sigma_scan(yaml, events);
+    for (r in found["by_rule"]) {
+        putln("  ", r["level"], r["hits"], r["title"]);
+    }
+    putln(found["matched"], "hits over", found["events"], "events");
+    putln("  fields no event carried:", found["unmatched_fields"]);
+}

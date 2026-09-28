@@ -5,10 +5,7 @@
 
 putln("=== Parse logs ===");
 
-let lines = [
-    "2024-06-01 12:05:33 login user=alice ip=10.0.0.5 result=ok",
-    "2024-06-01 12:06:01 login user=bob ip=8.8.8.8 result=fail"
-];
+let lines = ["2024-06-01 12:05:33 login user=alice ip=10.0.0.5 result=ok", "2024-06-01 12:06:01 login user=bob ip=8.8.8.8 result=fail"];
 
 // [^ ]+ means "one or more non-space characters" - no backslashes needed.
 let pattern = "user=([^ ]+) ip=([^ ]+) result=([^ ]+)";
@@ -19,5 +16,5 @@ each(lines, fn(line) {
         putln("  [no match]");
     } else {
         putln("  user:", g[1], " ip:", g[2], " result:", g[3]);
-    };
+    }
 });

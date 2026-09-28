@@ -1,0 +1,13 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 10/10  the seal");
+
+if (quilldrop.ready(quilldrop.handover)) {
+    let seal, _ = case_manifest_verify(str_format("%s/manifest.json", quilldrop.handover));
+    putln("  case", seal["case_id"], "by", seal["examiner"]);
+    putln("  hash_matches", seal["hash_matches"], "signature_valid", seal["signature_valid"]);
+    for (name in ["report.md", "report.html"]) {
+        let now, _ = fs_hash(str_format("%s/%s", quilldrop.handover, name));
+        putln("  ", name, now["hash"]);
+    }
+}

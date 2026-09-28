@@ -198,6 +198,9 @@ type custodySession struct {
 	// the case had never been keyed -- while listing, in the same block, the
 	// labels tagged under it.
 	keyed bool
+	// keyErased records that case_key_erase erased every generation of the key
+	// in this run. It is never cleared either: the manifest says it happened.
+	keyErased bool
 
 	// classes is the classification scheme, in the order it was declared.
 	// Order is presentation order and carries no authority: nothing here
@@ -1136,6 +1139,9 @@ func (s *custodySession) classificationRecord() map[string]any {
 		record["key_fingerprint"] = s.keyFingerprint
 		record["key_id"] = custodyKeyID(s.keyFingerprint)
 		record["key_generation"] = int64(s.keyGeneration)
+		// Whether case_key_erase erased every generation of it in this run;
+		// the ledger's erasure_list says whether one ever did.
+		record["key_erased"] = s.keyErased
 	}
 	return record
 }

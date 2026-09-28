@@ -45,6 +45,7 @@ package builtin
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -261,8 +262,12 @@ func CaseKeyOpen(args ...object.Object) object.Object {
 		// Forgotten, so that trying again asks again. The terminal source
 		// remembers an answer when it is typed, before anything has checked
 		// it, and without this a typo here is the answer to every later
-		// case_key_open of this file for the rest of the run.
-		security.ForgetPassphrase(request)
+		// case_key_open of this file for the rest of the run. An erased
+		// generation is refused after the file's MAC has held, so the answer
+		// that reached it was right, and it is kept.
+		if !errors.Is(err, security.ErrCaseKeyGenerationErased) {
+			security.ForgetPassphrase(request)
+		}
 		return resultAndError(nil, newError("%s: %s", BuiltinNameCaseKeyOpen, err.Error()))
 	}
 	security.SecureZero(wrapKey)
@@ -525,6 +530,9 @@ func CaseKeyFingerprint(args ...object.Object) object.Object {
 			"created":     stringObj(g.Created),
 			"fingerprint": stringObj(g.Fingerprint),
 			"key_id":      stringObj(custodyKeyID(g.Fingerprint)),
+			// What the file claims, like the rest: the zeros case_key_erase
+			// writes over an erased generation's wrapped key.
+			"erased": boolObj(g.Erased()),
 		}))
 	}
 

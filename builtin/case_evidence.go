@@ -75,7 +75,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,9 +145,6 @@ func evidenceHolderAfter(state, by string) string {
 // the intake's, and a case opened with no hash policy would otherwise have
 // nothing to compare.
 const evidenceDigestAlgo = "sha256"
-
-// evidenceDisposers are the roles a disposal is recorded under.
-var evidenceDisposers = []string{"case_owner", "administrator"}
 
 // The options evidence_intake, evidence_accept and evidence_history take.
 var (
@@ -1025,9 +1021,8 @@ func EvidenceDispose(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	if !slices.Contains(evidenceDisposers, ledger.role.Name) {
-		return resultAndError(nil, newError("%s: %s is acting as %s, and a disposal is recorded by a %s. %s", op,
-			ledger.actor, ledger.role.Name, strings.Join(evidenceDisposers, " or an "), roleNotAccessControl))
+	if errObj := disposerRefusal(op, ledger, "a disposal"); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	custodyStore.Lock()

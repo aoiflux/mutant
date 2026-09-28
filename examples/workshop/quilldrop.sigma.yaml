@@ -1,0 +1,46 @@
+title: Executable written to a user Downloads folder
+id: 4f1c0a11-0001-4a10-9a01-quilldrop0001
+status: experimental
+level: medium
+logsource:
+  category: file_event
+detection:
+  selection:
+    path|contains: '/Downloads/'
+    path|endswith: '.exe'
+  condition: selection
+---
+title: Executable living in AppData Roaming
+id: 4f1c0a11-0002-4a10-9a01-quilldrop0002
+status: experimental
+level: high
+logsource:
+  category: file_event
+detection:
+  selection:
+    path|contains: '/AppData/Roaming/'
+    path|endswith: '.exe'
+  condition: selection
+---
+title: Archive staged in a temporary folder
+id: 4f1c0a11-0003-4a10-9a01-quilldrop0003
+status: experimental
+level: high
+logsource:
+  category: file_event
+detection:
+  selection:
+    path|contains: '/Temp/'
+    path|endswith: '.zip'
+  condition: selection
+---
+title: Persistence written under a Run key
+id: 4f1c0a11-0004-4a10-9a01-quilldrop0004
+status: experimental
+level: critical
+logsource:
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains: 'CurrentVersion\Run'
+  condition: selection

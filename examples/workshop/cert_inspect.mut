@@ -19,5 +19,5 @@ if (err) {
         putln("is_ca     :", cert["is_ca"]);
         putln("expires   :", expiry["iso"]);
         putln("sha256 fp :", cert["sha256"]);
-    };
-};
+    }
+}

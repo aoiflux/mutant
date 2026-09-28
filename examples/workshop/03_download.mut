@@ -1,0 +1,17 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 3/10  the download");
+
+let dropped = quilldrop.path("Users/r.mehta/Downloads/Invoice_MRD-88412.pdf.exe");
+
+if (quilldrop.ready(quilldrop.root)) {
+    let kind, _ = fs_magic(dropped);
+    putln("  magic", kind["type"], kind["mime"]);
+    let hist, _ = sqlite_query(quilldrop.path("Users/r.mehta/AppData/Local/Google/Chrome/History"), "select url from urls");
+    for (r in hist["rows"]) {
+        putln("  visited", r["url"]);
+    }
+    let zone, _ = fs_read(str_format("%s:Zone.Identifier", dropped));
+    let marks, _ = regex_find_all("HostUrl=\S+", zone);
+    putln("  ", marks);
+}

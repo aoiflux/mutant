@@ -1,247 +1,177 @@
-# QUILLDROP — 2-hour run sheet
+# QUILLDROP — two-hour run sheet
 
-A minute-by-minute plan for the hands-on session. **No slides required.** The
-only things on screen are a terminal and a text editor.
+Ten beats, about ten minutes each, with a break after six. Every beat has the
+same shape:
 
-Read [CASE_QUILLDROP.md](CASE_QUILLDROP.md) first — it is the story everything
-hangs on. Build the evidence before the room arrives (see
-[evidence/README.md](evidence/README.md)).
+- **2 min** — ask the question, out loud, before anyone opens an editor.
+- **5 min** — they write it. The file is under eighteen lines; they can.
+- **3 min** — run it, and read the one line that is not what they expected.
 
----
+The files are deliberately comment-free. The teaching is in the question you
+ask before they type, and in the output afterwards. Do not read the code to
+them.
 
-## The shape of it
+## Before anyone arrives
 
-Six tools, one case, each answering the question the previous one raised. Every
-block is the same rhythm:
-
-| | |
-|---|---|
-| **5 min** | *I build it.* You type, they watch. Talk while you type. |
-| **10 min** | *They build it.* They type. You walk the room. |
-| **5 min** | *The twist.* Run it, something surprising happens, explain why. |
-
-Cut any block and the rest still works. If you are running short, cut **12** and
-shorten **10**. Never cut **13** (it earns everything else) or **11** (it is the
-ending).
-
----
-
-## 0:00 – 0:10 — Cold open
-
-Do **not** introduce the language. Do not show a feature list.
-
-1. Read the client brief from `CASE_QUILLDROP.md` out loud. 90 seconds.
-2. Run `11_verdict.mut`. Let the finished, signed case report scroll past.
-3. Say: *"That is where we finish. Everything between here and there, you write."*
-4. Close it. Do not explain it yet.
-
-Then the two housekeeping facts, and only these two:
-
-```
-mutant gen --src tool.mut  # compiles .mut -> .mu
-mutant tool.mu             # runs it
-```
-
-> **Run from PowerShell or cmd, not Git Bash or WSL.** Mutant's secure mode
-> detects an analysis-sandbox-looking host and halts before executing. Under Git
-> Bash it sees WSL indicators and stops with `sandbox detected, execution
-> halted`. Either use a native shell, or pass `--compat` (which only downgrades
-> the response to a warning — the password and artifact verification still
-> apply). **Test this on the room's machines beforehand.**
+1. `go install github.com/aoiflux/fsagen@latest` and run
+   `.\examples\workshop\evidence\build_evidence.ps1` on your own machine.
+   Confirm it finishes and check the file count against
+   [evidence/README.md](evidence/README.md).
+2. **Add a Defender exclusion for the corpus folder**, and generate somewhere
+   Windows Search does not index. Defender's ML detection refuses writes of
+   generated PE files and its verdict is not stable across runs; Windows Search
+   adds an `OECustomProperty` stream to `.eml` files in indexed folders within
+   seconds, which would corrupt beat 3.
+3. Build or download **v2.5.0**. The story uses only v2.5.0 builtins; running it
+   on a newer build is fine, but the release is what attendees will have.
+4. Decide the password story. `--dev` is simplest and is what the README
+   teaches; if you want them to feel the key material, use `--password-stdin`.
+5. Tell everyone: **PowerShell or cmd, never Git Bash.** The sandbox detector
+   scores Git Bash on Windows as WSL at confidence 90 and halts.
 
 ---
 
-## 0:10 – 0:20 — Setup, together
+## 0:00 — 0:10  Cold open
 
-Everyone runs the evidence builder. Everyone ends up with **byte-identical
-evidence**, because it is generated from a seed.
+Read [CASE_QUILLDROP.md](CASE_QUILLDROP.md) aloud. Ninety seconds.
 
-```
-.\examples\workshop\evidence\build_evidence.ps1      # Windows
-sh   examples/workshop/evidence/build_evidence.sh    # Linux/macOS
-```
+Then run `10_seal.mut` on your own prepared case and let the two `true`s land.
+"That is where we finish. Nothing between here and there is longer than
+eighteen lines."
 
-Say why this matters now, not later: *"Your evidence and mine are the same
-bytes. So at the end, your report and my report will have the same SHA-256. If
-they don't, one of us made a mistake, and we'll be able to tell which."*
+Then everyone runs `build_evidence.ps1` and `run.ps1 01_scene`.
 
-Sanity check everyone is alive:
+## 0:10 — 0:20  Beat 1 — the scene
 
-```
-mutant gen --src examples/workshop/ioc_extract.mut
-mutant examples/workshop/ioc_extract.mu
-```
+**Ask:** you have a folder. Before you open anything, what can you say about it?
 
----
+`fs_walk` gives you every object. `fs_entropy` gives you one number per file.
 
-## 0:20 – 0:40 — **13_hexeye.mut** — "be the parser"
+**The twist:** the archive in `Temp` scores as high as the scrambled
+spreadsheets. Compression and encryption look identical to entropy. Entropy
+found you something; it did not tell you what.
 
-**This is the hook. Do it first, even though it is numbered last.**
+## 0:20 — 0:30  Beat 2 — the lure
 
-- **5 min** — Write the `hexdump` function live. It is ~15 lines and it is a
-  *real* hex editor. Point it at `sample_win.exe`. Let them see `4D 5A` and the
-  `MZ` in the ASCII column, and tell them whose initials those are.
-- **10 min** — They walk the header by hand: byte at `0x00`, pointer at `0x3C`,
-  follow it, `PE\0\0`, then machine / section count / **TimeDateStamp**.
-- **5 min** — The twist: the timestamp reads `0` → *1970*. Somebody scrubbed
-  the build time, and that is itself a finding. Then run `bin_pe_parse`,
-  `bin_sections`, `imphash`, `go_symbols` and show the hand-read numbers match
-  exactly.
+**Ask:** who wrote to this person, and what did they want them to do?
 
-**Land this line:** *"There is no step in any forensic tool harder than: read a
-byte, read a pointer, follow it, read a table. There are only more offsets."*
+`email_parse` on the `.eml`. Then `extract_iocs` on the body — one call, every
+URL.
 
-Best moment: `go_symbols` recovering 21 function names out of a **stripped** Go
-binary. Go's runtime needs the symbol table for stack traces, so stripping
-cannot remove it.
+**The twist:** the attachment's name has two extensions. Write it down; it is
+the first line of the next file.
 
----
+## 0:30 — 0:40  Beat 3 — the download
 
-## 0:40 – 1:00 — **07_dropzone.mut** — how did it get in?
+**Ask:** is that file what its name says it is, and how did it get here?
 
-- **5 min** — Magic-vs-extension. A `.pdf` whose first two bytes are `MZ`.
-- **10 min** — They add the **Mark-of-the-Web** reader. This is the moment:
-  `fs_read(path + ":Zone.Identifier")` — no special builtin, just an NTFS
-  alternate data stream addressed by appending to the path. Out falls the exact
-  URL the file was downloaded from.
-- **5 min** — The correlation. That URL's domain also appears in the phishing
-  email on the same disk. Two artifacts, written by two programs that never
-  spoke to each other, agreeing. *That* is a finding; a suspicious file is not.
+Three artifacts, three independent answers: `fs_magic` reads the header,
+`fs_read(path + ":Zone.Identifier")` reads the alternate data stream Windows
+attached when it was downloaded, and `sqlite_query` reads Chrome's history.
 
-Then show `detect_suspicious_files()` doing the scoring in one call — **after**
-they wrote it themselves, never before. *"You cannot defend a finding you got
-from a function you can't explain."*
+**The twist:** all three agree, and the host in the ADS is the host in the
+email from beat 2. That is corroboration, and it is what turns a finding into a
+conclusion.
 
-**Watch for:** non-NTFS filesystems have no MoTW. The tool says so honestly
-rather than reporting nothing found. Use that: "found nothing" and "cannot look"
-are different answers.
+*NTFS only.* On ext4 or APFS the ADS is not there and that line reports
+nothing, which is the honest answer.
 
----
+## 0:40 — 0:50  Beat 4 — the binary
 
-## 1:00 – 1:20 — **08_supertimeline.mut** — in what order?
+**Ask:** what is the thing in AppData?
 
-- **5 min** — `bodyfile_parse` + `mactime`. Four timestamps per file; the live
-  filesystem only gives you one.
-- **10 min** — `events_from(rows, "bodyfile")`, then merge in the email's `Date:`
-  header and the implant's own log. One vocabulary, three source families.
-- **5 min** — **Sigma.** Paste in four YAML rules and run `sigma_scan` over the
-  timeline. Real detection rules, executing in the language, no SIEM.
+`bin_pe_parse`, then `timestamp_normalize` on the field it returns, then
+`imphash`.
 
-Two things to point at:
+**The twist:** it was built on **1 January 1970**. The PE's `TimeDateStamp` is
+zero — scrubbed. The absence of a build date is itself a finding, and the
+imphash still clusters it against anything else built from the same imports.
 
-1. `unmatched_fields` — the fields **no event carried**. A rule that could not
-   have fired is not a host that came back clean. No coverage report tells you
-   this.
-2. **The twist, and it is free:** three of the hits are dated **2024** — before
-   the email that delivered them. Sigma is not wrong. The bodyfile is not wrong.
-   The *filesystem* is repeating what the attacker told it.
+## 0:50 — 1:00  Beat 5 — the day
 
-Hold the silence there. That is the setup for the next block.
+**Ask:** what happened, and in what order?
 
----
+`bodyfile_parse` gives you four times per object. `mactime` collapses them into
+one row per distinct instant with a MACB flag string.
 
-## 1:20 – 1:25 — Break
+**The twist:** count the rows against the moments. Four timestamps per file
+does not mean four events — most files were born, written and read in the same
+second, and `mactime` says so with `macb`.
 
----
+## 1:00 — 1:10  Beat 6 — the contradictions
 
-## 1:25 – 1:45 — **09_revenant.mut** — where did they lie?
+**Ask:** which of those times cannot be true?
 
-Open with the line on the board:
+Two tests, one loop. `mtime < crtime` — a file modified before it existed.
+`fs_exists` false on a path the timeline names — something that was there and
+is not.
 
-> **You cannot delete a fact. You can only create a contradiction.**
+**The twist:** the archive claims 2024. The staging folder claims to have
+existed at all. Both claims came from the same person, and they cannot both be
+managed by deleting things: the deletion is what left the second one visible.
 
-- **5 min** — TELL 1: `mtime < crtime`. Modified before it was born. One
-  `filter`, and it is not "unusual", it is *impossible*.
-- **10 min** — TELL 2, which is the real one: **`ctime` long after `mtime`**.
-  Setting a timestamp *is* a metadata change, so the kernel stamps the moment of
-  the lie onto the record. The attacker picked the mtime; they did not get to
-  pick the ctime. It reads `12 March 00:10` — that is *when they did it*.
-- **5 min** — TELL 3 (four files sharing one exact second: a script, not a
-  person) and TELL 4 (`seq 60 → 97`: 36 beacons cut out of a log whose own
-  counter kept score).
+## 1:10 — 1:15  Break
 
-**If you built the NTFS image** (`evidence/make_ntfs_image.ps1`, admin, once,
-beforehand), set `MFT_PATH` and run TELL 6 for the real thing: NTFS stores every
-timestamp **twice**, and `$FILE_NAME` is kernel-written and unreachable from the
-ordinary API. Four independent tells, scored together. See the notes at the end
-of this sheet.
+## 1:15 — 1:25  Beat 7 — the inventory
 
----
+**Ask:** what left, and can you answer without opening the archive?
 
-## 1:45 – 2:00 — **10_quarry** (short) then **11_verdict** (the ending)
+`zip_open` reads the central directory only. `zip_entries` gives you every
+member's name, size, CRC-32 and date. Nothing is decompressed — the script
+prints `never decompressed` and it is literally true.
 
-Run `10_quarry.mut` rather than building it — you are short on time, and its
-payoff is in the output.
+**The twist:** the member dates predate the archive. Whoever made it did not
+create these files; they collected them.
 
-- The zip is opened and **never extracted**. Only the central directory is read.
-- Each member's stored **CRC-32** is compared against the CRC-32 of the original
-  still sitting in `Documents`. 18 documents proven **byte-identical**, without
-  decompressing anything. *"The attacker wrote you an inventory list and called
-  it a zip."*
-- 6 of them are HR records. That is a notification clock starting.
-- Then the beacon detector says **nothing found** — because the log tampering
-  left one enormous gap that wrecks the variance. Split the series at the hole
-  09_revenant found, re-run, and it comes back **CV 0.00, score 100, confidence
-  high**. *Anti-forensics is not a wall. It is a signpost.*
+## 1:25 — 1:35  Beat 8 — the rules
 
-Finish with `11_verdict.mut`:
+**Ask:** what does somebody else's detection library say about your timeline?
 
-> **Analysis is what you did. Evidence is what you can prove you did.**
+`events_from(rows, "bodyfile")` normalizes your bodyfile into the interchange
+vocabulary. `sigma_scan` runs [quilldrop.sigma.yaml](quilldrop.sigma.yaml) over
+it, and reports per rule.
 
-`case_open` → evidence registered with digests → every builtin that touched each
-source counted → findings written → sealed with SHA-256 + Ed25519 → `case_bundle`
-writes a handover anybody can check with `sha256sum -c`.
+**The twist:** the critical rule fired **zero** times, and the last line says
+why: `fields no event carried: [CommandLine]`. A bodyfile has no command lines.
+That rule did not clear the host — it never ran. A detection stack that reports
+"0 alerts" without reporting that is telling you nothing.
 
-**The closer:** the tool edits one phrase in its own report and re-checks the
-digest. It fails. The signature still verifies — and now *proves* the report
-beside it is not the report that was produced. Then it restores the file.
+## 1:35 — 1:50  Beat 9 — the verdict
 
-Last line: *"Regenerate the evidence from the seed, re-run these tools, and you
-get the same digests. That is the difference between an opinion and a result."*
+**Ask:** hand this to a lawyer. What has to be in the envelope?
+
+`case_open` with a hash policy, `case_evidence` per exhibit, `case_note` for
+your conclusion, `case_bundle` to write it out, `case_close`.
+
+**The twist:** compare exhibit digests across the room. They match — the
+evidence is the same bytes everywhere. Now compare the manifest hash. It does
+not match, and it must not: it records when *you* opened the case. Reproducible
+evidence, singular custody.
+
+## 1:50 — 2:00  Beat 10 — the seal
+
+**Ask:** can a reader tell if you changed the report after you signed it?
+
+`case_manifest_verify` on the manifest alone — no key the reader does not
+already have, no case still open.
+
+**The closer, do this live:** open `handover/report.md`, change one word, save.
+Re-run `10_seal.mut`.
+
+`hash_matches` is still `true` and `signature_valid` is still `true` — the
+manifest verifies itself and nobody touched the manifest. But the `report.md`
+digest on the last line has moved, and it no longer matches what the manifest
+recorded when the bundle was written. The seal did not catch the edit; the
+*digest the seal covers* did. That difference is the whole of what chain of
+custody buys you. Put the word back and run it once more.
 
 ---
 
-## If you have 30 more minutes
+## If you have thirty more minutes
 
-- **12_imposter / deeper binary triage** — `imphash` for family clustering,
-  `go_types`, `bin_yara_scan`, `mem_find_shellcode`.
-- **Registry** — `hive_open` / `amcache_parse` / `shimcache_parse`, or
-  `reg_open` against the student's own live registry.
-- **Let them write one Sigma rule** for something they noticed in tool 7 and
-  watch it fire without touching any other file.
-
----
-
-## Language gotchas — put this on a card on every desk
-
-Every one of these was hit while writing these tools. They cost minutes each if
-you have not seen them.
-
-| Gotcha | What happens | Fix |
-|---|---|---|
-| Fallible builtins return `(value, err)` | Nesting one passes the *pair*: `got MULTI_VALUE` | `let v, e = f(x);` then use `v` |
-| No `null` literal | `undefined variable: null` | a bare `return;` yields null; test with `is_null()` |
-| No string literal inside `${...}` | parser error naming the line **inside** the string | bind a local first, then `${local}` |
-| Builtins are not values | `map(xs, defang)` fails | `map(xs, fn(d) { return defang(d); })` |
-| **`while` / C-style `for` inside a `for…in`** | `loop cursor was replaced on the stack` | use `for (i in range(a, b))`, which nests fine |
-| `regex_find_all(p, s, 0)` | returns nothing — `0` is a limit | omit the third argument |
-| Semicolons after block statements | parse error | `if (c) { … };` and `let f = fn(){ … };` |
-| Git Bash / WSL | `sandbox detected, execution halted` | run in PowerShell/cmd, or pass `--compat` |
-| `-pwd` / `--password` flag | refused since 2.6.0 | omit it and be prompted, or `--password-stdin` |
-
----
-
-## Facilitator prep checklist
-
-- [ ] `fsagen` installed; `build_evidence` run once and the output checked in or
-      on a USB stick, so a student with no Go toolchain is not stuck
-- [ ] Validate the playbook against `fsagen --generate-schema .` (fsagen moves;
-      the `.mut` tools depend on the **paths**, not the YAML)
-- [ ] Every tool compiled once on the room's OS — `07` and `13` touch NTFS
-      features and behave differently on ext4/APFS (honestly, but differently)
-- [ ] `mutant.exe` on PATH, or tell them the full path
-- [ ] **Optional but worth it:** `evidence/make_ntfs_image.ps1` run once, as
-      admin, to produce a real `$MFT` with a real timestomp in it. Ship the
-      exported `case_quilldrop.mft` and students need no admin at all.
-- [ ] Decide the password story: everyone types the same one (`workshop`), or
-      everyone is prompted. Do not let people improvise at minute 12.
+- Write a fourth Sigma rule against a field the bodyfile *does* carry
+  (`path`, `size`, `ts_desc`) and watch it fire.
+- Point `06_lies.mut` at a timeline you generated with a different seed.
+- Open [lib/quilldrop.mut](lib/quilldrop.mut) and ask why `ready()` returns a
+  boolean instead of raising.
+- Pick anything from the snippets table in [README.md](README.md).

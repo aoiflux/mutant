@@ -415,7 +415,7 @@ func TestEachStateRefusesAFixedSetOfActs(t *testing.T) {
 		caseStateConcluded: {caseActSeal, caseActIntake},
 		caseStateRetained:  {caseActSeal, caseActIntake},
 		caseStateDisposed: {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact,
-			caseActReview, caseActRetain},
+			caseActReview, caseActRetain, caseActErase},
 	}
 	for _, state := range caseStates {
 		for action, name := range caseActionNames {

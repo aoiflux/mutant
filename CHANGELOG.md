@@ -373,6 +373,27 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A record's key is erased, and so is the case's, and a case is disposed of.**
+  `record_erase(ledger, path, reason, options?)` overwrites the record key in
+  one copy's header with zeros as wide as it, forces the write to the disk,
+  reads it back, and records the erasure in the case's ledger with the file's
+  digest before and after; `{"preview": true}` checks everything and writes
+  nothing. It destroys that copy's key and nothing else, and its
+  `does_not_erase` field says so: every other copy still opens with the case
+  key, and a grant already issued still opens the segments it names.
+  `case_key_erase(ledger, key_path, reason, options?)` is the erasure that
+  reaches every copy: it overwrites the key file and removes it, or with
+  `{"generation": n}` erases one earlier generation in the file. Both are
+  recorded by an examiner acting as a case_owner or an administrator, and both
+  are refused under a legal hold. `case_transition(ledger, "disposed", reason)`
+  disposes of a retained case once no hold is in force, the retention period
+  has run, every exhibit is returned or disposed of and the case key is erased,
+  and a refusal names everything still missing. `erasure_list` reads the
+  erasures back with the ledger alone, `record_verify` reports an erased copy
+  as `erased` -- its signature no longer holds, because it covered the bytes
+  the erasure overwrote -- and `case_key_fingerprint` says which generations
+  are erased. The lifecycle reader refuses a move the lifecycle does not have.
+
 - **A case is reviewed, and kept.** `review_request(ledger, subject, note,
   options?)` asks for a review of the attached case, of one of its records or of
   one of its redaction versions, and binds what it asks about by a hash: a
@@ -703,6 +724,12 @@ exhaustive lists.
   ledger open.
 
 ### Fixed
+
+- **The disclosure policy promised an erasure nothing performed.** It said
+  crypto-erasure was available and listed it among the operations, and no
+  builtin erased or rewrapped any key. `record_erase` and `case_key_erase` do
+  now, and sections 3 and 7 say what each destroys and what it cannot reach:
+  destroying one record's key is not enough while copies of the record exist.
 
 - **A withdrawal could leave its examiner unable to write to the ledger.** A
   disclose_* write finds an Actor, Record, Class or View node the ledger

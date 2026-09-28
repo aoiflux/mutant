@@ -43,6 +43,7 @@ package builtin
 // append-only, and TestRoleIDsAreAFormat pins every id.
 
 import (
+	"slices"
 	"strings"
 
 	"mutant/object"
@@ -161,6 +162,20 @@ func RecipientRoles() []string { return roleNames(caseRole.recipientSide) }
 // roleNotAccessControl ends every refusal a role causes.
 const roleNotAccessControl = "A role is asserted, not authenticated: this refusal keeps the record " +
 	"consistent with the role it names, and is not access control"
+
+// disposerRoles are the roles an examiner records a disposal under -- of an
+// exhibit, or of a case -- and an erasure: a record's key or the case's.
+var disposerRoles = []string{"case_owner", "administrator"}
+
+// disposerRefusal refuses an examiner acting under any other role to record
+// what: "a disposal", "an erasure".
+func disposerRefusal(op string, ledger *ledgerSession, what string) *object.Error {
+	if slices.Contains(disposerRoles, ledger.role.Name) {
+		return nil
+	}
+	return newError("%s: %s is acting as %s, and %s is recorded by a %s. %s", op, ledger.actor, ledger.role.Name,
+		what, strings.Join(disposerRoles, " or an "), roleNotAccessControl)
+}
 
 // roleOption reads the `role` option of case_open and ledger_open. given is
 // false when the option was left out, and the role is then roleUnasserted.

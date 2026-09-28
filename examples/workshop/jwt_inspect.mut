@@ -6,9 +6,7 @@
 putln("=== Inspect JWT ===");
 
 // A standard example token: header.payload.signature (base64url).
-let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" +
-    ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ" +
-    ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+let token = (("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ") + ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c");
 
 let jwt, err = jwt_decode(token);
 if (err) {
@@ -17,5 +15,5 @@ if (err) {
     putln("algorithm:", jwt["algorithm"]);
     putln("subject  :", jwt["claims"]["sub"]);
     putln("name     :", jwt["claims"]["name"]);
-    putln("verified :", jwt["verified"]);   // always false - decode never verifies
-};
+    putln("verified :", jwt["verified"]); // always false - decode never verifies
+}

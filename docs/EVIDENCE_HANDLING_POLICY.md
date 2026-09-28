@@ -66,7 +66,13 @@ forks, skips a step, or has either recorded by anybody else. **A disposal is a
 statement.** It deletes nothing -- not the file the exhibit was taken in from,
 and not any copy -- and says so in its result. It is refused while the case is
 under a legal hold placed with `retention_hold`, until `retention_release`
-lifts it.
+lifts it. A case is disposed of the same way: `case_transition(ledger,
+"disposed", reason)` records it and deletes nothing, and only once no hold is in
+force, the retention period has run, every exhibit is returned or disposed of,
+and the case key is erased. `record_erase` and `case_key_erase` do write: they
+overwrite a record's key in one copy of the record, and the case key in its key
+file. Both are the case's own files and not evidence -- the evidence a record
+was sealed from is not touched -- and both are refused under a legal hold too.
 
 **A new evidence family belongs on that list.** Leaving it off is the one soft
 edge of this policy: nothing catches an omission automatically, which is why the

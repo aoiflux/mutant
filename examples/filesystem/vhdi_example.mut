@@ -1,6 +1,6 @@
 // mutant:sweep needs-input -- opens ./disk.vhdx, a VHDX image the repository does not ship
 
-let image_path = "./disk.vhdx";
+let image_path = "E:\\hyper\\vhd\\ubuntu.vhdx";
 let opened, open_err = vhdi_open(image_path);
 if (open_err) {
     putln("vhdi_open failed:", open_err);
@@ -8,7 +8,7 @@ if (open_err) {
 }
 
 let handle = opened["handle"];
-putf("VHDI opened: " + opened["path"] + " (handle=" + handle + ")");
+putf((((("VHDI opened: " + opened["path"]) + " (handle=") + handle) + ")"));
 
 let meta, meta_err = vhdi_metadata(handle);
 if (meta_err) {
@@ -17,12 +17,12 @@ if (meta_err) {
 }
 
 putf("Metadata:");
-putf("  format=" + meta["format"]);
-putf("  disk_type=" + meta["disk_type"]);
-putf("  virtual_size=" + meta["virtual_size"]);
-putf("  block_size=" + meta["block_size"]);
-putf("  sector_size=" + meta["sector_size"]);
-putf("  identifier=" + meta["identifier"]);
+putf(("  format=" + meta["format"]));
+putf(("  disk_type=" + meta["disk_type"]));
+putf(("  virtual_size=" + meta["virtual_size"]));
+putf(("  block_size=" + meta["block_size"]));
+putf(("  sector_size=" + meta["sector_size"]));
+putf(("  identifier=" + meta["identifier"]));
 putf("  is_differencing=", meta["is_differencing"]);
 
 let off_info, off_err = vhdi_map_offset(handle, 0);
@@ -43,8 +43,8 @@ putf(bytes);
 
 let closed, close_err = vhdi_close(handle);
 if (close_err) {
-     putln("vhdi_close failed:", close_err);
-     return;
+    putln("vhdi_close failed:", close_err);
+    return;
 }
 
-putf("Handle closed: " + closed["closed"]);
+putf(("Handle closed: " + closed["closed"]));

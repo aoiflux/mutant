@@ -184,6 +184,11 @@ var (
 	ErrSegmentAuth = errors.New("the segment does not open under this key and position")
 	// ErrCaseKeyAuth is the same discipline for the case-key file.
 	ErrCaseKeyAuth = errors.New("the case key did not open: the passphrase is wrong, or the file has been edited")
+	// ErrCaseKeyGenerationErased is returned for a generation case_key_erase
+	// erased. It is not an oracle: the zeros an erasure leaves are in the file
+	// for anybody to read.
+	ErrCaseKeyGenerationErased = errors.New("this generation of the case key was erased, and nothing wrapped " +
+		"under it opens")
 )
 
 // ---------------------------------------------------------------------------
@@ -1281,12 +1286,59 @@ func (f *CaseKeyFile) wrapGeneration(wrapKey []byte, number uint32, caseKey []by
 	return g, nil
 }
 
+// The wrapped case key and its nonce as case_key_erase leaves an erased
+// generation: zeros, as wide as the hex they replace.
+var (
+	erasedGenerationNonce   = strings.Repeat("0", 2*chacha20poly1305.NonceSizeX)
+	erasedGenerationWrapped = strings.Repeat("0", 2*WrappedKeySize)
+)
+
+// Erased reports whether a generation's wrapped key and its nonce are the
+// zeros case_key_erase writes over them. Both, and not either: a generation
+// with one of them zeroed is one somebody edited, and it fails as that.
+func (g CaseKeyGeneration) Erased() bool {
+	return g.Nonce == erasedGenerationNonce && g.Wrapped == erasedGenerationWrapped
+}
+
+// EraseGeneration replaces one generation's wrapped key and its nonce with
+// zeros, and names the file it was as the one this replaces. The caller seals
+// the file again with SealCaseKeyFile: the file MAC covers every generation's
+// wrapped key, so the erasure is authenticated by the passphrase as any other
+// change to the file is.
+//
+// The current generation is refused. A file whose current generation is erased
+// holds no key a record could be sealed under and none a rotation could begin
+// from; erasing every generation is removing the file. The fingerprint stays:
+// it names a key that existed, which is what a ledger and a record header name
+// it by, and it cannot be walked back to the key.
+func (f *CaseKeyFile) EraseGeneration(number uint32) error {
+	if number == f.Current {
+		return fmt.Errorf("generation %d is the one this key file seals under, and it is erased with every "+
+			"other generation or not at all", number)
+	}
+	for i := range f.Generations {
+		if f.Generations[i].Generation != number {
+			continue
+		}
+		if f.Generations[i].Erased() {
+			return fmt.Errorf("generation %d: %w", number, ErrCaseKeyGenerationErased)
+		}
+		f.Generations[i].Nonce, f.Generations[i].Wrapped = erasedGenerationNonce, erasedGenerationWrapped
+		f.PreviousFileMAC = f.FileMAC
+		return nil
+	}
+	return fmt.Errorf("this key file has no generation %d", number)
+}
+
 // UnwrapGeneration recovers one generation's case key. The caller owns the
 // bytes and must SecureZero them.
 func (f *CaseKeyFile) UnwrapGeneration(wrapKey []byte, number uint32) ([]byte, error) {
 	g, err := f.Generation(number)
 	if err != nil {
 		return nil, err
+	}
+	if g.Erased() {
+		return nil, fmt.Errorf("generation %d: %w", number, ErrCaseKeyGenerationErased)
 	}
 	nonceBytes, err := hex.DecodeString(g.Nonce)
 	if err != nil {
@@ -1562,6 +1614,8 @@ func (f *CaseKeyFile) RotatePassphrase(oldPassphrase, newPassphrase []byte, now 
 		return ErrCaseKeyAuth
 	}
 
+	// An erased generation has no key to carry over. It keeps its zeros, and
+	// the new MAC covers them as the old one did.
 	keys := make([][]byte, 0, len(f.Generations))
 	defer func() {
 		for _, k := range keys {
@@ -1569,6 +1623,10 @@ func (f *CaseKeyFile) RotatePassphrase(oldPassphrase, newPassphrase []byte, now 
 		}
 	}()
 	for _, g := range f.Generations {
+		if g.Erased() {
+			keys = append(keys, nil)
+			continue
+		}
 		caseKey, err := f.UnwrapGeneration(oldWrapKey, g.Generation)
 		if err != nil {
 			return err
@@ -1593,6 +1651,10 @@ func (f *CaseKeyFile) RotatePassphrase(oldPassphrase, newPassphrase []byte, now 
 
 	rewrapped := make([]CaseKeyGeneration, 0, len(f.Generations))
 	for i, g := range f.Generations {
+		if g.Erased() {
+			rewrapped = append(rewrapped, g)
+			continue
+		}
 		next, err := f.wrapGeneration(newWrapKey, g.Generation, keys[i], g.Created)
 		if err != nil {
 			return err

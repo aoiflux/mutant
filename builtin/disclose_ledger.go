@@ -227,6 +227,7 @@ var disclosureKeys = map[store.NodeType][]string{
 	disclosureNodeReviewRequest:    {"review.uid", "review.chain"},
 	disclosureNodeReviewDecision:   {"decision.uid", "decision.chain"},
 	disclosureNodeRetention:        {"retention.uid", "retention.chain"},
+	disclosureNodeErasure:          {"erasure.uid", "erasure.chain"},
 }
 
 // disclosureNode is one node of this schema as read back: its id and its

@@ -1,0 +1,14 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 4/10  the binary");
+
+let implant = quilldrop.path("Users/r.mehta/AppData/Roaming/MeridianSync/updater.exe");
+
+if (quilldrop.ready(quilldrop.root)) {
+    let pe, _ = bin_pe_parse(implant);
+    let built, _ = timestamp_normalize(pe["timestamp"], "unix");
+    let ih, _ = imphash(implant);
+    putln("  ", pe["format"], pe["machine"], pe["num_sections"], "sections");
+    putln("  built", built["iso"]);
+    putln("  imphash", ih["imphash"], ih["dll_count"], "dlls");
+}

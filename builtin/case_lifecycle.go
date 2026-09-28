@@ -27,15 +27,16 @@ package builtin
 //	registered -> active -> in_review -> concluded <-> active
 //	                                   concluded -> retained -> disposed
 //
-// case_transition makes the moves that are an examiner's decision alone:
-// registered to active, and reopening a concluded case. The review and
-// retention moves are made by the builtins that record the review and the
-// retention (case_review.go, case_retention.go) -- review_request submits an
-// active case, review_decide concludes it or sends it back, retention_set
-// retains a concluded one -- and a disposal by the one that checks what
-// disposal requires. A refusal names the state the case is in and the moves
-// available from it, and the builtin that makes a move case_transition does
-// not.
+// case_transition makes the moves that are an examiner's decision alone --
+// registered to active, and reopening a concluded case -- and the disposal of
+// a retained one, which it makes only when the ledger shows everything a
+// disposal needs (case_erasure.go). The review and retention moves are made by
+// the builtins that record the review and the retention (case_review.go,
+// case_retention.go): review_request submits an active case, review_decide
+// concludes it or sends it back, retention_set retains a concluded one. A
+// refusal names the state the case is in and the moves available from it, and
+// the builtin that makes a move case_transition does not. The lifecycle reader
+// refuses a move the lifecycle does not have.
 //
 // Each state takes what it can, and refuses what it cannot, in both the
 // builtins that take the ledger -- which ask the ledger -- and the ones that
@@ -115,7 +116,6 @@ type caseMove struct {
 }
 
 // caseMoves are the moves of the lifecycle and the builtin that makes each.
-// The disposal move is added with the builtin that makes it.
 var caseMoves = []caseMove{
 	{caseStateRegistered, caseStateActive, BuiltinNameCaseTransition},
 	{caseStateActive, caseStateInReview, BuiltinNameReviewRequest},
@@ -123,6 +123,7 @@ var caseMoves = []caseMove{
 	{caseStateInReview, caseStateActive, BuiltinNameReviewDecide},
 	{caseStateConcluded, caseStateActive, BuiltinNameCaseTransition},
 	{caseStateConcluded, caseStateRetained, BuiltinNameRetentionSet},
+	{caseStateRetained, caseStateDisposed, BuiltinNameCaseTransition},
 }
 
 // caseMoveHow says how the builtins other than case_transition make their
@@ -147,6 +148,7 @@ const (
 	caseActRedact
 	caseActReview
 	caseActRetain
+	caseActErase
 )
 
 var caseActionNames = map[caseAction]string{
@@ -158,6 +160,7 @@ var caseActionNames = map[caseAction]string{
 	caseActRedact:   "commitment of a redaction version",
 	caseActReview:   "request for a review, or decision of one",
 	caseActRetain:   "retention period, or legal hold placed or lifted",
+	caseActErase:    "erasure of a record's key or the case key",
 }
 
 // caseStateRefuses is what each state refuses. A state not listed refuses
@@ -167,7 +170,7 @@ var caseStateRefuses = map[string][]caseAction{
 	caseStateConcluded: {caseActSeal, caseActIntake},
 	caseStateRetained:  {caseActSeal, caseActIntake},
 	caseStateDisposed: {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact,
-		caseActReview, caseActRetain},
+		caseActReview, caseActRetain, caseActErase},
 }
 
 var caseStateWhy = map[string]string{
@@ -240,8 +243,8 @@ type caseAttachment struct {
 
 // caseLifecycleRead reads a case's lifecycle and the state it leaves the case
 // in: "" when the ledger holds no lifecycle for the case. Every event must
-// move the case from the state the one before it left, and the first must
-// register it.
+// move the case from the state the one before it left, the first must
+// register it, and every later one must make a move the lifecycle has.
 func caseLifecycleRead(g *graphene.Graph, caseUID string) ([]caseChainEvent, string, error) {
 	events, err := caseChainRead(g, caseLifecycleChain, strings.ToLower(caseUID))
 	if err != nil {
@@ -250,6 +253,7 @@ func caseLifecycleRead(g *graphene.Graph, caseUID string) ([]caseChainEvent, str
 	state := ""
 	for _, event := range events {
 		from, to := event.get("lifecycle.from"), event.get("lifecycle.state")
+		_, known := caseMoveOf(from, to)
 		switch {
 		case from != state:
 			return nil, "", fmt.Errorf("lifecycle event %d of case %s moves the case from %q, and the event "+
@@ -260,6 +264,9 @@ func caseLifecycleRead(g *graphene.Graph, caseUID string) ([]caseChainEvent, str
 		case event.seq == 1 && to != caseStateRegistered:
 			return nil, "", fmt.Errorf("the first lifecycle event of case %s is %q, and a case's first "+
 				"event registers it", caseUID, to)
+		case event.seq > 1 && !known:
+			return nil, "", fmt.Errorf("lifecycle event %d of case %s moves the case from %s to %s, which is not a "+
+				"move a case makes: %s", event.seq, caseUID, from, to, caseMovesText(from))
 		}
 		state = to
 	}
@@ -1156,10 +1163,12 @@ func caseLifecycleRow(event caseChainEvent) object.Object {
 		"by":      stringObj(event.get("lifecycle.by")),
 		"by_role": stringObj(event.get("lifecycle.by_role")),
 		"at":      stringObj(event.get("lifecycle.at")),
-		// The review request, or the retention event, a move was made for; ""
-		// for a move case_transition made.
+		// The review request, or the retention event, a move was made for, and
+		// the erasure of the case key a disposal rested on; "" for the moves
+		// case_transition makes otherwise.
 		"review_uid":    stringObj(event.get("lifecycle.review_uid")),
 		"retention_uid": stringObj(event.get("lifecycle.retention_uid")),
+		"erasure_uid":   stringObj(event.get("lifecycle.erasure_uid")),
 	})
 }
 
@@ -1239,11 +1248,25 @@ func CaseTransition(args ...object.Object) object.Object {
 			from, to, caseMoveHow[move.by]))
 	}
 	now := custodyNow()
+	// A disposal is recorded by a case_owner or an administrator, and only
+	// once the ledger shows everything it needs; the move names the erasure of
+	// the case key it rests on.
+	var extra map[string]string
+	if to == caseStateDisposed {
+		if errObj := disposerRefusal(op, ledger, "the disposal of a case"); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		erasure, err := caseDisposalRefusal(ledger.graph, session.caseUID, session.ID, now)
+		if err != nil {
+			return fail(err)
+		}
+		extra = map[string]string{"lifecycle.erasure_uid": erasure}
+	}
 	w, err := caseBeginWrite(ledger, session.caseUID, session.ID, now)
 	if err != nil {
 		return fail(err)
 	}
-	event, err := w.lifecycle(caseChainHead(events), from, to, reason)
+	event, err := w.lifecycleFor(caseChainHead(events), from, to, reason, extra)
 	if err != nil {
 		return fail(err)
 	}

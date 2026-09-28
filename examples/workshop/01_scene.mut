@@ -1,0 +1,17 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 1/10  the scene");
+
+if (quilldrop.ready(quilldrop.root)) {
+    let found, _ = fs_walk(quilldrop.root);
+    for (f in found) {
+        let e, err = fs_entropy(f["path"]);
+        if (err) {
+            continue;
+        }
+        if (e["entropy"] > 7.9) {
+            putln("  high entropy:", f["name"], e["entropy"]);
+        }
+    }
+    putln(len(found), "objects under", quilldrop.root);
+}

@@ -1,0 +1,18 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 9/10  the verdict");
+
+let exhibits = ["Users/r.mehta/Inbox/invoice.eml", "Users/r.mehta/AppData/Roaming/MeridianSync/updater.exe", "Users/r.mehta/AppData/Local/Temp/bkp_20260311.zip"];
+
+if (quilldrop.ready(quilldrop.root)) {
+    let _, _ = case_open("QUILLDROP", "workshop", {"hash": "sha256"});
+    for (name in exhibits) {
+        let e, _ = case_evidence(quilldrop.path(name));
+        putln("  ", name, e["hash"]);
+    }
+    let _, _ = case_note("the extension lied, the build date was scrubbed, the archive was backdated, the staging was deleted");
+    let out, _ = case_bundle(quilldrop.handover, {"generated": "2026-03-12T09:00:00Z"});
+    let _, _ = case_close();
+    putln("  handover", out["dir"], len(out["files"]), "files");
+    putln("  manifest", out["manifest_hash"]);
+}

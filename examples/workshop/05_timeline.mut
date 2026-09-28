@@ -1,0 +1,12 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 5/10  the day");
+
+if (quilldrop.ready(quilldrop.body)) {
+    let rows, _ = bodyfile_parse(quilldrop.body);
+    let moments = mactime(rows);
+    for (m in slice(moments, 0, 25)) {
+        putln("  ", m["iso"], m["macb"], m["name"]);
+    }
+    putln(len(moments), "moments from", len(rows), "rows");
+}

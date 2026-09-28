@@ -40,7 +40,8 @@ document describes is waiting to be built.
 | `case_attach`, `case_transition`, `case_assign`: the case's lifecycle, its assignments and its class and view definitions kept in the ledger | **In force.** [`builtin/case_lifecycle.go`](../builtin/case_lifecycle.go), [`builtin/case_chain.go`](../builtin/case_chain.go) |
 | `evidence_intake`, `evidence_release`, `evidence_accept`, `evidence_return`, `evidence_dispose`, `evidence_history`: the custody of each exhibit kept in the ledger | **In force.** [`builtin/case_evidence.go`](../builtin/case_evidence.go) |
 | `review_request`, `review_decide`, `review_list`: a case, a record or a redaction version reviewed, bound to what was asked about, and decided by a reviewer who did not ask | **In force.** [`builtin/case_review.go`](../builtin/case_review.go) |
-| `retention_set`, `retention_hold`, `retention_release`, `retention_list`: how long a case is kept, and the legal holds that stop every disposal in it | **In force.** [`builtin/case_retention.go`](../builtin/case_retention.go) |
+| `retention_set`, `retention_hold`, `retention_release`, `retention_list`: how long a case is kept, and the legal holds that stop every disposal and erasure in it | **In force.** [`builtin/case_retention.go`](../builtin/case_retention.go) |
+| `record_erase`, `case_key_erase`, `erasure_list`, and the disposal of a case: a record's key erased in one copy, the case key erased in every copy, and a case disposed of once nothing in it is left to keep, [Section 3](#3-revocation-is-not-offered) | **In force.** [`builtin/case_erasure.go`](../builtin/case_erasure.go) |
 | `role_define`, `role_assign`, `role_list`: recipient roles, the views each may be granted, and the refusal of a disclosure its recipient's role does not allow | **In force.** [`builtin/recipient_role.go`](../builtin/recipient_role.go) |
 | `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
 | `ledger_classify`, `ledger_classifications`, `ledger_under_view`: the classes a node a script wrote holds, and the ledger read under a view, which only the reads that read through one take | **In force.** [`builtin/ledger_classify.go`](../builtin/ledger_classify.go), [`builtin/ledger_view.go`](../builtin/ledger_view.go) |
@@ -102,9 +103,17 @@ What withdrawal does achieve is worth stating in full, because it is not nothing
   Withdrawal gets an AUTHORISED_BY edge to the authority's Actor node beside its
   PERFORMED_BY edge. Every name here is asserted, and none is checked
   ([Section 9](#9-the-signature-authenticates-the-document-not-the-names-in-it)).
-- **Crypto-erasure is available.** Destroying the record key means you can no
-  longer open the record. That is a claim about your own storage and nothing
-  more; it is not cryptographic evidence that anyone else's copy is gone.
+- **Crypto-erasure is two builtins, and only one of them reaches every copy.**
+  A record keeps its key in one place: wrapped under the case key, in its own
+  header. `record_erase` overwrites it there, in one copy, and every other copy
+  of the record still opens with the case key -- so destroying one record's key
+  is not enough while copies of the record exist. `case_key_erase` destroys the
+  case key, and then no copy of any record wrapped under it opens for anyone
+  relying on the case key; a case is disposed of only after it. Neither reaches
+  a grant already issued, which carries its segments' own keys, or a copy of the
+  key file kept anywhere else, and each says what it did not reach in a
+  `does_not_erase` field. Both are claims about storage you control and nothing
+  more: neither is cryptographic evidence that anyone else's copy is gone.
 
 The honest substitute for revocation is a question the schema is built to answer:
 **which recipients hold bytes whose classification has since changed, and would
@@ -429,7 +438,7 @@ Conflating these is the fastest route to a claim nobody can back.
 | --- | --- | --- |
 | **Withholding** a byte range | *Nothing.* It is the absence of a key grant. | The signed `withheld` list, plus the recipient's inability to decrypt |
 | **Redacting graphene properties** (`RedactNodeProperties`) | Graphene's *metadata about* a range — not the range | `ProvePropertyRedaction`, which is content-free: it proves identity is unchanged and only properties were removed |
-| **Crypto-erasure** | The record key, in your own storage | *Nothing cryptographic.* It is an assertion about a system you control |
+| **Crypto-erasure** | `record_erase`: the record key, in one copy of a record. `case_key_erase`: the case key, so that no copy of any record wrapped under it opens with it | *Nothing cryptographic.* The ledger records each erasure with the digests of what it changed, which is an assertion about a system you control; a grant already issued and a copy of the key file kept elsewhere are out of its reach |
 
 Note the middle row's window: `RemovalProvable` is false between a redaction and
 the next compaction. During that window the report says `provable: false` rather
@@ -717,9 +726,11 @@ Record or RedactionVersion it asks about; a request's decision (`review_decide`)
 is a ReviewDecision node that REVIEWS the request, in a chain of its own that
 holds one event. A case's retention period and legal holds (`retention_set`,
 `retention_hold`, `retention_release`) are one chain of RetentionEvent nodes per
-case, and a hold is AUTHORISED_BY the Actor whose authority it was placed on. The
-label table graphene keeps beside the ledger also names ErasureEvent and ERASES:
-their numbers are fixed now, and nothing writes them yet.
+case, and a hold is AUTHORISED_BY the Actor whose authority it was placed on. A
+case's erasures (`record_erase`, `case_key_erase`) are one chain of ErasureEvent
+nodes per case, each IN_CASE and PERFORMED_BY its examiner, and each ERASES what
+it erased: the Record whose key it destroyed in one copy, with the digests of that
+file before and after, or the Case whose key it destroyed.
 
 Four properties of it are worth stating:
 
@@ -735,10 +746,11 @@ Four properties of it are worth stating:
 - **A case's history is a chain, and a fork is refused.** Each lifecycle event,
   each examiner's or recipient's assignments, each exhibit's custody, each
   view's versions of a redaction, each script node's classifications, a case's
-  requests for review and each request's decision, a case's retention, and the
-  ledger's reviews of its redactions are a chain: an event names its position and
-  the uid of the one before it, and its own uid is a SHA-256 over everything it
-  records. The head of the chain is what is in force. Two events after one
+  requests for review and each request's decision, a case's retention, a case's
+  erasures, and the ledger's reviews of its redactions are a chain: an event
+  names its position and the uid of the one before it, and its own uid is a
+  SHA-256 over everything it records. The head of the chain is what is in force.
+  Two events after one
   event, an event whose uid does not recompute, and an event no walk from the
   first one reaches are all refused by every reader, naming the events, rather
   than resolved -- which of two histories is the case's is not a question this

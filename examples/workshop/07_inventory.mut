@@ -1,0 +1,15 @@
+import "lib/quilldrop.mut";
+
+putln("QUILLDROP 7/10  the inventory");
+
+if (quilldrop.ready(quilldrop.root)) {
+    let zip, _ = zip_open(quilldrop.path("Users/r.mehta/AppData/Local/Temp/bkp_20260311.zip"));
+    let items, _ = zip_entries(zip["handle"]);
+    for (e in items) {
+        let when, _ = timestamp_normalize(e["modified"], "unix");
+        putln("  ", when["iso"], e["crc32"], e["name"]);
+    }
+    putln(zip["entry_count"], "entries,", zip["total_uncompressed"], "bytes, never decompressed");
+    let closed, _ = zip_close(zip["handle"]);
+    putln("  released", closed["handle"]);
+}

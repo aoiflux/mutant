@@ -1,4 +1,4 @@
-// Workshop 5/5 - Timestomping detection
+// Timestomping detection: SI vs FN creation times in an NTFS $MFT.
 //
 // Windows stores TWO creation times per file:
 //   SI ($STANDARD_INFORMATION) - what Explorer shows; anti-forensic tools edit it.
@@ -8,6 +8,8 @@
 //
 // Input: an NTFS $MFT (a standalone $MFT from KAPE/FTK/icat, or an NTFS image).
 //        Set MFT_PATH below.
+//
+// mutant:sweep needs-input -- needs an NTFS $MFT, which no sweep can supply
 
 let MFT_PATH = "C:/evidence/$MFT";
 

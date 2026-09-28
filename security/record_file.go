@@ -638,6 +638,38 @@ func VerifyRecordSignature(footer *RecordFooter, header []byte, root [sha256.Siz
 }
 
 // ---------------------------------------------------------------------------
+// An erased record key
+// ---------------------------------------------------------------------------
+
+// The wrapped record key and its nonce as record_erase leaves them: zeros, as
+// wide as the hex they replace. The width is kept so that an erasure is an
+// overwrite in place -- the header stays the length its prefix gives, and
+// every offset after it stays where it was.
+var (
+	erasedRecordKeyNonce   = strings.Repeat("0", 2*chacha20poly1305.NonceSizeX)
+	erasedRecordKeyWrapped = strings.Repeat("0", 2*WrappedKeySize)
+)
+
+// RecordKeyErased reports whether a header's wrapped record key and its nonce
+// are the zeros record_erase writes over them. Nothing opens a record whose
+// header holds them: the record key was in those bytes and nowhere else in the
+// file. Both fields and not either, because a header with one of them zeroed
+// is a header somebody edited.
+//
+// The signature covered the bytes the erasure replaced, so it cannot hold for
+// an erased copy. What says the rest of the header is unchanged is the ledger's
+// record of the erasure, which names the file's digest before and after.
+func (h *RecordHeader) RecordKeyErased() bool {
+	return h.RecordKeyNonce == erasedRecordKeyNonce && h.RecordKeyWrapped == erasedRecordKeyWrapped
+}
+
+// EraseRecordKey replaces the header's wrapped record key and its nonce with
+// the zeros RecordKeyErased recognises.
+func (h *RecordHeader) EraseRecordKey() {
+	h.RecordKeyNonce, h.RecordKeyWrapped = erasedRecordKeyNonce, erasedRecordKeyWrapped
+}
+
+// ---------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------
 

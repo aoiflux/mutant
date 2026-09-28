@@ -5,17 +5,17 @@
 # Run from the repository root. Requires fsagen on PATH:
 #   go install github.com/aoiflux/fsagen@latest
 #
-# Prefer an NTFS volume: Mark-of-the-Web and the alternate data stream are NTFS
-# features, and two of the workshop's findings live in them.
+# Prefer NTFS: Mark-of-the-Web and the alternate data stream are NTFS features,
+# and beat 3 reads both. Add a Defender exclusion for the output folder first,
+# and keep it outside Windows Search indexing.
 
 $ErrorActionPreference = 'Stop'
 
 $Seed     = 88412
 $Here     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Playbook = Join-Path $Here 'quilldrop.playbook.yaml'
-$Root     = Join-Path $Here 'case_quilldrop'
-$Bodyfile = Join-Path $Here 'case_quilldrop.body'
-$CsvTl    = Join-Path $Here 'case_quilldrop.csv'
+$Root     = Join-Path (Split-Path -Parent $Here) 'case'
+$Bodyfile = Join-Path (Split-Path -Parent $Here) 'case_quilldrop.body'
 
 if (-not (Get-Command fsagen -ErrorAction SilentlyContinue)) {
     Write-Host 'fsagen not found on PATH.' -ForegroundColor Red
@@ -29,23 +29,20 @@ if (Test-Path $Root) {
 }
 
 Write-Host "generating corpus (seed $Seed)..." -ForegroundColor Cyan
-fsagen --seed $Seed --playbook $Playbook --timeline $Bodyfile $Root
-
-# A second pass for the CSV timeline. --timeline alone regenerates from the
-# existing corpus, so this costs nothing and does not disturb the artifacts.
-Write-Host 'generating CSV timeline...' -ForegroundColor Cyan
-fsagen --timeline $CsvTl $Root
+fsagen --seed $Seed --playbook $Playbook `
+       --timeline $Bodyfile --timeline-format bodyfile --timeline-source modelled `
+       $Root
 
 $files = Get-ChildItem -Recurse -File $Root
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+$rows  = (Get-Content $Bodyfile).Count
 
 Write-Host ''
 Write-Host 'evidence ready' -ForegroundColor Green
 Write-Host "  corpus   : $Root"
 Write-Host "  files    : $($files.Count)"
 Write-Host "  bytes    : $bytes"
-Write-Host "  bodyfile : $Bodyfile"
-Write-Host "  csv      : $CsvTl"
+Write-Host "  bodyfile : $Bodyfile ($rows rows)"
 Write-Host ''
-Write-Host 'Now run the first tool:' -ForegroundColor Yellow
-Write-Host '  mutant examples/workshop/07_dropzone.mut    (it asks for a password)'
+Write-Host 'Now run the first step:' -ForegroundColor Yellow
+Write-Host '  .\examples\workshop\run.ps1 01_scene'

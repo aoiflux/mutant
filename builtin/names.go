@@ -774,4 +774,10 @@ const (
 	BuiltinNameRetentionHold    = "retention_hold"
 	BuiltinNameRetentionRelease = "retention_release"
 	BuiltinNameRetentionList    = "retention_list"
+
+	// a record's key erased from one copy, the case's key erased, and the
+	// erasures read back
+	BuiltinNameRecordErase  = "record_erase"
+	BuiltinNameCaseKeyErase = "case_key_erase"
+	BuiltinNameErasureList  = "erasure_list"
 )

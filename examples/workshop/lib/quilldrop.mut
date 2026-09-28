@@ -1,0 +1,16 @@
+let root = "examples/workshop/case";
+let body = "examples/workshop/case_quilldrop.body";
+let handover = "examples/workshop/handover";
+
+let path = fn(name) {
+    return str_format("%s/%s", root, name);
+};
+
+let ready = fn(what) {
+    let there, _ = fs_exists(what);
+    if (there) {
+        return true;
+    }
+    putln("  missing", what, "- see examples/workshop/README.md");
+    return false;
+};

@@ -1,8 +1,0 @@
-=== 4/5 Custom analysis logic ===
-scores:
-  invoice.pdf.exe => 90
-  report.docx => 0
-  svc.dll => 60
-flagged (>= 50):
-  !  invoice.pdf.exe (90)
-  !  svc.dll (60)

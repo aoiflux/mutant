@@ -774,6 +774,9 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameRetentionHold, &BuiltIn{RetentionHold}},
 	{BuiltinNameRetentionRelease, &BuiltIn{RetentionRelease}},
 	{BuiltinNameRetentionList, &BuiltIn{RetentionList}},
+	{BuiltinNameRecordErase, &BuiltIn{RecordErase}},
+	{BuiltinNameCaseKeyErase, &BuiltIn{CaseKeyErase}},
+	{BuiltinNameErasureList, &BuiltIn{ErasureList}},
 }
 
 // registerHelpBuiltin appends `help` to the builtin set. It is done in init()
