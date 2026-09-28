@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,10 +12,27 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/shirou/gopsutil/v3/common"
 	"github.com/shirou/gopsutil/v3/process"
 
 	"mutant/object"
 )
+
+// sfContext is the context every gopsutil call is made with. Without one,
+// gopsutil builds each path it reads on Linux from HOST_PROC (and the other
+// HOST_* variables), and decides that a pid exists by signalling it when that
+// directory is not a mount, so the environment chose what the process_*
+// builtins reported (M26-NET-025). It names every directory gopsutil would
+// otherwise look up, as the one gopsutil falls back to.
+var sfContext = context.WithValue(context.Background(), common.EnvKey, common.EnvMap{
+	common.HostProcEnvKey: "/proc",
+	common.HostSysEnvKey:  "/sys",
+	common.HostEtcEnvKey:  "/etc",
+	common.HostVarEnvKey:  "/var",
+	common.HostRunEnvKey:  "/run",
+	common.HostDevEnvKey:  "/dev",
+	common.HostRootEnvKey: "/",
+})
 
 type sfProcess struct {
 	pid  int
@@ -96,12 +114,12 @@ func ProcessOpenFiles(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	proc, err := process.NewProcess(int32(pid))
+	proc, err := process.NewProcessWithContext(sfContext, int32(pid))
 	if err != nil {
 		return resultAndError(nil, newError("process_open_files: %s", err.Error()))
 	}
 
-	files, err := proc.OpenFiles()
+	files, err := proc.OpenFilesWithContext(sfContext)
 	if err != nil {
 		return resultAndError(nil, newError("process_open_files: %s", err.Error()))
 	}
@@ -128,7 +146,7 @@ func ProcessThreads(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	proc, err := process.NewProcess(int32(pid))
+	proc, err := process.NewProcessWithContext(sfContext, int32(pid))
 	if err != nil {
 		return resultAndError(nil, newError("process_threads: %s", err.Error()))
 	}
@@ -136,8 +154,8 @@ func ProcessThreads(args ...object.Object) object.Object {
 	// NumThreads (the count) is available on every supported OS; the per-thread
 	// IDs are only exposed on some (e.g. Linux). Surface the count always and the
 	// TIDs where the platform provides them, rather than hard-failing off Linux.
-	count, countErr := proc.NumThreads()
-	threads, threadsErr := proc.Threads()
+	count, countErr := proc.NumThreadsWithContext(sfContext)
+	threads, threadsErr := proc.ThreadsWithContext(sfContext)
 	if countErr != nil && threadsErr != nil {
 		return resultAndError(nil, newError("process_threads: %s", countErr.Error()))
 	}
@@ -261,11 +279,11 @@ func ProcessEnv(args ...object.Object) object.Object {
 	if pid == os.Getpid() {
 		envLines = os.Environ()
 	} else {
-		proc, err := process.NewProcess(int32(pid))
+		proc, err := process.NewProcessWithContext(sfContext, int32(pid))
 		if err != nil {
 			return resultAndError(nil, newError("process_env: %s", err.Error()))
 		}
-		envLines, err = proc.Environ()
+		envLines, err = proc.EnvironWithContext(sfContext)
 		if err != nil {
 			return resultAndError(nil, newError("process_env: %s", err.Error()))
 		}
@@ -352,26 +370,26 @@ func sfExecutableForPID(pid int) (string, error) {
 	if pid == os.Getpid() {
 		return os.Executable()
 	}
-	proc, err := process.NewProcess(int32(pid))
+	proc, err := process.NewProcessWithContext(sfContext, int32(pid))
 	if err != nil {
 		return "", err
 	}
-	return proc.Exe()
+	return proc.ExeWithContext(sfContext)
 }
 
 // sfListProcesses enumerates running processes natively across Windows, Linux,
 // and macOS via gopsutil (no external `tasklist`/`ps` shell-outs), including a
 // real parent PID on every platform.
 func sfListProcesses() ([]sfProcess, error) {
-	procs, err := process.Processes()
+	procs, err := process.ProcessesWithContext(sfContext)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]sfProcess, 0, len(procs))
 	for _, p := range procs {
-		ppid, _ := p.Ppid()
-		name, _ := p.Name()
+		ppid, _ := p.PpidWithContext(sfContext)
+		name, _ := p.NameWithContext(sfContext)
 		if name == "" {
 			name = "pid-" + strconv.Itoa(int(p.Pid))
 		}

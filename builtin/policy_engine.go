@@ -29,6 +29,27 @@ var policyStore = struct {
 	defs: map[string]regoPolicyProgram{},
 }
 
+// regoRefusedBuiltins are the OPA builtins a policy is not offered: the ones
+// that reach the network. http.send's client takes its proxy from HTTP_PROXY,
+// HTTPS_PROXY and NO_PROXY and its default timeout from HTTP_SEND_TIMEOUT, and
+// policy_load evaluates a policy to validate it, so a policy that fetched went
+// wherever the environment sent it (M26-DAT-030). json.match_schema and
+// json.verify_schema fetch a schema's remote $ref with net/http's default
+// client, through the same proxy (M26-DAT-032). The http_* builtins fetch; a
+// policy reads what they fetched from its input.
+var regoRefusedBuiltins = map[string]struct{}{
+	"http.send":          {},
+	"json.match_schema":  {},
+	"json.verify_schema": {},
+}
+
+// newRego is rego.New for every evaluation a policy_* builtin makes, so none
+// of them offers what regoRefusedBuiltins names: OPA refuses a module or a
+// query that calls one before anything is evaluated.
+func newRego(options ...func(*rego.Rego)) *rego.Rego {
+	return rego.New(append(options, rego.UnsafeBuiltins(regoRefusedBuiltins))...)
+}
+
 func PolicyLoad(args ...object.Object) object.Object {
 	if len(args) != 2 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=2", len(args)))
@@ -233,7 +254,7 @@ func validateRegoProgram(program regoPolicyProgram) *object.Error {
 	ctx := context.Background()
 	queries := []string{program.EvalQuery, program.AllowQuery, program.RulesQuery}
 	for _, q := range queries {
-		r := rego.New(
+		r := newRego(
 			rego.Query(q),
 			rego.Module(program.Name+".rego", program.Module),
 		)
@@ -289,7 +310,7 @@ func evalRegoQuery(program regoPolicyProgram, query string, input any, withTrace
 		options = append(options, rego.QueryTracer(&tracer))
 	}
 
-	r := rego.New(options...)
+	r := newRego(options...)
 	results, err := r.Eval(ctx)
 	if err != nil {
 		return nil, newError("rego evaluation failed for query `%s`: %s", query, err.Error())

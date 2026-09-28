@@ -46,16 +46,17 @@ var mutantEnvName = regexp.MustCompile(`^MUTANT_[A-Z0-9_]*$`)
 
 // envFuncs are the selectors that read or write the process environment.
 // Matching the selector alone -- not the package qualifier -- catches os.Getenv,
-// syscall.Getenv, t.Setenv, an aliased import, and proc.Environ() on a
-// gopsutil process, all with one rule.
+// syscall.Getenv, t.Setenv, an aliased import, and proc.Environ() or
+// proc.EnvironWithContext() on a gopsutil process, all with one rule.
 var envFuncs = map[string]bool{
-	"Getenv":    true,
-	"LookupEnv": true,
-	"Setenv":    true,
-	"Unsetenv":  true,
-	"ExpandEnv": true,
-	"Environ":   true,
-	"Clearenv":  true,
+	"Getenv":             true,
+	"LookupEnv":          true,
+	"Setenv":             true,
+	"Unsetenv":           true,
+	"ExpandEnv":          true,
+	"Environ":            true,
+	"EnvironWithContext": true,
+	"Clearenv":           true,
 }
 
 // libraryEnvReads are standard-library functions that read the environment
@@ -63,9 +64,15 @@ var envFuncs = map[string]bool{
 // os.UserHomeDir, which no Getenv selector shows). These are matched by
 // package as well as name, through whatever name the file imports the package
 // under, because t.TempDir, or a method of the same name on anything else, is
-// not them.
+// not them. net/http's default client and transport, and the package-level
+// requests that use them, send through the proxy HTTP_PROXY, HTTPS_PROXY and
+// NO_PROXY name (M26-NET-010).
 var libraryEnvReads = map[string]map[string]bool{
 	"os": {"UserHomeDir": true, "UserCacheDir": true, "UserConfigDir": true, "TempDir": true},
+	"net/http": {
+		"ProxyFromEnvironment": true, "DefaultTransport": true, "DefaultClient": true,
+		"Get": true, "Head": true, "Post": true, "PostForm": true,
+	},
 }
 
 // tempDirDefaults create a file or directory in os.TempDir when their directory
@@ -83,8 +90,17 @@ var tempDirDefaults = map[string]map[string]bool{
 // are flagged only in files that build for Linux without cgo.
 var userLookups = map[string]bool{"Current": true, "Lookup": true, "LookupId": true}
 
+// linuxEnvReads read the environment only in the Linux build: os/user's
+// lookups, and crypto/x509's SystemCertPool, which takes the system's
+// certificate authorities from SSL_CERT_FILE and SSL_CERT_DIR when they are set
+// (M26-NET-010).
+var linuxEnvReads = map[string]map[string]bool{
+	"os/user":     userLookups,
+	"crypto/x509": {"SystemCertPool": true},
+}
+
 // linuxWithoutCgo is the build Mutant ships for Linux, and the one in which
-// userLookups read the environment.
+// linuxEnvReads read the environment.
 var linuxWithoutCgo = func() build.Context {
 	ctx := build.Default
 	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = "linux", "amd64", false
@@ -235,11 +251,16 @@ func inspectFile(fset *token.FileSet, rel string, file *ast.File, onLinux bool) 
 				addAccess(node.Pos(), node.Sel.Name)
 			}
 			pkg, name := packageFunc(node)
-			if libraryEnvReads[pkg][name] || (onLinux && pkg == "os/user" && userLookups[name]) {
+			if libraryEnvReads[pkg][name] || (onLinux && linuxEnvReads[pkg][name]) {
 				addAccess(node.Pos(), path.Base(pkg)+"."+name)
 			}
 
 		case *ast.CallExpr:
+			if fn, ok := node.Fun.(*ast.Ident); ok && fn.Name == "new" && len(node.Args) == 1 {
+				if pkg, name := packageFunc(node.Args[0]); pkg == "net/http" && name == "Client" {
+					addAccess(node.Pos(), "new(http.Client), which sends through net/http's default transport")
+				}
+			}
 			if pkg, name := packageFunc(node.Fun); tempDirDefaults[pkg][name] && len(node.Args) > 0 {
 				if dir, ok := node.Args[0].(*ast.BasicLit); ok && dir.Kind == token.STRING {
 					if value, err := strconv.Unquote(dir.Value); err == nil && value == "" {
@@ -268,6 +289,9 @@ func inspectFile(fset *token.FileSet, rel string, file *ast.File, onLinux bool) 
 			}
 
 		case *ast.CompositeLit:
+			if pkg, name := packageFunc(node.Type); pkg == "net/http" && name == "Client" && !namesATransport(node) {
+				addAccess(node.Pos(), "http.Client with no Transport, which sends through net/http's default transport")
+			}
 			// Narrowed to a Cmd literal so object.Function{Env: env} does not
 			// fire. A locally defined struct with an Env field would be missed,
 			// but any such construction still needs an os.Environ() the
@@ -329,6 +353,26 @@ func functionSpans(file *ast.File) []funcSpan {
 		spans = append(spans, funcSpan{fn.Name.Name, fn.Pos(), fn.End()})
 	}
 	return spans
+}
+
+// namesATransport reports whether an http.Client literal gives the client a
+// transport of its own. A client without one, or with a nil one, sends through
+// net/http's default transport.
+func namesATransport(lit *ast.CompositeLit) bool {
+	for i, elt := range lit.Elts {
+		value := elt
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "Transport" {
+				continue
+			}
+			value = kv.Value
+		} else if i != 0 {
+			continue
+		}
+		ident, isIdent := value.(*ast.Ident)
+		return !isIdent || ident.Name != "nil"
+	}
+	return false
 }
 
 func isCmdType(expr ast.Expr) bool {
@@ -513,14 +557,16 @@ func TestGuardScansTheRepository(t *testing.T) {
 }
 
 // The keystore once followed HOME through os.UserHomeDir, a read no Getenv
-// selector shows (M26-DOC3-001). The guard must see every standard-library
-// call that reads the environment inside itself, under any import name, and
-// must not mistake t.TempDir, or a temporary file in a directory the caller
-// names, for one.
+// selector shows (M26-DOC3-001), and the TLS clients took the system's
+// certificate authorities from SSL_CERT_FILE through crypto/x509 (M26-NET-010).
+// The guard must see every standard-library call that reads the environment
+// inside itself, under any import name, and must not mistake t.TempDir, or a
+// temporary file in a directory the caller names, for one.
 func TestTheGuardSeesLibraryCallsThatReadTheEnvironment(t *testing.T) {
 	const src = `package fixture
 
 import (
+	"crypto/x509"
 	stdos "os"
 	"os/user"
 	"testing"
@@ -536,6 +582,7 @@ func reads(dir string) {
 	stdos.MkdirTemp(dir, "x-*")
 	user.Current()
 	user.LookupId("0")
+	x509.SystemCertPool()
 	_ = configDir
 }
 
@@ -557,7 +604,7 @@ func fine(t *testing.T) {
 	for _, onLinux := range []bool{true, false} {
 		want := append([]string(nil), always...)
 		if onLinux {
-			want = append(want, "user.Current", "user.LookupId")
+			want = append(want, "user.Current", "user.LookupId", "x509.SystemCertPool")
 		}
 		_, access := inspectFile(fset, "fixture.go", file, onLinux)
 		var got []string
@@ -573,6 +620,62 @@ func fine(t *testing.T) {
 			t.Errorf("onLinux=%v: the guard saw\n  %s\nwant\n  %s", onLinux,
 				strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 		}
+	}
+}
+
+// net/http's default transport sends a request through the proxy HTTP_PROXY,
+// HTTPS_PROXY and NO_PROXY name, and the http_* builtins used it (M26-NET-010).
+// The guard must see every way to reach it: the default client and transport,
+// the package-level requests that use them, the proxy function itself, and a
+// client made with no transport of its own. A client handed a transport, and a
+// transport that names no proxy, are not it.
+func TestTheGuardSeesNetHTTPsDefaultTransport(t *testing.T) {
+	const src = `package fixture
+
+import web "net/http"
+
+func reads() {
+	web.Get("http://feed.example.invalid/")
+	web.PostForm("http://feed.example.invalid/", nil)
+	_ = web.DefaultClient
+	_ = web.DefaultTransport
+	_ = web.ProxyFromEnvironment
+	_ = &web.Client{}
+	_ = web.Client{CheckRedirect: nil}
+	_ = &web.Client{Transport: nil}
+	_ = new(web.Client)
+}
+
+func fine(client *web.Client, transport web.RoundTripper) {
+	client.Get("http://feed.example.invalid/")
+	_ = &web.Client{Transport: transport}
+	_ = &web.Transport{Proxy: nil}
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"http.Get", "http.PostForm", "http.DefaultClient", "http.DefaultTransport", "http.ProxyFromEnvironment",
+		"http.Client with no Transport, which sends through net/http's default transport",
+		"http.Client with no Transport, which sends through net/http's default transport",
+		"http.Client with no Transport, which sends through net/http's default transport",
+		"new(http.Client), which sends through net/http's default transport",
+	}
+	_, access := inspectFile(fset, "fixture.go", file, false)
+	var got []string
+	for _, a := range access {
+		if a.fn != "reads" {
+			t.Errorf("%s does not reach the default transport", a)
+		}
+		got = append(got, a.what)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("the guard saw\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 }
 

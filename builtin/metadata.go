@@ -2013,7 +2013,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("full regex capture array (full match plus groups)", ParamArray).ofElem(ParamString)},
 	BuiltinNamePolicyLoad: {
 		signature: "policy_load(name, source)",
-		summary:   "Loads a policy module by name from source text or config hash.",
+		summary:   "Loads a policy module by name from source text or config hash. A policy or query that calls one of OPA's builtins that reach the network -- http.send, json.match_schema, json.verify_schema -- is refused, here and by every policy_* builtin: fetch with http_get and pass what it returns in the input.",
 		returns:   pairRet("the loaded policy's name, package, and query set", ParamHash).withFields("allow_query", "eval_query", "loaded", "name", "package", "rules_query"), params: []builtinParamDoc{param("name", "Name the policy is registered under; must not be empty.", ParamString), param("source", "Rego module source, or a config hash describing it.", ParamHash, ParamString)}},
 	BuiltinNamePolicyEval: {
 		signature: "policy_eval(policy, input)",

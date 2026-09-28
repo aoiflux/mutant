@@ -56,7 +56,11 @@ func LuaRunHTTP(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument to `lua_run_http` must be STRING, got %s", args[0].Type()))
 	}
 
-	resp, err := httpClient.Get(url.Value)
+	client, err := httpClient()
+	if err != nil {
+		return resultAndError(nil, newError("lua_run_http: %s", err.Error()))
+	}
+	resp, err := client.Get(url.Value)
 	if err != nil {
 		return resultAndError(nil, newError("lua_run_http: %s", err.Error()))
 	}

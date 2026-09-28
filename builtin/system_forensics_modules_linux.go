@@ -11,12 +11,12 @@ import (
 // sfProcessModulePaths returns the file-backed loaded modules for a pid by
 // reading its memory maps (via gopsutil, backed by /proc/<pid>/maps on Linux).
 func sfProcessModulePaths(pid int) ([]string, error) {
-	proc, err := process.NewProcess(int32(pid))
+	proc, err := process.NewProcessWithContext(sfContext, int32(pid))
 	if err != nil {
 		return nil, err
 	}
 
-	maps, err := proc.MemoryMaps(false)
+	maps, err := proc.MemoryMapsWithContext(sfContext, false)
 	if err != nil {
 		return nil, err
 	}

@@ -509,7 +509,7 @@ Load and evaluate allow/deny policies with rule metadata and evaluation traces.
 | --- | --- | --- |
 | `policy_allow(policy: HASH\|STRING, input: HASH) -> (BOOLEAN, ERROR)` | all | Evaluates and returns allow/deny boolean for a policy. |
 | `policy_eval(policy: HASH\|STRING, input: HASH) -> (HASH, ERROR)` | all | Evaluates a loaded policy and returns decision details. |
-| `policy_load(name: STRING, source: HASH\|STRING) -> (HASH, ERROR)` | all | Loads a policy module by name from source text or config hash. |
+| `policy_load(name: STRING, source: HASH\|STRING) -> (HASH, ERROR)` | all | Loads a policy module by name from source text or config hash. A policy or query that calls one of OPA's builtins that reach the network -- http.send, json.match_schema, json.verify_schema -- is refused, here and by every policy_* builtin: fetch with http_get and pass what it returns in the input. |
 | `policy_rules(policy: HASH\|STRING) -> (ANY, ERROR)` | all | Returns rule metadata exported by a loaded policy. |
 | `policy_trace(policy: HASH\|STRING, input: HASH) -> (ANY, ERROR)` | all | Runs policy evaluation with trace output for debugging rule flow. |
 

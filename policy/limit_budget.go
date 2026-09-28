@@ -35,7 +35,6 @@ var LimitBudget = map[string]int{
 	"builtin/fuzzy_matching.go":                   1,
 	"builtin/hashset_builtins.go":                 2,
 	"builtin/hive_builtins.go":                    1,
-	"builtin/http.go":                             1,
 	"builtin/ioc_builtins.go":                     1,
 	"builtin/jumplist_builtins.go":                1,
 	"builtin/ledger_read.go":                      2,

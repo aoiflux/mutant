@@ -143,4 +143,26 @@ var EnvAccessAllowlist = []EnvAccessException{
 		Category: "regression",
 		Why:      "Points HOME and USERPROFILE at two directories in turn and requires the keystore not to move (M26-DOC3-001).",
 	},
+	{
+		File: "builtin/http_environment_test.go", Func: "TestTheHTTPBuiltinsDoNotFollowTheProxyVariables", Lines: 1,
+		Category: "regression",
+		Why:      "Names a local listener in HTTP_PROXY and HTTPS_PROXY and requires no http_* request to reach it (M26-NET-010).",
+	},
+	{
+		File: "builtin/tls_roots_linux_test.go", Func: "TestTheTLSClientsDoNotTrustTheCertificateVariables", Lines: 1,
+		Category: "regression",
+		Why: "Names a planted certificate authority in SSL_CERT_FILE and SSL_CERT_DIR and requires no TLS client to " +
+			"trust it (M26-NET-010).",
+	},
+	{
+		File: "builtin/tls_roots_linux_test.go", Func: "TestTheSystemStoreIsTheOneCryptoX509Reads", Lines: 2,
+		Category: "regression",
+		Why: "Clears SSL_CERT_FILE and SSL_CERT_DIR and asks crypto/x509's SystemCertPool for the system's store, " +
+			"which Mutant's own reading of it must equal (M26-NET-010).",
+	},
+	{
+		File: "builtin/process_host_proc_linux_test.go", Func: "TestTheProcessBuiltinsReadTheRealProc", Lines: 1,
+		Category: "regression",
+		Why:      "Names a planted /proc in HOST_PROC and requires every process_* builtin to report from /proc (M26-NET-025).",
+	},
 }

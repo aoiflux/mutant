@@ -1,17 +1,71 @@
 package builtin
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"mutant/object"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+// httpRequestTimeout bounds one request an http_* builtin or lua_run_http
+// makes, from dialling to the last byte of the body.
+//
+//mutant:limit duration
+const httpRequestTimeout = 30 * time.Second
+
+// httpTLSHandshakeTimeout, httpIdleConnTimeout and httpMaxIdleConns are what
+// net/http's default transport sets. The http_* builtins no longer send
+// through that transport, so they name the values it would have given them.
+const (
+	// httpTLSHandshakeTimeout bounds the TLS handshake of one connection.
+	//
+	//mutant:limit duration
+	httpTLSHandshakeTimeout = 10 * time.Second
+
+	// httpIdleConnTimeout is how long a connection kept for reuse waits for
+	// the next request before it is closed.
+	//
+	//mutant:limit duration
+	httpIdleConnTimeout = 90 * time.Second
+
+	// httpMaxIdleConns is how many connections, across every host, are kept
+	// for reuse.
+	//
+	//mutant:limit count
+	httpMaxIdleConns = 100
+)
+
+// httpClient is the client the http_* builtins and lua_run_http send with. Its
+// transport names no proxy: net/http's default transport takes one from
+// HTTP_PROXY, HTTPS_PROXY and NO_PROXY, so whoever set the examiner's
+// environment saw every request and could rewrite a plain-HTTP answer
+// (M26-NET-010). It trusts clientRootCAs, which on Linux is not whatever
+// SSL_CERT_FILE and SSL_CERT_DIR name. It is built on first use, because
+// reading the certificate store costs something a program that never fetches
+// should not pay.
+var httpClient = sync.OnceValues(func() (*http.Client, error) {
+	roots, err := clientRootCAs()
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Timeout: httpRequestTimeout,
+		Transport: &http.Transport{
+			Proxy:               nil,
+			TLSClientConfig:     &tls.Config{RootCAs: roots},
+			ForceAttemptHTTP2:   true,
+			TLSHandshakeTimeout: httpTLSHandshakeTimeout,
+			IdleConnTimeout:     httpIdleConnTimeout,
+			MaxIdleConns:        httpMaxIdleConns,
+		},
+	}, nil
+})
 
 func HttpGet(args ...object.Object) object.Object {
 	if len(args) != 1 {
@@ -21,7 +75,11 @@ func HttpGet(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument to `http_get` must be STRING, got %s", args[0].Type()))
 	}
-	resp, err := httpClient.Get(url.Value)
+	client, err := httpClient()
+	if err != nil {
+		return httpResponseOrError2(nil, err, BuiltinNameHttpGet)
+	}
+	resp, err := client.Get(url.Value)
 	return httpResponseOrError2(resp, err, BuiltinNameHttpGet)
 }
 
@@ -48,7 +106,11 @@ func HttpPost(args ...object.Object) object.Object {
 		}
 		contentType = ctObj.Value
 	}
-	resp, err := httpClient.Post(url.Value, contentType, strings.NewReader(body))
+	client, err := httpClient()
+	if err != nil {
+		return httpResponseOrError2(nil, err, BuiltinNameHttpPost)
+	}
+	resp, err := client.Post(url.Value, contentType, strings.NewReader(body))
 	return httpResponseOrError2(resp, err, BuiltinNameHttpPost)
 }
 
@@ -85,7 +147,11 @@ func HttpRequest(args ...object.Object) object.Object {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := httpClient.Do(req)
+	client, err := httpClient()
+	if err != nil {
+		return httpResponseOrError2(nil, err, BuiltinNameHttpRequest)
+	}
+	resp, err := client.Do(req)
 	return httpResponseOrError2(resp, err, BuiltinNameHttpRequest)
 }
 

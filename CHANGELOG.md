@@ -738,6 +738,16 @@ exhaustive lists.
   the view shows. `ledger_close` takes such a handle and drops it, leaving the
   ledger open.
 
+- **A Rego policy is no longer offered the builtins that reach the network: `http.send`,
+  `json.match_schema` and `json.verify_schema`.** `policy_load`, `policy_eval`, `policy_allow`,
+  `policy_rules` and `policy_trace` refuse a policy, or a query, that calls one, before anything
+  is evaluated. `http.send`'s client took its proxy from `HTTP_PROXY`, `HTTPS_PROXY` and
+  `NO_PROXY` and its timeout from `HTTP_SEND_TIMEOUT`, and `policy_load` evaluates a policy to
+  validate it, so loading one was enough to send a request wherever the environment pointed it
+  (M26-DAT-030). The two schema builtins fetch a schema's remote `$ref` through the same proxy
+  (M26-DAT-032), and cannot be offered without it. Fetch with `http_get` and pass what it
+  returns in the policy's input.
+
 ### Fixed
 
 - **The disclosure policy promised an erasure nothing performed.** It said
@@ -955,6 +965,25 @@ exhaustive lists.
   rules would have made it eleven. They read the one set now: analysing a
   50-declaration document allocates about 160 KB less than before, the four new
   rules included.
+
+- **The HTTP builtins went through whatever proxy the environment named.** `http_get`,
+  `http_post`, `http_request` and `lua_run_http` sent every request through net/http's default
+  transport, which takes a proxy from `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, so whoever set
+  the examiner's environment saw every fetch and upload and could rewrite a plain-HTTP answer.
+  On Linux, `SSL_CERT_FILE` and `SSL_CERT_DIR` likewise chose the certificate authorities those
+  requests, `net_tls_connect` and `net_tls_upgrade_client` trusted. The builtins now send
+  through a transport that names no proxy, and on Linux read the system's certificate
+  authorities from where Go reads them when neither variable is set (M26-NET-010). The
+  configuration guard now refuses net/http's default client and transport, an `http.Client`
+  with no transport of its own and, in the Linux build, `x509.SystemCertPool`.
+
+- **On Linux the `process_*` builtins read `/proc` from wherever `HOST_PROC` named.**
+  `process_list`, `process_tree`, `process_env`, `process_hash`, `process_modules`,
+  `process_open_files` and `process_threads` go through gopsutil, which builds every path it
+  reads from `HOST_PROC` unless it is told the directory, and decides that a process exists by
+  signalling it when that directory is not a mount, so the environment decided what they
+  reported (M26-NET-025). gopsutil is now told `/proc`, and every other directory it would look
+  up.
 
 ### Security
 

@@ -202,6 +202,9 @@ func NetTLSConnect(args ...object.Object) object.Object {
 	if errObj := applyClientTLSOptions(cfg, options); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := trustSystemRoots(BuiltinNameNetTlsConnect, cfg); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 
 	dialer := &net.Dialer{Timeout: time.Duration(timeoutMs.Value) * time.Millisecond}
 	conn, err := tls.DialWithDialer(dialer, "tcp", addr.Value, cfg)
@@ -613,6 +616,9 @@ func NetTLSUpgradeClient(args ...object.Object) object.Object {
 	if errObj := applyClientTLSOptions(cfg, options); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if errObj := trustSystemRoots(BuiltinNameNetTlsUpgradeClient, cfg); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	if cfg.ServerName == "" {
 		if host, _, err := net.SplitHostPort(addrString(mc.conn.RemoteAddr())); err == nil {
 			cfg.ServerName = host
@@ -977,6 +983,21 @@ func applyClientTLSOptions(cfg *tls.Config, options object.Object) *object.Error
 		}
 		cfg.Certificates = []tls.Certificate{cert}
 	}
+	return nil
+}
+
+// trustSystemRoots gives a client configuration the system's certificate
+// authorities, clientRootCAs, unless a ca_cert option named others or the
+// insecure option turned verification off.
+func trustSystemRoots(opName string, cfg *tls.Config) *object.Error {
+	if cfg.RootCAs != nil || cfg.InsecureSkipVerify {
+		return nil
+	}
+	roots, err := clientRootCAs()
+	if err != nil {
+		return newError("%s: %s", opName, err.Error())
+	}
+	cfg.RootCAs = roots
 	return nil
 }
 

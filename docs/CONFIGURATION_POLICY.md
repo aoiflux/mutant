@@ -165,20 +165,32 @@ Mutant reads no variable of its own, and the guard holds every read in its code
 to the sites above. What remains is read on Mutant's behalf by the Go runtime,
 the standard library and the libraries Mutant links. This is the complete list
 for 2.6.0, from a survey on 2026-09-28 of every package linked into `mutant` and
-`mlsp` for Windows, Linux and macOS:
+`mlsp` for Windows, Linux and macOS, and the probes that followed it:
 
 | Variables | What they change | Status |
 | --- | --- | --- |
-| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lower-case forms | the proxy `http_get`, `http_post` and `http_request` connect through, and the one a Rego policy's `http.send` uses | defects: M26-NET-010, M26-DAT-030 |
-| `HTTP_SEND_TIMEOUT` | how long a Rego policy's `http.send` waits | defect: M26-DAT-030 |
-| `SSL_CERT_FILE`, `SSL_CERT_DIR` (Linux) | the certificate authorities those requests, `net_tls_connect` and `net_tls_upgrade_client` trust | defect: M26-NET-010 |
-| `HOST_PROC` (Linux) | the directory `process_list`, `process_env`, `process_hash`, `process_modules`, `process_open_files` and `process_threads` read as `/proc` | defect: M26-NET-025 |
 | `PATH` (with `PATHEXT` on Windows) | which program runs when Mutant starts one by name: `go` for `mutant release`, the shell `exec_string` and `cmd_run` start, the system tools the sandbox and debugger probes call, `clear` in the REPL | accepted: whoever sets `PATH` already chooses every program the session runs |
 | every variable | is inherited by each child process, so the Go toolchain's own variables (`GOFLAGS`, `GOTOOLCHAIN`, `GOPROXY` and the rest) apply to the `go build` that `mutant release` runs | accepted: a child is configured the way that program is configured |
 | `TMPDIR` (`TMP`, `TEMP`, `USERPROFILE` on Windows), `SQLITE_TMPDIR` | where working files and SQLite's temporary files go | accepted: see Scratch above |
-| `TZ` (Linux and macOS) | the offset local times are printed with, as in `time_now` and the modification times the `fs_*` listings give | accepted: the instant printed does not change |
+| `TZ` | the zone local time is in: the offset with which `time_now` and the `fs_*` listings' modification times are printed, and a Rego policy's `"Local"` zone (Linux and macOS); and the zone SQLite's `localtime` modifier converts to (every system, on Windows only in the C library's own form, such as `UTC` or `EST5EDT`) | accepted where a time is printed with its offset, since the instant printed does not change; where it is not -- a Rego clock, SQLite's `localtime` -- open: M26-DAT-031 |
+| `ZONEINFO` | the rules of a zone a Rego policy names in `time.format`, `time.date`, `time.clock`, `time.weekday`, `time.add_date` or `time.diff` | defect: M26-DAT-031 |
 | `PWD` (Linux and macOS) | how an absolute path Mutant makes from a relative one is spelled, when the working directory was reached through a symbolic link | accepted: Go uses it only when it names the working directory |
 | `GODEBUG`, `GOGC`, `GOMEMLIMIT`, `GOMAXPROCS`, `GOTRACEBACK` | the Go runtime's memory, scheduling and crash output, and standard-library defaults, among them TLS, X.509 and archive-path checks | accepted: every Go program reads them before its first line runs |
+
+Three libraries are handed what they would otherwise look up. The `http_*`
+builtins and `lua_run_http` send through a transport that names no proxy, so
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` go unread (M26-NET-010). On Linux,
+`http_*` requests over TLS, `net_tls_connect` and `net_tls_upgrade_client` read
+the system's certificate authorities from where Go reads them with
+`SSL_CERT_FILE` and `SSL_CERT_DIR` unset, so neither variable decides whom they
+trust (M26-NET-010). gopsutil is told that `/proc` is `/proc`, so `HOST_PROC`
+and the other `HOST_*` variables no longer decide what the `process_*` builtins
+read (M26-NET-025). A Rego policy is not offered the builtins that reach the
+network: `http.send`, whose client took its proxy from the environment and its
+timeout from `HTTP_SEND_TIMEOUT` (M26-DAT-030), and `json.match_schema` and
+`json.verify_schema`, which fetch a schema's remote `$ref` through the same proxy
+(M26-DAT-032). OPA still reads `HTTP_SEND_TIMEOUT` when it starts, for a builtin
+no policy can call.
 
 Everything else a linked library reads is on a path Mutant does not take, or
 changes nothing it reports: Lua's `os.getenv` is removed before a script runs,
@@ -276,13 +288,17 @@ parses every `.go` file in the repository and fails on:
 - any string literal that is a Mutant-prefixed variable name (rule 1, no
   allowlist consulted);
 - any `Getenv` / `LookupEnv` / `Setenv` / `Unsetenv` / `ExpandEnv` / `Environ` /
-  `Clearenv` selector outside `policy.EnvAccessAllowlist`;
+  `EnvironWithContext` / `Clearenv` selector outside `policy.EnvAccessAllowlist`;
 - a standard-library call that reads the environment inside itself, under
   whatever name the file imports its package by: `os.UserHomeDir`,
   `os.UserCacheDir`, `os.UserConfigDir` and `os.TempDir`; `os.MkdirTemp`,
   `os.CreateTemp`, `ioutil.TempDir` and `ioutil.TempFile` with an empty
-  directory; and, in a file that builds for Linux without cgo, `user.Current`,
-  `user.Lookup` and `user.LookupId`;
+  directory; `net/http`'s `DefaultClient`, `DefaultTransport` and
+  `ProxyFromEnvironment`, its package-level `Get`, `Head`, `Post` and
+  `PostForm`, and an `http.Client` made with no transport of its own, all of
+  which send through the proxy the environment names; and, in a file that builds
+  for Linux without cgo, `user.Current`, `user.Lookup`, `user.LookupId` and
+  `x509.SystemCertPool`;
 - a dot-import of `os`, `os/user` or `syscall`;
 - an assignment to a `.Env` field, or a `Cmd` composite literal with an `Env:`
   key, outside the allowlist;
@@ -307,9 +323,11 @@ a schedule either. The extension's own build-target variable was removed in
 favour of a `--target` argument, but nothing prevents a new one being added.
 
 The guard sees only the calls it names. A library that reads the environment by
-itself -- `net/http`'s proxy default, gopsutil's `HOST_PROC` -- is invisible to
-it, and so is a new dependency that does the same. The list in
-[What the environment can still change](#what-the-environment-can-still-change)
+itself -- `net/http`'s proxy default inside another library, gopsutil's
+`HOST_PROC` behind a call that names no directory, `crypto/x509`'s store behind
+a TLS client that names no certificate authorities, OPA's zone names through
+`ZONEINFO` -- is invisible to it, and so is a new dependency that does the same.
+The list in [What the environment can still change](#what-the-environment-can-still-change)
 is kept by hand (M26-TEST-013).
 
 ## 6. Limits
