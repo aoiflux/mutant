@@ -483,11 +483,13 @@ Four rules, all in force today.
   a file named in program text, and **never from an environment variable** — see
   [`docs/CONFIGURATION_POLICY.md`](CONFIGURATION_POLICY.md), which makes that a
   machine-checked rule for the whole tree. Every `case_*`, `class_*`,
-  `record_*`, `view_*`, `role_*`, `disclose_*` and `evidence_*` builtin that
-  takes an options hash refuses a key named `passphrase`, `password`, `secret`
-  or `key` **by name**, before it looks at any other argument, because
-  "unknown option" reads as a misspelling and the point is that the option is
-  forbidden.
+  `record_*`, `view_*`, `role_*`, `disclose_*`, `evidence_*`, `review_*`,
+  `retention_*` and `erasure_*` builtin that takes an options hash, and
+  `ledger_open`, refuses a key named `passphrase`, `password`, `secret` or
+  `key` **by name**, before it looks at any other argument, because "unknown
+  option" reads as a misspelling and the point is that the option is
+  forbidden. The editor's `secretOption` rule reports such a key at the line,
+  before the program runs.
 - **Plaintext is `ParamBytes`, never `ParamString`.** A Go string cannot be
   zeroed, and the runtime copies and retains one at will. See
   [`object/bytesObj.go`](../object/bytesObj.go).

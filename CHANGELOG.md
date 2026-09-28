@@ -373,6 +373,21 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **The editor knows what the case builtins refuse.** Four new lint rules, each
+  a warning by default, report a call the run time refuses, in its own words,
+  before the program runs and asks for a passphrase. `roleLiteral`: a role
+  `case_open` or `ledger_open` refuses -- a word that is not a role, a
+  recipient's role such as `legal`, or `unasserted`. `filteredLedgerHandle`:
+  the handle `ledger_under_view` returns, passed to a builtin that does not read
+  under a view. `secretOption`: an option named `passphrase`, `password`,
+  `secret` or `key`, which those builtins refuse by name. `lifecycleState`: a
+  state `case_transition` never moves a case to, naming the builtin that does.
+  Each reads what the builtin package exports -- `RoleOptionBuiltins` and
+  `ExaminerRoleRefusal`, `RefusesLedgerViewHandle`, `SecretOptionRefusers`,
+  `CaseMoves` -- and tests that read the package's source or call every builtin
+  concerned hold each to the code, so none can warn about a call the run time
+  accepts. `mutant.lint.rules.<rule>.severity` sets each.
+
 - **A record's key is erased, and so is the case's, and a case is disposed of.**
   `record_erase(ledger, path, reason, options?)` overwrites the record key in
   one copy's header with zeros as wide as it, forces the write to the disk,
@@ -923,6 +938,23 @@ exhaustive lists.
   too; `record_release`'s also left out `report_table` and `report_list`. A test
   now holds `record_release`'s documentation to the list the run time is held
   to.
+
+- **A lint report on a call inside a `return` was given twice.** The parser
+  records a return's first value twice over, and the walk most of the lint rules
+  share followed both, so `classifiedPlaintext`, `commandInjection`,
+  `evidenceMutation`, `pathTraversal`, `tlsVerificationDisabled`,
+  `unboundedResource` and `weakCrypto` each reported a call written in a
+  `return` twice, in the editor and in `mutant lint`. The statements inside an
+  `if` or `match` that a function returns were walked twice too. Each is walked
+  once now.
+
+- **Every analysis built the set of builtin names again for each rule that
+  asks.** Seven lint rules built a set of every builtin's name, about 27 KB,
+  each time a document was analysed -- on every keystroke -- although the
+  language server builds that set once when it starts, and the four new case
+  rules would have made it eleven. They read the one set now: analysing a
+  50-declaration document allocates about 160 KB less than before, the four new
+  rules included.
 
 ### Security
 

@@ -837,6 +837,28 @@ func TestAKeyFileRewriteIsReadBackBeforeItIsRecorded(t *testing.T) {
 	}
 }
 
+// A rewrite shorter than the key file it overwrites -- a copy whose line
+// endings were turned into CRLF on its way, say -- is padded so that every old
+// byte is overwritten, and the padding is cut off once that is on the disk: the
+// file is left holding the new document and nothing after it.
+func TestAKeyFileRewriteLeavesNoPadding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "case.key")
+	document := []byte("{\n  \"current\": 2\n}\n")
+	if err := os.WriteFile(path, bytes.ReplaceAll(document, []byte("\n"), []byte("\r\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := caseKeyFileRewrite(path, document); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, document) {
+		t.Fatalf("the rewritten key file holds %q, not the document %q", got, document)
+	}
+}
+
 // A key file rotated or rewritten while its erasure was being prepared is not
 // erased: what the erasure records is of the file as it was read. The
 // passphrase prompt is where that happens, and case_key_erase asks again once

@@ -2834,6 +2834,21 @@ nothing: a false positive on a security rule is how a security rule gets turned
 off. Any of them can be set to `off` — or to `error`, for CI — through
 `mutant.lint.rules.<name>.severity`.
 
+Four more know what the case, record and ledger builtins refuse. Each of these
+calls compiles and fails when it runs, often after the program has asked for a
+passphrase, so the editor says so at the line, in the run time's own words:
+
+| Rule                   | What it reports                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `roleLiteral`          | A `role` in `case_open`'s or `ledger_open`'s options that is not a role, is a recipient's, or is `unasserted` |
+| `filteredLedgerHandle` | The handle `ledger_under_view` returns, passed to a builtin that does not read under a view                 |
+| `secretOption`         | An option named `passphrase`, `password`, `secret` or `key`, which those builtins refuse by name            |
+| `lifecycleState`       | A state `case_transition` never moves a case to, with the builtin that does make the move                    |
+
+The lists they read are the run time's, exported by the builtin package and held
+to its code by tests, so the editor cannot warn about a call the run time
+accepts.
+
 ## Maintenance
 
 When adding or changing language keywords or builtins, update the source definitions first

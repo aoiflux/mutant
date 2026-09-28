@@ -109,6 +109,13 @@ func (p BuiltinParamDoc) AcceptsChoice(word string) bool {
 	return slices.Contains(p.OneOf, choiceFold(word))
 }
 
+// Choice returns the word of the parameter's closed set a STRING argument
+// names, folded as AcceptsChoice folds it, and false when it names none.
+func (p BuiltinParamDoc) Choice(word string) (string, bool) {
+	folded := choiceFold(word)
+	return folded, slices.Contains(p.OneOf, folded)
+}
+
 // AcceptsElement reports whether an ARRAY parameter admits an element of the
 // given kind. It is true for every kind when no element contract is declared.
 func (p BuiltinParamDoc) AcceptsElement(kind ParamKind) bool {
@@ -3431,6 +3438,23 @@ func ParamSpecs(name string) ([]BuiltinParamDoc, bool) {
 		return nil, false
 	}
 	return exportParams(doc.params), true
+}
+
+// OptionsPosition returns the 1-based position of a builtin's options hash --
+// the parameter spelt `options` or `opts` -- or false when it takes none. The
+// editor's rules about what an options hash may hold find it here.
+func OptionsPosition(name string) (int, bool) {
+	doc, ok := builtinDocs[name]
+	if !ok {
+		return 0, false
+	}
+	for i, p := range doc.params {
+		switch strings.TrimSuffix(p.name, "?") {
+		case "options", "opts":
+			return i + 1, true
+		}
+	}
+	return 0, false
 }
 
 // ReturnSpec returns the contract for what a builtin yields, or false when the

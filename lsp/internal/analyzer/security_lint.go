@@ -112,6 +112,15 @@ func singleBindings(statements []mast.Statement) map[string]mast.Expression {
 	return values
 }
 
+// maxFollowedNames bounds how many names, slices and entries a rule follows
+// from an argument back to where its value was made -- classifiedPlaintext to a
+// read, filteredLedgerHandle to ledger_under_view. A chain longer than this is
+// not worth the risk of following a binding somewhere it does not reach, and a
+// rule that stops early stays quiet, which is the direction it errs in.
+//
+//mutant:limit depth
+const maxFollowedNames = 8
+
 // resolveOneHop returns the expression an argument stands for: itself, or --
 // when it is a bare name this scope binds exactly once -- the expression it was
 // bound to.
@@ -224,7 +233,6 @@ func forEachBuiltinCall(
 	shadowed map[string]struct{},
 	visit func(name string, anchor mast.Node, call *mast.CallExpression, bindings map[string]mast.Expression),
 ) {
-	live := liveBuiltinNames()
 	isShadowed := func(name string) bool {
 		_, taken := shadowed[name]
 		return taken
@@ -240,10 +248,7 @@ func forEachBuiltinCall(
 					return
 				}
 				name, anchor, ok := builtinCallee(call.Function, isShadowed)
-				if !ok {
-					return
-				}
-				if _, exists := live[name]; !exists {
+				if !ok || !isLiveBuiltin(name) {
 					return
 				}
 				// Built on first use: most scopes hold no call this family

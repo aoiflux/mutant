@@ -15,7 +15,7 @@ A limit that is not listed here is a bare literal somewhere in the source, and
 `policy/limit_budget.go`. Values fixed by a file format or a protocol are not
 limits; they are marked `//mutant:format` and are not listed.
 
-18 limits in 5 packages.
+19 limits in 6 packages.
 
 ## `builtin`
 
@@ -38,6 +38,12 @@ limits; they are marked `//mutant:format` and are not listed.
 | `WalkMaxNodes` | 2,000,000 | count | -- | WalkMaxNodes bounds the nodes one walk may visit. A walk that reaches two million has read most of a large store, which is a question to narrow -- to a set of ids, or a lower depth -- rather than one to answer. | `graphstore/walk.go` |
 | `WalkMaxTime` | 1m0s | duration | -- | WalkMaxTime bounds one walk's wall time. It is set well above the platform's clock granularity on purpose: graphene's own note is that on Windows the runtime reads the interrupt time, which advances at the timer tick -- 15.6 ms by default -- so a deadline in the microseconds is a deadline in name only; a probe with MaxTime 1ns completed a 201-node walk and reported no error at all. | `graphstore/walk.go` |
 | `walkClockInterval` | 16 | count | -- | walkClockInterval is how many charges pass between two reads of the clock when a budget sets MaxTime. It is graphene's own cadence, for graphene's reason: a clock read on every step of a walk that charges once per node and once per edge cost it about a fifth of its time, and sixteen steps is five or six nodes of overshoot. | `graphstore/walk.go` |
+
+## `lsp/internal/analyzer`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `maxFollowedNames` | 8 | depth | -- | maxFollowedNames bounds how many names, slices and entries a rule follows from an argument back to where its value was made -- classifiedPlaintext to a read, filteredLedgerHandle to ledger_under_view. A chain longer than this is not worth the risk of following a binding somewhere it does not reach, and a rule that stops early stays quiet, which is the direction it errs in. | `lsp/internal/analyzer/security_lint.go` |
 
 ## `policy/limitscan`
 

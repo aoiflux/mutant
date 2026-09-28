@@ -126,6 +126,22 @@ var caseMoves = []caseMove{
 	{caseStateRetained, caseStateDisposed, BuiltinNameCaseTransition},
 }
 
+// CaseMove is one move of the lifecycle and the builtin that makes it.
+type CaseMove struct {
+	From, To, By string
+}
+
+// CaseMoves returns caseMoves, for the editor's lifecycleState rule: a state no
+// move of case_transition's own leads to is a target case_transition refuses
+// whatever state the case is in.
+func CaseMoves() []CaseMove {
+	out := make([]CaseMove, 0, len(caseMoves))
+	for _, move := range caseMoves {
+		out = append(out, CaseMove{From: move.from, To: move.to, By: move.by})
+	}
+	return out
+}
+
 // caseMoveHow says how the builtins other than case_transition make their
 // moves, for a refusal that sends an examiner to them.
 var caseMoveHow = map[string]string{

@@ -64,6 +64,10 @@ type LintConfig struct {
 	AssignmentTarget             LintSeverity
 	PathTraversal                LintSeverity
 	ClassifiedPlaintext          LintSeverity
+	RoleLiteral                  LintSeverity
+	FilteredLedgerHandle         LintSeverity
+	SecretOption                 LintSeverity
+	LifecycleState               LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -178,6 +182,20 @@ func DefaultLintConfig() LintConfig {
 		// rather than error because the code compiles, and the refusal it
 		// predicts is itself the safe outcome.
 		ClassifiedPlaintext: LintSeverityWarning,
+		// The four below are the case builtins' refusals, each a certain
+		// run-time error in code that compiles, so each is a warning as
+		// builtinArgChoice is. A role case_open or ledger_open refuses: a word
+		// that is not a role, a recipient's role, or "unasserted".
+		RoleLiteral: LintSeverityWarning,
+		// A handle ledger_under_view returned, passed to a builtin that does
+		// not read under a view.
+		FilteredLedgerHandle: LintSeverityWarning,
+		// An option named for a secret, which the case builtins refuse by name
+		// because a passphrase is asked for at the terminal.
+		SecretOption: LintSeverityWarning,
+		// A state case_transition never moves a case to, whatever state the
+		// case is in, because another builtin makes that move or none does.
+		LifecycleState: LintSeverityWarning,
 	}
 }
 
@@ -238,6 +256,14 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.PathTraversal
 	case "classifiedPlaintext":
 		severityName = c.ClassifiedPlaintext
+	case "roleLiteral":
+		severityName = c.RoleLiteral
+	case "filteredLedgerHandle":
+		severityName = c.FilteredLedgerHandle
+	case "secretOption":
+		severityName = c.SecretOption
+	case "lifecycleState":
+		severityName = c.LifecycleState
 	default:
 		return nil, false
 	}
@@ -316,6 +342,10 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintEvidenceMutation(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintPathTraversal(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintClassifiedPlaintext(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintRoleLiteral(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintFilteredLedgerHandle(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintSecretOption(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintLifecycleState(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

@@ -122,6 +122,24 @@ what makes them worth having: nothing else in the toolchain objects.
   a case opened read-only -- the one rule here about the report rather than the
   machine, because an altered artifact is an artifact that proves nothing
 
+The case family. Each reports a call the case, record and ledger builtins refuse
+when the program runs -- often after it has asked for a passphrase -- in the run
+time's own words, from lists the run time exports and its tests hold to the code.
+
+- `mutant.lint.rules.roleLiteral.severity`: severity for a role `case_open` or
+  `ledger_open` refuses in its options: a word that is not a role, a recipient's
+  role such as `legal`, or `unasserted`
+- `mutant.lint.rules.filteredLedgerHandle.severity`: severity for passing the
+  handle `ledger_under_view` returns to a builtin that does not read under a
+  view -- any writer, and every read but the eight that filter
+- `mutant.lint.rules.secretOption.severity`: severity for an option named
+  `passphrase`, `password`, `secret` or `key` handed to a builtin that asks for
+  its passphrase at the terminal and refuses one as an argument
+- `mutant.lint.rules.lifecycleState.severity`: severity for asking
+  `case_transition` for a state it never moves a case to -- `in_review`,
+  `concluded`, `retained` or `registered` -- naming the builtin that makes the
+  move
+
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

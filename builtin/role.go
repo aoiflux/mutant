@@ -43,6 +43,7 @@ package builtin
 // append-only, and TestRoleIDsAreAFormat pins every id.
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -159,6 +160,43 @@ func ExaminerRoles() []string { return roleNames(caseRole.examinerSide) }
 // RecipientRoles are the roles a recipient can be named under, in id order.
 func RecipientRoles() []string { return roleNames(caseRole.recipientSide) }
 
+// roleOptionBuiltins read the examiner's role from the `role` entry of their
+// options hash, with roleOption. The editor's roleLiteral rule reads
+// RoleOptionBuiltins, and TestRoleOptionBuiltinsAreTheBuiltinsThatReadARole
+// holds it to the code.
+var roleOptionBuiltins = []string{BuiltinNameCaseOpen, BuiltinNameLedgerOpen}
+
+// RoleOptionBuiltins returns roleOptionBuiltins.
+func RoleOptionBuiltins() []string { return slices.Clone(roleOptionBuiltins) }
+
+// examinerRoleNamed reads the role an examiner asserts, and says why it is
+// refused when it is: the literal "unasserted", a word that is not a role, or a
+// role only a recipient is named under.
+func examinerRoleNamed(name string) (caseRole, string) {
+	role, known := roleNamed(name)
+	switch {
+	case strings.EqualFold(strings.TrimSpace(name), roleNameUnasserted):
+		return caseRole{}, fmt.Sprintf("%q is what is recorded when no role is given; to assert none, leave the "+
+			"role option out", roleNameUnasserted)
+	case !known:
+		return caseRole{}, fmt.Sprintf("%q is not a role. The roles are fixed; an examiner acts as one of %s", name,
+			strings.Join(ExaminerRoles(), ", "))
+	case !role.examinerSide():
+		return caseRole{}, fmt.Sprintf("%s is a recipient role: it names who a grant is issued to, not who is "+
+			"running this program. An examiner acts as one of %s", role.Name, strings.Join(ExaminerRoles(), ", "))
+	}
+	return role, ""
+}
+
+// ExaminerRoleRefusal is why an examiner cannot assert name as their role -- the
+// sentence case_open and ledger_open refuse it with -- or "" when they can. The
+// editor's roleLiteral rule repeats it at the line, and
+// TestTheRoleRefusalTheEditorRepeatsIsTheRuntimes holds it to both builtins.
+func ExaminerRoleRefusal(name string) string {
+	_, refusal := examinerRoleNamed(name)
+	return refusal
+}
+
 // roleNotAccessControl ends every refusal a role causes.
 const roleNotAccessControl = "A role is asserted, not authenticated: this refusal keeps the record " +
 	"consistent with the role it names, and is not access control"
@@ -187,18 +225,9 @@ func roleOption(op string, opts *formatOptions) (role caseRole, given bool, errO
 	if errObj != nil {
 		return caseRole{}, false, errObj
 	}
-	role, known := roleNamed(name)
-	switch {
-	case strings.EqualFold(strings.TrimSpace(name), roleNameUnasserted):
-		return caseRole{}, false, newError("%s: %q is what is recorded when no role is given; to assert "+
-			"none, leave the role option out", op, roleNameUnasserted)
-	case !known:
-		return caseRole{}, false, newError("%s: %q is not a role. The roles are fixed; an examiner acts as "+
-			"one of %s", op, name, strings.Join(ExaminerRoles(), ", "))
-	case !role.examinerSide():
-		return caseRole{}, false, newError("%s: %s is a recipient role: it names who a grant is issued to, "+
-			"not who is running this program. An examiner acts as one of %s", op, role.Name,
-			strings.Join(ExaminerRoles(), ", "))
+	role, refusal := examinerRoleNamed(name)
+	if refusal != "" {
+		return caseRole{}, false, newError("%s: %s", op, refusal)
 	}
 	return role, true, nil
 }

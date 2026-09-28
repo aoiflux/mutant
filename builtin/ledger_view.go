@@ -86,6 +86,20 @@ var ledgerViewReads = []string{
 // a view goes nowhere else.
 func LedgerViewReads() []string { return slices.Clone(ledgerViewReads) }
 
+// RefusesLedgerViewHandle reports whether a builtin refuses a handle under a
+// view: every builtin that takes a ledger as its first argument does, except
+// the reads in ledgerViewReads and ledger_close. The editor's
+// filteredLedgerHandle rule asks it, and
+// TestEveryBuiltinTakingALedgerRefusesAHandleUnderAViewUnlessItReadsThroughOne
+// holds it to what each builtin does.
+func RefusesLedgerViewHandle(name string) bool {
+	doc, ok := builtinDocs[name]
+	if !ok || len(doc.params) == 0 || strings.TrimSuffix(doc.params[0].name, "?") != "ledger" {
+		return false
+	}
+	return name != BuiltinNameLedgerClose && !slices.Contains(ledgerViewReads, name)
+}
+
 // ledgerViewRefusal is every other builtin's answer to a handle under a view.
 func ledgerViewRefusal(op string, handle int64, v *ledgerView) *object.Error {
 	return newError("%s: handle %d is ledger %s read under view %q, and %s does not read under a view; only %s "+

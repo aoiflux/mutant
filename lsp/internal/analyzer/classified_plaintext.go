@@ -45,11 +45,6 @@ import (
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
-// classifiedResolveDepth bounds how many names and slices the rule follows
-// from an argument back to the read. A chain longer than this is not worth the
-// risk of following a binding somewhere it does not reach.
-const classifiedResolveDepth = 8
-
 func lintClassifiedPlaintext(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil || snapshot.Program.NodePositions == nil {
 		return nil
@@ -125,7 +120,7 @@ type classifiedFinder struct {
 // origin reports the source builtin an expression certainly holds plaintext
 // from, and how it holds it, phrased to follow "argument N holds".
 func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held string, ok bool) {
-	if expr == nil || depth > classifiedResolveDepth {
+	if expr == nil || depth > maxFollowedNames {
 		return "", "", false
 	}
 	switch node := expr.(type) {
@@ -231,7 +226,7 @@ func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held 
 // searchResult reports whether an expression is certainly a record_search
 // result: the call itself, or a name this scope binds once to one.
 func (f classifiedFinder) searchResult(expr mast.Expression, depth int) bool {
-	if expr == nil || depth > classifiedResolveDepth {
+	if expr == nil || depth > maxFollowedNames {
 		return false
 	}
 	switch node := expr.(type) {
@@ -254,7 +249,7 @@ func (f classifiedFinder) searchResult(expr mast.Expression, depth int) bool {
 // searchHits reports whether an expression is certainly a search's hits: the
 // `hits` entry of a result, or a name bound once to it.
 func (f classifiedFinder) searchHits(expr mast.Expression, depth int) bool {
-	if expr == nil || depth > classifiedResolveDepth {
+	if expr == nil || depth > maxFollowedNames {
 		return false
 	}
 	switch node := expr.(type) {
@@ -277,7 +272,7 @@ func (f classifiedFinder) searchHits(expr mast.Expression, depth int) bool {
 // searchHit reports whether an expression is certainly one of a search's
 // hits: an index into its hits, or a name bound once to one.
 func (f classifiedFinder) searchHit(expr mast.Expression, depth int) bool {
-	if expr == nil || depth > classifiedResolveDepth {
+	if expr == nil || depth > maxFollowedNames {
 		return false
 	}
 	switch node := expr.(type) {

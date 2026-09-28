@@ -50,6 +50,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"mutant/object"
@@ -581,15 +582,45 @@ func refusePassphraseOption(op string, args []object.Object, pos int) *object.Er
 		if !ok {
 			continue
 		}
-		switch name.Value {
-		case "passphrase", "password", "secret", "key":
-			return newError("%s: a passphrase is not an argument. Key material must not sit in "+
-				"program text, in a variable a traceback can print, or in an unzeroable Go "+
-				"string. It is asked for at the terminal", op)
+		if slices.Contains(secretOptionNames, name.Value) {
+			return newError("%s: %s", op, secretOptionRefusal)
 		}
 	}
 	return nil
 }
+
+// secretOptionNames are the option names refusePassphraseOption refuses. They
+// are matched exactly, as every other option name is.
+var secretOptionNames = []string{"passphrase", "password", "secret", "key"}
+
+// secretOptionRefusal is the refusal, after the builtin's name.
+const secretOptionRefusal = "a passphrase is not an argument. Key material must not sit in program text, in a " +
+	"variable a traceback can print, or in an unzeroable Go string. It is asked for at the terminal"
+
+// SecretOptionNames returns secretOptionNames, for the editor's secretOption
+// rule.
+func SecretOptionNames() []string { return slices.Clone(secretOptionNames) }
+
+// SecretOptionRefusal is what a builtin in SecretOptionRefusers says of such an
+// option, which the editor repeats at the line.
+func SecretOptionRefusal() string { return secretOptionRefusal }
+
+// secretOptionRefusers are the builtins that read their options hash with
+// secretOptionsArg, and so refuse an option named for a secret before they look
+// at anything else. The editor's secretOption rule reads SecretOptionRefusers,
+// and TestSecretOptionRefusersAreTheBuiltinsThatRefuse holds it to the calls.
+var secretOptionRefusers = []string{
+	BuiltinNameCaseOpen, BuiltinNameCaseEvidence, BuiltinNameCaseWrite, BuiltinNameCaseReport,
+	BuiltinNameCaseBundle, BuiltinNameCaseKeyCreate, BuiltinNameCaseKeyOpen, BuiltinNameCaseKeyRotate,
+	BuiltinNameCaseKeyErase, BuiltinNameClassDefine, BuiltinNameViewDefine, BuiltinNameRecordSeal,
+	BuiltinNameRecordSealQuantised, BuiltinNameRecordOpen, BuiltinNameRecordSearch, BuiltinNameRecordErase,
+	BuiltinNameDiscloseWithdraw, BuiltinNameLedgerOpen, BuiltinNameRoleDefine, BuiltinNameEvidenceIntake,
+	BuiltinNameEvidenceAccept, BuiltinNameEvidenceHistory, BuiltinNameReviewRequest, BuiltinNameReviewList,
+	BuiltinNameRetentionHold, BuiltinNameRetentionList, BuiltinNameErasureList,
+}
+
+// SecretOptionRefusers returns secretOptionRefusers.
+func SecretOptionRefusers() []string { return slices.Clone(secretOptionRefusers) }
 
 // secretOptionsArg reads an options hash after refusing, by name, an option
 // named for a secret. The builtins that use it call it before they check their

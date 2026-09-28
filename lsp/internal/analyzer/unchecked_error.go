@@ -69,7 +69,7 @@ func lintUncheckedErrors(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 		severity: severity,
 		source:   &source,
 		shadowed: namesBoundAnywhere(snapshot.Program.Statements),
-		builtins: liveBuiltinNames(),
+		builtins: builtinNameSet,
 	}
 	collector.checkScope(snapshot.Program.Statements)
 	return collector.result
@@ -87,6 +87,9 @@ type uncheckedErrorCollector struct {
 // liveBuiltinNames is the set of names the registry actually defines. A
 // contract in the metadata table for a name no longer registered would
 // otherwise let this rule report a call to something that does not exist.
+//
+// It is built once, as builtinNameSet, and the rules read that: it is some
+// 20 KB, and eleven rules ask per analysis (TestTheRegistryIsReadNotRebuilt).
 func liveBuiltinNames() map[string]struct{} {
 	names := make(map[string]struct{}, len(builtin.Builtins))
 	for _, def := range builtin.Builtins {

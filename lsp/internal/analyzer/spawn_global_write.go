@@ -248,10 +248,14 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 		case *mast.ExpressionStatement:
 			walkExpression(n.Expression)
 		case *mast.ReturnStatement:
+			// The parser records the first value in both fields, so
+			// ReturnValue alone is walked only when it is the only one set.
 			for _, value := range n.ReturnValues {
 				walkExpression(value)
 			}
-			walkExpression(n.ReturnValue)
+			if len(n.ReturnValues) == 0 {
+				walkExpression(n.ReturnValue)
+			}
 		case *mast.BlockStatement:
 			for _, inner := range n.Statements {
 				walkStatement(inner)

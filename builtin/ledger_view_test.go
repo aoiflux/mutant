@@ -449,12 +449,14 @@ func TestEveryBuiltinTakingALedgerRefusesAHandleUnderAViewUnlessItReadsThroughOn
 		}
 		_, errObj := unwrapPairNoFatal(GetBuiltinByName(name).Fn(args...))
 		refused := errObj != nil && strings.Contains(errObj.Message, "does not read under a view")
-		switch reads := slices.Contains(ledgerViewReads, name); {
-		case reads && refused:
+		// The editor's filteredLedgerHandle rule reports exactly the builtins
+		// RefusesLedgerViewHandle names, so that is what each one is held to.
+		switch refuses := RefusesLedgerViewHandle(name); {
+		case !refuses && refused:
 			t.Errorf("%s reads under a view and refused a handle under one: %s", name, errObj.Message)
-		case !reads && !refused:
+		case refuses && !refused:
 			t.Errorf("%s took a handle under a view: %v", name, errObj)
-		case !reads && !strings.Contains(errObj.Message, "Pass the ledger's own handle ("):
+		case refuses && !strings.Contains(errObj.Message, "Pass the ledger's own handle ("):
 			t.Errorf("%s refused a handle under a view without naming the ledger's own: %s", name, errObj.Message)
 		}
 	}
@@ -463,6 +465,12 @@ func TestEveryBuiltinTakingALedgerRefusesAHandleUnderAViewUnlessItReadsThroughOn
 	}
 	if got := LedgerViewReads(); !slices.Equal(got, ledgerViewReads) {
 		t.Errorf("LedgerViewReads is %v", got)
+	}
+	for name, want := range map[string]bool{BuiltinNameLedgerAddNode: true, BuiltinNameLedgerStats: true,
+		BuiltinNameLedgerNode: false, BuiltinNameLedgerClose: false, BuiltinNameDbNode: false, BuiltinNamePutln: false} {
+		if got := RefusesLedgerViewHandle(name); got != want {
+			t.Errorf("RefusesLedgerViewHandle(%s) = %v, want %v", name, got, want)
+		}
 	}
 }
 

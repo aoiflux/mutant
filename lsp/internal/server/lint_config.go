@@ -71,6 +71,10 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "evidenceMutation", &config.EvidenceMutation)
 	applyRuleSeverity(rulesMap, "pathTraversal", &config.PathTraversal)
 	applyRuleSeverity(rulesMap, "classifiedPlaintext", &config.ClassifiedPlaintext)
+	applyRuleSeverity(rulesMap, "roleLiteral", &config.RoleLiteral)
+	applyRuleSeverity(rulesMap, "filteredLedgerHandle", &config.FilteredLedgerHandle)
+	applyRuleSeverity(rulesMap, "secretOption", &config.SecretOption)
+	applyRuleSeverity(rulesMap, "lifecycleState", &config.LifecycleState)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

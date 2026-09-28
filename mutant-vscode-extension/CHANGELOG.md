@@ -37,11 +37,25 @@
   context it carries, handed to a builtin that refuses it is flagged at the
   line. A search's whole result and its `hits` are not, because a search that
   found nothing holds no plaintext.
-- **Every new builtin is highlighted and hoverable** -- 166 of them, across disk
+- **Four new diagnostics for the case builtins.** `roleLiteral`,
+  `filteredLedgerHandle`, `secretOption` and `lifecycleState` report a call the
+  run time refuses -- a role `case_open` or `ledger_open` will not take, the
+  handle `ledger_under_view` returns passed to a builtin that does not read
+  under a view, an option named `passphrase`, `password`, `secret` or `key`,
+  and a state `case_transition` never moves a case to -- at the line and in the
+  run time's own words. Each is a warning by default, set by
+  `mutant.lint.rules.<rule>.severity`.
+- **A call inside a `return` is reported once.** Seven rules, most of the
+  security family among them, reported it twice.
+- **Less garbage on every keystroke.** Seven rules built the set of every
+  builtin's name again, about 27 KB each, whenever a document was analysed. They
+  read the one the server builds when it starts.
+- **Every new builtin is highlighted and hoverable** -- 196 of them, across disk
   image verification, partition-offset opening, deleted-file recovery, journals,
-  slack, the forensic ledger, classified records, disclosure and reading a graph
-  store back -- with no change here, because the grammar and the hover cards are
-  both generated from the registry.
+  slack, the forensic ledger, classified records, disclosure, reading a graph
+  store back, and a case's roles, lifecycle, evidence custody, reviews,
+  retention and erasure -- with no change here, because the grammar and the
+  hover cards are both generated from the registry.
 
 ## 0.2.0
 

@@ -388,9 +388,13 @@ func forEachStatementInScope(statements []mast.Statement, visit func(mast.Statem
 		case *mast.LetStatement:
 			forEachNestedBlockExpression(n.Value, walk)
 		case *mast.ReturnStatement:
-			forEachNestedBlockExpression(n.ReturnValue, walk)
+			// The parser records the first value in both fields, so
+			// ReturnValue alone is walked only when it is the only one set.
 			for _, value := range n.ReturnValues {
 				forEachNestedBlockExpression(value, walk)
+			}
+			if len(n.ReturnValues) == 0 {
+				forEachNestedBlockExpression(n.ReturnValue, walk)
 			}
 		}
 	}

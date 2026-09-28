@@ -434,6 +434,39 @@ policy.
   Certainty is by construction: a name bound once in its scope is followed, a
   name bound twice, a user function's result and `a + b` are not.
   `record_release`'s result is never reported -- it is the way to comply)
+- `roleLiteral` -> warning (the `role` in `case_open`'s or `ledger_open`'s
+  options, when it is one they refuse: a word that is not a role, a recipient
+  role -- `legal`, `external_partner`, `restricted_viewer` -- or `unasserted`,
+  which is what is recorded when no role is given. The message is
+  `builtin.ExaminerRoleRefusal`, the sentence both builtins refuse with, held to
+  them by a test; the builtins are `builtin.RoleOptionBuiltins`, held to the
+  calls of `roleOption` by a test that reads the source. A role passed as an
+  argument -- `case_assign`'s, `role_define`'s, `role_assign`'s -- is a parameter
+  that declares its words, so `builtinArgChoice` reports it and this rule does
+  not. Two `role` keys in one literal are left alone: which one the run time
+  reads is the order it builds the hash in)
+- `filteredLedgerHandle` -> warning (the handle `ledger_under_view` returns --
+  the `handle` entry of its result, through names bound once -- passed as the
+  ledger of a builtin that refuses it. It asks
+  `builtin.RefusesLedgerViewHandle`: every builtin whose first parameter is a
+  ledger, except the reads in `builtin.LedgerViewReads` and `ledger_close`. The
+  test that calls every such builtin with a handle under a view is held to the
+  same predicate, so the rule and the run time cannot disagree. The message
+  lists the reads that do read under a view and says to pass the ledger's own
+  handle, knowing nothing it returns is filtered)
+- `secretOption` -> warning (an option named `passphrase`, `password`, `secret`
+  or `key`, matched exactly, in the options hash of a builtin in
+  `builtin.SecretOptionRefusers` -- every builtin that reads its options with
+  `secretOptionsArg`, which a test finds in the source and holds to the list,
+  checking too that each reads the hash where the metadata puts it
+  (`builtin.OptionsPosition`). One report per call, at the first such key
+  written. The message ends with the run time's own refusal)
+- `lifecycleState` -> warning (a state `case_transition` never moves a case to:
+  one no move in `builtin.CaseMoves` made by `case_transition` leads to. Such a
+  call is refused whatever state the case is in, and the message names the
+  builtin that makes the move -- `review_request`, `review_decide`,
+  `retention_set` -- or says the case starts out in that state. A word that is
+  not a state is `builtinArgChoice`'s, and is left to it)
 - `pathTraversal` -> warning (a path built from a value the program did not
   write, reaching `fs_*`, a `*_read_file` or an archive entry, with nothing
   looking at the value in between. The only rule in the family with taint

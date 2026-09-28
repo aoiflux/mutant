@@ -3,7 +3,7 @@ package builtin
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,43 +16,47 @@ import (
 var secretOptionFamilies = []string{"case_", "class_", "record_", "view_", "disclose_", "evidence_", "role_",
 	"redaction_"}
 
-// optionsPosition is the 1-based position of a builtin's options hash, or 0.
-func optionsPosition(doc builtinDoc) int {
-	for i, p := range doc.params {
-		switch strings.TrimSuffix(p.name, "?") {
-		case "options", "opts":
-			return i + 1
-		}
-	}
-	return 0
-}
-
 // M26-DOC3-010. The by-name refusal of a passphrase option was made only by
 // case_key_*. record_open, record_seal, view_define and the others answered
 // `unknown option "passphrase"`, which reads as a misspelling, and case_open
 // and case_evidence did not look at unknown keys at all. Every builtin in these
 // families with an options hash now refuses the four names first, before any
 // other argument is looked at -- which is why the others here are placeholders.
+// So does every other builtin the editor's secretOption rule names: ledger_open
+// and the review_, retention_ and erasure_ builtins, which no family here
+// reaches.
 func TestEveryOptionNamedForASecretIsRefusedByName(t *testing.T) {
 	t.Chdir(t.TempDir())
 	var names []string
-	for name, doc := range builtinDocs {
+	for name := range builtinDocs {
+		if _, hasOptions := OptionsPosition(name); !hasOptions {
+			continue
+		}
 		for _, prefix := range secretOptionFamilies {
-			if strings.HasPrefix(name, prefix) && optionsPosition(doc) > 0 {
+			if strings.HasPrefix(name, prefix) {
 				names = append(names, name)
 				break
 			}
 		}
 	}
-	sort.Strings(names)
 	// The metadata scan is the test's reach; if a rename made it find nothing,
 	// every assertion below would pass by not running.
 	if len(names) < 13 {
 		t.Fatalf("found %d builtins with an options hash in these families, want at least 13: %v", len(names), names)
 	}
+	for _, name := range names {
+		if !slices.Contains(SecretOptionRefusers(), name) {
+			t.Errorf("%s takes an options hash and is not in SecretOptionRefusers, so the editor will not "+
+				"say it refuses a secret", name)
+		}
+	}
+	names = sortedSet(append(names, SecretOptionRefusers()...))
+	if got, want := SecretOptionNames(), []string{"passphrase", "password", "secret", "key"}; !slices.Equal(got, want) {
+		t.Errorf("SecretOptionNames is %v, want %v", got, want)
+	}
 
 	for _, name := range names {
-		position := optionsPosition(builtinDocs[name])
+		position, _ := OptionsPosition(name)
 		fn := GetBuiltinByName(name)
 		if fn == nil {
 			t.Fatalf("%s has metadata and no builtin", name)
