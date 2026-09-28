@@ -435,6 +435,7 @@ func TestEveryChoiceParameterIsTheBuiltinsOwnList(t *testing.T) {
 		BuiltinNameCaseAssign + ".role":       caseAssignRoles(),
 		BuiltinNameRoleDefine + ".role":       RecipientRoles(),
 		BuiltinNameRoleAssign + ".role":       recipientAssignRoles(),
+		BuiltinNameReviewDecide + ".decision": {"approved", "changes_requested", "rejected"},
 	}
 	seen := map[string]bool{}
 	for _, def := range Builtins {

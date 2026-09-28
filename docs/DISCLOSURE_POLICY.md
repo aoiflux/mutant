@@ -39,6 +39,8 @@ document describes is waiting to be built.
 | The graphene disclosure ledger, [Section 13](#13-the-disclosure-ledger) | **In force.** [`builtin/disclose_ledger.go`](../builtin/disclose_ledger.go) |
 | `case_attach`, `case_transition`, `case_assign`: the case's lifecycle, its assignments and its class and view definitions kept in the ledger | **In force.** [`builtin/case_lifecycle.go`](../builtin/case_lifecycle.go), [`builtin/case_chain.go`](../builtin/case_chain.go) |
 | `evidence_intake`, `evidence_release`, `evidence_accept`, `evidence_return`, `evidence_dispose`, `evidence_history`: the custody of each exhibit kept in the ledger | **In force.** [`builtin/case_evidence.go`](../builtin/case_evidence.go) |
+| `review_request`, `review_decide`, `review_list`: a case, a record or a redaction version reviewed, bound to what was asked about, and decided by a reviewer who did not ask | **In force.** [`builtin/case_review.go`](../builtin/case_review.go) |
+| `retention_set`, `retention_hold`, `retention_release`, `retention_list`: how long a case is kept, and the legal holds that stop every disposal in it | **In force.** [`builtin/case_retention.go`](../builtin/case_retention.go) |
 | `role_define`, `role_assign`, `role_list`: recipient roles, the views each may be granted, and the refusal of a disclosure its recipient's role does not allow | **In force.** [`builtin/recipient_role.go`](../builtin/recipient_role.go) |
 | `redaction_commit`, `redaction_versions`: the versions of a record's redaction, and which disclosures were issued under one since superseded | **In force.** [`builtin/redaction_version.go`](../builtin/redaction_version.go) |
 | `ledger_classify`, `ledger_classifications`, `ledger_under_view`: the classes a node a script wrote holds, and the ledger read under a view, which only the reads that read through one take | **In force.** [`builtin/ledger_classify.go`](../builtin/ledger_classify.go), [`builtin/ledger_view.go`](../builtin/ledger_view.go) |
@@ -708,10 +710,16 @@ nodes, each IN_CASE to the Case, PERFORMED_BY its actor and CLASSIFIED_AS each
 class it names; it names the node by property, and no edge joins the two. The
 ledger's reviews of its redactions (`ledger_redactions_review`, section 7) are
 one chain of RedactionReview nodes per ledger, each PERFORMED_BY its examiner and
-naming the redaction record it answers through by sequence number and hash. The
-label table graphene keeps beside the ledger also names ReviewRequest,
-ReviewDecision, RetentionEvent and ErasureEvent, and REVIEWS and ERASES: their
-numbers are fixed now, and nothing writes them yet.
+naming the redaction record it answers through by sequence number and hash. A
+case's requests for review (`review_request`) are one chain of ReviewRequest
+nodes per case, each IN_CASE, PERFORMED_BY its examiner, and REVIEWS the Case,
+Record or RedactionVersion it asks about; a request's decision (`review_decide`)
+is a ReviewDecision node that REVIEWS the request, in a chain of its own that
+holds one event. A case's retention period and legal holds (`retention_set`,
+`retention_hold`, `retention_release`) are one chain of RetentionEvent nodes per
+case, and a hold is AUTHORISED_BY the Actor whose authority it was placed on. The
+label table graphene keeps beside the ledger also names ErasureEvent and ERASES:
+their numbers are fixed now, and nothing writes them yet.
 
 Four properties of it are worth stating:
 
@@ -726,7 +734,8 @@ Four properties of it are worth stating:
   refused, never reconciled by overwriting.
 - **A case's history is a chain, and a fork is refused.** Each lifecycle event,
   each examiner's or recipient's assignments, each exhibit's custody, each
-  view's versions of a redaction, each script node's classifications and the
+  view's versions of a redaction, each script node's classifications, a case's
+  requests for review and each request's decision, a case's retention, and the
   ledger's reviews of its redactions are a chain: an event names its position and
   the uid of the one before it, and its own uid is a SHA-256 over everything it
   records. The head of the chain is what is in force. Two events after one

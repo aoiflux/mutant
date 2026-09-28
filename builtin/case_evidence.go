@@ -465,23 +465,6 @@ func evidenceComparison(measured evidenceMeasured, intake, discrepancy string) m
 	}
 }
 
-// evidenceWrite is the preamble every custody writer shares, run with the
-// custody lock and disclosureLedgerMu held: the open case, attached to this
-// ledger, and the ledger's label names declared.
-func evidenceWrite(op string, ledger *ledgerSession) (*custodySession, *object.Error) {
-	session, errObj := openSessionLocked(op)
-	if errObj != nil {
-		return nil, errObj
-	}
-	if errObj := session.attachedToLocked(op, ledger); errObj != nil {
-		return nil, errObj
-	}
-	if err := disclosureDeclareNames(ledger); err != nil {
-		return nil, newError("%s: %s", op, err.Error())
-	}
-	return session, nil
-}
-
 // evidenceHeldBy reads an exhibit of the attached case and refuses unless
 // the ledger says the examiner writing holds it.
 func evidenceHeldBy(op string, session *custodySession, ledger *ledgerSession, exhibit string) (evidenceItem,
@@ -645,7 +628,7 @@ func EvidenceIntake(args ...object.Object) object.Object {
 	defer custodyStore.Unlock()
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
-	session, errObj := evidenceWrite(op, ledger)
+	session, errObj := caseLedgerWrite(op, ledger)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -830,7 +813,7 @@ func EvidenceRelease(args ...object.Object) object.Object {
 	defer custodyStore.Unlock()
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
-	session, errObj := evidenceWrite(op, ledger)
+	session, errObj := caseLedgerWrite(op, ledger)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -918,7 +901,7 @@ func EvidenceAccept(args ...object.Object) object.Object {
 	defer custodyStore.Unlock()
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
-	session, errObj := evidenceWrite(op, ledger)
+	session, errObj := caseLedgerWrite(op, ledger)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1001,7 +984,7 @@ func EvidenceReturn(args ...object.Object) object.Object {
 	defer custodyStore.Unlock()
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
-	session, errObj := evidenceWrite(op, ledger)
+	session, errObj := caseLedgerWrite(op, ledger)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -1051,12 +1034,15 @@ func EvidenceDispose(args ...object.Object) object.Object {
 	defer custodyStore.Unlock()
 	disclosureLedgerMu.Lock()
 	defer disclosureLedgerMu.Unlock()
-	session, errObj := evidenceWrite(op, ledger)
+	session, errObj := caseLedgerWrite(op, ledger)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	item, errObj := evidenceHeldBy(op, session, ledger, exhibit)
 	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	if errObj := retentionHoldRefusal(op, session, ledger.graph); errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	event, errObj := evidenceAppend(op, session, ledger, item, evidenceKindDispose, statement, nil, nil)

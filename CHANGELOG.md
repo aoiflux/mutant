@@ -373,6 +373,35 @@ exhaustive lists.
   surrounding space, and looks only at literals.
   `mutant.lint.rules.builtinArgChoice.severity` sets it.
 
+- **A case is reviewed, and kept.** `review_request(ledger, subject, note,
+  options?)` asks for a review of the attached case, of one of its records or of
+  one of its redaction versions, and binds what it asks about by a hash: a
+  record by its file's SHA-256, a redaction version by the digest of what it
+  releases, and the case by a manifest `case_write` wrote, which must still hash
+  to its seal and have been written with the case where it stands -- the
+  manifest a run renders in memory changes each time it is looked at. A review
+  of the case moves it from active to in_review, and `review_decide(ledger,
+  request, decision, reason)` concludes it or sends it back; a decision is
+  recorded by an examiner acting as reviewer who did not ask for the review,
+  and a request is decided once. `retention_set(ledger, until, basis)` retains a
+  concluded case until a date, and `retention_hold(ledger, reason, options?)`
+  places a legal hold, on the examiner's own authority or one they name: while
+  a hold is in force `evidence_dispose` refuses, until `retention_release` lifts
+  it. `review_list` and `retention_list` read both back with the ledger alone, and
+  `case_transition` refuses the moves the review and retention builtins make,
+  naming the one that makes each.
+
+- **A ledger's older redactions can be reviewed.**
+  `ledger_redactions_review(ledger, through_seq, reason)` records that an
+  examiner has answered for the ledger's redactions, up to a sequence number,
+  that were recorded with no role, by a build that may not have refused a
+  redaction of a disclosure record. Each review is the next event of the
+  ledger's one hash-linked chain of reviews. `ledger_redactions` marks each
+  redaction still in question `unguarded` and reports `reviewed_through`,
+  `unguarded_redactions`, `reviews_intact` and `reviews_reason`;
+  `disclose_history`, `disclose_for_segment`, `disclose_reclassified` and
+  `redaction_versions` report `unguarded_redactions`. See Security.
+
 - **A record can be searched as one of its readers could read it.**
   `record_search(record, pattern, options?)` finds a literal -- BYTES, or a
   STRING's UTF-8 bytes -- in what one reader of a record could read. Opened
@@ -973,6 +1002,22 @@ exhaustive lists.
   the other standard-library calls that read the environment inside themselves,
   and CONFIGURATION_POLICY lists every variable the Go runtime and Mutant's
   libraries still read.
+
+- **A ledger redacted by an older build could have lost a withdrawal without a
+  trace.** The redaction builtins refuse every record of the disclosure schema,
+  but a ledger redacted by a build from before that refusal may hold a redaction
+  that removed one -- a withdrawal, a disclosure or a reclassification -- and a
+  redaction record names what it removed by id and hash, never by label. A
+  withdrawal removed that way let its record be disclosed again to the recipient
+  it was withdrawn from, and the history no longer counted it. Every redaction
+  recorded with no role is now in question (every build that records a role also
+  refuses the schema), unless it only stripped the properties of a node or an
+  edge a script wrote that the ledger still holds; `disclose_to_passphrase`
+  issues no grant from a ledger holding one until `ledger_redactions_review`
+  records that an examiner has answered for it. A withdrawal is now also found by
+  the record and the recipient it names, so one whose disclosure was removed
+  still stops a new grant. No released version is affected: the ledger family is
+  new in 2.6.0.
 
 ## [2.5.0] — 2026-09-17
 

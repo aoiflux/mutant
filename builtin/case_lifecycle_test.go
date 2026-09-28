@@ -345,9 +345,18 @@ func TestACaseMovesOnlyAlongItsLifecycle(t *testing.T) {
 	mustHash(t, CaseTransition(ledger, stringObj("active"), stringObj("begin")))
 	mustRefuse(t, "a move to where it is", CaseTransition(ledger, stringObj("active"), stringObj("x")), "already active")
 	mustRefuse(t, "a move case_transition does not make", CaseTransition(ledger, stringObj("in_review"),
-		stringObj("x")), "moves a case that is active nowhere")
+		stringObj("x")), "the move to in_review is made by review_request(ledger, \"case\"")
+	mustRefuse(t, "a move nothing makes", CaseTransition(ledger, stringObj("retained"), stringObj("x")),
+		"case_transition moves a case that is active nowhere; review_request moves it to in_review")
 
-	forceLifecycle(t, run.session(t), openCaseUID(t), caseStateInReview, caseStateConcluded)
+	forceLifecycle(t, run.session(t), openCaseUID(t), caseStateInReview)
+	mustRefuse(t, "a review's move", CaseTransition(ledger, stringObj("concluded"), stringObj("x")),
+		"the move to concluded is made by review_decide(")
+	mustRefuse(t, "leaving a review without a decision", CaseTransition(ledger, stringObj("active"), stringObj("x")),
+		"the move to active is made by review_decide(")
+	forceLifecycle(t, run.session(t), openCaseUID(t), caseStateConcluded)
+	mustRefuse(t, "a retention's move", CaseTransition(ledger, stringObj("retained"), stringObj("x")),
+		"the move to retained is made by retention_set(")
 	reopened := mustHash(t, CaseTransition(ledger, stringObj("active"), stringObj("new evidence")))
 	if mustHashStringValue(t, reopened, "from") != caseStateConcluded || mustHashIntValue(t, reopened, "seq") != 5 {
 		t.Fatalf("reopening gave %s", reopened.Inspect())
@@ -405,7 +414,8 @@ func TestEachStateRefusesAFixedSetOfActs(t *testing.T) {
 		caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake, caseActRedact},
 		caseStateConcluded: {caseActSeal, caseActIntake},
 		caseStateRetained:  {caseActSeal, caseActIntake},
-		caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact},
+		caseStateDisposed: {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact,
+			caseActReview, caseActRetain},
 	}
 	for _, state := range caseStates {
 		for action, name := range caseActionNames {

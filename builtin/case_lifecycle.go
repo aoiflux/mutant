@@ -30,8 +30,12 @@ package builtin
 // case_transition makes the moves that are an examiner's decision alone:
 // registered to active, and reopening a concluded case. The review and
 // retention moves are made by the builtins that record the review and the
-// retention, and a disposal by the one that checks what disposal requires.
-// A refusal names the state the case is in and the moves available from it.
+// retention (case_review.go, case_retention.go) -- review_request submits an
+// active case, review_decide concludes it or sends it back, retention_set
+// retains a concluded one -- and a disposal by the one that checks what
+// disposal requires. A refusal names the state the case is in and the moves
+// available from it, and the builtin that makes a move case_transition does
+// not.
 //
 // Each state takes what it can, and refuses what it cannot, in both the
 // builtins that take the ledger -- which ask the ledger -- and the ones that
@@ -110,11 +114,25 @@ type caseMove struct {
 	from, to, by string
 }
 
-// caseMoves are the moves case_transition makes. The review, retention and
-// disposal moves are added with the builtins that make them.
+// caseMoves are the moves of the lifecycle and the builtin that makes each.
+// The disposal move is added with the builtin that makes it.
 var caseMoves = []caseMove{
 	{caseStateRegistered, caseStateActive, BuiltinNameCaseTransition},
+	{caseStateActive, caseStateInReview, BuiltinNameReviewRequest},
+	{caseStateInReview, caseStateConcluded, BuiltinNameReviewDecide},
+	{caseStateInReview, caseStateActive, BuiltinNameReviewDecide},
 	{caseStateConcluded, caseStateActive, BuiltinNameCaseTransition},
+	{caseStateConcluded, caseStateRetained, BuiltinNameRetentionSet},
+}
+
+// caseMoveHow says how the builtins other than case_transition make their
+// moves, for a refusal that sends an examiner to them.
+var caseMoveHow = map[string]string{
+	BuiltinNameReviewRequest: "review_request(ledger, \"case\", note, {\"manifest\": path}), which records the " +
+		"manifest the case was submitted for review as",
+	BuiltinNameReviewDecide: "review_decide(ledger, request, decision, reason), recorded by a reviewer other " +
+		"than whoever asked for the review",
+	BuiltinNameRetentionSet: "retention_set(ledger, until, basis), which records how long the case is kept and why",
 }
 
 // caseAction is a kind of write a lifecycle state can refuse.
@@ -127,6 +145,8 @@ const (
 	caseActAssign
 	caseActIntake
 	caseActRedact
+	caseActReview
+	caseActRetain
 )
 
 var caseActionNames = map[caseAction]string{
@@ -136,6 +156,8 @@ var caseActionNames = map[caseAction]string{
 	caseActAssign:   "assignment of a role",
 	caseActIntake:   "intake of evidence",
 	caseActRedact:   "commitment of a redaction version",
+	caseActReview:   "request for a review, or decision of one",
+	caseActRetain:   "retention period, or legal hold placed or lifted",
 }
 
 // caseStateRefuses is what each state refuses. A state not listed refuses
@@ -144,7 +166,8 @@ var caseStateRefuses = map[string][]caseAction{
 	caseStateInReview:  {caseActSeal, caseActDefine, caseActDisclose, caseActIntake, caseActRedact},
 	caseStateConcluded: {caseActSeal, caseActIntake},
 	caseStateRetained:  {caseActSeal, caseActIntake},
-	caseStateDisposed:  {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact},
+	caseStateDisposed: {caseActSeal, caseActDefine, caseActDisclose, caseActAssign, caseActIntake, caseActRedact,
+		caseActReview, caseActRetain},
 }
 
 var caseStateWhy = map[string]string{
@@ -647,6 +670,24 @@ func caseLedgerElsewhere(op string, ledger *ledgerSession) *object.Error {
 	return session.ledgerElsewhereLocked(op, ledger)
 }
 
+// caseLedgerWrite is the preamble every writer of a case's records through
+// its ledger shares -- custody, reviews, retention -- run with the custody lock
+// and disclosureLedgerMu held: the open case, attached to this ledger, and the
+// ledger's label names declared.
+func caseLedgerWrite(op string, ledger *ledgerSession) (*custodySession, *object.Error) {
+	session, errObj := openSessionLocked(op)
+	if errObj != nil {
+		return nil, errObj
+	}
+	if errObj := session.attachedToLocked(op, ledger); errObj != nil {
+		return nil, errObj
+	}
+	if err := disclosureDeclareNames(ledger); err != nil {
+		return nil, newError("%s: %s", op, err.Error())
+	}
+	return session, nil
+}
+
 // attachedToLocked refuses unless the case is attached to this ledger.
 func (s *custodySession) attachedToLocked(op string, ledger *ledgerSession) *object.Error {
 	if s.attached == nil {
@@ -709,7 +750,15 @@ func caseBeginWrite(ledger *ledgerSession, caseUID, caseID string, at time.Time)
 
 // lifecycle appends a lifecycle event after head.
 func (w *caseWriter) lifecycle(head *caseChainEvent, from, to, reason string) (caseChainEvent, error) {
-	id, event, err := w.tx.chainAppend(caseLifecycleChain, w.caseUID, head, map[string]string{
+	return w.lifecycleFor(head, from, to, reason, nil)
+}
+
+// lifecycleFor appends a lifecycle event after head, with extra written beside
+// the properties every lifecycle event carries: the review or the retention
+// event a move was made for.
+func (w *caseWriter) lifecycleFor(head *caseChainEvent, from, to, reason string,
+	extra map[string]string) (caseChainEvent, error) {
+	props := map[string]string{
 		"lifecycle.case_id":   w.caseID,
 		"lifecycle.from":      from,
 		"lifecycle.state":     to,
@@ -718,7 +767,9 @@ func (w *caseWriter) lifecycle(head *caseChainEvent, from, to, reason string) (c
 		"lifecycle.by_role":   w.ledger.role.Name,
 		"lifecycle.at":        w.at.UTC().Format(time.RFC3339Nano),
 		"lifecycle.unix_nano": strconv.FormatInt(w.at.UnixNano(), 10),
-	})
+	}
+	maps.Copy(props, extra)
+	id, event, err := w.tx.chainAppend(caseLifecycleChain, w.caseUID, head, props)
 	if err != nil {
 		return caseChainEvent{}, err
 	}
@@ -890,19 +941,46 @@ func caseTextArg(op string, arg object.Object, position int, what string) (strin
 func caseMovesFrom(state string) []string {
 	var out []string
 	for _, move := range caseMoves {
-		if move.from == state {
+		if move.from == state && move.by == BuiltinNameCaseTransition {
 			out = append(out, move.to)
 		}
 	}
 	return out
 }
 
+// caseMovesText says where case_transition moves a case from state, and which
+// other builtin moves it where.
 func caseMovesText(state string) string {
-	moves := caseMovesFrom(state)
-	if len(moves) == 0 {
-		return fmt.Sprintf("case_transition moves a case that is %s nowhere", state)
+	text := fmt.Sprintf("case_transition moves a case that is %s nowhere", state)
+	if moves := caseMovesFrom(state); len(moves) > 0 {
+		text = fmt.Sprintf("from %s, case_transition moves a case to %s", state, strings.Join(moves, " or "))
 	}
-	return fmt.Sprintf("from %s, case_transition moves a case to %s", state, strings.Join(moves, " or "))
+	var builtins []string
+	targets := map[string][]string{}
+	for _, move := range caseMoves {
+		if move.from != state || move.by == BuiltinNameCaseTransition {
+			continue
+		}
+		if _, seen := targets[move.by]; !seen {
+			builtins = append(builtins, move.by)
+		}
+		targets[move.by] = append(targets[move.by], move.to)
+	}
+	for _, by := range builtins {
+		text += fmt.Sprintf("; %s moves it to %s", by, strings.Join(targets[by], " or "))
+	}
+	return text
+}
+
+// caseMoveOf returns the move from one state to another, if the lifecycle
+// has one.
+func caseMoveOf(from, to string) (caseMove, bool) {
+	for _, move := range caseMoves {
+		if move.from == from && move.to == to {
+			return move, true
+		}
+	}
+	return caseMove{}, false
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,6 +1156,10 @@ func caseLifecycleRow(event caseChainEvent) object.Object {
 		"by":      stringObj(event.get("lifecycle.by")),
 		"by_role": stringObj(event.get("lifecycle.by_role")),
 		"at":      stringObj(event.get("lifecycle.at")),
+		// The review request, or the retention event, a move was made for; ""
+		// for a move case_transition made.
+		"review_uid":    stringObj(event.get("lifecycle.review_uid")),
+		"retention_uid": stringObj(event.get("lifecycle.retention_uid")),
 	})
 }
 
@@ -1147,9 +1229,14 @@ func CaseTransition(args ...object.Object) object.Object {
 	if from == to {
 		return resultAndError(nil, newError("%s: case %s is already %s", op, session.ID, to))
 	}
-	if !slices.Contains(caseMovesFrom(from), to) {
+	move, known := caseMoveOf(from, to)
+	switch {
+	case !known:
 		return resultAndError(nil, newError("%s: case %s is %s and case_transition does not move it to %s: %s",
 			op, session.ID, from, to, caseMovesText(from)))
+	case move.by != BuiltinNameCaseTransition:
+		return resultAndError(nil, newError("%s: case %s is %s, and the move to %s is made by %s", op, session.ID,
+			from, to, caseMoveHow[move.by]))
 	}
 	now := custodyNow()
 	w, err := caseBeginWrite(ledger, session.caseUID, session.ID, now)

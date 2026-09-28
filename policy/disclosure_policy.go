@@ -73,6 +73,10 @@ var DisclosureFiles = []string{
 	// the review of redactions made before the disclosure schema was guarded,
 	// which every grant waits on
 	"builtin/ledger_redaction_review.go",
+	// the reviews of a case, its records and its redaction versions, and how
+	// long the case is kept and what holds it
+	"builtin/case_review.go",
+	"builtin/case_retention.go",
 }
 
 // DisclosureFormatFuncs are the calls whose format argument must be a constant

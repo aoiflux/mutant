@@ -258,24 +258,9 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument 1 to `case_manifest_verify` must be STRING, got %s", args[0].Type()))
 	}
 
-	raw, err := os.ReadFile(pathObj.Value)
-	if err != nil {
-		return resultAndError(nil, newError("case_manifest_verify: %s", err.Error()))
-	}
-
-	// UseNumber is what makes the round trip exact: without it every integer in
-	// the document comes back as a float64 and re-marshals differently, so a
-	// perfectly good manifest would fail its own hash check.
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var document map[string]any
-	if err := decoder.Decode(&document); err != nil {
-		return resultAndError(nil, newError("case_manifest_verify: %s is not a manifest: %s", pathObj.Value, err.Error()))
-	}
-
-	if _, ok := document["seal"].(map[string]any); !ok {
-		return resultAndError(nil, newError(
-			"case_manifest_verify: %s has no seal; it was not written by `case_write`", pathObj.Value))
+	document, errObj := custodyManifestDocument(BuiltinNameCaseManifestVerify, pathObj.Value)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	result := custodyVerifyDocument(document)
@@ -289,6 +274,32 @@ func CaseManifestVerify(args ...object.Object) object.Object {
 		result["examiner"], _ = caseInfo["examiner"].(string)
 	}
 	return custodyManifestResult(BuiltinNameCaseManifestVerify, result)
+}
+
+// custodyManifestDocument reads a written manifest for custodyVerifyDocument,
+// and refuses a file that is not one. It is how case_manifest_verify and a
+// review request read a manifest, so the two cannot come to differ about
+// which files are manifests.
+func custodyManifestDocument(op, path string) (map[string]any, *object.Error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, newError("%s: %s", op, err.Error())
+	}
+
+	// UseNumber is what makes the round trip exact: without it every integer in
+	// the document comes back as a float64 and re-marshals differently, so a
+	// perfectly good manifest would fail its own hash check.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		return nil, newError("%s: %s is not a manifest: %s", op, path, err.Error())
+	}
+
+	if _, ok := document["seal"].(map[string]any); !ok {
+		return nil, newError("%s: %s has no seal; it was not written by `case_write`", op, path)
+	}
+	return document, nil
 }
 
 // custodyVerifyDocument checks a sealed document that has already been decoded

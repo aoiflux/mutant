@@ -64,7 +64,9 @@ ledger -- a hand-off by the person the ledger says holds the exhibit, an accept
 by the person it was released to -- and every reader refuses a history that
 forks, skips a step, or has either recorded by anybody else. **A disposal is a
 statement.** It deletes nothing -- not the file the exhibit was taken in from,
-and not any copy -- and says so in its result.
+and not any copy -- and says so in its result. It is refused while the case is
+under a legal hold placed with `retention_hold`, until `retention_release`
+lifts it.
 
 **A new evidence family belongs on that list.** Leaving it off is the one soft
 edge of this policy: nothing catches an omission automatically, which is why the

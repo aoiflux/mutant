@@ -765,4 +765,13 @@ const (
 	// an examiner's review of the redactions a ledger received before its
 	// disclosure schema was out of a redaction's reach
 	BuiltinNameLedgerRedactionsReview = "ledger_redactions_review"
+
+	// a case's reviews, how long it is kept, and the legal holds on it
+	BuiltinNameReviewRequest    = "review_request"
+	BuiltinNameReviewDecide     = "review_decide"
+	BuiltinNameReviewList       = "review_list"
+	BuiltinNameRetentionSet     = "retention_set"
+	BuiltinNameRetentionHold    = "retention_hold"
+	BuiltinNameRetentionRelease = "retention_release"
+	BuiltinNameRetentionList    = "retention_list"
 )

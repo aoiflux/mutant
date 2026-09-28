@@ -1209,7 +1209,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the case as the ledger holds it", ParamHash).withFields("assignments", "case_id", "case_uid", "bundles_read", "classes_read", "definitions_other_keys", "first_attach", "ledger", "lifecycle", "moves", "role", "role_authenticated", "source", "state", "views_read")},
 	BuiltinNameCaseTransition: {
 		signature: "case_transition(ledger, to, reason)",
-		summary:   "Moves the attached case along its lifecycle -- registered, active, in_review, concluded, retained, disposed -- by appending a lifecycle event to the ledger, hash-linked to the one before it and attributed to the examiner and the role they asserted. It makes the moves that are an examiner's decision alone: registered to active, and reopening a concluded case; a refusal names the state the case is in and the moves available from it. A state refuses what it cannot take: in review, sealing, definitions, reclassifications, disclosures, redaction versions and new evidence; concluded or retained, sealing and new evidence; disposed, everything but a withdrawal and the movement of an exhibit already taken in, which every state takes. Builtins that take the ledger ask the ledger for the state -- the one the case is attached to, and no other -- and the rest ask the case attached in this run. Refused on a ledger opened as auditor. Returns (transition, err).",
+		summary:   "Moves the attached case along its lifecycle -- registered, active, in_review, concluded, retained, disposed -- by appending a lifecycle event to the ledger, hash-linked to the one before it and attributed to the examiner and the role they asserted. It makes the moves that are an examiner's decision alone: registered to active, and reopening a concluded case. The review and retention moves are made by the builtins that record them -- review_request submits an active case for review, review_decide concludes it or sends it back, retention_set retains a concluded case -- and a refusal names the state the case is in, the moves available from it, and the builtin that makes a move case_transition does not. A state refuses what it cannot take: in review, sealing, definitions, reclassifications, disclosures, redaction versions and new evidence; concluded or retained, sealing and new evidence; disposed, everything but a withdrawal and the movement of an exhibit already taken in, which every state takes. Builtins that take the ledger ask the ledger for the state -- the one the case is attached to, and no other -- and the rest ask the case attached in this run. Refused on a ledger opened as auditor. Returns (transition, err).",
 		params: []builtinParamDoc{
 			param("ledger", "The ledger the case is attached to.", ParamInt),
 			choiceParam("to", "The state to move the case to.", caseStates),
@@ -1268,7 +1268,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the return", ParamHash).withFields("at", "by", "by_role", "case_id", "evidence_uid", "exhibit", "holder", "kind", "reason", "role_authenticated", "seq", "state", "to", "uid")},
 	BuiltinNameEvidenceDispose: {
 		signature: "evidence_dispose(ledger, exhibit, statement)",
-		summary:   "Records the holder of an exhibit disposing of it, in a statement of how. It deletes nothing -- not the file the exhibit was taken in from, not any copy -- and says so with `deleted: false`. Recorded by a case_owner or an administrator who holds the exhibit; the role is asserted, and the refusal says it is not access control. Ends the exhibit's custody chain: a disposed exhibit is not handed on or taken in again. Taken in every lifecycle state; refused on a ledger opened as auditor. Returns (custody event, err).",
+		summary:   "Records the holder of an exhibit disposing of it, in a statement of how. It deletes nothing -- not the file the exhibit was taken in from, not any copy -- and says so with `deleted: false`. Recorded by a case_owner or an administrator who holds the exhibit; the role is asserted, and the refusal says it is not access control. Ends the exhibit's custody chain: a disposed exhibit is not handed on or taken in again. Taken in every lifecycle state; refused while the case is under a legal hold (retention_hold), naming the first hold placed, and on a ledger opened as auditor. Returns (custody event, err).",
 		params: []builtinParamDoc{
 			param("ledger", "The ledger the case is attached to.", ParamInt),
 			param("exhibit", "The exhibit's name in the case.", ParamString),
@@ -1283,6 +1283,69 @@ var builtinDocs = map[string]builtinDoc{
 			param("options?", "`{\"case_uid\": \"...\"}` reads one case; `{\"exhibit\": \"...\"}` reads the exhibits of that name.", ParamHash),
 		},
 		returns: pairRet("the custody of each exhibit", ParamHash).withFields("count", "disposed", "exhibits", "held", "in_transit", "returned", "source")},
+	BuiltinNameReviewRequest: {
+		signature: "review_request(ledger, subject, note, options?)",
+		summary:   "Asks for a review of the attached case, of one of its records or of one of its redaction versions, and binds what is asked about by a hash a reviewer can hold their copy to. The subject is `\"case\"`, a record's uid, or a redaction version's uid (from redaction_commit or redaction_versions), told apart by their length. A record is bound by the SHA-256 of the record file the ledger holds, and a redaction version by the digest of what it releases. A case is reviewed as a written manifest shows it: `{\"manifest\": path}` names one case_write wrote, which must be this case's, still hash to its seal, carry a signature that holds if it is signed, and have been written with the case's lifecycle where it stands now -- the manifest a run renders in memory changes every time it is looked at, so it binds nothing. A review of the case moves it from active to in_review, where it takes no sealing, definitions, disclosures, redaction versions or new evidence until review_decide answers; a review of a record or a redaction version moves nothing. One request is open at a time for one subject. A case's requests are one hash-linked chain, and each request is IN_CASE, REVIEWS its subject and is PERFORMED_BY the examiner. Anybody attached may ask. Refused while the case is disposed, and on a ledger opened as auditor. Returns (request, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("subject", "`\"case\"`, a record's uid, or a redaction version's uid.", ParamString),
+			param("note", "What the reviewer is asked to look at, in words a reader will see beside the request forever. Required.", ParamString),
+			param("options?", "`{\"manifest\": path}`: the manifest case_write wrote that a review of the case is bound to. Required for the case, refused for anything else.", ParamHash),
+		},
+		returns: pairRet("the request", ParamHash).withFields("at", "by", "by_role", "case_id", "from", "manifest", "manifest_signed", "moved", "note", "role_authenticated", "seq", "state", "subject", "subject_hash", "subject_kind", "uid")},
+	BuiltinNameReviewDecide: {
+		signature: "review_decide(ledger, request, decision, reason)",
+		summary:   "Records a reviewer's answer to a request for a review -- approved, changes_requested or rejected -- with the reason. A review of the case moves it on: approved to concluded, changes_requested or rejected back to active. A review of a record or a redaction version is recorded and moves nothing. Recorded by an examiner acting as reviewer who is not the one who asked for the review; the role is asserted, and the refusal says it is not access control. A request is decided once: a second decision is refused and names the first, and a new request asks again. The decision is a chain of one event keyed by its request; it REVIEWS the request, is IN_CASE and PERFORMED_BY the reviewer, and carries the hash the request bound. Needs the case attached, so a reviewer attaches under the reviewer role the case assigns them. Refused while the case is disposed, and on a ledger opened as auditor. Returns (decision, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("request", "The request's uid, from review_request or review_list.", ParamString),
+			choiceParam("decision", "approved, changes_requested or rejected.", reviewDecisions),
+			param("reason", "What was checked and why this decision, in words a reader will see beside it forever. Required.", ParamString),
+		},
+		returns: pairRet("the decision", ParamHash).withFields("at", "by", "by_role", "case_id", "decision", "from", "moved", "reason", "request_uid", "requested_by", "role_authenticated", "state", "subject", "subject_hash", "subject_kind", "uid")},
+	BuiltinNameReviewList: {
+		signature: "review_list(ledger, options?)",
+		summary:   "Reads the review requests in a ledger, each with its decision, from every case or from one. Needs no case open, so an auditor reads it with the ledger alone. Each case's chain of requests and each request's decision is checked as it is read -- that neither forks, that every uid recomputes, that each event names its own case and request, and that no request is decided twice -- and a chain that fails is refused rather than resolved. A row gives what was asked about and the hash it was bound by, who asked and as what, and the decision with who made it; an undecided request says `decided: false` and answers \"\" for the decision's fields. Returns (reviews, err).",
+		params: []builtinParamDoc{
+			param("ledger", "A ledger handle from ledger_open.", ParamInt),
+			param("options?", "`{\"case_uid\": \"...\"}` reads one case.", ParamHash),
+		},
+		returns: pairRet("the requests and their decisions", ParamHash).withFields("approved", "changes_requested", "count", "pending", "rejected", "requests", "source")},
+	BuiltinNameRetentionSet: {
+		signature: "retention_set(ledger, until, basis)",
+		summary:   "Records the date the attached case is kept until, and the basis for keeping it -- a statute, a policy, a court's order. The first period retains a concluded case, moving it to retained in the same commit; a later one changes a retained case's period and says what it was in `previous_until`. A date is taken as its first instant in UTC and an RFC 3339 time as given; one already passed is recorded and reported `lapsed`, and nothing is disposed of when a period runs. A case's retention events are one hash-linked chain, which every reader walks. Refused for a case neither concluded nor retained, a period the case already has, a disposed case, and a ledger opened as auditor. Returns (retention, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("until", "The date the case is kept until: 2033-09-28, or an RFC 3339 time.", ParamString),
+			param("basis", "Why it is kept that long, in words a reader will see beside it forever. Required.", ParamString),
+		},
+		returns: pairRet("the retention period", ParamHash).withFields("at", "basis", "by", "by_role", "case_id", "from", "holds_in_force", "kind", "lapsed", "moved", "previous_until", "role_authenticated", "seq", "state", "uid", "until")},
+	BuiltinNameRetentionHold: {
+		signature: "retention_hold(ledger, reason, options?)",
+		summary:   "Places a legal hold on the attached case. While any hold is in force nothing in the case is disposed of: evidence_dispose refuses, naming the hold. A hold is placed in any state but disposed, and each is its own event, so two holds for two matters are two, and lifting one leaves the other in force. `{\"authority\": name}` records whose authority the hold was placed on; left out, it is the examiner's own. `authority_basis` says which, the hold is AUTHORISED_BY that authority, and neither is checked. Refused while the case is disposed, and on a ledger opened as auditor. Returns (hold, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("reason", "Why the case is held, in words a reader will see beside the hold forever. Required.", ParamString),
+			param("options?", "`{\"authority\": name}`: whose authority the hold is placed on -- a person, a court, a legal department. Left out, it is the examiner's own.", ParamHash),
+		},
+		returns: pairRet("the hold", ParamHash).withFields("at", "authority", "authority_basis", "by", "by_role", "case_id", "holds_in_force", "kind", "reason", "role_authenticated", "seq", "state", "uid")},
+	BuiltinNameRetentionRelease: {
+		signature: "retention_release(ledger, hold, reason)",
+		summary:   "Lifts a legal hold on the attached case, named by the uid retention_hold or retention_list gives it; other holds stay in force. Anybody attached may lift a hold: who may is an organisation's policy and this program does not hold one, so the record says who lifted it and as what. Refused for a hold the case never had, one already lifted (naming when and by whom), a disposed case, and a ledger opened as auditor. Returns (release, err).",
+		params: []builtinParamDoc{
+			param("ledger", "The ledger the case is attached to.", ParamInt),
+			param("hold", "The hold's uid.", ParamString),
+			param("reason", "Why the hold is lifted, in words a reader will see beside it forever. Required.", ParamString),
+		},
+		returns: pairRet("the release", ParamHash).withFields("at", "by", "by_role", "case_id", "held_since", "hold_reason", "hold_uid", "holds_in_force", "kind", "reason", "role_authenticated", "seq", "state", "uid")},
+	BuiltinNameRetentionList: {
+		signature: "retention_list(ledger, options?)",
+		summary:   "Reads the retention of every case in a ledger that has any, or of one: the period in force and its basis, whether it has lapsed, the holds in force, and every retention event. Needs no case open, so an auditor reads it with the ledger alone. Each chain is checked as it is read -- that it does not fork, that every uid recomputes, that each event names its own case, that each period names a time, and that each release lifts a hold placed before it and still in force -- and a chain that fails is refused rather than resolved. Returns (retention, err).",
+		params: []builtinParamDoc{
+			param("ledger", "A ledger handle from ledger_open.", ParamInt),
+			param("options?", "`{\"case_uid\": \"...\"}` reads one case.", ParamHash),
+		},
+		returns: pairRet("the retention of each case", ParamHash).withFields("cases", "count", "holds_in_force", "source")},
 	BuiltinNameRoleDefine: {
 		signature: "role_define(role, views, options?)",
 		summary:   "Declares which of the case's views a recipient role may be granted: the role's bundle. A disclosure is issued against the recipient's role, deny by default -- `disclose_to_passphrase` refuses unless the recipient holds a role in force, that role has a bundle, and the bundle holds the view -- and the grant is still exactly the view, so `view_preview` still says what it releases. Only a recipient role takes a bundle: legal, external_partner, restricted_viewer, and reviewer and auditor, who are on both sides. A bundle holding no view is legal and says so in `grants_nothing`, because \"somebody decided nothing\" and \"nobody decided\" are different answers to a disclosure review. A role's bundle is defined once in a run. Needs the case key open: a view names classes, and a class is tagged under the key. While the case is attached to a ledger, the bundle is written into the ledger before the run holds it (`in_ledger`) -- a RoleBundle node that BUNDLES each of its views -- and a later attach reads it back; defining again a bundle the ledger already holds is answered with `already_defined: true` when it holds the same views, and refused when it holds anything else. Refused while the attached case is in review or disposed. Returns (bundle, err).",
@@ -3558,6 +3621,12 @@ var capabilityCategories = []capabilityCategory{
 	// evidence_ is custody itself -- which exhibits a case holds and who holds
 	// each -- so it files with case_. No other prefix here begins "evidence".
 	{"evidence_", "chain of custody"},
+	// review_ and retention_ are the case's own record -- who looked at it and
+	// how long it is kept -- so they file with case_. Neither is a prefix of
+	// another entry here (reg_, report_, record_, redaction_, regex_, refang),
+	// and none of those is a prefix of either.
+	{"review_", "chain of custody"},
+	{"retention_", "chain of custody"},
 	// record_ is its own category and not "chain of custody". The custody
 	// family documents what happened to evidence; this one encrypts it, and a
 	// reader looking for what a classification costs should not have to find it

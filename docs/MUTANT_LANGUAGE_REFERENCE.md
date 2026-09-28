@@ -969,7 +969,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **683 builtins** across **41 categories**.
+The standard library is **690 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1010,7 +1010,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Memory Forensics](CAPABILITY_REFERENCE.md#memory-forensics-7) | 7 | Memory-dump analysis, PE/shellcode discovery |
 | [Binary Analysis](CAPABILITY_REFERENCE.md#binary-analysis-14) | 14 | PE/ELF/Mach-O/DWARF, imports, GoReSym |
 | [Reporting](CAPABILITY_REFERENCE.md#reporting-7) | 7 | Build a report as a value, render it as HTML, Markdown or CSV, write it out with its digest |
-| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-28) | 28 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, and the custody of each exhibit |
+| [Chain of Custody](CAPABILITY_REFERENCE.md#chain-of-custody-35) | 35 | Case session, evidence record, drift verification, signed manifest, the handover bundle, the case key, the classification labels tagged under it, the case's lifecycle and roles kept in its ledger, the custody of each exhibit, the reviews of the case and what it holds, and how long it is kept and what holds it |
 | [Classified Records](CAPABILITY_REFERENCE.md#classified-records-12) | 12 | The `.mrec` container: classification ranges, sealing at those boundaries or rounded outward, opening, reading with the withheld spans named, searching what one reader could read, verifying with no key at all, and the one recorded way to let read plaintext out |
 | [Disclosure](CAPABILITY_REFERENCE.md#disclosure-15) | 15 | Named disclosure postures, the recipient roles that may be given them, the grants issued under them and the redaction versions they carry out, the package a recipient verifies, and who holds which bytes after the fact |
 | [Registry Forensics](CAPABILITY_REFERENCE.md#registry-forensics-15) | 15 | Hive/JSON/live registry, Amcache, Shimcache |
@@ -2316,6 +2316,26 @@ evidence_intake(ledger, "EXH-1", "evidence/laptop.E01", {"received_from": "DC Ra
 evidence_release(ledger, "EXH-1", "bob", "to the lab for imaging");
 let history, err = evidence_history(ledger, {"exhibit": "EXH-1"});
 putln(history["exhibits"][0]["where"]);
+```
+
+**A case is reviewed, and kept.** `review_request(ledger, "case", note,
+{"manifest": path})` submits an active case for review, bound to a manifest
+`case_write` wrote -- one that still hashes to its seal and was written with the
+case where it stands now, because the manifest a run renders in memory changes
+every time it is looked at. The case is then in review, and takes nothing that
+would change what the reviewer was shown until a reviewer who did not ask for
+the review records `review_decide(ledger, request, decision, reason)`: approved
+concludes it, changes_requested or rejected sends it back. A record's uid or a
+redaction version's uid is reviewed the same way, bound to its digest, and moves
+nothing. `retention_set(ledger, until, basis)` retains a concluded case until a
+date, and `retention_hold(ledger, reason)` places a legal hold: while one is in
+force `evidence_dispose` refuses, until `retention_release` lifts it.
+`review_list` and `retention_list` read them back with the ledger alone.
+
+```mutant
+case_write("IR-2026-014.manifest.json");
+let request, err = review_request(ledger, "case", "ready for peer review", {"manifest": "IR-2026-014.manifest.json"});
+retention_hold(ledger, "litigation is pending", {"authority": "Legal"});
 ```
 
 **The seal is checkable by someone else.** `case_write` puts a SHA-256 over every
