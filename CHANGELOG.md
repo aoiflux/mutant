@@ -748,6 +748,24 @@ exhaustive lists.
   (M26-DAT-032), and cannot be offered without it. Fetch with `http_get` and pass what it
   returns in the policy's input.
 
+- **An artifact's header may ask for no more Argon2id work than the costliest derivation in the
+  tree.** A password-encrypted artifact carries its key's Argon2id cost, and the runner pays it
+  before anything in the artifact has been authenticated; the header could ask for eight passes
+  over 4 GiB in sixteen lanes. It may now ask for at most three passes over 256 MiB in four
+  lanes -- what a case-key or grant file costs -- and for no less memory than the 64 MiB the
+  generator writes. Every artifact a Mutant build has written asks for one pass over 64 MiB, and
+  still runs (M26-LIM-010).
+
+- **The limit guard's budget lists each unnamed limit, and the limits of `security/` and
+  `runner/` are named.** `policy/limit_budget.go` holds the findings the tree still carries by
+  rule, function and expression rather than as a count per file, so naming one limit can no
+  longer make room for a new one beside it (M26-LIM-005). A value counted in kibibytes,
+  milliseconds or microseconds says so, and the limits reference prints it as the size or time
+  it is. The record format's bounds, the anti-tamper thresholds, the Argon2 band and the command
+  and remote-scan scores are named with their reasons, the record format's fixed sizes are marked
+  as format facts, and two remote-scan fields and two tamper-delay bounds that nothing read are
+  gone. The names change no compiled instruction.
+
 ### Fixed
 
 - **The disclosure policy promised an erasure nothing performed.** It said
@@ -984,6 +1002,15 @@ exhaustive lists.
   signalling it when that directory is not a mount, so the environment decided what they
   reported (M26-NET-025). gopsutil is now told `/proc`, and every other directory it would look
   up.
+
+- **The limits reference and the configuration policy claimed more than was true.**
+  `docs/LIMITS_REFERENCE.md` said every value that bounds Mutant was a named constant and that
+  it was the list of them, while the guard's budget held 167 that were not, and it listed a test
+  helper's settle timeout beside the limits of a run. It now says how many limits the guard finds
+  unnamed, and lists the limits of the tools around Mutant -- the test helpers, the guard itself
+  -- after those that bound a run (M26-LIM-003). The configuration policy excused binary-format
+  offsets from the guard because "their bounds are tested by fuzzing instead"; the tree has no
+  fuzz targets yet, and the policy says so (M26-LIM-002).
 
 ### Security
 

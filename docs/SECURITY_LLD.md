@@ -127,9 +127,8 @@ Resolution:
 - secure mode (the default): `terminate`
 
 `delay` is implemented in `ApplyTamperResponse` and sleeps
-`DefaultTamperDelayMs` (a `250` ms constant, clamped to `[0..5000]` by
-`MinTamperDelayMs`/`MaxTamperDelayMs`), but no mode selects it. It survives as
-the seam a future response policy would use.
+`DefaultTamperDelayMs` (a `250` ms constant), but no mode selects it. It
+survives as the seam a future response policy would use.
 
 ### 4.3 Protection Profiles
 

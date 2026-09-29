@@ -25,11 +25,11 @@ func CorrelateProcessSignals(target RemoteProcessTarget, signals []RemoteProcess
 
 func riskBandForScore(score int) string {
 	switch {
-	case score < 40:
+	case score < remoteScanMediumScore:
 		return "low"
-	case score < 70:
+	case score < defaultRemoteScanHighRisk:
 		return "medium"
-	case score < 85:
+	case score < defaultRemoteScanCritical:
 		return "high"
 	default:
 		return "critical"

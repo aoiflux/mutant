@@ -1,29 +1,37 @@
 package security
 
 const (
-	defaultRemoteScanMaxProcesses = 32
-	defaultRemoteScanIntervalMs   = 1000
-	defaultRemoteScanHighRisk     = 70
-	defaultRemoteScanCritical     = 85
+	// defaultRemoteScanHighRisk is the verdict score from which the remote
+	// process scan records a process as suspicious, and where its "high" risk
+	// band starts. The scan is off in every shipped binary and its Windows
+	// scanner returns no verdicts, so only tests, which supply their own
+	// verdicts, ever reach these scores.
+	//
+	//mutant:limit score
+	defaultRemoteScanHighRisk = 70
+	// defaultRemoteScanCritical is the verdict score from which the scan
+	// records a process as critical and, in enforce mode, stops the run; its
+	// "critical" band starts here. Like defaultRemoteScanHighRisk, only tests
+	// ever reach it.
+	//
+	//mutant:limit score
+	defaultRemoteScanCritical = 85
+	// remoteScanMediumScore is where the "medium" risk band starts; below it
+	// a verdict is "low". It labels a verdict and decides nothing.
+	//
+	//mutant:limit score
+	remoteScanMediumScore = 40
 )
 
 var remoteScanConfigState = RemoteScanConfig{
 	Enabled:       false,
 	Mode:          RemoteScanModeObserve,
-	MaxProcesses:  defaultRemoteScanMaxProcesses,
-	IntervalMs:    defaultRemoteScanIntervalMs,
 	Allowlist:     map[string]struct{}{},
 	HighRiskScore: defaultRemoteScanHighRisk,
 	CriticalScore: defaultRemoteScanCritical,
 }
 
 func SetRemoteScanConfigForTesting(cfg RemoteScanConfig) {
-	if cfg.MaxProcesses <= 0 {
-		cfg.MaxProcesses = defaultRemoteScanMaxProcesses
-	}
-	if cfg.IntervalMs <= 0 {
-		cfg.IntervalMs = defaultRemoteScanIntervalMs
-	}
 	if cfg.HighRiskScore <= 0 {
 		cfg.HighRiskScore = defaultRemoteScanHighRisk
 	}
@@ -43,8 +51,6 @@ func ResetRemoteScanConfigForTesting() {
 	remoteScanConfigState = RemoteScanConfig{
 		Enabled:       false,
 		Mode:          RemoteScanModeObserve,
-		MaxProcesses:  defaultRemoteScanMaxProcesses,
-		IntervalMs:    defaultRemoteScanIntervalMs,
 		Allowlist:     map[string]struct{}{},
 		HighRiskScore: defaultRemoteScanHighRisk,
 		CriticalScore: defaultRemoteScanCritical,

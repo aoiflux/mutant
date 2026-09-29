@@ -11,8 +11,20 @@ import (
 )
 
 const (
+	// defaultCommandExecTimeout is how long exec_string and cmd_run let a
+	// command run before the shell is killed and the result says timed_out:
+	// long enough for a shell to start and answer a short query of the host,
+	// short enough that a hung command does not hang the script.
+	//
+	//mutant:limit milliseconds
 	defaultCommandExecTimeout = 3000
-	defaultCommandMaxOutput   = 8192
+	// defaultCommandMaxOutput is how much of each of a command's output
+	// streams exec_string and cmd_run hand back; what is past it is cut and
+	// marked as truncated. A result is for reading an answer, not for
+	// capturing a transcript.
+	//
+	//mutant:limit bytes
+	defaultCommandMaxOutput = 8192
 
 	errorCommandEmpty     = "command is empty"
 	errorCommandTimedOut  = "command timed out"

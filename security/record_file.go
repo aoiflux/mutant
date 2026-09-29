@@ -116,11 +116,15 @@ const (
 
 	// DefaultSegmentSize is 64 KiB: small enough that a disclosure is granular,
 	// large enough that the per-segment tag and key derivation are noise.
+	//
+	//mutant:limit bytes
 	DefaultSegmentSize uint32 = 64 << 10
 
 	// MaxRecordSpans bounds the classification ranges one record may carry. A
 	// span list is read by a person deciding whether a disclosure is fair, and
 	// past a few thousand rows nobody is reading it.
+	//
+	//mutant:limit count
 	MaxRecordSpans = 4096
 
 	// MaxRecordSegments bounds the DERIVED segment table, which is the number
@@ -139,11 +143,19 @@ const (
 	// A million segments is 64 GiB of plaintext at the default segment size and
 	// 1 TiB at the largest, so a record that hits this is a record that should
 	// raise its segment size rather than one this format cannot hold.
+	//
+	//mutant:limit count
 	MaxRecordSegments = 1 << 20
 
-	// MaxRecordHeader and MaxRecordFooter bound what is read and parsed before
-	// a signature has been checked. Neither is a limit an honest record meets.
+	// MaxRecordHeader bounds the header, which is read and parsed before a
+	// signature has been checked. It is not a limit an honest record meets.
+	//
+	//mutant:limit bytes
 	MaxRecordHeader = 8 << 20
+	// MaxRecordFooter bounds the footer, which is read and parsed before a
+	// signature has been checked. It is not a limit an honest record meets.
+	//
+	//mutant:limit bytes
 	MaxRecordFooter = 1 << 20
 
 	// RecordFilePrefixSize is the magic plus the header length.
@@ -151,6 +163,8 @@ const (
 	// RecordFooterPrefixSize is the footer length that precedes the footer. It
 	// carries no magic of its own: by the time it is read, the header has
 	// already said this is a record and said where the footer begins.
+	//
+	//mutant:format .mrec v1: the footer's length prefix
 	RecordFooterPrefixSize = 4
 )
 

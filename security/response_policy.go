@@ -14,9 +14,13 @@ const (
 	TamperResponseDelay     = "delay"
 	TamperResponseTerminate = "terminate"
 
+	// DefaultTamperDelayMs is how long the delay response pauses a run that
+	// tripped a detector before letting it continue. No mode selects that
+	// response -- secure mode terminates, --compat and --dev warn -- so no run
+	// waits on it today; it is the value the response would use if a mode did.
+	//
+	//mutant:limit milliseconds
 	DefaultTamperDelayMs = 250
-	MinTamperDelayMs     = 0
-	MaxTamperDelayMs     = 5000
 )
 
 // TamperDetail is what a detector actually observed. It exists so a run that

@@ -2,7 +2,10 @@ package policy
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +16,10 @@ import (
 
 // limitPolicyDoc is named in every limit-guard failure.
 const limitPolicyDoc = "docs/CONFIGURATION_POLICY.md (\"Limits\") and docs/LIMITS_REFERENCE.md"
+
+// scanHeader opens every source the self-tests scan, importing what their
+// snippets use.
+const scanHeader = "package p\n\nimport (\n\t\"bufio\"\n\t\"flag\"\n\t\"time\"\n)\n\nvar _ = bufio.NewScanner\nvar _ = flag.Int\nvar _ = time.Now\n\n"
 
 var (
 	limitScanOnce   sync.Once
@@ -46,59 +53,63 @@ Add flag=--name when a command-line flag overrides it. A value fixed by a file
 format or protocol is not a limit: mark it //mutant:format <spec reference>.
 Then run ` + "`go run ./cmd/gendocs`" + ` to refresh the limits reference.`
 
-// TestUnnamedLimitsStayWithinBudget is the guard. Each file may hold exactly as
-// many unnamed limits as policy.LimitBudget says: more fails because a new
-// literal limit appeared, fewer fails because the budget must come down with
-// the fix, so the number only ever shrinks.
+// TestUnnamedLimitsStayWithinBudget is the guard. A file may hold the unnamed
+// limits policy.LimitBudget lists for it and no others: one it does not list
+// fails because a new literal limit appeared, and an entry nothing answers to
+// fails because the entry must come out with the fix, so the list only ever
+// shrinks.
 func TestUnnamedLimitsStayWithinBudget(t *testing.T) {
-	result := scanLimits(t)
-
-	byFile := map[string][]limitscan.Finding{}
-	for _, f := range result.Findings {
-		byFile[f.File] = append(byFile[f.File], f)
-	}
-
-	files := make([]string, 0, len(byFile))
-	for file := range byFile {
-		files = append(files, file)
-	}
-	sort.Strings(files)
-
-	var over, under []string
-	for _, file := range files {
-		got, allowed := len(byFile[file]), LimitBudget[file]
-		if got > allowed {
-			var b strings.Builder
-			fmt.Fprintf(&b, "%s holds %d unnamed limit(s); its budget is %d:\n", file, got, allowed)
-			for _, f := range byFile[file] {
-				fmt.Fprintf(&b, "    %s\n", f)
-			}
-			over = append(over, b.String())
-		}
-	}
-	for file, allowed := range LimitBudget {
-		if got := len(byFile[file]); got < allowed {
-			under = append(under, fmt.Sprintf("%s: budget %d, now %d -- lower policy.LimitBudget[%q] to %d%s",
-				file, allowed, got, file, got, deleteHint(got)))
-		}
-	}
-	sort.Strings(under)
-
+	over, under := budgetCheck(scanLimits(t).Findings, LimitBudget)
 	if len(over) > 0 {
-		t.Errorf("unnamed limits beyond policy.LimitBudget:\n\n%s\n%s\n\nSee %s.",
-			strings.Join(over, "\n"), limitHowTo, limitPolicyDoc)
+		t.Errorf("unnamed limits that policy.LimitBudget does not list:\n\n    %s\n\n%s\n\nSee %s.",
+			strings.Join(over, "\n    "), limitHowTo, limitPolicyDoc)
 	}
 	if len(under) > 0 {
-		t.Errorf("limits were named -- thank you. The budget has to come down with them, or the\n"+
-			"headroom would let a new unnamed limit in unnoticed:\n  %s", strings.Join(under, "\n  "))
+		t.Errorf("limits were named -- thank you. Their entries have to come out of policy.LimitBudget in the\n"+
+			"same change, or an entry would let the same limit back in unnoticed:\n  %s", strings.Join(under, "\n  "))
 	}
 }
 
-func deleteHint(got int) string {
-	if got == 0 {
-		return " (delete the entry)"
+// budgetCheck holds a scan's findings against a budget, file by file and
+// finding by finding. over lists each finding the budget does not hold; under
+// lists each entry that no finding answers to any more. An entry answers to
+// one finding, so a key listed twice allows two.
+func budgetCheck(findings []limitscan.Finding, budget map[string][]string) (over, under []string) {
+	found := map[string][]limitscan.Finding{}
+	files := map[string]bool{}
+	for _, f := range findings {
+		found[f.File] = append(found[f.File], f)
+		files[f.File] = true
 	}
-	return ""
+	for file := range budget {
+		files[file] = true
+	}
+	sorted := make([]string, 0, len(files))
+	for file := range files {
+		sorted = append(sorted, file)
+	}
+	sort.Strings(sorted)
+
+	for _, file := range sorted {
+		allowed := map[string]int{}
+		for _, key := range budget[file] {
+			allowed[key]++
+		}
+		for _, f := range found[file] {
+			if allowed[f.Key()] > 0 {
+				allowed[f.Key()]--
+				continue
+			}
+			over = append(over, f.String())
+		}
+		for _, key := range budget[file] {
+			if allowed[key] > 0 {
+				allowed[key]--
+				under = append(under, fmt.Sprintf("%s: %q", file, key))
+			}
+		}
+	}
+	return over, under
 }
 
 // A budget entry for a file that no longer exists is a hole in the guard.
@@ -112,13 +123,82 @@ func TestLimitBudgetHasNoStaleEntries(t *testing.T) {
 }
 
 func TestLimitBudgetEntriesAreWellFormed(t *testing.T) {
-	for file, allowed := range LimitBudget {
-		if allowed < 1 {
-			t.Errorf("policy.LimitBudget[%q] is %d; an entry that allows nothing should be deleted", file, allowed)
+	for _, problem := range budgetProblems(LimitBudget) {
+		t.Error(problem)
+	}
+
+	// The check itself, on a budget that breaks each rule once.
+	bad := budgetProblems(map[string][]string{
+		"p/p.go":   {"N1 package level: maxThings = 500", "maxThings = 500", "Q9 f: 1"},
+		"./p/q.go": {"L1 f: 4096"},
+		"p/r.go":   {},
+	})
+	if len(bad) != 4 {
+		t.Errorf("a key with no rule, an unknown rule, a ./ path and an empty list should be four problems, got %v", bad)
+	}
+}
+
+// budgetProblems lists what is wrong with a budget's own shape.
+func budgetProblems(budget map[string][]string) []string {
+	var problems []string
+	for file, keys := range budget {
+		if len(keys) == 0 {
+			problems = append(problems, fmt.Sprintf("policy.LimitBudget[%q] lists nothing; an entry that allows nothing should be deleted", file))
 		}
 		if filepath.ToSlash(file) != file || strings.HasPrefix(file, "/") || strings.HasPrefix(file, "./") {
-			t.Errorf("policy.LimitBudget[%q]: use a repository-relative path with forward slashes", file)
+			problems = append(problems, fmt.Sprintf("policy.LimitBudget[%q]: use a repository-relative path with forward slashes", file))
 		}
+		for _, key := range keys {
+			rule, rest, ok := strings.Cut(key, " ")
+			if !ok || limitscan.RuleDescriptions[rule] == "" || !strings.Contains(rest, ": ") {
+				problems = append(problems, fmt.Sprintf("policy.LimitBudget[%q]: %q is not a finding's key (rule, function, expression)", file, key))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// TestTheBudgetListsFindingsNotCounts is the swap a count per file let through
+// (M26-LIM-005): one limit in a file is named while a new one is written into
+// the same file, and the file's count does not move. A budget of findings sees
+// both. A limit that only moves down its file keeps its entry.
+func TestTheBudgetListsFindingsNotCounts(t *testing.T) {
+	scan := func(src string) []limitscan.Finding {
+		t.Helper()
+		result, err := limitscan.ScanSource("p/p.go", []byte(scanHeader+src))
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		return result.Findings
+	}
+	before := scan("func f() time.Duration { return 5 * time.Second }\n")
+	if len(before) != 1 {
+		t.Fatalf("the fixture should hold one finding, got %v", before)
+	}
+	budget := map[string][]string{"p/p.go": {before[0].Key()}}
+
+	moved := scan("\n\n\nfunc f() time.Duration { return 5 * time.Second }\n")
+	if over, under := budgetCheck(moved, budget); len(over)+len(under) != 0 {
+		t.Errorf("a limit that moved down its file lost its entry: over %v, under %v", over, under)
+	}
+
+	swapped := scan("// lookupTimeout bounds one lookup.\n//\n//mutant:limit duration\nconst lookupTimeout = 5 * time.Second\n\n" +
+		"func f() time.Duration { return lookupTimeout }\n\nfunc g() []byte { return make([]byte, 1<<24) }\n")
+	over, under := budgetCheck(swapped, budget)
+	if len(over) != 1 || !strings.Contains(over[0], "1<<24") {
+		t.Errorf("the new unnamed allocation should be the one finding over the budget, got %v", over)
+	}
+	if len(under) != 1 || !strings.Contains(under[0], "5 * time.Second") {
+		t.Errorf("the named timeout's entry should be the one left over, got %v", under)
+	}
+
+	// A file whose last unnamed limit is named has no findings at all, and
+	// its entry has to be reported all the same.
+	named := scan("// lookupTimeout bounds one lookup.\n//\n//mutant:limit duration\nconst lookupTimeout = 5 * time.Second\n\n" +
+		"func f() time.Duration { return lookupTimeout }\n")
+	if over, under := budgetCheck(named, budget); len(over) != 0 || len(under) != 1 {
+		t.Errorf("a file with nothing left unnamed should leave its one entry over: over %v, under %v", over, under)
 	}
 }
 
@@ -158,7 +238,7 @@ func TestLimitGuardScansTheRepository(t *testing.T) {
 // deliberately leaves alone, so a rule that silently stops matching fails here
 // instead of letting its whole class of limit back in.
 func TestTheLimitGuardCatchesEachRule(t *testing.T) {
-	const header = "package p\n\nimport (\n\t\"bufio\"\n\t\"flag\"\n\t\"time\"\n)\n\nvar _ = bufio.NewScanner\nvar _ = flag.Int\nvar _ = time.Now\n\n"
+	const header = scanHeader
 
 	catches := []struct {
 		rule string
@@ -235,5 +315,91 @@ func TestTheLimitGuardCatchesEachRule(t *testing.T) {
 		if len(result.Problems) == 0 {
 			t.Errorf("%s should be reported as a malformed directive", src)
 		}
+	}
+}
+
+// TestLimitValuesAreShownInTheirUnits pins how the reference prints a value: a
+// size as a size and a time as a time, whatever the constant counts in. An
+// integer of milliseconds printed as a duration would read as nanoseconds.
+func TestLimitValuesAreShownInTheirUnits(t *testing.T) {
+	cases := []struct{ unit, expr, want string }{
+		{"bytes", "64 << 10", "64 KiB"},
+		{"bytes", "1000", "1,000 bytes"},
+		{"duration", "30 * time.Second", "30s"},
+		{"milliseconds", "250", "250ms"},
+		{"milliseconds", "30_000", "30s"},
+		{"microseconds", "200000", "200ms"},
+		{"kibibytes", "64 * 1024", "64 MiB"},
+		{"count", "1_000_000", "1,000,000"},
+		{"score", "70", "70"},
+	}
+	for _, c := range cases {
+		src := scanHeader + "// why.\n//\n//mutant:limit " + c.unit + "\nconst maxThing = " + c.expr + "\n"
+		result, err := limitscan.ScanSource("p/p.go", []byte(src))
+		if err != nil {
+			t.Fatalf("%s %s: %v", c.unit, c.expr, err)
+		}
+		if len(result.Problems) != 0 || len(result.Limits) != 1 {
+			t.Fatalf("%s %s: problems %v, limits %v", c.unit, c.expr, result.Problems, result.Limits)
+		}
+		if got := result.Limits[0].Value; got != c.want {
+			t.Errorf("%s in %s is shown as %q, want %q", c.expr, c.unit, got, c.want)
+		}
+	}
+}
+
+// fuzzTarget matches the declaration of a Go fuzz target.
+var fuzzTarget = regexp.MustCompile(`(?m)^func Fuzz\w*\(\s*\w+\s+\*testing\.F\s*\)`)
+
+// TestTheLimitsSectionSaysWhetherAnythingIsFuzzed holds the policy's one
+// sentence about fuzzing to the tree (M26-LIM-002). The section excused
+// binary-format offsets from the guard because "their bounds are tested by
+// fuzzing instead" while the tree had no fuzz target at all. While there are
+// none it has to say so; once there are, it has to stop saying so.
+func TestTheLimitsSectionSaysWhetherAnythingIsFuzzed(t *testing.T) {
+	var targets []string
+	err := filepath.WalkDir(repositoryRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".codegraph", "node_modules", "testdata", "mutant-vscode-extension":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if fuzzTarget.Match(src) {
+			targets = append(targets, filepath.ToSlash(path))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "CONFIGURATION_POLICY.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, found := strings.Cut(string(doc), "## 6. Limits")
+	if !found {
+		t.Fatal("docs/CONFIGURATION_POLICY.md has no \"## 6. Limits\" section")
+	}
+	saysNone := strings.Contains(section, "no fuzz targets")
+	switch {
+	case len(targets) == 0 && !saysNone:
+		t.Error("the tree has no fuzz targets, and the Limits section of docs/CONFIGURATION_POLICY.md must say " +
+			"so (\"no fuzz targets\") rather than leave a reader to assume the offsets it does not guard are fuzzed")
+	case len(targets) > 0 && saysNone:
+		t.Errorf("the tree has fuzz targets (%s), and the Limits section of docs/CONFIGURATION_POLICY.md still "+
+			"says there are none; say what they cover", strings.Join(targets, ", "))
 	}
 }

@@ -12,11 +12,26 @@ type sandboxDetection struct {
 	Indicators []string
 }
 
+// sandboxDetectedThreshold is the confidence from which a run counts as
+// sandboxed, and from which the cpuid_hypervisor probe reports one. A detector
+// adds up its indicators' confidences per sandbox type; on Linux, for one, the
+// specific indicators -- a Docker or WSL marker, a VM vendor in the CPU or the
+// firmware -- reach it alone, and the generic ones, such as the CPU's
+// hypervisor flag, do not.
+//
+//mutant:limit score
 const sandboxDetectedThreshold = 70
 
 const (
-	sandboxTypeNone    = "none"
+	sandboxTypeNone = "none"
+	// minConfidenceScore and maxConfidenceScore are the ends of the scale
+	// every detector scores on, and a score is clamped into them.
+	//
+	//mutant:format the 0-100 confidence scale of TamperDetail.Confidence
 	minConfidenceScore = 0
+	// maxConfidenceScore is the top of the same scale.
+	//
+	//mutant:format the 0-100 confidence scale of TamperDetail.Confidence
 	maxConfidenceScore = 100
 )
 

@@ -39,12 +39,33 @@ const (
 	ConfidenceMemoryPageAnomalyDetected   = 92
 	ConfidenceProcessInjectionCombined    = 95
 
-	TimingLoopIterations        uint64 = 200000
-	TimingLoopXORConstant       uint64 = 0x9E3779B9
-	TimingSuspiciousThresholdUs        = 200000
+	// TimingLoopIterations is the length of the timing probe's loop: enough
+	// work to be timed, little enough to cost nothing.
+	//
+	//mutant:limit iterations
+	TimingLoopIterations  uint64 = 200000
+	TimingLoopXORConstant uint64 = 0x9E3779B9
+	// TimingSuspiciousThresholdUs is how long the loop may take before the
+	// timing probe reports it. The loop runs in well under a millisecond on an
+	// unhindered machine -- the Windows clock reads it as 0 or 1 ms -- so two
+	// hundred is a thread stopped part way through, single-stepped or
+	// suspended, and not a slow one.
+	//
+	//mutant:limit microseconds
+	TimingSuspiciousThresholdUs = 200000
 
+	// RDTSCDriftSleepIterations is how many rdtscDriftSleep naps the drift
+	// probe times.
+	//
+	//mutant:limit iterations
 	RDTSCDriftSleepIterations = 3
-	RDTSCDriftThresholdMs     = 10
+	// RDTSCDriftThresholdMs is how far the naps' total may run past what they
+	// asked for before the probe reports it. Three 1 ms naps take four to six
+	// milliseconds on an idle Windows machine; ten more than asked for is a
+	// thread that was stopped, not one that was scheduled late.
+	//
+	//mutant:limit milliseconds
+	RDTSCDriftThresholdMs = 10
 
 	LinuxProcSelfStatusPath = "/proc/self/status"
 )

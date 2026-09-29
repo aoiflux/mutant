@@ -45,16 +45,16 @@ The fields, and what they hold in a shipped binary:
 
 `ResolveRemoteScanConfig` coerces any unrecognised value back to `observe`.
 
-3. `MaxProcesses` -- `32`.
-
-4. `IntervalMs` -- `1000`.
-
-5. `Allowlist` -- empty. Process names to skip;
+3. `Allowlist` -- empty. Process names to skip;
    `parseRemoteProcessAllowlist` has no source to read from and returns an empty
    set. It remains as the seam a future `--scan-allowlist <file>` would fill.
 
-6. `HighRiskScore` / `CriticalScore` -- `70` / `85`. `ResolveRemoteScanConfig`
-   raises `CriticalScore` to `HighRiskScore` if a caller sets them inverted.
+4. `HighRiskScore` / `CriticalScore` -- `70` / `85`, the scores where the "high"
+   and "critical" risk bands start. `ResolveRemoteScanConfig` raises
+   `CriticalScore` to `HighRiskScore` if a caller sets them inverted.
+
+A process cap and a scan interval were fields here until 2.6.0, and nothing
+read either one.
 
 The `Enabled: true` paths documented in the rest of this file are exercised by
 tests, which set the config directly. They are not reachable by an operator.

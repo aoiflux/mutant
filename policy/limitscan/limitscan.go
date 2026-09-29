@@ -73,17 +73,23 @@ var RuleDescriptions = map[string]string{
 	RuleUndocumented: "named limit constant without a //mutant:limit or //mutant:format directive",
 }
 
-// Units a //mutant:limit directive may name.
+// Units a //mutant:limit directive may name. A value counted in something
+// other than bytes or nanoseconds says so -- an Argon2 cost in kibibytes, a
+// timeout held as an integer of milliseconds -- so the reference can print it
+// as the size or the duration it is.
 var Units = map[string]bool{
-	"bytes":      true,
-	"bits":       true,
-	"count":      true,
-	"depth":      true,
-	"duration":   true,
-	"iterations": true,
-	"percent":    true,
-	"ratio":      true,
-	"score":      true,
+	"bytes":        true,
+	"bits":         true,
+	"count":        true,
+	"depth":        true,
+	"duration":     true,
+	"iterations":   true,
+	"kibibytes":    true,
+	"microseconds": true,
+	"milliseconds": true,
+	"percent":      true,
+	"ratio":        true,
+	"score":        true,
 }
 
 const (
@@ -219,11 +225,22 @@ type Finding struct {
 }
 
 func (f Finding) String() string {
-	where := f.Func
-	if where == "" {
-		where = "package level"
+	return fmt.Sprintf("%s:%d (%s): %s %s: %s", f.File, f.Line, f.where(), f.Rule, RuleDescriptions[f.Rule], f.Text)
+}
+
+// Key names a finding without its line: the rule, the function it is in and
+// the expression as written. A budget lists findings by key, so an edit that
+// moves a limit down the file leaves its entry standing, and naming one limit
+// cannot make room for a new one beside it.
+func (f Finding) Key() string {
+	return f.Rule + " " + f.where() + ": " + f.Text
+}
+
+func (f Finding) where() string {
+	if f.Func == "" {
+		return "package level"
 	}
-	return fmt.Sprintf("%s:%d (%s): %s %s: %s", f.File, f.Line, where, f.Rule, RuleDescriptions[f.Rule], f.Text)
+	return f.Func
 }
 
 // Limit is a named limit constant, as the reference renders it.
@@ -256,6 +273,13 @@ type Result struct {
 	Formats  int // named constants marked //mutant:format
 	Problems []Problem
 	Scanned  map[string]bool // repository-relative paths of the files read
+
+	// Imports maps each package to the mutant packages its non-test files
+	// import, and Mains holds the packages that are programs. Together they
+	// say which packages a program is built from, which is how the reference
+	// tells the limits of a run from those of the tools that build and test it.
+	Imports map[string]map[string]bool
+	Mains   map[string]bool
 }
 
 // skippedDirs are pruned from the walk. testdata holds fixtures, not program
@@ -351,7 +375,7 @@ func newScanner() *scanner {
 		consts:   map[string]map[string]*constDecl{},
 		folded:   map[string]constant.Value{},
 		folding:  map[string]bool{},
-		result:   &Result{Scanned: map[string]bool{}},
+		result:   &Result{Scanned: map[string]bool{}, Imports: map[string]map[string]bool{}, Mains: map[string]bool{}},
 		seenRoot: map[token.Pos]bool{},
 	}
 }
@@ -367,12 +391,19 @@ func (s *scanner) add(rel string, src []byte) error {
 	s.result.Scanned[rel] = true
 	pkg := filepath.ToSlash(filepath.Dir(rel))
 	pf := &parsedFile{rel: rel, pkg: pkg, file: file, src: src, buildTag: buildTag(file), imports: map[string]string{}}
+	if file.Name.Name == "main" {
+		s.result.Mains[pkg] = true
+	}
+	if s.result.Imports[pkg] == nil {
+		s.result.Imports[pkg] = map[string]bool{}
+	}
 	for _, imp := range file.Imports {
 		path, err := strconv.Unquote(imp.Path.Value)
 		if err != nil || !strings.HasPrefix(path, "mutant/") {
 			continue
 		}
 		dir := strings.TrimPrefix(path, "mutant/")
+		s.result.Imports[pkg][dir] = true
 		local := dir[strings.LastIndex(dir, "/")+1:]
 		if imp.Name != nil {
 			local = imp.Name.Name
@@ -1045,10 +1076,16 @@ func (s *scanner) render(cd *constDecl, v constant.Value, folded bool, unit stri
 	if v.Kind() == constant.Int {
 		n, exact := constant.Int64Val(v)
 		if exact {
-			if isDuration {
+			switch {
+			case unit == "milliseconds":
+				return (time.Duration(n) * time.Millisecond).String()
+			case unit == "microseconds":
+				return (time.Duration(n) * time.Microsecond).String()
+			case unit == "kibibytes":
+				return humanBytes(n << 10)
+			case isDuration:
 				return time.Duration(n).String()
-			}
-			if unit == "bytes" {
+			case unit == "bytes":
 				return humanBytes(n)
 			}
 			return groupDigits(n)

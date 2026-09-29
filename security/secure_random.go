@@ -11,7 +11,14 @@ import (
 )
 
 const (
-	streamSeedByteSize      = 8
+	// streamSeedByteSize is the seed's width in the stream key's material: an
+	// int64, little-endian.
+	//
+	//mutant:format mutant-stream-v1: the seed as a 64-bit integer
+	streamSeedByteSize = 8
+	// streamBlockSize is the ChaCha20 block a stream offset is counted in.
+	//
+	//mutant:format RFC 8439 section 2.3: a 64-byte ChaCha20 block
 	streamBlockSize         = 64
 	streamVersionPrefix     = "mutant-stream-v1"
 	streamMaterialSeparator = "|"

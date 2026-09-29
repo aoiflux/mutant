@@ -528,8 +528,6 @@ model as package-level state, with these shipped values:
 | --- | --- |
 | `Enabled` | `false` |
 | `Mode` | `observe` |
-| `MaxProcesses` | `32` |
-| `IntervalMs` | `1000` |
 | `Allowlist` | empty; `parseRemoteProcessAllowlist` has no source to read |
 | `HighRiskScore` | `70` |
 | `CriticalScore` | `85` |
@@ -545,8 +543,6 @@ The struct (security/processscan_types.go):
 type RemoteScanConfig struct {
    Enabled       bool
    Mode          string // off|observe|enforce
-   MaxProcesses  int
-   IntervalMs    int
    Allowlist     map[string]struct{}
    HighRiskScore int
    CriticalScore int

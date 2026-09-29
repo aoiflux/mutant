@@ -91,6 +91,8 @@ const (
 	HKDFInfoGrantWrap = "mutant-grant-wrap-v1"
 
 	// DisclosureUIDSize is the length of a disclosure's random identity.
+	//
+	//mutant:format grant file v1: the disclosure identity
 	DisclosureUIDSize = 16
 	// GrantMaterialSize is one segment's key and nonce.
 	GrantMaterialSize = KeySize + chacha20poly1305.NonceSizeX

@@ -110,26 +110,40 @@ const (
 	// KeySize is the size of a case key, a record key and a segment key.
 	KeySize = chacha20poly1305.KeySize
 	// CaseUIDSize is the length of the case identity bound into every segment.
+	//
+	//mutant:format .mrec v1 and case-key file v1: the case identity
 	CaseUIDSize = 16
 	// RecordUIDSize is the length of the random identifier that makes a
 	// cross-record graft unrepresentable.
+	//
+	//mutant:format .mrec v1: the record identity
 	RecordUIDSize = 16
 	// SealSaltSize is the length of the per-seal salt that makes two seals of
 	// the same record under the same key derive disjoint segment material.
+	//
+	//mutant:format .mrec v1: the seal salt
 	SealSaltSize = 16
 	// CaseKeySaltSize is the Argon2id salt length.
+	//
+	//mutant:format case-key file v1: the Argon2id salt
 	CaseKeySaltSize = 32
 	// WrappedKeySize is a 32-byte key plus a 16-byte Poly1305 tag.
 	WrappedKeySize = KeySize + chacha20poly1305.Overhead
 	// SegmentAADSize is the fixed encoded width of a SegmentAAD.
+	//
+	//mutant:format .mrec v1: the segment's additional data
 	SegmentAADSize = 104
 	// MaxSegmentPlaintext keeps every call far below the size at which
 	// chacha20poly1305 panics instead of returning an error. A segment is a
 	// unit of disclosure, not a unit of storage; a record has as many as it
 	// needs.
+	//
+	//mutant:limit bytes
 	MaxSegmentPlaintext = 1 << 20
 	// MaxClassLabel is the longest class label a tag will be computed over. A
 	// label ends up in a report, a CSV and possibly a court exhibit.
+	//
+	//mutant:limit bytes
 	MaxClassLabel = 64
 )
 
@@ -139,9 +153,10 @@ const (
 // disk, and that is the whole point. To check any tag in the file you must
 // first derive the wrapping key, and to derive it you must run Argon2 under
 // some parameters -- so parameters a file supplies are parameters you honour
-// before you can authenticate them. ValidateArgon2Params permits up to 4 GiB at
-// eight passes, and a 4 GiB allocation is a Go runtime fatal rather than a
-// recoverable error, which a builtin could never report. So the file's KDF
+// before you can authenticate them. ValidateArgon2Params bounds such a cost,
+// but a bound is still a cost the file's author picks, and until 2.6.0 it was
+// 4 GiB at eight passes, where the allocation is a Go runtime fatal rather than
+// a recoverable error, which a builtin could never report. So the file's KDF
 // block is compared against this table at parse time and the file is refused if
 // it disagrees; the numbers are kept in the document and bound as additional
 // data as a record of what was used, never as an instruction.

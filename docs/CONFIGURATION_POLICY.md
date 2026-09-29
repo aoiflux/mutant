@@ -353,12 +353,16 @@ A limit is declared like this:
 const maxArchiveEntries = 1 << 20
 ```
 
-The directive names a unit (`bytes`, `bits`, `count`, `depth`, `duration`,
-`iterations`, `percent`, `ratio` or `score`) and, when a flag overrides the value,
-`flag=--name`. The prose above it is required: a limit whose reason is not written
-down is the hidden default this section exists to remove. A value fixed by a file
-format or a protocol is not a limit; it is marked `//mutant:format <specification>`
-and stays out of the reference.
+The directive names a unit (`bytes`, `kibibytes`, `bits`, `count`, `depth`,
+`duration`, `milliseconds`, `microseconds`, `iterations`, `percent`, `ratio` or
+`score`) and, when a flag overrides the value, `flag=--name`. A constant that
+counts in kibibytes or in whole milliseconds says so, and the reference prints it
+as the size or the time it is. The prose above it is required: a limit whose
+reason is not written down is the hidden default this section exists to remove.
+A value fixed by a file format or a protocol is not a limit; it is marked
+`//mutant:format <specification>` and stays out of the reference. The reference
+lists the limits of a run first, and after them those of the tools that build,
+test and document Mutant, which bound no run.
 
 `go test ./policy/` enforces it (`policy/limit_guard_test.go`, with the rules in
 `policy/limitscan`). It fails on a limit written as a bare literal in a shape it
@@ -378,18 +382,22 @@ recognises:
 | N1 | a constant named like a limit (`max…`, `…Timeout`, `…Size`) without a directive |
 
 It also fails on a malformed directive. Hexadecimal, octal and binary literals in
-a comparison are left alone -- that is how this tree writes format checks such
-as `len(data) < 0x40`.
+a comparison, or given to a limit-named field, are left alone -- that is how this
+tree writes format checks and layout tables, such as `len(data) < 0x40` and
+`Size: 0x40`.
 
-What was already in the tree when the guard arrived is held in a per-file budget,
+What was already in the tree when the guard arrived is held in a budget,
 `policy/limit_budget.go`, seeded on 2026-09-24 at 174 findings in 82 files. It
-only shrinks: a file above its entry fails, and so does a file below it, so the
-number comes down in the same change that names a limit.
+lists each finding by its rule, the function it is in and the expression as
+written, rather than keeping a count per file, so naming one limit cannot make
+room for a new one beside it. It only shrinks: a finding it does not list fails,
+and so does an entry no finding answers to, so an entry comes out in the same
+change that names its limit.
 
 The guard is a floor, not a proof. It recognises limits by shape and by name, so
-a limit in a shape none of the rules describes is not caught; binary-format
-offsets are deliberately not guarded, and their bounds are tested by fuzzing
-instead.
+a limit in a shape none of the rules describes is not caught. Binary-format
+offsets are deliberately not guarded; their bounds are for fuzzing to test, and
+the tree has no fuzz targets yet.
 
 ---
 

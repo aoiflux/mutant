@@ -9,16 +9,29 @@ import (
 )
 
 const (
-	debugMethodIsDebuggerPresent    = "windows:is_debugger_present"
-	debugMethodCheckRemoteDebugger  = "windows:check_remote_debugger_present"
-	debugMethodProcessDebugPort     = "windows:process_debug_port"
-	debugMethodProcessDebugObject   = "windows:process_debug_object_handle"
-	debugMethodSystemDebugControl   = "windows:system_debug_control_query_version"
-	debugMethodOutputDebugTiming    = "windows:output_debug_string_timing"
-	debugMethodDebuggerDLLLoaded    = "windows:debugger_dll_loaded"
+	debugMethodIsDebuggerPresent   = "windows:is_debugger_present"
+	debugMethodCheckRemoteDebugger = "windows:check_remote_debugger_present"
+	debugMethodProcessDebugPort    = "windows:process_debug_port"
+	debugMethodProcessDebugObject  = "windows:process_debug_object_handle"
+	debugMethodSystemDebugControl  = "windows:system_debug_control_query_version"
+	debugMethodOutputDebugTiming   = "windows:output_debug_string_timing"
+	debugMethodDebuggerDLLLoaded   = "windows:debugger_dll_loaded"
+	// outputDebugTimingThresholdTicks is how many milliseconds, as
+	// GetTickCount counts them, an OutputDebugString call may take before it
+	// counts as a debugger's. GetTickCount moves a timer tick at a time, so
+	// this fires when the call spans a tick: likely for a call a debugger stops
+	// to receive, rare for one nobody receives.
+	//
+	//mutant:limit milliseconds
 	outputDebugTimingThresholdTicks = 10
-	weakSignalTriggerThreshold      = 2
-	outputDebugProbeMessage         = "DEBUG_CHECK"
+	// weakSignalTriggerThreshold is how many of the weak checks must fire
+	// together before they count as a debugger. There are two -- the
+	// OutputDebugString timing and a debugger's DLL in the process -- and
+	// either alone is common on a developer's machine.
+	//
+	//mutant:limit count
+	weakSignalTriggerThreshold = 2
+	outputDebugProbeMessage    = "DEBUG_CHECK"
 )
 
 var debuggerDLLs = []string{"dbghelp.dll", "msvcr120d.dll", "msvcd120d.dll", "vccorlib120d.dll"}

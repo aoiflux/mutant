@@ -102,13 +102,19 @@ func detectCPUIDHypervisor() AntiTamperSignal {
 	return makeSignal(ProbeCPUIDHypervisor, false, ConfidenceNone, "no hypervisor signal")
 }
 
+// rdtscDriftSleep is one of the drift probe's naps: the shortest sleep worth
+// asking the scheduler for.
+//
+//mutant:limit duration
+const rdtscDriftSleep = time.Millisecond
+
 func detectRDTSCDrift() AntiTamperSignal {
 	start := time.Now()
 	for i := 0; i < RDTSCDriftSleepIterations; i++ {
-		time.Sleep(time.Millisecond)
+		time.Sleep(rdtscDriftSleep)
 	}
 	elapsedMs := int(time.Since(start).Milliseconds())
-	drift := elapsedMs - RDTSCDriftSleepIterations
+	drift := elapsedMs - RDTSCDriftSleepIterations*int(rdtscDriftSleep/time.Millisecond)
 	if drift < 0 {
 		drift = -drift
 	}

@@ -32,8 +32,6 @@ type ProcessRiskVerdict struct {
 type RemoteScanConfig struct {
 	Enabled       bool
 	Mode          string
-	MaxProcesses  int
-	IntervalMs    int
 	Allowlist     map[string]struct{}
 	HighRiskScore int
 	CriticalScore int

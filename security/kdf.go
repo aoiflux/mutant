@@ -24,17 +24,66 @@ type KDFParams struct {
 }
 
 const (
-	// Argon2id recommended parameters (OWASP)
-	DefaultArgon2Time    = 1
-	DefaultArgon2Memory  = 64 * 1024 // 64 MB
+	// DefaultArgon2Time is the Argon2id pass count an artifact's password key
+	// is derived with. The generator writes the cost into the artifact beside
+	// the salt and the runner derives with what the artifact says, so the
+	// default can change without stranding an artifact already written. One
+	// pass over DefaultArgon2Memory meets OWASP's Argon2id minimum for a
+	// single pass, 46 MiB.
+	//
+	//mutant:limit iterations
+	DefaultArgon2Time = 1
+	// DefaultArgon2Memory is the Argon2id memory cost of an artifact's
+	// password key, in the kibibytes Argon2 counts in: 64 MiB.
+	//
+	//mutant:limit kibibytes
+	DefaultArgon2Memory = 64 * 1024
+	// DefaultArgon2Threads is the Argon2id lane count of an artifact's
+	// password key: four, as both of RFC 9106's recommended parameter sets
+	// use.
+	//
+	//mutant:limit count
 	DefaultArgon2Threads = 4
-	DefaultKeyLen        = 32 // 256 bits
-	MinArgon2Time        = 1
-	MaxArgon2Time        = 8
-	MinArgon2Memory      = 64 * 1024       // 64 MB
-	MaxArgon2Memory      = 4 * 1024 * 1024 // 4 GB (in KB units)
-	MinArgon2Threads     = 1
-	MaxArgon2Threads     = 16
+	// DefaultKeyLen is the length of an artifact's password key. The artifact
+	// cipher is AES-256-GCM and an artifact records no key length, so every
+	// artifact's key is this long.
+	//
+	//mutant:format FIPS 197: an AES-256 key
+	DefaultKeyLen = 32
+
+	// MinArgon2Time is Argon2's own floor of one pass.
+	//
+	//mutant:format RFC 9106 section 3.1
+	MinArgon2Time = 1
+	// MaxArgon2Time bounds the passes an artifact's header may ask for. The
+	// runner derives the key before it has anything to authenticate the header
+	// with, so this is a cost a crafted header could name. It stops at the
+	// costliest derivation in the tree -- caseKeyProfiles' and
+	// grantFileProfiles' three passes over 256 MiB in four lanes, which
+	// TestCaseKeyProfileIsInBand holds inside these bounds.
+	//
+	//mutant:limit iterations
+	MaxArgon2Time = 3
+	// MinArgon2Memory is the least memory an artifact's header may ask for:
+	// the default this build writes, so a header edited down to a cheap
+	// derivation is refused rather than honoured.
+	//
+	//mutant:limit kibibytes
+	MinArgon2Memory = 64 * 1024
+	// MaxArgon2Memory bounds the memory an artifact's header may ask for, at
+	// the same costliest derivation MaxArgon2Time stops at: 256 MiB.
+	//
+	//mutant:limit kibibytes
+	MaxArgon2Memory = 256 * 1024
+	// MinArgon2Threads is Argon2's own floor of one lane.
+	//
+	//mutant:format RFC 9106 section 3.1
+	MinArgon2Threads = 1
+	// MaxArgon2Threads bounds the lanes an artifact's header may ask for, at
+	// the four every derivation in the tree uses.
+	//
+	//mutant:limit count
+	MaxArgon2Threads = 4
 
 	// HKDF info strings
 	HKDFInfoBytecode  = "mutant-bytecode-encryption-v1"
