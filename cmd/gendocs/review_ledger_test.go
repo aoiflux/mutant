@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,10 +15,16 @@ import (
 
 // The 2.6.0 review keeps one ledger of findings, one JSON object per line, so a
 // finding is one line in a diff and every report is written from the same rows.
-// These tests hold the ledger to its own rules; see docs/review/2.6.0/README.md.
+// These tests hold the ledger to its own rules; see the README beside it.
+//
+// The ledger is not in this repository, and must not be. It carries the
+// unfixed findings of a security review, most of them with a reproduction,
+// and this repository is public -- so it lives with the review's own tooling
+// under plans/, which git ignores. These tests check it where it is present
+// and skip on a clone that has not got it.
 
 const (
-	reviewDir    = "../../docs/review/2.6.0"
+	reviewDir    = "../../plans/review-2.6.0/ledger"
 	reviewLedger = reviewDir + "/findings.jsonl"
 )
 
@@ -69,6 +77,9 @@ func setOf(values ...string) map[string]bool {
 func readReviewLedger(t *testing.T) []reviewFinding {
 	t.Helper()
 	data, err := os.ReadFile(filepath.FromSlash(reviewLedger))
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("no ledger at %s: it is kept out of the repository, so this runs only where it is present", reviewLedger)
+	}
 	if err != nil {
 		t.Fatalf("reading %s: %v", reviewLedger, err)
 	}
