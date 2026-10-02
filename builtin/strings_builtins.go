@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"mutant/object"
 )
@@ -117,6 +118,16 @@ func StrRepeat(args ...object.Object) object.Object {
 	}
 	if n < 0 {
 		return newError("argument 2 to `str_repeat` must be non-negative, got %d", n)
+	}
+	if n == 0 || len(s) == 0 {
+		return stringObj("")
+	}
+	// Compared as a division so the product cannot overflow on the way to the
+	// comparison, and checked after the empty cases so that past this point n
+	// is at most the limit and int(n) is exact on every platform.
+	if n > maxBuiltinResultBytes/int64(len(s)) {
+		return newError("argument 2 to `str_repeat` would repeat a %d-byte string %d times, over the %d-byte limit on one builtin result; write data this large to a file instead",
+			len(s), n, int64(maxBuiltinResultBytes))
 	}
 	return stringObj(strings.Repeat(s, int(n)))
 }
@@ -280,6 +291,13 @@ func strPad(op string, args []object.Object, left bool) object.Object {
 	runes := []rune(s)
 	if int64(len(runes)) >= width {
 		return stringObj(s)
+	}
+	// The fill is built as runes, so the limit is the byte cap divided by the
+	// worst case a rune costs. Subtracting here cannot overflow: width is the
+	// larger of the two and len(runes) is not negative.
+	if width-int64(len(runes)) > maxBuiltinResultBytes/utf8.UTFMax {
+		return newError("argument 2 to `%s` would add %d runes of padding, over the %d runes that the %d-byte limit on one builtin result allows",
+			op, width-int64(len(runes)), int64(maxBuiltinResultBytes/utf8.UTFMax), int64(maxBuiltinResultBytes))
 	}
 	needed := int(width) - len(runes)
 	padRunes := []rune(pad)

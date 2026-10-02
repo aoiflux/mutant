@@ -1012,6 +1012,18 @@ exhaustive lists.
   offsets from the guard because "their bounds are tested by fuzzing instead"; the tree has no
   fuzz targets yet, and the policy says so (M26-LIM-002).
 
+- **A count an examiner mistyped was charged to the host.** `str_repeat`, `str_pad_left`,
+  `str_pad_right` and `rand_bytes` allocated whatever size the script asked for, and so did
+  `random_hex` and `nanoid`. The result was not an error and was not a crash: the process stayed
+  alive holding tens of gibibytes of committed memory, printing nothing, surviving an ordinary
+  kill, so the case it was opened for was neither finished nor released and the machine an
+  examiner shares was the thing that degraded (M26-BLT-013). All six now refuse a result over
+  32 MiB, naming the builtin, the size asked for and the limit, in the same shape as every other
+  argument refusal. The refusal also happens at expansion time, so a macro body that asks for one
+  can no longer wedge a compile. The bound is `maxBuiltinResultBytes` in
+  `builtin/result_limit.go`, the language server shows it on the parameter before the call is
+  run, and `docs/LIMITS_REFERENCE.md` lists it with its reason.
+
 ### Security
 
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**

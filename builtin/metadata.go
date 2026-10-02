@@ -626,9 +626,9 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameStrStartsWith: {signature: "str_starts_with(s, prefix)", summary: "Returns whether s begins with prefix.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("prefix", "Prefix to test for.", ParamString)}, returns: ret("whether s begins with prefix", ParamBool)},
 	BuiltinNameStrEndsWith:   {signature: "str_ends_with(s, suffix)", summary: "Returns whether s ends with suffix.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("suffix", "Suffix to test for.", ParamString)}, returns: ret("whether s ends with suffix", ParamBool)},
 	BuiltinNameStrJoin:       {signature: "str_join(array, sep)", summary: "Joins an array of strings with sep (inverse of text_split).", params: []builtinParamDoc{arrayParam("array", "Array of STRING elements to join; a non-string element is an error.", ParamString), param("sep", "Separator placed between elements.", ParamString)}, returns: ret("the elements joined by sep", ParamString)},
-	BuiltinNameStrRepeat:     {signature: "str_repeat(s, n)", summary: "Returns s repeated n times.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("n", "Repeat count; must be non-negative.", ParamInt)}, returns: ret("s repeated n times", ParamString)},
-	BuiltinNameStrPadLeft:    {signature: "str_pad_left(s, width, pad)", summary: "Left-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}, returns: ret("s left-padded to width runes", ParamString)},
-	BuiltinNameStrPadRight:   {signature: "str_pad_right(s, width, pad)", summary: "Right-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}, returns: ret("s right-padded to width runes", ParamString)},
+	BuiltinNameStrRepeat:     {signature: "str_repeat(s, n)", summary: "Returns s repeated n times.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("n", "Repeat count; must be non-negative, and s repeated n times must not exceed 32 MiB.", ParamInt)}, returns: ret("s repeated n times", ParamString)},
+	BuiltinNameStrPadLeft:    {signature: "str_pad_left(s, width, pad)", summary: "Left-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes; the padding added must not exceed 8,388,608 runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}, returns: ret("s left-padded to width runes", ParamString)},
+	BuiltinNameStrPadRight:   {signature: "str_pad_right(s, width, pad)", summary: "Right-pads s with pad until it reaches width runes.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("width", "Target width in runes; the padding added must not exceed 8,388,608 runes.", ParamInt), param("pad", "Padding string; must be non-empty.", ParamString)}, returns: ret("s right-padded to width runes", ParamString)},
 	BuiltinNameStrReverse:    {signature: "str_reverse(s)", summary: "Returns s reversed (rune-aware).", params: []builtinParamDoc{param("s", "Source string.", ParamString)}, returns: ret("s reversed (rune-aware)", ParamString)},
 	BuiltinNameStrSubstr:     {signature: "str_substr(s, start, length)", summary: "Returns length runes of s starting at rune index start (clamped to bounds).", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("start", "Starting rune index; must be non-negative.", ParamInt), param("length", "Number of runes to take; must be non-negative.", ParamInt)}, returns: ret("length runes of s starting at rune index start (clamped to bounds)", ParamString)},
 	BuiltinNameStrCharAt:     {signature: "str_char_at(s, index)", summary: "Returns the rune at index as a string.", params: []builtinParamDoc{param("s", "Source string.", ParamString), param("index", "Rune index; must be within the string.", ParamInt)}, returns: ret("the rune at index as a string", ParamString)},
@@ -674,11 +674,11 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameUUIDv7: {signature: "uuid_v7()", summary: "Returns a time-ordered (v7) UUID string.", returns: ret("a time-ordered (v7) UUID string", ParamString)},
 	BuiltinNameRandomHex: {
 		signature: "random_hex(n)", summary: "Returns n cryptographically-random bytes as a 2n-char hex string.",
-		params:  []builtinParamDoc{param("n", "Number of random bytes.", ParamInt)},
+		params:  []builtinParamDoc{param("n", "Number of random bytes (0..16 MiB, because the hex result is twice that).", ParamInt)},
 		returns: ret("n cryptographically-random bytes as a 2n-char hex string", ParamString)},
 	BuiltinNameNanoID: {
 		signature: "nanoid(n)", summary: "Returns a URL-safe random identifier of length n.",
-		params:  []builtinParamDoc{param("n", "Identifier length in characters.", ParamInt)},
+		params:  []builtinParamDoc{param("n", "Identifier length in characters (1..32 MiB).", ParamInt)},
 		returns: ret("a URL-safe random identifier of length n", ParamString)},
 	// generic: math
 	// The math builtins take their operands through requireNumericArg, which
@@ -764,7 +764,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: ret("a random INTEGER in [lo, hi)", ParamInt)},
 	BuiltinNameRandBytes: {
 		signature: "rand_bytes(n)", summary: "Returns n cryptographically-random bytes (as a byte string).",
-		params:  []builtinParamDoc{param("n", "Number of random bytes.", ParamInt)},
+		params:  []builtinParamDoc{param("n", "Number of random bytes (0..32 MiB).", ParamInt)},
 		returns: ret("n cryptographically-random bytes (as a byte string)", ParamString)},
 	BuiltinNameMathPi: {signature: "math_pi()", summary: "Returns the constant pi.", returns: ret("the constant pi", ParamFloat)},
 	BuiltinNameMathE:  {signature: "math_e()", summary: "Returns the constant e.", returns: ret("the constant e", ParamFloat)},

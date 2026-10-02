@@ -283,10 +283,13 @@ type Result struct {
 }
 
 // skippedDirs are pruned from the walk. testdata holds fixtures, not program
-// code; the extension and its node_modules vendor code that is not Mutant's.
+// code; the extension and its node_modules vendor code that is not Mutant's;
+// plans is the review's own working material, which .gitignore keeps out of
+// the repository and which may hold whole scratch programs of its own.
 var skippedDirs = map[string]bool{
 	".git":                    true,
 	".codegraph":              true,
+	"plans":                   true,
 	"node_modules":            true,
 	"dist":                    true,
 	"testdata":                true,

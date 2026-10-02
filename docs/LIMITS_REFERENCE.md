@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-48 limits in 5 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 125 limits that are not named yet; `policy/limit_budget.go` lists each one.
+49 limits in 5 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 125 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -30,6 +30,7 @@ and are not listed.
 | `httpMaxIdleConns` | 100 | count | -- | httpMaxIdleConns is how many connections, across every host, are kept for reuse. | `builtin/http.go` |
 | `httpRequestTimeout` | 30s | duration | -- | httpRequestTimeout bounds one request an http_* builtin or lua_run_http makes, from dialling to the last byte of the body. | `builtin/http.go` |
 | `httpTLSHandshakeTimeout` | 10s | duration | -- | httpTLSHandshakeTimeout bounds the TLS handshake of one connection. | `builtin/http.go` |
+| `maxBuiltinResultBytes` | 32 MiB | bytes | -- | maxBuiltinResultBytes bounds a result whose size the script picks outright: a repeat count, a pad width, a number of random bytes. Uncapped, one mistyped count does not fail -- it leaves the process alive holding tens of gibibytes of the host's commit charge, printing nothing and surviving every ordinary kill, so the case it was opened for is never released. | `builtin/result_limit.go` |
 | `maxCaseReason` | 4 KiB | bytes | -- | maxCaseReason bounds a reason or a name written into a case record. It is written into a signed commit that is never compacted away, so it is a sentence and not a document. | `builtin/case_lifecycle.go` |
 | `maxRedactionLine` | 4,096 | count | -- | maxRedactionLine bounds the walk back through a record's reclassifications. Each step is a reclassification an examiner recorded, so a line longer than this is not one anybody recorded by hand, and the walk refuses it rather than following it. | `builtin/redaction_version.go` |
 | `maxRoleBundleViews` | 256 | count | -- | maxRoleBundleViews bounds one bundle's view list. A bundle cannot usefully hold more views than a case would ever declare, and a longer list is one with repeats in it, which are refused on their own account anyway. | `builtin/recipient_role.go` |

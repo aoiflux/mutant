@@ -231,6 +231,10 @@ func RandBytes(args ...object.Object) object.Object {
 	if n < 0 {
 		return newError("argument 1 to `rand_bytes` must be non-negative, got %d", n)
 	}
+	if n > maxBuiltinResultBytes {
+		return newError("argument 1 to `rand_bytes` asks for %d bytes, over the %d-byte limit on one builtin result; write data this large to a file instead",
+			n, int64(maxBuiltinResultBytes))
+	}
 	buf := make([]byte, n)
 	if _, err := crand.Read(buf); err != nil {
 		return newError("rand_bytes: %s", err.Error())

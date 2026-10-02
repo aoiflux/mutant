@@ -26,12 +26,15 @@ const repositoryRoot = ".."
 const policyDoc = "docs/CONFIGURATION_POLICY.md"
 
 // skippedDirs are pruned during the walk. node_modules is not optional: it
-// vendors third-party Go that has nothing to do with this policy.
+// vendors third-party Go that has nothing to do with this policy; plans is the
+// review's own working material, which .gitignore keeps out of the repository,
+// so a scratch program left there is not code this policy governs.
 var skippedDirs = map[string]bool{
 	"node_modules": true,
 	".git":         true,
 	".codegraph":   true,
 	"dist":         true,
+	"plans":        true,
 }
 
 // mutantEnvName matches a Mutant-prefixed environment variable name. It is

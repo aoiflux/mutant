@@ -161,6 +161,11 @@ func RandomHex(args ...object.Object) object.Object {
 	if n < 0 {
 		return newError("argument 1 to `random_hex` must be non-negative, got %d", n)
 	}
+	// Halved, because the result an examiner receives is the hex encoding.
+	if n > maxBuiltinResultBytes/2 {
+		return newError("argument 1 to `random_hex` asks for %d bytes, whose hex encoding is over the %d-byte limit on one builtin result",
+			n, int64(maxBuiltinResultBytes))
+	}
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
 		return newError("random_hex: %s", err.Error())
@@ -180,6 +185,10 @@ func NanoID(args ...object.Object) object.Object {
 	}
 	if n < 1 {
 		return newError("argument 1 to `nanoid` must be positive, got %d", n)
+	}
+	if n > maxBuiltinResultBytes {
+		return newError("argument 1 to `nanoid` asks for %d characters, over the %d-byte limit on one builtin result",
+			n, int64(maxBuiltinResultBytes))
 	}
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
