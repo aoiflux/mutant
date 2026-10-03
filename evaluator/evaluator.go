@@ -229,7 +229,23 @@ func evalTemplateLiteral(node *ast.TemplateLiteral, env *object.Environment) obj
 		if i >= len(node.Parts) {
 			continue
 		}
-		piece := Eval(node.Parts[i], env)
+		// Inside a macro body the unexported eval is used, so a hole that gives
+		// up ends the literal. The exported Eval unwraps the fatal signal into
+		// an ordinary error value, and isError tests only for the signal -- so a
+		// refusal raised in a hole used to be written into the string and
+		// expansion SUCCEEDED, carrying the refusal's own text into the program
+		// as a literal. A gate that reports itself that way reads as working.
+		//
+		// The run time keeps Eval, deliberately. There the two engines agree:
+		// the VM pushes a builtin's error onto the stack as an ordinary value
+		// and OpConcat prints it, so switching this unconditionally would make
+		// the evaluator diverge from the VM rather than match it.
+		var piece object.Object
+		if env.InMacroExpansion() {
+			piece = eval(node.Parts[i], env)
+		} else {
+			piece = Eval(node.Parts[i], env)
+		}
 		if isError(piece) {
 			return piece
 		}
@@ -291,8 +307,8 @@ func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object
 	if val, ok := env.Get(node.Value); ok {
 		return val
 	}
-	if builtin, ok := builtins[node.Value]; ok {
-		return builtin
+	if resolved, registered := resolveBuiltin(node.Value, node.Value, env); registered {
+		return resolved
 	}
 	return newError("%s", "identifier not found: "+node.Value)
 }
@@ -864,8 +880,15 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 			// Looked up in this engine's own table rather than taken on trust,
 			// so a registry entry with no implementation falls through to field
 			// access exactly as it did before.
-			if fn, found := builtins[resolved.Builtin]; found {
-				return fn
+			//
+			// This is the second door into that table, and the one a fix aimed
+			// at evalIdentifier leaves open: sema folded `fs.write` to
+			// `fs_write` before we got here, so no identifier for the builtin
+			// was ever built. Both doors go through resolveBuiltin for that
+			// reason, keyed on the flat name and reporting the dotted spelling.
+			if answer, registered := resolveBuiltin(
+				resolved.Builtin, ident.Value+"."+node.Field.Value, env); registered {
+				return answer
 			}
 		}
 	}

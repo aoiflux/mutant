@@ -713,6 +713,23 @@ unless(1 > 2, putln("smaller"), putln("bigger"));   // prints: smaller
   **argument's source**, unevaluated. `add(dynamic, 5)` substitutes the
   identifier `dynamic`, not whatever it holds at expansion time.
 
+**What expansion may call.** Expansion happens while the compiler is running, so
+only pure computation is available there. A macro body may use the operators, the
+literals, its own parameters, and the builtins listed as macro-safe. A builtin that
+reads or writes a file, reaches the network, runs a program, opens a handle, draws
+entropy, reads the clock or writes state the program would later read back is
+refused, and so is one that decodes cryptographic material -- `aes_encrypt`,
+`aes_decrypt`, `aes_decrypt_bytes`, `x509_parse`, `der_parse`, `jwt_decode` and
+`pem_decode` -- because a compile is the wrong place to run a cipher or a
+certificate parser over bytes the source carries. The refusal names the builtin and
+says which of those it does. Parsers of ordinary structure stay available --
+`json_parse`, `yaml_parse`, `xml_parse`, `csv_parse`, `toml_parse`, `cbor_parse`,
+`msgpack_parse`, `protobuf_parse` and the rest -- because writing code from a table
+the macro carries is one of the main reasons to have macros. This applies to the
+namespaced spelling as well, because `fs.write` and `fs_write` are the same
+builtin. Nothing inside a `quote` is affected: that is source being
+captured, not code being run, and only an `unquote` inside it is evaluated.
+
 **Declaration and scope.** Macros are collected from top-level statements only,
 and their declarations are removed from the program before compilation. A macro
 declared inside a function or a block is never collected, and is reported as

@@ -39,9 +39,13 @@ func addMacro(stmt ast.Statement, env *object.Environment) {
 	letStatement, _ := stmt.(*ast.LetStatement)
 	macroLiteral, _ := letStatement.Value.(*ast.MacroLiteral)
 
+	// The body's lexical parent is a marked wrapper, not the environment we were
+	// handed: Get walks straight through it, so nothing about scoping changes,
+	// and the environment the caller owns is never marked. The macro itself still
+	// goes into the caller's environment, which is where ExpandMacros finds it.
 	macro := &object.Macro{
 		Parameters: macroLiteral.Parameters,
-		Env:        env,
+		Env:        object.NewMacroExpansionEnvironment(env),
 		Body:       macroLiteral.Body,
 	}
 
@@ -217,8 +221,13 @@ func quoteArgs(exp *ast.CallExpression) []*object.Quote {
 // extendMacroEnv binds the call's arguments to the macro's parameters. The
 // caller checks arity first: this indexes positionally and would otherwise
 // panic on an under-applied macro.
+// It also marks the environment it builds. This is the one place the environment
+// a macro body runs in is constructed, so it is the one place the restriction has
+// to be switched on -- and everything the body then creates inherits it, because
+// NewEnclosedEnvironement copies the mark forward. Switching it on here rather
+// than at the three callers of ExpandMacros means a fourth caller cannot forget.
 func extendMacroEnv(macro *object.Macro, args []*object.Quote) *object.Environment {
-	extended := object.NewEnclosedEnvironement(macro.Env)
+	extended := object.NewMacroExpansionEnvironment(macro.Env)
 
 	for paramIdx, param := range macro.Parameters {
 		if paramIdx >= len(args) {

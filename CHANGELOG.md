@@ -1146,6 +1146,35 @@ exhaustive lists.
   still stops a new grant. No released version is affected: the ledger family is
   new in 2.6.0.
 
+- **A macro body ran whatever it liked, while the compiler was running.**
+  A macro is expanded before any code is generated, and expansion evaluated its body
+  against the whole builtin registry. So compiling somebody else's source wrote files,
+  ran programs and read the host -- before the program was started, before a password
+  was asked for, and before any of the run time's controls existed. Compiling is not
+  running. Three separate paths reached the registry, not one: the plain name; the
+  namespaced spelling, because `fs.write` folds to the same builtin through a second
+  lookup that a fix aimed at the first would have left open; and `with_resource`, which
+  resolves what it calls from a string while it runs, where no rule that reads names can
+  see it. Expansion now resolves only the builtins listed as macro-safe -- pure
+  computation over values the body already holds -- and refuses every other one by name,
+  saying which of reading a file, reaching the network, running a program, opening a
+  handle, drawing entropy, reading the clock or writing state the program would later
+  read back it would have done. Seven are refused for none of those: `aes_encrypt`,
+  `aes_decrypt`, `aes_decrypt_bytes`, `x509_parse`, `der_parse`, `jwt_decode` and
+  `pem_decode` decode cryptographic material, and a compile is the wrong place to run a
+  cipher or a certificate parser over bytes the source carries; parsers of ordinary
+  structure such as `json_parse` and `csv_parse` stay available, because writing code
+  from a table the macro carries is one of the reasons to have macros. The reach was
+  wider than the file anybody typed:
+  expansion covers every module in the linked graph, so a macro in an imported library
+  ran at the importer's compile; `mutant test` with no arguments compiles every test
+  program it can find, and filters by name only afterwards; and a debug launch compiled
+  before `stopOnEntry` applied, so "load it and stop at the first line" had already
+  expanded it. The language server never expanded macros, so opening or saving a file
+  ran nothing. One thing changes for programs that worked before: a macro body that
+  called a builtin outside the macro-safe list is now a compile error that names the
+  builtin and says why (M26-EVL-012).
+
 ## [2.5.0] — 2026-09-17
 
 The v2.5 line — *trustworthy: structural correctness*. The theme is that every

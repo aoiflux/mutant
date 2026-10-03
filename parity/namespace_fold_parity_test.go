@@ -195,10 +195,22 @@ func TestABindingStillBeatsACollidingFamily(t *testing.T) {
 // tree-walking evaluator, and the evaluator is what computes unquote(...) at
 // expansion time. A divergence here means a line inside a macro means something
 // different from the identical line written inline.
+//
+// Three constraints on any input added here, all of them forced rather than
+// chosen. The flat name must contain an underscore, or sema does not fold the
+// dotted spelling and the row proves nothing about the door this test exists for.
+// The value must be a scalar with a source form -- unquote takes an integer,
+// float, string, boolean or quote and nothing else -- so a builtin returning a
+// (value, err) pair cannot be used, time_parse included. And the builtin must be
+// macro-safe: expansion runs while the compiler runs, so it is limited to pure
+// computation, which is why this test asks rand nothing. That last constraint is
+// what the two dotted-but-not-pure inputs here used to violate: they drew
+// entropy at compile time, and expansion has to produce the same source on every
+// compile.
 func TestANamespacedBuiltinInsideAMacroMatchesTheSameCallInline(t *testing.T) {
 	inputs := []string{
-		"rand.int(5, 6)",
-		"len(rand.bytes(4))",
+		"time.format(0, \"2006-01-02\")",
+		"text.count(\"banana\", \"a\")",
 		"len(str.upper(\"shout\"))",
 		"len(hash.blake2(\"x\"))",
 	}
