@@ -1061,6 +1061,33 @@ exhaustive lists.
   against generated ones, and a sweep test refuses a `putf` format any example decides at run
   time (M26-EX-020).
 
+- **Calling something that was not a function did not fail.** The VM tested the callee slot for a
+  closure or a builtin, and when it held neither it called whatever was at the bottom of the stack
+  instead -- which is usually the function currently running. A dispatch table with no entry for
+  the value it was keyed on therefore re-invoked its own caller and handed back that result, so a
+  program that looked up a handler by a string from the evidence got an answer it never computed
+  and nothing was reported anywhere (M26-VM-003). When the value at the bottom of the stack was
+  the caller, the call recursed on itself: `fn() { let x = 5; return x(); }` did not return a wrong
+  number, it ran until something stopped it, and in a test what stopped it was the ten-minute
+  timeout. The fallback is gone, and a callee that cannot be called is refused by name --
+  `calling non-function and non-built-in: INTEGER`, naming the type the author wrote and not the
+  encrypted form it is stored in. The tree-walking evaluator always refused this, so the two
+  engines no longer disagree about what the same expression means.
+
+- **A failing task named the instruction that failed, and that name changed with the build.**
+  `task_wait` handed the waiting program an error reading `vm_runtime_error ip=6 op=OpDiv:
+  integer division by zero`, and the same source built at another mutation level said `ip=12`.
+  A program that printed a failed task's error printed different output depending on how it was
+  built, which is the one thing mutation promises not to do, and the number described the
+  mutated instruction layout to whoever read that output (M26-VM-002). An error a program
+  receives as a value now carries a source position instead of a bytecode one -- and the
+  position is the line the task died on, not the `task_wait` that collected it, which is what a
+  reader was looking for in the first place. The failure also brings the task's own call stack
+  with it, readable as `err.stack`. An error that ends the run is unchanged: there the
+  instruction pointer and the opcode are what a bug report needs, and they are still printed.
+  A `with_resource` closer that fails and a test that dies rather than asserting were the same
+  defect and are fixed with it.
+
 ### Security
 
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**

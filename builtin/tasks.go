@@ -205,9 +205,45 @@ func TaskWait(args ...object.Object) object.Object {
 	releaseTask(handle)
 
 	if task.failure != nil {
-		return resultAndError(nil, newError("task failed: %s", task.failure.Error()))
+		return resultAndError(nil, taskFailureError(task.failure))
 	}
 	return resultAndError(task.result, nil)
+}
+
+// failureSite is what a task failure offers about where it happened. The VM
+// implements it (vm.scriptError) and this package cannot import the VM, so the
+// two meet by shape instead: the registry holds a plain error and asks it.
+//
+// A failure that does not answer -- a panicked task, a program compiled with no
+// debug info -- simply has no site, and the error is positioned at the
+// task_wait the way every other builtin error is.
+type failureSite interface {
+	Position() (file string, line, column int)
+	Stack() []string
+}
+
+// taskFailureError turns what stopped a task into the error the waiting program
+// receives.
+//
+// The position is the task's, not the waiter's. Without this the error carries
+// the line of the task_wait that collected it, which is where the program
+// found out and not where anything went wrong -- and for a task those are
+// rarely even in the same function. Setting it here also stops the VM stamping
+// its own: decorateError leaves an error that already has a line alone.
+func taskFailureError(failure error) *object.Error {
+	failed := newError("task failed: %s", failure.Error())
+
+	site, ok := failure.(failureSite)
+	if !ok {
+		return failed
+	}
+	file, line, column := site.Position()
+	if line <= 0 {
+		return failed
+	}
+	failed.File, failed.Line, failed.Column = file, line, column
+	failed.Stack = site.Stack()
+	return failed
 }
 
 // TaskDone reports whether a spawned task has finished, without waiting.

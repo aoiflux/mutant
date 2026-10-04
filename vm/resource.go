@@ -82,7 +82,11 @@ func (vm *VM) closeResource(call builtin.ResourceCall) *object.Error {
 			// A closer that dies cannot be allowed to end the run: the body
 			// already finished, and its result is what the program asked for.
 			// The failure becomes a value so it can be reported alongside.
-			return vmErrorf("%s: the closer failed: %s", builtin.BuiltinNameWithResource, err)
+			// A value, like the task failure spawn produces, and stripped of
+			// the instruction pointer for the same reason. The position comes
+			// from decorateError further out and names the with_resource call,
+			// which is where a reader looking for the closer starts.
+			return vmErrorf("%s: the closer failed: %s", builtin.BuiltinNameWithResource, withoutInstructionMetadata(err))
 		}
 		return builtin.ErrorIn(vm.decorateError(result))
 	}

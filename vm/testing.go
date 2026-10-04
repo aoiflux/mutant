@@ -358,9 +358,9 @@ func testErrorFailure(err error) TestFailure {
 	var runtime *RuntimeError
 	if errors.As(err, &runtime) && len(runtime.Frames) > 0 {
 		innermost := runtime.Frames[0]
-		return TestFailure{File: innermost.File, Line: innermost.Line, Message: runtime.Err.Error()}
+		return TestFailure{File: innermost.File, Line: innermost.Line, Message: withoutInstructionMetadata(runtime.Err)}
 	}
-	return TestFailure{Message: err.Error()}
+	return TestFailure{Message: withoutInstructionMetadata(err)}
 }
 
 // mustNotCatch reports whether an error that ended a test must also end the run.

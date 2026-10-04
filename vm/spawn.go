@@ -109,6 +109,12 @@ func (vm *VM) hoSpawn(args []object.Object) (object.Object, error) {
 		// constants the parent and any sibling task are still reading.
 		worker := vm.newWorkerVMWithGlobals(globals)
 		result, failure = worker.CallClosureSync(task, callArgs)
+
+		// task_wait hands this to the waiting program as a value, so it must
+		// not name the instruction that failed: that number changes with the
+		// mutation level, and the program would print a different line at each
+		// one. scriptFacingMessage explains the trade and what replaces it.
+		failure = scriptFacingError(failure)
 	}()
 
 	return vmPair(&object.Integer{Value: handle}, nil), nil

@@ -1534,11 +1534,33 @@ func runtimeOpcodeName(op code.Opcode) string {
 	return fmt.Sprintf("opcode_%d", op)
 }
 
+// instructionError is a failure named by where in the bytecode it happened.
+//
+// The instruction pointer and the opcode are fields now as well as text. As
+// text they are what a crash report needs, and an error that ends the run
+// still carries them exactly as it did. As fields they can be left back out,
+// which is what a failure on its way to becoming a value the program holds
+// needs: mutation rewrites the instruction stream, so both numbers describe
+// the build rather than the program. See scriptFacingMessage.
+type instructionError struct {
+	IP  int
+	Op  code.Opcode
+	Err error
+}
+
+func (e *instructionError) Error() string {
+	return fmt.Sprintf("vm_runtime_error ip=%d op=%s: %s", e.IP, runtimeOpcodeName(e.Op), e.Err)
+}
+
+// Unwrap keeps errors.Is and errors.As answering about the cause, which is
+// what the %w this replaced did.
+func (e *instructionError) Unwrap() error { return e.Err }
+
 func (vm *VM) runtimeErrorAt(ip int, op code.Opcode, err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("vm_runtime_error ip=%d op=%s: %w", ip, runtimeOpcodeName(op), err)
+	return &instructionError{IP: ip, Op: op, Err: err}
 }
 
 func (vm *VM) runtimeErrorfAt(ip int, op code.Opcode, format string, args ...interface{}) error {
@@ -2424,27 +2446,47 @@ func (vm *VM) execCall(numArgs int) error {
 		return fmt.Errorf("call with %d arguments reaches outside the stack (sp=%d)", numArgs, vm.stackPointer)
 	}
 
+	// What stood here fell back to vm.stack[0] whenever the slot held anything
+	// that was not callable, so calling a non-function did not fail: it called
+	// whatever sat at the bottom of the stack, which is usually the function
+	// currently running or the first builtin the top-level statement pushed. A
+	// dispatch table with no entry for the value it was keyed on therefore
+	// re-invoked its own caller and handed back that result, with nothing
+	// reported anywhere. When that result was the caller itself the program did
+	// not merely answer wrongly -- it recursed until something stopped it, and
+	// the frame-integrity probe walks every active frame, so what stopped it
+	// was the clock. Only when stack[0] happened not to be callable either did
+	// the program get the refusal it should always have had. (M26-VM-003)
+	//
+	// The callee is read raw, and the raw slot is what gets called. A callable
+	// is never stored encrypted -- EncryptObject has no arm for a closure or a
+	// builtin -- and this switch is the same test the fallback's own condition
+	// made, so a working call pays nothing here and callClosure still receives
+	// the closure that is on the stack. Decrypting first would not: the
+	// CLOSURE_OBJ arm of DecryptObject rebuilds the closure around a fresh Free
+	// slice, which is both a copy per call and a second decryption of every
+	// free variable that OpGetFree decrypts again where it reads it.
+	switch callee := vm.stack[calleeIndex].(type) {
+	case *object.Closure:
+		return vm.callClosure(callee, numArgs)
+	case *builtin.BuiltIn:
+		return vm.callBuiltin(callee, numArgs)
+	}
+
+	// Not callable, so the only thing left to do is say what it was.
+	//
 	// A slot below the stack pointer can still be nil: callClosure raises the
 	// pointer over a frame's locals without writing them.
-	var callee object.Object
-	if at := vm.stack[calleeIndex]; at != nil && (at.Type() == object.CLOSURE_OBJ || at.Type() == object.BUILTIN_OBJ) {
-		callee = at
-	} else if len(vm.stack) > 0 {
-		callee = vm.stack[0]
-	}
-	if callee == nil {
-		return fmt.Errorf("calling non-function and non-built-in")
+	at := vm.stack[calleeIndex]
+	if at == nil {
+		return fmt.Errorf("calling non-function and non-built-in: the callee slot holds nothing")
 	}
 
-	switch calleeType := callee.(type) {
-	case *object.Closure:
-		return vm.callClosure(calleeType, numArgs)
-	case *builtin.BuiltIn:
-		return vm.callBuiltin(calleeType, numArgs)
-
-	default:
-		return fmt.Errorf("calling non-function and non-built-in")
-	}
+	// Decrypted here and nowhere else. A scalar on the stack is stored
+	// encrypted, so the raw slot reports ENCRYPTED where the author wrote an
+	// integer, and naming the stack's word instead of the program's would make
+	// the message useless to the person who has to fix the call.
+	return fmt.Errorf("calling non-function and non-built-in: %s", vm.decryptForUse(at).Type())
 }
 
 func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
