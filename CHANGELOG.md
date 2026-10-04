@@ -565,6 +565,20 @@ exhaustive lists.
   and not the role: graphene v0.9.0 keeps no role on a commit, and Mutant passes
   it anyway so a graphene that does will record it.
 
+- **The editor says what a macro body may not do.** A new `macroSafety` lint
+  rule, a warning by default, reports a builtin a macro body calls that the
+  compiler refuses while expanding it -- one that reads or writes a file, reaches
+  the network, starts a process, draws entropy, reads the clock, decodes
+  cryptographic material, or answers from state something else set. It repeats
+  `builtin.MacroRefusal`, the sentence the expander itself prints, so the two
+  cannot come to say different things, and it names the spelling the author wrote:
+  `fs.write` for the dotted form, `fs_write` for the flat one. Nothing inside a
+  `quote(...)` is reported, because that is the source the macro emits rather than
+  code the compiler runs -- and an `unquote(...)` inside one is, because that is
+  the compiler running again. Expansion stops at the first refusal, so a build
+  names one of them where the editor names them all.
+  `mutant.lint.rules.macroSafety.severity` sets it.
+
 ### Changed
 
 - **A bare `--password` is refused.** 2.5.0 warned on it and promised the next

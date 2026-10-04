@@ -68,6 +68,7 @@ type LintConfig struct {
 	FilteredLedgerHandle         LintSeverity
 	SecretOption                 LintSeverity
 	LifecycleState               LintSeverity
+	MacroSafety                  LintSeverity
 }
 
 func DefaultLintConfig() LintConfig {
@@ -196,6 +197,11 @@ func DefaultLintConfig() LintConfig {
 		// A state case_transition never moves a case to, whatever state the
 		// case is in, because another builtin makes that move or none does.
 		LifecycleState: LintSeverityWarning,
+		// A builtin a macro body calls that the expander refuses, which is a
+		// compile that fails rather than a program that does. Warning, to sit
+		// with the rest of the family: the build will not proceed, and the
+		// author may be part-way through writing the body.
+		MacroSafety: LintSeverityWarning,
 	}
 }
 
@@ -264,6 +270,8 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 		severityName = c.SecretOption
 	case "lifecycleState":
 		severityName = c.LifecycleState
+	case "macroSafety":
+		severityName = c.MacroSafety
 	default:
 		return nil, false
 	}
@@ -346,6 +354,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	diagnostics = append(diagnostics, lintFilteredLedgerHandle(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintSecretOption(snapshot, lintConfig)...)
 	diagnostics = append(diagnostics, lintLifecycleState(snapshot, lintConfig)...)
+	diagnostics = append(diagnostics, lintMacroSafety(snapshot, lintConfig)...)
 
 	if len(diagnostics) == 0 {
 		return nil

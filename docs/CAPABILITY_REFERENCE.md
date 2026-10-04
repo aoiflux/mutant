@@ -950,7 +950,7 @@ Unix log artifacts: RFC 5424 / RFC 3164 syslog parsing.
 
 ## Browser Artifacts (5)
 
-Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite querying (forensically safe: originals are never modified).
+Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite querying. The query runs on a temp copy opened read-only which may attach no other database, so the original is never modified and no statement writes any file.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |

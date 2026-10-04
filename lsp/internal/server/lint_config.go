@@ -75,6 +75,7 @@ func applyLintConfig(config *analyzer.LintConfig, settings any) {
 	applyRuleSeverity(rulesMap, "filteredLedgerHandle", &config.FilteredLedgerHandle)
 	applyRuleSeverity(rulesMap, "secretOption", &config.SecretOption)
 	applyRuleSeverity(rulesMap, "lifecycleState", &config.LifecycleState)
+	applyRuleSeverity(rulesMap, "macroSafety", &config.MacroSafety)
 }
 
 // parseStrictFormatting reads `mutant.strictFormatting`, defaulting to true.

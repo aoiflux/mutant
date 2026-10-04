@@ -84,7 +84,7 @@ It writes somewhere other than the evidence. That is the bar.
 
 | Site | What it writes | Why |
 | --- | --- | --- |
-| `withSQLiteCopy` / `copyFileContents` | `os.MkdirTemp`, `os.Create`, `os.RemoveAll` | This one is the policy in action rather than an exception to it. SQLite wants to write a journal beside any database it opens, so an evidence database is **copied** into a temp directory and queried there — which is exactly why the original is never opened by something that would modify it. |
+| `withSQLiteCopy` / `copyFileContents` | `os.MkdirTemp`, `os.Create`, `os.RemoveAll` | This one is the policy in action rather than an exception to it. SQLite wants to write a journal beside any database it opens, so an evidence database is **copied** into a temp directory and queried there. The copy is not on its own what keeps the original safe, and M26-DAT-001 is why: the copy is opened read-only and the connection may attach no database at all, so ATTACH and VACUUM INTO are refused and no statement reaches a file other than the copy. |
 
 It is recorded in
 [`policy.EvidenceWriteAllowlist`](../policy/evidence_policy.go) with an exact

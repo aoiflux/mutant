@@ -57,6 +57,15 @@
   retention and erasure -- with no change here, because the grammar and the
   hover cards are both generated from the registry.
 
+- **A new diagnostic: `macroSafety`.** A macro body runs while the compiler runs,
+  where a builtin that reads or writes a file, reaches the network, starts a
+  process, draws entropy, reads the clock or decodes cryptographic material is
+  refused. The editor now says so at the line, in the expander's own words,
+  instead of leaving a clean file and a build that fails with nothing to click.
+  Nothing inside a `quote(...)` is reported, since that is the source the macro
+  emits; an `unquote(...)` inside one is. A warning by default, set by
+  `mutant.lint.rules.macroSafety.severity`.
+
 ## 0.2.0
 
 New this release:

@@ -729,6 +729,9 @@ the macro carries is one of the main reasons to have macros. This applies to the
 namespaced spelling as well, because `fs.write` and `fs_write` are the same
 builtin. Nothing inside a `quote` is affected: that is source being
 captured, not code being run, and only an `unquote` inside it is evaluated.
+The editor reports the same call at the line it is on, in the same words, so the
+refusal does not have to wait for a build -- and expansion stops at the first
+one, so a build names one refusal where the editor names them all.
 
 **Declaration and scope.** Macros are collected from top-level statements only,
 and their declarations are removed from the program before compilation. A macro
@@ -2865,6 +2868,14 @@ passphrase, so the editor says so at the line, in the run time's own words:
 The lists they read are the run time's, exported by the builtin package and held
 to its code by tests, so the editor cannot warn about a call the run time
 accepts.
+
+One more is about *when* code runs rather than what it does. A macro body is
+evaluated while the compiler is running, where a builtin that touches a file, the
+network, a process, the clock or cryptographic material is refused; `macroSafety`
+reports such a call inside a macro body, in the expander's own words. It says
+nothing inside `quote(...)`, which is the program being written rather than the
+compiler running, and it does report an `unquote(...)` inside one, which is the
+compiler running again.
 
 ## Maintenance
 

@@ -228,7 +228,7 @@ var categorySections = []categorySection{
 	{
 		category: "browser artifacts",
 		heading:  "Browser Artifacts",
-		blurb:    "Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite querying (forensically safe: originals are never modified).",
+		blurb:    "Chromium/Firefox history, cookies, and downloads, plus generic read-only SQLite querying. The query runs on a temp copy opened read-only which may attach no other database, so the original is never modified and no statement writes any file.",
 	},
 	{
 		category: "forensic timeline",

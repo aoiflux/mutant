@@ -170,6 +170,24 @@ func visitExpressions(node mast.Node, visit func(mast.Expression)) {
 // bindings needs enterFunctions=false: a nested body has different bindings, so
 // it has to be walked separately rather than as part of this one.
 func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expression)) {
+	walkExpressionsFiltered(node, enterFunctions, nil, visit)
+}
+
+// walkExpressionsFiltered is walkExpressions with a gate on the descent: when
+// descend is not nil and answers false for an expression, that expression is
+// visited and its children are not.
+//
+// It exists for a caller whose subtree means something other than the code
+// around it. macroSafety needs it for `quote(...)`, which holds source the macro
+// emits rather than code the compiler runs, and has to walk that subtree under a
+// different rule instead of skipping it -- an `unquote(...)` anywhere inside puts
+// its argument back. A nil descend is the behaviour every other caller has.
+func walkExpressionsFiltered(
+	node mast.Node,
+	enterFunctions bool,
+	descend func(mast.Expression) bool,
+	visit func(mast.Expression),
+) {
 	var walkStatement func(mast.Statement)
 	var walkExpression func(mast.Expression)
 
@@ -178,6 +196,9 @@ func walkExpressions(node mast.Node, enterFunctions bool, visit func(mast.Expres
 			return
 		}
 		visit(e)
+		if descend != nil && !descend(e) {
+			return
+		}
 
 		switch n := e.(type) {
 		case *mast.CallExpression:

@@ -140,6 +140,15 @@ time's own words, from lists the run time exports and its tests hold to the code
   `concluded`, `retained` or `registered` -- naming the builtin that makes the
   move
 
+One is about when code runs rather than what it does.
+
+- `mutant.lint.rules.macroSafety.severity`: severity for a builtin a macro body
+  calls that the compiler refuses while expanding it -- one that reads or writes
+  a file, reaches the network, starts a process, draws entropy, reads the clock
+  or decodes cryptographic material -- in the expander's own words. Nothing
+  inside `quote(...)` is reported, since that is the source the macro emits; an
+  `unquote(...)` inside it is
+
 - `mutant.strictFormatting`: master on/off switch for canonical formatting
   (`true` by default)
 - `mutant.format.onType.enabled`: opt-in on-type formatting while typing

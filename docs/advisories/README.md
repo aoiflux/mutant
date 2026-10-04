@@ -40,7 +40,7 @@ published version.
 | MVF-2026-0004                     | S2  | none released     | 2.6.0           | An audit entry with no sequence number ended the walk as though intact        |
 | MVF-2026-0005                     | S2  | all through 2.5.0 | 2.5.1 and 2.6.0 | Two strings sharing one 64-bit digest were one hash entry                     |
 | MVF-2026-0006                     | S2  | none released     | 2.6.0           | A relabelled disclosure package verified against the genuine root             |
-| MVF-2026-0007                     | S1  | 2.3.0 – 2.5.0     | 2.5.1 and 2.6.0 | A SQL query the documentation called read-only could modify evidence          |
+| [MVF-2026-0007](MVF-2026-0007.md) | S1  | 2.3.0 – 2.5.0     | 2.5.1 and 2.6.0 | A SQL query the documentation called read-only could modify evidence          |
 | MVF-2026-0008                     | S2  | none released     | 2.6.0           | A classified buffer put in a report table was rendered to hex and written out |
 | MVF-2026-0009                     | S3  | 2.1.0 – 2.5.0     | 2.5.1 and 2.6.0 | An inherited environment variable chose the signing key and the trust anchor  |
 | MVF-2026-0010                     | S3  | extension only    | 2.6.0           | The editor extension's release task passed the password in the argument list  |
@@ -48,10 +48,57 @@ published version.
 
 Until an advisory has its own page, its account is the entry in the Security
 section of [CHANGELOG.md](../../CHANGELOG.md), which names the identifier and
-the internal row. MVF-2026-0005, MVF-2026-0007 and MVF-2026-0009 reached a
-published release and are owed a page of their own before 2.6.0 ships; the
-rest concern code that no released version contained, so there is no version
-to tell an operator to upgrade from.
+the internal row. MVF-2026-0005 and MVF-2026-0009 reached a published
+release and are owed a page of their own before 2.6.0 ships. Six others --
+MVF-2026-0002, -0003, -0004, -0006, -0008 and -0011 -- concern code that no
+released version contained, so there is no version to tell an operator to
+upgrade from and the changelog entry is the whole account. MVF-2026-0010 is
+neither: it concerns the editor extension, which versions its own releases
+separately from the language.
+
+## Severity vectors
+
+Every identifier carries both a CVSS:3.1 and a CVSS:4.0 base vector, including
+the ones with no page of their own. **These are this project's own assessment,
+not a numbering authority's.** Mutant's S1-S5 scale, which `SECURITY.md`
+defines, is what the project actually triages by; the vectors are here so a
+reader who works in CVSS can compare these issues with others, and so they can
+be argued with rather than guessed at.
+
+| Identifier                        | Row          | CVSS:3.1                                       | CVSS:4.0                                                          |
+| --------------------------------- | ------------ | ---------------------------------------------- | ----------------------------------------------------------------- |
+| [MVF-2026-0001](MVF-2026-0001.md) | M26-EVL-012  | `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` | `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N` |
+| MVF-2026-0002                     | M26-CUS-001  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0003                     | M26-CUS-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0004                     | M26-CUS-006  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0005                     | M26-EVL-003  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0006                     | M26-REC-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:P/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0007](MVF-2026-0007.md) | M26-DAT-001  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:H/A:H` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:L/VI:H/VA:H/SC:N/SI:N/SA:N` |
+| MVF-2026-0008                     | M26-DAT-002  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0009                     | M26-DOC3-001 | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0010                     | M26-LSP-017  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
+| MVF-2026-0011                     | M26-CUS-021  | `CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N` | `CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N` |
+
+Three things to know before reading a row.
+
+**4.0 is not a re-encoding of 3.1 and the two disagree on purpose in places.**
+4.0 splits 3.1's Attack Complexity into AC, how hard the attack is, and AT, what
+has to already be true. MVF-2026-0011 is the clear case: it needs a ledger that
+an older build had already redacted, which is a precondition and not difficulty,
+so its 3.1 is `AC:H` and its 4.0 is `AC:L/AT:P`. 4.0 also replaces
+`UI:N`/`UI:R` with none, Passive and Active, which splits "the victim is using
+the tool normally" from "the victim has to run this particular thing".
+
+**MVF-2026-0001's 3.1 vector is the one published with its advisory and is
+unchanged here, `UI:N` included.** Compiling is an action the victim takes, so
+3.1 would normally score `UI:R`, and its 4.0 vector accordingly says `UI:A`.
+A published vector is not quietly rewritten; the disagreement is recorded here
+instead.
+
+**Subsequent-system metrics are `N` throughout.** What several of these damage
+-- the evidence, the audit log, the case record -- is the vulnerable system's
+own data in 4.0's terms rather than a separate system downstream of it. Scoring
+it as subsequent impact as well would count it twice.
 
 ## Not assigned an identifier
 

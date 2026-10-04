@@ -624,6 +624,18 @@
                         "off"
                     ],
                     "description": "Severity for lifecycle-state diagnostics: warns when case_transition is asked for a state it never moves a case to — in_review, concluded, retained or registered — which it refuses whatever state the case is in. The message names the builtin that makes that move: review_request, review_decide or retention_set. A word that is not a state at all is reported by builtinArgChoice. Set to 'off' to suppress the rule."
+                },
+                "mutant.lint.rules.macroSafety.severity": {
+                    "type": "string",
+                    "default": "warning",
+                    "enum": [
+                        "error",
+                        "warning",
+                        "information",
+                        "hint",
+                        "off"
+                    ],
+                    "description": "Severity for macro-safety diagnostics: warns when a macro body calls a builtin the compiler refuses while it is expanding — one that reads or writes a file, reaches the network, starts a process, draws entropy, reads the clock, decodes cryptographic material, or answers from state something else set. The message is the expander's own sentence and says which of those the builtin does. Nothing inside quote(...) is reported, because that is the source the macro emits rather than code the compiler runs; an unquote(...) inside it is. Set to 'off' to suppress the rule."
                 }
             }
         },
