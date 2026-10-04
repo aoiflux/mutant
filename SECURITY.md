@@ -36,6 +36,47 @@ A useful report contains:
 Reporters are credited in the advisory and in [CHANGELOG.md](CHANGELOG.md)
 unless you ask not to be.
 
+## Advisory identifiers
+
+This project is not a CVE Numbering Authority and cannot assign a CVE. A
+confirmed vulnerability is published under an identifier in Mutant's own
+namespace -- **MVF-2026-0001**, for _Mutant Vulnerabilities & Fixtures_, the
+year it was assigned and a four-digit serial -- and listed in
+[docs/advisories/](docs/advisories/README.md).
+
+An MVF never replaces an identifier somebody else assigned. A CVE or a GitHub
+advisory for the same issue is recorded beside it, and a vulnerability in a
+dependency keeps that project's identifier.
+
+**What gets one.** All four of:
+
+1. It breaks a promise listed under "In scope" below.
+2. It has been reproduced. An unreproduced report is triaged, not numbered.
+3. It is reachable in a published release, or on a path a release would reach.
+   Code fixed before it ever shipped is a changelog entry.
+4. It has a **fixture**: the test, in this repository, that fails on the
+   unfixed code and passes on the fixed code. That is the second half of the
+   name. An advisory whose fix has nothing holding it in place is not
+   finished, and `go test ./cmd/gendocs/` fails when a published advisory
+   names a test the tree does not have.
+
+Hardening with no demonstrated impact does not get one, and neither does a fix
+whose only effect is to make a refusal arrive in the documented order.
+Numbering those would turn the namespace into a synonym for "changed something
+under security".
+
+**When it is assigned.** When the advisory is written, which is when the fix is
+ready to publish -- not when the report arrives. So the serials are in neither
+severity order nor discovery order, they are allocated one at a time, and they
+are never reused or renumbered. Gaps carry no information, and the number of
+issues still unfixed cannot be read off the register.
+
+**Severity** is this project's own S1-S5 scale, used to order triage. S1 is
+reserved for a silent break of an evidence or confidentiality promise: one
+where the operator is given no reason to doubt a result that is wrong. No CVSS
+vector is published, because a single vector for a tool an examiner runs by
+hand over evidence they chose would be an invented precision.
+
 ## Supported versions
 
 Security fixes land on the latest released minor version. There are no
@@ -75,6 +116,13 @@ Anything that breaks a promise the toolchain makes to the person running it:
   write outside the directory the operator named.
 - **The language server.** `mlsp` parses untrusted source from an editor;
   anything that turns opening a file into code execution is in scope.
+- **Compiling, as against running.** Compiling a program is expected to
+  inspect it, not to run it -- and `mutant gen`, `mutant test`, a debug
+  launch and a plain `mutant program.mut` all compile before anything runs.
+  Anything that makes compilation perform input or output is in scope, even
+  where running the same program would have been allowed to do it, and
+  whether it is the named file or a module it imports that does it. See
+  [MVF-2026-0001](docs/advisories/MVF-2026-0001.md).
 - **Supply chain.** A compromised or unexpected dependency, a released binary
   whose hash does not match its provenance, or a build script that fetches code
   at build time.
@@ -103,7 +151,9 @@ process memory, enumerates handles, scans remote hosts and parses raw disks
 because that is the job. A `.mut` script using those builtins is the tool
 working. Running an untrusted `.mut` file is equivalent to running an untrusted
 executable, and the toolchain does not currently claim otherwise. *Capability
-configuration is under design; no interface is specified.*
+configuration is under design; no interface is specified.* This is about
+running one: **compiling** an untrusted program is a separate promise, it is
+in scope above, and the difference is the whole of MVF-2026-0001.
 
 **Weaker modes behaving weakly.** `--compat` and `--dev` deliberately downgrade
 verification and tamper response so that debugging and analysis are possible.

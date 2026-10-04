@@ -30,6 +30,16 @@ var historyDocs = map[string]bool{
 	"mutant-vscode-extension/CHANGELOG.md": true,
 }
 
+// isHistoryDoc reports whether a document's job is to record what used to be
+// true. A published advisory's is: it describes the code before the fix, cites
+// the lines it stood at then, and names flags and builtins that may since have
+// been retired. Holding one to today's tree would mean rewriting the record of
+// a vulnerability every time the code moved, which is the opposite of what it
+// is for. Links are still checked, in every document.
+func isHistoryDoc(rel string) bool {
+	return historyDocs[rel] || strings.HasPrefix(rel, "docs/advisories/")
+}
+
 var (
 	inlineCode   = regexp.MustCompile("`([^`\n]+)`")
 	builtinCall  = regexp.MustCompile(`^([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\(`)
@@ -83,7 +93,7 @@ func TestDocumentedBuiltinsExist(t *testing.T) {
 	}
 	checked := 0
 	for _, file := range markdownFiles(t) {
-		if historyDocs[file] {
+		if isHistoryDoc(file) {
 			continue
 		}
 		for _, line := range proseLines(t, file) {
@@ -201,7 +211,7 @@ func TestDocumentedCommandLinesExist(t *testing.T) {
 		}
 	}
 	for _, file := range markdownFiles(t) {
-		if historyDocs[file] {
+		if isHistoryDoc(file) {
 			continue
 		}
 		for _, f := range fences(t, file) {
@@ -355,7 +365,7 @@ func TestCitedPathsExist(t *testing.T) {
 	top, ignored, committable := topLevel(t), ignoredTopLevel(t), committableFiles(t)
 	checked := 0
 	for _, file := range markdownFiles(t) {
-		if historyDocs[file] {
+		if isHistoryDoc(file) {
 			continue
 		}
 		dir := filepath.ToSlash(filepath.Dir(file))

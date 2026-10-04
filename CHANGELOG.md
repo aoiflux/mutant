@@ -1033,7 +1033,10 @@ exhaustive lists.
   release binary compiles the standard library in, so the move matters to
   anyone who runs a released `mutant`, and anyone building from source needs
   go1.26.6 or newer. `go test ./policy/` refuses a `go.mod` that goes back
-  below either version.
+  below either version. These are upstream defects that already carry
+  upstream identifiers, which `govulncheck` names; this project does not
+  rename other people's vulnerabilities, so there is no MVF for them.
+  (M26-RUN-003)
 
 - **`sqlite_query` and `sqlite_query_bytes` could modify the evidence they
   read.** Both copy the database first and promised the original is never
@@ -1045,7 +1048,7 @@ exhaustive lists.
   script named. The copy is now opened read-only and may attach nothing, so
   `ATTACH` and `VACUUM INTO` are refused with a reason and no statement writes
   any file. Joining two databases takes two queries. The `browser_*` parsers
-  read through the same confined connection.
+  read through the same confined connection. (M26-DAT-001, MVF-2026-0007)
 
 - **`audit_verify` passed two kinds of doctored log.** A log with entries
   deleted from the front verified as intact, anchored and complete against the
@@ -1059,7 +1062,8 @@ exhaustive lists.
   every entry needs a positive, consecutive sequence number; `entries`,
   `dropped` and `chain_complete` are recomputed from the entries rather than
   copied from the document; and a break carries its position in the new
-  `broken_index`.
+  `broken_index`. (M26-CUS-005 and M26-CUS-006, MVF-2026-0003 and
+  MVF-2026-0004)
 
 - **A script could redact the disclosure ledger's own records.** The
   `ledger_redact_*` builtins checked the handle, the id and the reason but not
@@ -1072,7 +1076,7 @@ exhaustive lists.
   would take such an edge, is refused with the reason, and
   `ledger_redaction_impact` reports `protected` and `protected_reason` before
   anything is attempted. A disclosure record is corrected by appending a new
-  one, never by removing an old one.
+  one, never by removing an old one. (M26-CUS-001, MVF-2026-0002)
 
 - **`disclose_verify` verified a genuine package that had been relabelled or
   given another disclosure's grant.** Its ledger check proved the manifest's
@@ -1086,7 +1090,8 @@ exhaustive lists.
   descriptors root -- and names every disagreement; a package now takes eleven
   checks to verify. The result also gives `manifest_public_key` and
   `record_public_key`, because a signature means something only once its key is
-  compared with one the recipient already trusts.
+  compared with one the recipient already trusts. (M26-REC-005,
+  MVF-2026-0006)
 
 - **A refused disclosure was refused too late.** `disclose_to_passphrase`
   derived the grant's key material and asked the examiner to choose and
@@ -1095,7 +1100,10 @@ exhaustive lists.
   reclassified. The refusal still came and nothing was issued, but
   DISCLOSURE_POLICY promises the withdrawal is checked before any new key is
   issued. Both refusals now come first, and are asked again inside the ledger
-  write for a withdrawal recorded in between.
+  write for a withdrawal recorded in between. The refusal always came and
+  nothing was ever issued, so what broke was the documented order rather
+  than a security property: this is a conformance fix and carries no MVF.
+  (M26-REC-001)
 
 - **Two different strings could be one hash key.** A string or buffer used as
   a hash key was identified by its 64-bit FNV digest alone, and lookups never
@@ -1104,13 +1112,14 @@ exhaustive lists.
   and a lookup of either returned the other's value. Hash keys chosen from
   evidence, such as file or account names, could be merged that way on purpose.
   A string key is now the whole string, and a buffer key its SHA-256.
+  (M26-EVL-003, MVF-2026-0005)
 
 - **A classified buffer put in a report table was written out whole.**
   `report_table` and `report_list` render each cell to text as it is added --
   a buffer as its hex -- so by the time the report reached `report_render` or
   `report_write`, both of which refuse classified plaintext, there was no
   marked buffer left for them to find. Both builders now refuse one where it
-  goes in, and the editor warns at the call.
+  goes in, and the editor warns at the call. (M26-DAT-002, MVF-2026-0008)
 
 - **`HOME` or `USERPROFILE` chose the signing key, and the key `--signer-auth`
   trusts.** The local keystore -- the key pair that signs every `.mu` artifact,
@@ -1128,7 +1137,7 @@ exhaustive lists.
   the account's own home. The policy guard now also catches `os.UserHomeDir` and
   the other standard-library calls that read the environment inside themselves,
   and CONFIGURATION_POLICY lists every variable the Go runtime and Mutant's
-  libraries still read.
+  libraries still read. (M26-DOC3-001, MVF-2026-0009)
 
 - **A ledger redacted by an older build could have lost a withdrawal without a
   trace.** The redaction builtins refuse every record of the disclosure schema,
@@ -1144,7 +1153,7 @@ exhaustive lists.
   records that an examiner has answered for it. A withdrawal is now also found by
   the record and the recipient it names, so one whose disclosure was removed
   still stops a new grant. No released version is affected: the ledger family is
-  new in 2.6.0.
+  new in 2.6.0. (M26-CUS-021, MVF-2026-0011)
 
 - **A macro body ran whatever it liked, while the compiler was running.**
   A macro is expanded before any code is generated, and expansion evaluated its body
@@ -1173,7 +1182,16 @@ exhaustive lists.
   expanded it. The language server never expanded macros, so opening or saving a file
   ran nothing. One thing changes for programs that worked before: a macro body that
   called a builtin outside the macro-safe list is now a compile error that names the
-  builtin and says why (M26-EVL-012).
+  builtin and says why. (M26-EVL-012, MVF-2026-0001)
+
+- **The editor extension's release task put the password in the argument
+  list.** The packaged task that builds a signed artifact passed it with
+  `--password`, so for as long as the build ran the password could be read
+  from the process list by anything running as the same user. The task now
+  sets its `password` field, which reaches the binary the way the example
+  sweep does, and a bare `--password` is refused outright -- see Changed.
+  Nothing reached the disk or a log; the exposure was the argument list, for
+  the life of the build. (M26-LSP-017, MVF-2026-0010)
 
 ## [2.5.0] — 2026-09-17
 
