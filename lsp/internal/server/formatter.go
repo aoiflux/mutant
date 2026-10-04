@@ -1,11 +1,13 @@
 package server
 
 import (
+	"math"
 	"sort"
 	"strings"
 
 	mast "mutant/ast"
 	"mutant/lsp/internal/analyzer"
+	"mutant/parser"
 	"mutant/token"
 )
 
@@ -240,11 +242,60 @@ func (p *printer) returnValues(node *mast.ReturnStatement, level int) string {
 	return " " + p.expression(node.ReturnValue, level)
 }
 
+// expression prints expr with the brackets its author wrote around it, and no
+// others. The parser keeps no node for a pair of brackets -- precedence is
+// already in the tree's shape -- so which ones were written comes from the
+// program's side table. The formatter used to bracket every operator
+// expression, which turned `putf("a=" + b + "\n")` into
+// `putf((("a=" + b) + "\n"))`.
 func (p *printer) expression(expr mast.Expression, level int) string {
 	if expr == nil {
 		return ""
 	}
+	text := p.bareExpression(expr, level)
+	if p.program.IsParenthesized(expr) {
+		return "(" + text + ")"
+	}
+	return text
+}
 
+// operand prints an operator's operand. Brackets the author wrote come with it;
+// beyond those it is bracketed only if the tree says it must be, which a
+// parsed program never needs, since its source already had them. A tree built
+// without the side table -- by a test, or by hand -- still prints as source
+// that parses back to the same tree.
+func (p *printer) operand(expr mast.Expression, parent int, right bool, level int) string {
+	text := p.expression(expr, level)
+	if p.program.IsParenthesized(expr) {
+		return text
+	}
+	own := bindingOf(expr)
+	// Every infix operator is left-associative, so an operand of the same
+	// precedence needs brackets on the right only: a - (b - c).
+	if own < parent || (right && own == parent) {
+		return "(" + text + ")"
+	}
+	return text
+}
+
+// bindingOf is how tightly expr holds together as an operand. Only an operator
+// with an operand on its right can be pulled apart by a tighter neighbour;
+// calls, indexes, fields and literals are complete as they stand.
+func bindingOf(expr mast.Expression) int {
+	switch node := expr.(type) {
+	case *mast.InfixExpression:
+		return parser.Precedence(node.Token.Type)
+	case *mast.PrefixExpression:
+		return parser.PREFIX
+	case *mast.AssignExpression:
+		if node.Postfix == "" {
+			return parser.ASSIGNMENT
+		}
+	}
+	return math.MaxInt
+}
+
+func (p *printer) bareExpression(expr mast.Expression, level int) string {
 	switch node := expr.(type) {
 	case *mast.Identifier:
 		return node.Value
@@ -270,21 +321,27 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 		}
 		return node.String()
 	case *mast.PrefixExpression:
-		// Mutant's canonical form parenthesises every operator expression, so
-		// precedence is always explicit in the printed text.
-		return "(" + node.Operator + p.expression(node.Right, level) + ")"
+		// Not right-hand in operand's sense: a prefix operator applies to
+		// whatever follows it, so `!-a` needs no brackets.
+		operand := p.operand(node.Right, parser.PREFIX, false, level)
+		// `- -a` keeps its space: without it the two signs lex as `--`.
+		if node.Operator == "-" && strings.HasPrefix(operand, "-") {
+			return node.Operator + " " + operand
+		}
+		return node.Operator + operand
 	case *mast.InfixExpression:
-		return "(" + p.expression(node.Left, level) + " " + node.Operator + " " + p.expression(node.Right, level) + ")"
+		prec := parser.Precedence(node.Token.Type)
+		return p.operand(node.Left, prec, false, level) + " " + node.Operator + " " + p.operand(node.Right, prec, true, level)
 	case *mast.AssignExpression:
 		if node.Postfix != "" {
-			return p.expression(node.Left, level) + node.Postfix
+			return p.operand(node.Left, parser.CALL, false, level) + node.Postfix
 		}
 		if node.Operator != "" {
 			return p.expression(node.Left, level) + " " + node.Operator + "= " + p.expression(node.Value, level)
 		}
 		return p.expression(node.Left, level) + " = " + p.expression(node.Value, level)
 	case *mast.CallExpression:
-		return p.expression(node.Function, level) + "(" + p.expressionList(node.Arguments, level) + ")"
+		return p.operand(node.Function, parser.CALL, false, level) + "(" + p.expressionList(node.Arguments, level) + ")"
 	case *mast.FunctionLiteral:
 		return "fn(" + joinIdents(node.Parameters, ", ") + ") " + p.block(node.Body, level)
 	case *mast.MacroLiteral:
@@ -300,9 +357,9 @@ func (p *printer) expression(expr mast.Expression, level int) string {
 	case *mast.ArrayLiteral:
 		return "[" + p.expressionList(node.Elements, level) + "]"
 	case *mast.IndexExpression:
-		return p.expression(node.Left, level) + "[" + p.expression(node.Index, level) + "]"
+		return p.operand(node.Left, parser.INDEX, false, level) + "[" + p.expression(node.Index, level) + "]"
 	case *mast.FieldExpression:
-		return p.expression(node.Left, level) + "." + identValue(node.Field)
+		return p.operand(node.Left, parser.FIELD, false, level) + "." + identValue(node.Field)
 	case *mast.StructLiteral:
 		return p.structLiteral(node, level)
 	case *mast.HashLiteral:
@@ -365,11 +422,11 @@ func (p *printer) matchArm(arm *mast.MatchArm, level int) string {
 
 // matchPattern prints one pattern, which is not quite printing an expression.
 //
-// The canonical form parenthesises every operator expression so precedence is
-// explicit, and a negated number is one -- but a pattern has no precedence to
-// make explicit, and the pattern grammar admits a literal, a dotted path and a
-// leading `-`, nothing else. Printing `(-1)` would emit source the parser then
-// rejects, which is the one thing a formatter must never do.
+// A negated number is an operator expression, and the pattern grammar admits a
+// literal, a dotted path and a leading `-`, nothing else. A pattern is therefore
+// never bracketed, whatever a printer might decide for an expression: `(-1)`
+// would be source the parser rejects, which is the one thing a formatter must
+// never emit.
 func (p *printer) matchPattern(pattern mast.Expression, level int) string {
 	if prefix, ok := pattern.(*mast.PrefixExpression); ok && prefix != nil {
 		return prefix.Operator + p.matchPattern(prefix.Right, level)
@@ -455,12 +512,15 @@ func (p *printer) hashLiteral(node *mast.HashLiteral, level int) string {
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
+// condition prints the brackets `if`, `while` and `match` require around their
+// condition. They belong to the statement, so they are always written, whatever
+// the condition looks like. The first and last characters are no guide: this
+// used to skip them for any text starting with '(' and ending with ')', and
+// `(fs + more)[0](true)` or `(-f)(1)` came out as source that does not parse
+// (M26-LSP-008). A pair the author wrote around the whole condition is theirs,
+// and is kept as a second pair.
 func (p *printer) condition(expr mast.Expression, level int) string {
-	formatted := p.expression(expr, level)
-	if strings.HasPrefix(formatted, "(") && strings.HasSuffix(formatted, ")") {
-		return formatted
-	}
-	return "(" + formatted + ")"
+	return "(" + p.expression(expr, level) + ")"
 }
 
 // block renders a brace-delimited body. The opening brace stays on the
@@ -537,8 +597,6 @@ func (p *printer) whileStatement(stmt *mast.WhileStatement, level int) string {
 		return "while () " + p.block(stmt.Body, level)
 	}
 
-	// condition() rather than expression(): an infix condition already prints
-	// its own parentheses, and wrapping it again gives `while ((i < 10))`.
 	return "while " + p.condition(stmt.Condition, level) + " " + p.block(stmt.Body, level)
 }
 

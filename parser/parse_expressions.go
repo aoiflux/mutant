@@ -106,6 +106,7 @@ func (p *Parser) parseGroupedExpression() ast.Expression {
 	if !p.expectPeek(token.RPAREN) {
 		return nil
 	}
+	p.markParenthesized(exp)
 	return exp
 }
 

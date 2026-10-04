@@ -118,6 +118,7 @@ type Parser struct {
 	typedErrors    []ParseError
 	recoverables   []RecoverableError
 	nodeRanges     map[ast.Node]ast.Range
+	parenthesized  map[ast.Node]bool
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
 
@@ -221,6 +222,11 @@ func (p *Parser) ParseProgram() *ast.Program {
 	if len(p.nodeRanges) > 0 {
 		program.NodePositions = p.nodeRanges
 	}
+	// Likewise the expressions written inside brackets, which only the
+	// formatter reads.
+	if len(p.parenthesized) > 0 {
+		program.Parenthesized = p.parenthesized
+	}
 
 	// The lexer has now been driven through EOF, so its comment trivia is
 	// complete and can be published for the formatter.
@@ -291,6 +297,19 @@ func (p *Parser) recordRange(n ast.Node, start token.Position) {
 		p.nodeRanges = make(map[ast.Node]ast.Range)
 	}
 	p.nodeRanges[n] = ast.Range{Start: start, End: p.curToken.End}
+}
+
+// markParenthesized notes that the author wrote n inside brackets. The tree
+// drops them, since precedence is already in its shape; the formatter needs
+// them to print back the brackets that were written, and no others.
+func (p *Parser) markParenthesized(n ast.Expression) {
+	if n == nil {
+		return
+	}
+	if p.parenthesized == nil {
+		p.parenthesized = make(map[ast.Node]bool)
+	}
+	p.parenthesized[n] = true
 }
 
 // appendError records both a legacy string error and a range-annotated
@@ -441,18 +460,22 @@ func (p *Parser) peekError(t token.TokenType) {
 	p.appendError(p.peekToken, msg)
 }
 
-func (p *Parser) peekPrecedence() int {
-	if prec, ok := precedences[p.peekToken.Type]; ok {
+// Precedence is how tightly an infix operator's token binds, or LOWEST for a
+// token that is not one. It is the parser's own table, so a printer deciding
+// where brackets are needed cannot disagree with how the source parses.
+func Precedence(t token.TokenType) int {
+	if prec, ok := precedences[t]; ok {
 		return prec
 	}
 	return LOWEST
 }
 
+func (p *Parser) peekPrecedence() int {
+	return Precedence(p.peekToken.Type)
+}
+
 func (p *Parser) curPrecedence() int {
-	if prec, ok := precedences[p.curToken.Type]; ok {
-		return prec
-	}
-	return LOWEST
+	return Precedence(p.curToken.Type)
 }
 
 func (p *Parser) registerPrefix(tokenType token.TokenType, fn prefixParseFn) {

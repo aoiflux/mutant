@@ -8,7 +8,7 @@ if (open_err) {
 }
 
 let handle = opened["handle"];
-putf("HFS opened: " + opened["path"] + " (handle=" + handle + ")");
+putf("HFS opened: %s (handle=%s)\n", opened["path"], handle);
 
 let items, list_err = hfs_list_files(handle, "/");
 if (list_err) {
@@ -16,17 +16,16 @@ if (list_err) {
     return;
 }
 
-putf("Root entries:");
+putf("Root entries:\n");
 for (let i = 0; i < len(items); i = i + 1) {
     let e = items[i];
-    putf("- ", e["path"], " (dir=", e["is_dir"], ", cnid=", e["cnid"], ")");
+    putf("- %s (dir=%t, cnid=%d)\n", e["path"], e["is_dir"], e["cnid"]);
 }
 
 let target = "/etc/hosts";
 let content, read_err = hfs_read_file(handle, target);
 if (!read_err) {
-    putf("File content from " + target + ":");
-    putf(content);
+    putf("File content from %s:\n%s\n", target, content);
 }
 
 let meta, meta_err = hfs_metadata(handle, target);
@@ -35,18 +34,18 @@ if (meta_err) {
     return;
 }
 
-putf("Metadata:");
-putf("  path=" + meta["path"]);
-putf("  name=" + meta["name"]);
-putf("  cnid=" + meta["cnid"]);
-putf("  kind=" + meta["kind"]);
-putf("  block_size=" + meta["block_size"]);
-putf("  total_blocks=" + meta["total_blocks"]);
-putf("  free_blocks=" + meta["free_blocks"]);
-putf("  file_count=" + meta["file_count"]);
-putf("  folder_count=" + meta["folder_count"]);
-putf("  is_dir=", meta["is_dir"]);
-putf("  size=" + meta["size"]);
+putf("Metadata:\n");
+putf("  path=%s\n", meta["path"]);
+putf("  name=%s\n", meta["name"]);
+putf("  cnid=%d\n", meta["cnid"]);
+putf("  kind=%s\n", meta["kind"]);
+putf("  block_size=%d\n", meta["block_size"]);
+putf("  total_blocks=%d\n", meta["total_blocks"]);
+putf("  free_blocks=%d\n", meta["free_blocks"]);
+putf("  file_count=%d\n", meta["file_count"]);
+putf("  folder_count=%d\n", meta["folder_count"]);
+putf("  is_dir=%t\n", meta["is_dir"]);
+putf("  size=%d\n", meta["size"]);
 
 let closed, close_err = hfs_close(handle);
 if (close_err) {
@@ -54,4 +53,4 @@ if (close_err) {
     return;
 }
 
-putf("Handle closed: " + closed["closed"]);
+putf("Handle closed: %t\n", closed["closed"]);

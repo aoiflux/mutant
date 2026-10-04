@@ -29,11 +29,10 @@ func TestFormatterWritesATrailingComma(t *testing.T) {
 	}
 }
 
-// TestFormatterPrintsNegativePatternsUnparenthesised is the one place the
-// canonical form has to give way. Every operator expression is parenthesised so
-// precedence is explicit, but a pattern has no precedence to make explicit and
-// the pattern grammar has no `(` in it -- so `(-1)` would be source the parser
-// then rejects, which is the one thing a formatter must never emit.
+// TestFormatterPrintsNegativePatternsUnparenthesised: a negated number is an
+// operator expression, but the pattern grammar has no `(` in it -- so `(-1)`
+// would be source the parser then rejects, which is the one thing a formatter
+// must never emit.
 func TestFormatterPrintsNegativePatternsUnparenthesised(t *testing.T) {
 	got := format(t, `match (n) { -1 => "neg", _ => "other" }`)
 	if !strings.Contains(got, `-1 => "neg",`) {

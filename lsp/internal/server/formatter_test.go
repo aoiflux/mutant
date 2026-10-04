@@ -83,7 +83,7 @@ func TestFormatterOmitsSemicolonAfterBraceTerminatedStatements(t *testing.T) {
 		{"if else", "if (x) { y; } else { z; }", "if (x) {\n    y;\n} else {\n    z;\n}\n"},
 		{"struct", "struct Point{x;y;}", "struct Point { x; y; }\n"},
 		{"enum", "enum Color{Red,Green}", "enum Color { Red, Green }\n"},
-		{"for", "for(let i=0;i<3;i=i+1){i;}", "for (let i = 0; (i < 3); i = (i + 1)) {\n    i;\n}\n"},
+		{"for", "for(let i=0;i<3;i=i+1){i;}", "for (let i = 0; i < 3; i = i + 1) {\n    i;\n}\n"},
 	}
 
 	for _, tt := range tests {
@@ -258,23 +258,110 @@ func TestFormatterHandlesEmptyAndWhitespaceOnlyInput(t *testing.T) {
 	}
 }
 
-func TestFormatterParenthesizesOperatorExpressions(t *testing.T) {
+// TestFormatterKeepsTheBracketsTheAuthorWrote pins the owner's decision of
+// 2026-09-29: the formatter keeps the brackets the author wrote and adds none.
+// It used to bracket every operator expression, which buried a plain string
+// concatenation under one pair per `+`.
+func TestFormatterKeepsTheBracketsTheAuthorWrote(t *testing.T) {
 	tests := []struct {
 		src  string
 		want string
 	}{
-		{"let x = a + b * c;", "let x = (a + (b * c));\n"},
-		{"let x = (a + b) * c;", "let x = ((a + b) * c);\n"},
-		{"let x = -a;", "let x = (-a);\n"},
-		{"let x = !flag;", "let x = (!flag);\n"},
-		// Redundant grouping parens are dropped by the parser, so the
-		// canonical form has exactly one pair per operator.
-		{"let x = ((a));", "let x = a;\n"},
+		{"let x = a + b * c;", "let x = a + b * c;\n"},
+		{"let x = (a + b) * c;", "let x = (a + b) * c;\n"},
+		// A pair that precedence does not need is the author's, and stays.
+		{"let x = a + (b * c);", "let x = a + (b * c);\n"},
+		{"let ok = (flags & MASK) == 0;", "let ok = (flags & MASK) == 0;\n"},
+		{"let ok = flags & MASK == 0;", "let ok = flags & MASK == 0;\n"},
+		{"let x = a - (b - c);", "let x = a - (b - c);\n"},
+		{"let x = a - b - c;", "let x = a - b - c;\n"},
+		{"let x = -a;", "let x = -a;\n"},
+		{"let x = !flag;", "let x = !flag;\n"},
+		{"let x = -(a + b);", "let x = -(a + b);\n"},
+		// Two minus signs stay apart: `--` is the decrement token.
+		{"let x = - -a;", "let x = - -a;\n"},
+		{"let x = -(-a);", "let x = -(-a);\n"},
+		// Two pairs around one expression are one grouping.
+		{"let x = ((a));", "let x = (a);\n"},
+		{`putf("a=" + b + "\n");`, "putf(\"a=\" + b + \"\\n\");\n"},
+		{`putf(("a=" + b));`, "putf((\"a=\" + b));\n"},
+		{"let y = (-f)(1);", "let y = (-f)(1);\n"},
+		{"let y = (a + b)[0];", "let y = (a + b)[0];\n"},
+		{"x += (a + b) * c;", "x += (a + b) * c;\n"},
 	}
 
 	for _, tt := range tests {
 		if got := format(t, tt.src); got != tt.want {
 			t.Errorf("format(%q) = %q, want %q", tt.src, got, tt.want)
+		}
+	}
+}
+
+// TestFormatterBracketsWhatATreeWithoutTheSideTableNeeds covers the operand
+// rules on their own. With the record of written brackets removed, the output
+// must still parse back to the same tree, so every pair precedence needs is
+// written -- and no other, which is why `(a - b) - (c - d)` loses one.
+func TestFormatterBracketsWhatATreeWithoutTheSideTableNeeds(t *testing.T) {
+	src := "let x = (a + b) * c;\n" +
+		"let y = -(a + b);\n" +
+		"let z = (a - b) - (c - d);\n" +
+		"let w = a - (b - c);\n" +
+		"let v = (-f)(1);\n" +
+		"let u = (a + b)[0];\n" +
+		"let t = (a || b) && !(c == d);\n" +
+		"let s = - -a;\n"
+	want := "let x = (a + b) * c;\n" +
+		"let y = -(a + b);\n" +
+		"let z = a - b - (c - d);\n" +
+		"let w = a - (b - c);\n" +
+		"let v = (-f)(1);\n" +
+		"let u = (a + b)[0];\n" +
+		"let t = (a || b) && !(c == d);\n" +
+		"let s = - -a;\n"
+
+	snapshot := analyzer.New().Analyze(src)
+	if len(snapshot.ParseErrors) > 0 || snapshot.Program == nil {
+		t.Fatalf("fixture did not parse: %v", snapshot.ParseErrors)
+	}
+	snapshot.Program.Parenthesized = nil
+	if got := formatSnapshotText(snapshot); got != want {
+		t.Errorf("formatted without the side table =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestFormatterWritesTheBracketsAConditionNeeds is M26-LSP-008's regression
+// test. The brackets around a condition belong to `if`, `while` and `match`,
+// and the formatter used to leave them out whenever the printed condition began
+// with '(' and ended with ')' -- which a call on a bracketed callee does too.
+func TestFormatterWritesTheBracketsAConditionNeeds(t *testing.T) {
+	tests := []struct {
+		src  string
+		want string // a line the output must contain
+	}{
+		{"let fs = [fn(x) { return x; }];\nlet more = [];\nif ((fs + more)[0](true)) { putln(1); }\n",
+			"if ((fs + more)[0](true)) {"},
+		{"let f = fn(x) { return x; };\nif ((-f)(1)) { putln(1); }\n", "if ((-f)(1)) {"},
+		{"let h = {\"a\": 1};\nmatch ((h)[\"a\"]) { 1 => putln(1), _ => putln(2) }\n", "match ((h)[\"a\"]) {"},
+		{"let a = 1;\nif (a + a > 1) { putln(1); }\n", "if (a + a > 1) {"},
+		{"let i = 0;\nwhile (i < 3) { i = i + 1; }\n", "while (i < 3) {"},
+	}
+
+	for _, tt := range tests {
+		got := format(t, tt.src)
+		if !strings.Contains(got, tt.want) {
+			t.Errorf("format(%q) = %q, want it to contain %q", tt.src, got, tt.want)
+		}
+		reparsed := analyzer.New().Analyze(got)
+		if len(reparsed.ParseErrors) > 0 || reparsed.Program == nil {
+			t.Errorf("format(%q) = %q, which does not parse: %v", tt.src, got, reparsed.ParseErrors)
+			continue
+		}
+		before := canonicalRendering(analyzer.New().Analyze(tt.src).Program.String())
+		if after := canonicalRendering(reparsed.Program.String()); after != before {
+			t.Errorf("format(%q) changed the tree\n%s", tt.src, firstDifference(before, after))
+		}
+		if again := formatSnapshotText(reparsed); again != got {
+			t.Errorf("formatting %q twice gave %q, then %q", tt.src, got, again)
 		}
 	}
 }

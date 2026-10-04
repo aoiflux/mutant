@@ -69,6 +69,13 @@ type Program struct {
 	// user wrote is not where the bug is -- so the definition site is kept
 	// here alongside it.
 	MacroExpansions map[Node]MacroOrigin
+
+	// Parenthesized records the expressions the author wrote inside brackets.
+	// The tree keeps no node for a pair of brackets, since precedence is
+	// already in its shape, so this fourth side table is the only record of
+	// the ones written for clarity. The formatter reads it to print back the
+	// brackets that were written, and no others.
+	Parenthesized map[Node]bool
 }
 
 // MacroOrigin locates a macro expansion at both of its sources: Call is the
@@ -101,6 +108,16 @@ func (p *Program) RangeOf(n Node) (Range, bool) {
 		return Range{}, false
 	}
 	return r, true
+}
+
+// IsParenthesized reports whether the author wrote n inside brackets. A node
+// inside two pairs, ((a + b)), is recorded once: the tree cannot tell two
+// pairs from one, and one pair is all the grouping means.
+func (p *Program) IsParenthesized(n Node) bool {
+	if p == nil || p.Parenthesized == nil || n == nil {
+		return false
+	}
+	return p.Parenthesized[n]
 }
 
 func (p *Program) TokenLiteral() string {

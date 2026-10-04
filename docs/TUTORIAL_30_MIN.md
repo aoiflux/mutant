@@ -438,11 +438,11 @@ argument types, the `let x, err =` mistake from
 builtins on an OS that does not support them.
 
 There is also `mutant fmt`, a canonical formatter in the gofmt tradition — one
-rendering per program, no options. Be aware before you run it on existing code:
-its canonical form **parenthesises every operator expression**, so
-`a + b * c` becomes `(a + (b * c))`, and it joins multi-line expressions back
-onto one line. Most of the bundled examples are not written that way. Use
-`--stdout` to see what it would do before letting it rewrite anything:
+rendering per program, no options. It keeps the brackets you wrote and adds
+none: `a + b * c` stays as it is, and so does `(a * b) + c`. Be aware before you
+run it on existing code: it joins multi-line expressions back onto one line,
+which most of the bundled examples do not do. Use `--stdout` to see what it
+would do before letting it rewrite anything:
 
 ```bash
 $ mutant fmt --stdout triage.mut

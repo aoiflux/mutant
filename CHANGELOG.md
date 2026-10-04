@@ -780,6 +780,14 @@ exhaustive lists.
   as format facts, and two remote-scan fields and two tamper-delay bounds that nothing read are
   gone. The names change no compiled instruction.
 
+- **`mutant fmt` and format-on-save keep the brackets you wrote, and add none.** The formatter
+  printed every operator expression inside its own pair of brackets, so `putf("a=" + b + "\n")`
+  came back as `putf((("a=" + b) + "\n"))`, and once a file was formatted the brackets it had
+  added could not be told from the author's. The parser now records which expressions were
+  written inside brackets, and the formatter prints those and no others; a doubled pair prints
+  as one. Six examples that format-on-save had bracketed in 7e7ca13 lost the brackets it added,
+  and parse to the same trees as before (M26-LSP-030).
+
 ### Fixed
 
 - **The disclosure policy promised an erasure nothing performed.** It said
@@ -1037,6 +1045,21 @@ exhaustive lists.
   can no longer wedge a compile. The bound is `maxBuiltinResultBytes` in
   `builtin/result_limit.go`, the language server shows it on the parameter before the call is
   run, and `docs/LIMITS_REFERENCE.md` lists it with its reason.
+
+- **The formatter could write an `if`, `while` or `match` condition that did not parse.** It
+  left out the brackets the statement needs whenever the printed condition began with `(` and
+  ended with `)`, which a call on a bracketed callee such as `(-f)(1)` does. It now always
+  writes them (M26-LSP-008).
+
+- **The five disk-image examples failed on any real image.** `vhdi_example.mut`,
+  `hfs_example.mut`, `xfs_example.mut`, `ewf_example.mut` and `raw_example.mut` built their
+  lines with `+`, and an image's sizes and numbers are integers, so each stopped at the first
+  one with `unsupported types for binary operation: STRING, INTEGER`. They also ran their lines
+  together and passed the data they read to `putf` as the format, and `raw_example.mut` printed
+  `sector_size`, which `raw_metadata` calls `assumed_sector_size`. They now print through
+  `putf`'s verbs. The sweep cannot supply an image, so tests run the VHD and raw examples
+  against generated ones, and a sweep test refuses a `putf` format any example decides at run
+  time (M26-EX-020).
 
 ### Security
 

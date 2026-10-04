@@ -17,15 +17,17 @@ import (
 // drifts quietly away from the tree while looking authoritative.
 
 const (
-	advisoryDir      = "docs/advisories"
-	advisoryIndex    = "docs/advisories/README.md"
-	advisoryTestNote = "SECURITY.md calls the test an advisory names its fixture"
+	advisoryDir        = "docs/advisories"
+	advisoryIndex      = "docs/advisories/README.md"
+	advisoryTestNote   = "SECURITY.md calls the test an advisory names its fixture"
+	advisoryCreditNote = "SECURITY.md promises reporters are credited in the advisory AND in CHANGELOG.md"
 )
 
 var (
-	advisoryID   = regexp.MustCompile(`\bMVF-(\d{4})-(\d{4})\b`)
-	advisoryRow  = regexp.MustCompile(`^\|\s*(?:\[)?(MVF-\d{4}-\d{4})`)
-	advisoryTest = regexp.MustCompile("`([A-Za-z0-9_./-]+_test\\.go)`")
+	advisoryID       = regexp.MustCompile(`\bMVF-(\d{4})-(\d{4})\b`)
+	advisoryRow      = regexp.MustCompile(`^\|\s*(?:\[)?(MVF-\d{4}-\d{4})`)
+	advisoryTest     = regexp.MustCompile("`([A-Za-z0-9_./-]+_test\\.go)`")
+	advisoryReported = regexp.MustCompile(`^\|\s*\*\*Reported\*\*\s*\|\s*(.*?)\s*\|\s*$`)
 )
 
 // indexedAdvisories reads the identifiers the index lists as published, in the
@@ -352,4 +354,102 @@ func TestEveryPublishedAdvisoryHasAPage(t *testing.T) {
 				id, advisoryIndex, advisoryDir, id)
 		}
 	}
+}
+
+// The advisory scheme makes exactly one promise to somebody outside this
+// project, and SECURITY.md is where it is written: "Reporters are credited in
+// the advisory and in CHANGELOG.md unless you ask not to be." Two files,
+// edited weeks apart, by hand, with nothing joining them.
+//
+// That promise has already been half-kept once. MVF-2026-0001's fix landed on
+// 3 October and the reporter's consent to be named arrived on the 4th, so the
+// credit went into the advisory and the changelog named nobody for two days.
+// Nothing in the tree noticed; a note outside it held the canonical wording and
+// declared that the wording must be identical everywhere, which worked about as
+// well as asking politely -- one copy had quietly drifted to a thinner draft.
+//
+// So the promise is checked against the two files SECURITY.md names, and the
+// note goes back to being a note.
+//
+// Word sequence rather than bytes: an advisory page wraps at eighty columns and
+// the changelog wraps inside a list item, so the same sentence cannot be
+// byte-identical in both files. Collapsing whitespace compares what a reader
+// reads.
+func TestAnExternalReporterIsCreditedWhereSecurityMdPromises(t *testing.T) {
+	changelog := readingAsAReaderDoes(readRepoFile(t, changelogPath))
+	external := 0
+
+	for _, id := range indexedAdvisories(t) {
+		reported, credit := advisoryCredit(t, id)
+		switch {
+		case reported == "":
+			t.Errorf("%s's page has no **Reported** row in its header table, so nothing here can say whether a credit is owed",
+				id)
+		case credit == "":
+			t.Errorf("%s's page has no '## Credit' section: %s", id, advisoryCreditNote)
+		case !strings.HasPrefix(reported, "externally"):
+			// The forward check below only looks at pages whose header says
+			// the row came from outside. A credit added to an internal-looking
+			// page is therefore invisible to it, and to a reader scanning the
+			// header tables -- so that combination is the failure, not an
+			// oversight to be tolerated.
+			if strings.Contains(credit, "Reported by") {
+				t.Errorf("%s credits an outside reporter but its **Reported** cell reads %q; one of the two is wrong, and while they disagree the credit is invisible\n  the page says: %s",
+					id, reported, credit)
+			}
+		default:
+			external++
+			if !strings.Contains(changelog, credit) {
+				t.Errorf("%s was reported from outside and its page credits the reporter, but CHANGELOG.md does not carry that credit: %s\n  the page says: %s",
+					id, advisoryCreditNote, credit)
+			}
+		}
+	}
+
+	if external == 0 {
+		t.Fatalf("no published advisory has a **Reported** cell beginning 'externally', so this test checked nothing: either the header table changed shape or an external credit was dropped")
+	}
+}
+
+// advisoryCredit reads a page's Reported cell and the first paragraph of its
+// Credit section.
+//
+// The first paragraph is the credit. What follows it is commentary, and the
+// distinction is load-bearing: MVF-2026-0001's Credit section goes on to record
+// the severity the row was first given and why that was wrong, which is part of
+// the advisory's honesty and no part of anybody's credit.
+func advisoryCredit(t *testing.T, id string) (reported, credit string) {
+	t.Helper()
+	inCredit, started := false, false
+	for _, line := range proseLines(t, advisoryDir+"/"+id+".md") {
+		trimmed := strings.TrimSpace(line.text)
+		if m := advisoryReported.FindStringSubmatch(trimmed); m != nil {
+			reported = m[1]
+		}
+		if strings.HasPrefix(trimmed, "## ") {
+			if inCredit {
+				break
+			}
+			inCredit = trimmed == "## Credit"
+			continue
+		}
+		if !inCredit {
+			continue
+		}
+		if trimmed == "" {
+			if started {
+				break
+			}
+			continue
+		}
+		started = true
+		credit += " " + trimmed
+	}
+	return reported, readingAsAReaderDoes(credit)
+}
+
+// readingAsAReaderDoes collapses every run of whitespace to a single space, so
+// two copies of one sentence wrapped to different widths compare equal.
+func readingAsAReaderDoes(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

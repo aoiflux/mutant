@@ -2827,13 +2827,13 @@ func TestDocumentFormattingCanonicalizesExampleAccessSpacing(t *testing.T) {
 	}
 
 	updated := applyTextEdits(t, original, edits)
-	// Canonical form: four-space indent, fully parenthesised operator
-	// expressions, hash entries kept in authored order, and no stray `;`
-	// after the brace-terminated `if`.
+	// Canonical form: four-space indent, operator expressions with only the
+	// brackets the author wrote, hash entries kept in authored order, and no
+	// stray `;` after the brace-terminated `if`.
 	want := "// excerpt from ioc_event_triage\n" +
 		"let events = parsed[\"events\"];\n" +
 		"\n" +
-		"for (let i = 0; (i < event_count); i = (i + 1)) {\n" +
+		"for (let i = 0; i < event_count; i = i + 1) {\n" +
 		"    let ev = events[i];\n" +
 		"    if (ev[\"event\"] == \"auth_fail\") {\n" +
 		"        let updated_findings, err = push(findings, {\"src\": ev[\"src\"], \"count\": ev[\"count\"]});\n" +
@@ -2903,7 +2903,7 @@ func TestDocumentFormattingCanonicalizesTimelineAccessSpacing(t *testing.T) {
 	want := "// excerpt from mini_timeline_builder\n" +
 		"let files = parsed[\"files\"];\n" +
 		"\n" +
-		"for (let i = 0; (i < timeline_file_count); i = (i + 1)) {\n" +
+		"for (let i = 0; i < timeline_file_count; i = i + 1) {\n" +
 		"    let f = files[i];\n" +
 		"    let st, err = fs_stat(f);\n" +
 		"    check(db_index_prop(db, event_node, \"mod_time\", st[\"mod_time\"]), \"db_index_prop\");\n" +
@@ -2911,7 +2911,7 @@ func TestDocumentFormattingCanonicalizesTimelineAccessSpacing(t *testing.T) {
 		"    timeline = updated_timeline;\n" +
 		"}\n" +
 		"\n" +
-		"check(db_add_edge(db, event_nodes[(i - 1)], event_nodes[i], EDGE_NEXT_EVENT), \"db_add_edge\");\n"
+		"check(db_add_edge(db, event_nodes[i - 1], event_nodes[i], EDGE_NEXT_EVENT), \"db_add_edge\");\n"
 	if updated != want {
 		t.Fatalf("formatted timeline access text = %q, want %q", updated, want)
 	}

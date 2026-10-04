@@ -18,7 +18,7 @@ let MFT_PATH = "C:/evidence/$MFT";
 let looks_stomped = fn(e) {
     let si = get(e, "si_created", 0);
     let fun = get(e, "fn_created", 0);
-    return (((si > 0) && (fun > 0)) && (si < fun));
+    return si > 0 && fun > 0 && si < fun;
 };
 
 putln("=== 5/5 Timestomping detection ===");

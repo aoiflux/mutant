@@ -118,12 +118,12 @@ func TestFormatterPreservesEveryCommentAcrossExamples(t *testing.T) {
 // that the formatted text still means what the original did.
 //
 // The comparison is between parse trees rather than token streams, because this
-// formatter legitimately rewrites tokens: it parenthesises infix expressions
-// (`return n1 + n2` prints as `return (n1 + n2)`) and drops the optional
-// terminator after a struct or enum declaration. Both keep the same tree, which
-// is the property that actually matters. Re-parsing the formatted text and
-// comparing renderings sees past all of it, and still catches a lost statement
-// or a re-associated operator.
+// formatter legitimately rewrites tokens: it prints two pairs of brackets around
+// one expression as one (`((a))` as `(a)`) and drops the optional terminator
+// after a struct or enum declaration. Both keep the same tree, which is the
+// property that actually matters. Re-parsing the formatted text and comparing
+// renderings sees past all of it, and still catches a lost statement or a
+// re-associated operator.
 func TestFormatterPreservesProgramStructureAcrossExamples(t *testing.T) {
 	compared, skipped := 0, 0
 
@@ -335,6 +335,45 @@ func firstDifference(before, after string) string {
 	}
 	return fmt.Sprintf("  at offset %d (%d chars before, %d after)\n  before: ...%s...\n  after:  ...%s...",
 		at, len(before), len(after), window(before), window(after))
+}
+
+// TestFormatterAddsNoBracketsAcrossExamples holds every real example to the
+// owner's decision of 2026-09-29: the formatter keeps the brackets the author
+// wrote and adds none. The formatted text may have fewer `(` than the source --
+// two pairs around one expression print as one -- and never more.
+func TestFormatterAddsNoBracketsAcrossExamples(t *testing.T) {
+	compared := 0
+	for _, path := range exampleFiles(t) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		snapshot := analyzer.New().Analyze(string(data))
+		if len(snapshot.ParseErrors) > 0 || snapshot.Program == nil {
+			continue
+		}
+		compared++
+		before := openingBrackets(string(data))
+		if after := openingBrackets(formatSnapshotText(snapshot)); after > before {
+			t.Errorf("%s: formatting added brackets: %d before, %d after", path, before, after)
+		}
+	}
+	if compared == 0 {
+		t.Fatal("no example parsed cleanly enough to compare; the corpus or the analyzer is broken")
+	}
+}
+
+// openingBrackets counts `(` tokens, so a bracket inside a string or a comment
+// is not one.
+func openingBrackets(src string) int {
+	l := lexer.New(src)
+	count := 0
+	for tok := l.NextToken(); tok.Type != token.EOF; tok = l.NextToken() {
+		if tok.Type == token.LPAREN {
+			count++
+		}
+	}
+	return count
 }
 
 // commentBodies lexes src and returns its comment texts in source order.
