@@ -1196,7 +1196,10 @@ exhaustive lists.
   expanded it. The language server never expanded macros, so opening or saving a file
   ran nothing. One thing changes for programs that worked before: a macro body that
   called a builtin outside the macro-safe list is now a compile error that names the
-  builtin and says why. (M26-EVL-012, MVF-2026-0001)
+  builtin and says why. Reported by **Pranjal**, a BTech student in his fifth
+  semester at the National Forensic Sciences University (NFSU). He asked to be
+  credited publicly, and the name and affiliation are printed at his request.
+  (M26-EVL-012, MVF-2026-0001)
 
 - **The editor extension's release task put the password in the argument
   list.** The packaged task that builds a signed artifact passed it with
@@ -1204,8 +1207,11 @@ exhaustive lists.
   from the process list by anything running as the same user. The task now
   sets its `password` field, which reaches the binary the way the example
   sweep does, and a bare `--password` is refused outright -- see Changed.
-  Nothing reached the disk or a log; the exposure was the argument list, for
-  the life of the build. (M26-LSP-017, MVF-2026-0010)
+  mutant itself wrote the credential nowhere, but the route required it on
+  disk: the `password` property is part of a task definition, which lives in
+  `.vscode/tasks.json` in the workspace and is commonly committed with the case
+  scripts, so the exposure is that file as well as the argument list for the
+  life of the build. (M26-LSP-017, MVF-2026-0010)
 
 ## [2.5.0] — 2026-09-17
 

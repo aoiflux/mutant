@@ -19,9 +19,15 @@ that matter when reading this page:
   place. `go test ./cmd/gendocs/` checks that each one names a test that
   exists.
 
-Gaps in the serials carry no information. An identifier is allocated one at a
-time, when its fix is ready to publish, so the number of issues not yet fixed
-cannot be read off this page.
+**Every identifier has a page of its own, and the serials run from 0001 with no
+hole.** An identifier is assigned when its advisory is written, so one cannot be
+allocated and then left with nothing behind it, and `go test ./cmd/gendocs/`
+fails if a serial is missing from the sequence or if a listed advisory has no
+page. A reader following a citation never has to work out, from the absence of a
+page, whether one was owed.
+
+What cannot be read off this page is how many issues are not yet fixed. An
+advisory appears when its fix is ready to publish, not when the defect is found.
 
 ## Published
 
@@ -32,29 +38,32 @@ backported to the 2.5.1 patch release as well as fixed on the 2.6.0 line.
 family was not released, the builtins it concerns did not exist in any
 published version.
 
-| Identifier                        | Sev | Affected          | Fixed in        | What it was                                                                   |
-| --------------------------------- | --- | ----------------- | --------------- | ----------------------------------------------------------------------------- |
-| [MVF-2026-0001](MVF-2026-0001.md) | S1  | 2.2.0 – 2.5.0     | 2.5.1 and 2.6.0 | Compiling a program ran whatever builtins its macros called                   |
-| MVF-2026-0002                     | S2  | none released     | 2.6.0           | The disclosure ledger's own records could be redacted, undoing a withdrawal   |
-| MVF-2026-0003                     | S2  | none released     | 2.6.0           | An audit log with its first entries deleted verified as intact                |
-| MVF-2026-0004                     | S2  | none released     | 2.6.0           | An audit entry with no sequence number ended the walk as though intact        |
-| MVF-2026-0005                     | S2  | all through 2.5.0 | 2.5.1 and 2.6.0 | Two strings sharing one 64-bit digest were one hash entry                     |
-| MVF-2026-0006                     | S2  | none released     | 2.6.0           | A relabelled disclosure package verified against the genuine root             |
-| [MVF-2026-0007](MVF-2026-0007.md) | S1  | 2.3.0 – 2.5.0     | 2.5.1 and 2.6.0 | A SQL query the documentation called read-only could modify evidence          |
-| MVF-2026-0008                     | S2  | none released     | 2.6.0           | A classified buffer put in a report table was rendered to hex and written out |
-| MVF-2026-0009                     | S3  | 2.1.0 – 2.5.0     | 2.5.1 and 2.6.0 | An inherited environment variable chose the signing key and the trust anchor  |
-| MVF-2026-0010                     | S3  | extension only    | 2.6.0           | The editor extension's release task passed the password in the argument list  |
-| MVF-2026-0011                     | S3  | none released     | 2.6.0           | A ledger redacted by an older build could have lost a withdrawal silently     |
+| Identifier                        | Sev | Affected                | Fixed in              | What it was                                                                   |
+| --------------------------------- | --- | ----------------------- | --------------------- | ----------------------------------------------------------------------------- |
+| [MVF-2026-0001](MVF-2026-0001.md) | S1  | 2.2.0 – 2.5.0           | 2.5.1 and 2.6.0       | Compiling a program ran whatever builtins its macros called                   |
+| [MVF-2026-0002](MVF-2026-0002.md) | S2  | none released           | 2.6.0                 | The disclosure ledger's own records could be redacted, undoing a withdrawal   |
+| [MVF-2026-0003](MVF-2026-0003.md) | S2  | none released           | 2.6.0                 | An audit log with its first entries deleted verified as intact                |
+| [MVF-2026-0004](MVF-2026-0004.md) | S2  | none released           | 2.6.0                 | An audit entry with no sequence number ended the walk as though intact        |
+| [MVF-2026-0005](MVF-2026-0005.md) | S2  | all through 2.5.0       | 2.5.1 and 2.6.0       | Two strings sharing one 64-bit digest were one hash entry                     |
+| [MVF-2026-0006](MVF-2026-0006.md) | S2  | none released           | 2.6.0                 | A relabelled disclosure package verified against the genuine root             |
+| [MVF-2026-0007](MVF-2026-0007.md) | S1  | 2.3.0 – 2.5.0           | 2.5.1 and 2.6.0       | A SQL query the documentation called read-only could modify evidence          |
+| [MVF-2026-0008](MVF-2026-0008.md) | S2  | none released           | 2.6.0                 | A classified buffer put in a report table was rendered to hex and written out |
+| [MVF-2026-0009](MVF-2026-0009.md) | S3  | 2.1.0 – 2.5.0           | 2.5.1 and 2.6.0       | An inherited environment variable chose the signing key and the trust anchor  |
+| [MVF-2026-0010](MVF-2026-0010.md) | S3  | extension 0.1.0 - 0.2.0 | extension: unreleased | The editor extension's release task passed the password in the argument list  |
+| [MVF-2026-0011](MVF-2026-0011.md) | S3  | none released           | 2.6.0                 | A ledger redacted by an older build could have lost a withdrawal silently     |
 
-Until an advisory has its own page, its account is the entry in the Security
-section of [CHANGELOG.md](../../CHANGELOG.md), which names the identifier and
-the internal row. MVF-2026-0005 and MVF-2026-0009 reached a published
-release and are owed a page of their own before 2.6.0 ships. Six others --
-MVF-2026-0002, -0003, -0004, -0006, -0008 and -0011 -- concern code that no
-released version contained, so there is no version to tell an operator to
-upgrade from and the changelog entry is the whole account. MVF-2026-0010 is
-neither: it concerns the editor extension, which versions its own releases
-separately from the language.
+Every row above links to a page, and each page names the fixture that holds its
+fix. Six of the eleven -- MVF-2026-0002, -0003, -0004, -0006, -0008 and -0011 --
+concern code that no released version contained. They have a page anyway, and it
+says so in its own first section, because "no release is affected" is an answer
+an operator deserves to be given rather than left to infer; each one proves it at
+the tag rather than asserting it, and names the development window in which the
+defect was live.
+
+MVF-2026-0010 is the one row whose versions are not the language's: the editor
+extension versions its own releases, so its page carries both numbers, and it is
+the one advisory here whose fix has not been released in any version of the
+component it concerns.
 
 ## Severity vectors
 
@@ -68,16 +77,16 @@ be argued with rather than guessed at.
 | Identifier                        | Row          | CVSS:3.1                                       | CVSS:4.0                                                          |
 | --------------------------------- | ------------ | ---------------------------------------------- | ----------------------------------------------------------------- |
 | [MVF-2026-0001](MVF-2026-0001.md) | M26-EVL-012  | `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` | `CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N` |
-| MVF-2026-0002                     | M26-CUS-001  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0003                     | M26-CUS-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0004                     | M26-CUS-006  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0005                     | M26-EVL-003  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0006                     | M26-REC-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:P/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0002](MVF-2026-0002.md) | M26-CUS-001  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0003](MVF-2026-0003.md) | M26-CUS-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0004](MVF-2026-0004.md) | M26-CUS-006  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0005](MVF-2026-0005.md) | M26-EVL-003  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0006](MVF-2026-0006.md) | M26-REC-005  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:P/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` |
 | [MVF-2026-0007](MVF-2026-0007.md) | M26-DAT-001  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:H/A:H` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:L/VI:H/VA:H/SC:N/SI:N/SA:N` |
-| MVF-2026-0008                     | M26-DAT-002  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0009                     | M26-DOC3-001 | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0010                     | M26-LSP-017  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
-| MVF-2026-0011                     | M26-CUS-021  | `CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N` | `CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0008](MVF-2026-0008.md) | M26-DAT-002  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0009](MVF-2026-0009.md) | M26-DOC3-001 | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0010](MVF-2026-0010.md) | M26-LSP-017  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0011](MVF-2026-0011.md) | M26-CUS-021  | `CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N` | `CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N` |
 
 Three things to know before reading a row.
 

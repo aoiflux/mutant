@@ -333,3 +333,23 @@ func TestAdvisoryPageVectorsMatchTheIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryPublishedAdvisoryHasAPage is the other half of the no-gaps rule, and
+// it is the owner's, recorded 2026-10-05: "We cannot have disconnected MVF IDs,
+// as in MVF-2026-0001 and MVF-2026-0007 exist but others in between dont."
+//
+// TestAdvisorySerialsAreWholeAndUnique already refuses a hole in the SERIALS.
+// This refuses a hole in the PAGES, which is the gap a reader actually walks
+// into: an identifier listed in the register, cited from the changelog, and
+// linked from nowhere, so following it means guessing whether a page was owed
+// and never written or never owed at all. The register's own text used to say
+// gaps carry no information. They do: they say somebody stopped halfway.
+func TestEveryPublishedAdvisoryHasAPage(t *testing.T) {
+	for _, id := range indexedAdvisories(t) {
+		page := filepath.Join(repoRoot, filepath.FromSlash(advisoryDir), id+".md")
+		if _, err := os.Stat(page); err != nil {
+			t.Errorf("%s is listed in %s but has no page at %s/%s.md: an identifier a reader cannot follow",
+				id, advisoryIndex, advisoryDir, id)
+		}
+	}
+}
