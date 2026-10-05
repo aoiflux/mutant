@@ -55,6 +55,31 @@ func PrefetchParse(args ...object.Object) (result object.Object) {
 	return resultAndError(makeHashObject(parsed), nil)
 }
 
+// Where each version keeps its last run times and its run count, after libyal's
+// libscca and PECmd, which agree. The section offsets (0x54..0x77) are shared by
+// every version.
+//
+// Version 30 has two layouts of its file information. The first ends at 0x130
+// and keeps the run count at 0xD0. The second, which later Windows 10 builds and
+// Windows 11 write, leaves out eight bytes before the run count, so it ends at
+// 0x128 and keeps the run count at 0xC8. The file says which one it is: the
+// file metrics array starts where the file information ends, and the offset at
+// 0x54 says where that is.
+//
+//mutant:format libyal libscca, Windows Prefetch File (PF) format, file information
+const (
+	pfMetricsOffsetField = 0x54
+	pfV17RunTime         = 0x78
+	pfV17RunCount        = 0x90
+	pfV23RunTime         = 0x80
+	pfV23RunCount        = 0x98
+	pfRunTimes           = 0x80
+	pfRunTimeSlots       = 8
+	pfRunCount           = 0xD0
+	pfShortInfoEnd       = 0x128
+	pfShortInfoRunCount  = 0xC8
+)
+
 // parsePrefetch decodes an uncompressed SCCA prefetch buffer.
 func parsePrefetch(data []byte) (map[string]object.Object, error) {
 	if len(data) < 84 {
@@ -68,18 +93,22 @@ func parsePrefetch(data []byte) (map[string]object.Object, error) {
 	exeName := decodeUTF16Z(data[0x10:0x4C])
 	hash := binary.LittleEndian.Uint32(data[0x4C:0x50])
 
-	// Run-time / run-count offsets are the only version-specific pieces; the
-	// section-offset table (0x54..0x77) is shared across v17/v23/v26/v30.
+	// Run-time / run-count offsets are the only version-specific pieces.
 	var runTimesOff, runTimesCount, runCountOff int
 	switch version {
 	case 17: // Windows XP / 2003
-		runTimesOff, runTimesCount, runCountOff = 0x78, 1, 0x90
+		runTimesOff, runTimesCount, runCountOff = pfV17RunTime, 1, pfV17RunCount
 	case 23: // Windows Vista / 7
-		runTimesOff, runTimesCount, runCountOff = 0x80, 1, 0x98
+		runTimesOff, runTimesCount, runCountOff = pfV23RunTime, 1, pfV23RunCount
 	case 26: // Windows 8.1
-		runTimesOff, runTimesCount, runCountOff = 0x80, 8, 0xD0
+		runTimesOff, runTimesCount, runCountOff = pfRunTimes, pfRunTimeSlots, pfRunCount
 	case 30, 31: // Windows 10 / 11
-		runTimesOff, runTimesCount, runCountOff = 0x80, 8, 0xD0
+		runTimesOff, runTimesCount, runCountOff = pfRunTimes, pfRunTimeSlots, pfRunCount
+		// The shorter layout read at 0xD0 reported a field that is not the run
+		// count, on every file a current Windows writes (M26-ART-002).
+		if pfLE32(data, pfMetricsOffsetField) == pfShortInfoEnd {
+			runCountOff = pfShortInfoRunCount
+		}
 	default:
 		// Unknown version: still return the header fields we trust.
 		runTimesOff, runTimesCount, runCountOff = 0, 0, 0

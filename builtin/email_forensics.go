@@ -217,19 +217,50 @@ func parseEmailBodyAndAttachments(header mail.Header, body io.Reader) (string, s
 	return text, html, &object.Array{Elements: []object.Object{}}, nil
 }
 
-func parseMultipartEmail(rawBody []byte, boundary string) (string, string, *object.Array, *object.Error) {
-	mr := multipart.NewReader(bytes.NewReader(rawBody), boundary)
-	text := ""
-	html := ""
-	attachments := make([]object.Object, 0)
+// maxEmailMultipartDepth bounds how deeply multipart parts may nest inside one
+// another. Mail as it is written nests three or four deep -- a multipart/mixed
+// holding a multipart/related holding a multipart/alternative -- and every level
+// is walked with its own boundary, so a message nested deeper than this is one
+// built to make the walk recurse, and is refused rather than followed.
+//
+//mutant:limit depth
+const maxEmailMultipartDepth = 16
 
+// emailParts is what a multipart body's parts hold, collected in document
+// order: the first text/plain and text/html bodies, and every attachment.
+type emailParts struct {
+	text, html  string
+	attachments []object.Object
+}
+
+func parseMultipartEmail(rawBody []byte, boundary string) (string, string, *object.Array, *object.Error) {
+	parts := &emailParts{attachments: make([]object.Object, 0)}
+	if errObj := parts.walk(rawBody, boundary, 1); errObj != nil {
+		return "", "", nil, errObj
+	}
+	return parts.text, parts.html, &object.Array{Elements: parts.attachments}, nil
+}
+
+// walk reads one multipart body. A part that is itself multipart is walked with
+// its own boundary: that is how most mail is built, phishing included, with the
+// text and HTML bodies in a multipart/alternative inside the multipart/mixed
+// that carries the attachments.
+//
+// This used to look at the top level only. A multipart/* part is neither an
+// attachment nor text, so it was dropped, with every body, link and attachment
+// inside it (M26-ART-013).
+func (p *emailParts) walk(rawBody []byte, boundary string, depth int) *object.Error {
+	if depth > maxEmailMultipartDepth {
+		return newError("email parsing: multipart parts are nested more than %d deep", maxEmailMultipartDepth)
+	}
+	mr := multipart.NewReader(bytes.NewReader(rawBody), boundary)
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return "", "", nil, newError("email parsing: multipart read failed: %s", err.Error())
+			return newError("email parsing: multipart read failed: %s", err.Error())
 		}
 
 		contentDisposition := strings.ToLower(strings.TrimSpace(part.Header.Get("Content-Disposition")))
@@ -239,19 +270,19 @@ func parseMultipartEmail(rawBody []byte, boundary string) (string, string, *obje
 		partData, readErr := io.ReadAll(part)
 		_ = part.Close()
 		if readErr != nil {
-			return "", "", nil, newError("email parsing: part read failed: %s", readErr.Error())
+			return newError("email parsing: part read failed: %s", readErr.Error())
 		}
 
 		decoded, decErr := decodeBodyByTransferEncoding(partData, transferEncoding)
 		if decErr != nil {
-			return "", "", nil, newError("email parsing: %s", decErr.Error())
+			return newError("email parsing: %s", decErr.Error())
 		}
 
 		filename := part.FileName()
 		isAttachment := strings.Contains(contentDisposition, "attachment") || filename != ""
 		if isAttachment {
 			sha := sha256Hex(decoded)
-			attachments = append(attachments, makeHashObject(map[string]object.Object{
+			p.attachments = append(p.attachments, makeHashObject(map[string]object.Object{
 				"filename": stringObj(filename),
 				"size":     intObj(int64(len(decoded))),
 				"sha256":   stringObj(sha),
@@ -260,14 +291,27 @@ func parseMultipartEmail(rawBody []byte, boundary string) (string, string, *obje
 			continue
 		}
 
-		if strings.Contains(contentType, "text/plain") && text == "" {
-			text = string(decoded)
-		} else if strings.Contains(contentType, "text/html") && html == "" {
-			html = string(decoded)
+		// The boundary is case-sensitive, so the parameters come from the
+		// header as written and not from the lowercased copy above.
+		if mediaType, params, err := mime.ParseMediaType(part.Header.Get("Content-Type")); err == nil &&
+			strings.HasPrefix(mediaType, "multipart/") {
+			nested := params["boundary"]
+			if strings.TrimSpace(nested) == "" {
+				return newError("email parsing: a %s part has no boundary", mediaType)
+			}
+			if errObj := p.walk(decoded, nested, depth+1); errObj != nil {
+				return errObj
+			}
+			continue
+		}
+
+		if strings.Contains(contentType, "text/plain") && p.text == "" {
+			p.text = string(decoded)
+		} else if strings.Contains(contentType, "text/html") && p.html == "" {
+			p.html = string(decoded)
 		}
 	}
-
-	return text, html, &object.Array{Elements: attachments}, nil
+	return nil
 }
 
 func decodeBodyByTransferEncoding(raw []byte, transferEncoding string) ([]byte, error) {

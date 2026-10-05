@@ -1226,7 +1226,85 @@ exhaustive lists.
   network share as well. The documented platform table is now the measured one.
   (M26-EX-019)
 
+- **A Windows 10 or 11 jump list lost every entry after its first.** `jumplist_parse` read a
+  DestList entry's path size at 0x74 from version 3 on. The format keeps it at 0x80 from version
+  2 on, and 0x74 is the entry's access count, so the path came out of the wrong bytes and the next
+  entry was looked for in the wrong place: on a real jump list the walk stopped after one entry,
+  and the hostname, time, pin and path of every other were lost (M26-ART-001).
+
+- **`prefetch_parse` read the run count from the wrong field on current Windows.** Version 30
+  prefetch files come in two layouts. The one later Windows 10 builds and Windows 11 write keeps
+  the run count at 0xC8, where 0xD0 is another field. The file says which layout it is, by where
+  its file metrics array starts, and the run count is read from that layout now (M26-ART-002).
+
+- **A registry value over 16 KiB came back as 12 bytes.** On a hive of version 1.4 or later, a
+  value longer than one 16344-byte segment is stored through a big data record, and
+  `hive_get_value`, `hive_list_values` and every hive-backed `reg_*` read returned the record
+  instead of the value. They follow it now, and only where the format puts one: a short value
+  that happens to begin "db" is data, which the reader behind `shimcache_parse` used to get wrong
+  the other way (M26-ART-010).
+
+- **Nested email parts were dropped with everything in them.** `email_parse`,
+  `email_attachments` and `email_urls` read a message's top level only, so a multipart/alternative
+  inside a multipart/mixed -- how most mail is built, phishing included -- lost its text and HTML
+  bodies, its links and any attachment inside it. Nested parts are walked with their own
+  boundaries now, down to 16 levels, past which the message is refused by name (M26-ART-013).
+
+- **A crafted artifact could hang its parser or exhaust the host.** A registry index root naming
+  itself cost 2^33 calls, and a chain of them returned a million copies of one subkey; each list
+  is now read once (M26-ART-004). A binary plist of forty arrays, each holding two references to
+  the next, expanded to 2^40 values; a plist is now refused once it would describe more values
+  than it has bytes, which only shared containers can make it do, and a container holding itself
+  is named as one (M26-ART-008). An EVTX chunk declaring 2^64 records over one that states a size
+  of zero parsed that record until memory ran out; a chunk's records are now walked first and the
+  parser told how many there are (M26-ART-006). And a count read out of a file -- DestList
+  entries, registry values and big data sizes, plist objects and arrays -- no longer sizes an
+  allocation before the bytes it promises are there to read: one header could ask for 240 GB,
+  which no `recover` catches (M26-ART-005).
+
 ### Security
+
+- **A crafted artifact could kill the process parsing it, and one kind could
+  do it silently.** A count read straight out of a registry hive, a jump list
+  or a binary plist sized an allocation before the bytes it promised were
+  there to read, so the memory a parse asked for grew with a header field
+  rather than with the file: a 32-byte DestList stream claiming 2^22 entries
+  asked for 224 MiB, and a 48-byte plist claiming 2^24 objects asked for
+  128 MiB. A Go allocation past what the host can commit is a fatal error no
+  `recover` catches, and every one of these entry points wraps itself in one.
+  Separately, a binary plist refers to its values by index, and expanding that
+  graph into a tree was bounded only by nesting depth -- so twenty levels of
+  arrays each holding two references to the next returned a 32 MiB value tree
+  from 119 bytes **with no error at all**, and four times that per two further
+  levels. Every pre-size is now bounded by what the bytes can hold, and a
+  plist that would expand to more values than it has bytes is refused, naming
+  the shared containers that did it; a shared string is decoded once, and a
+  container holding itself is named as one.
+  (M26-ART-005, M26-ART-008, MVF-2026-0012, MVF-2026-0013)
+
+- **Two of those were reported from outside the project as well.** The
+  allocation half -- a count read out of a file sizing an allocation before
+  the bytes are there -- and the binary plist expansion were found
+  independently and reproduced against 2.5.0 through a compiled artifact,
+  which established that a crafted evidence file can kill a running script
+  outright rather than return an error. Reported by **Pranjal**, a BTech
+  student in his fifth semester at the National Forensic Sciences University
+  (NFSU). He asked to be credited publicly, and the name and affiliation are
+  printed at his request. (M26-ART-005, M26-ART-008)
+
+- **The code-signature encoder destroyed the timestamp it wrote, and the
+  decoder panicked on a malformed one.** `CodeSignature.Encode` wrote the
+  timestamp as `string(rune(cs.Timestamp))` -- a Unicode code point, not a
+  number. Every Unix timestamp since 1970-01-13 is larger than the largest
+  valid code point, so the conversion yielded U+FFFD and the field encoded as
+  `efbfbd` whatever the time was; `DecodeSignature` then read one byte of it
+  and returned 239 for every real timestamp, and indexed an empty slice when
+  the field was absent. The timestamp is now eight big-endian bytes, and a
+  field of any other length is refused by name. **Nothing called this pair**,
+  so it carries no MVF identifier and the custody seal that does carry a
+  signature, writing its fields separately, was never affected --
+  [docs/advisories/README.md](docs/advisories/README.md) records why.
+  (M26-SEC-009)
 
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**
   Under go1.26.2, govulncheck found 18 standard-library vulnerabilities the code

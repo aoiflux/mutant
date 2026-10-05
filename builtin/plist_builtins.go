@@ -206,31 +206,60 @@ func parseBinaryPlist(data []byte) (object.Object, error) {
 	trailer := data[len(data)-32:]
 	offsetIntSize := int(trailer[6])
 	objectRefSize := int(trailer[7])
-	numObjects := int(binary.BigEndian.Uint64(trailer[8:16]))
-	topObject := int(binary.BigEndian.Uint64(trailer[16:24]))
-	offsetTableOffset := int(binary.BigEndian.Uint64(trailer[24:32]))
+	numObjects64 := binary.BigEndian.Uint64(trailer[8:16])
+	topObject64 := binary.BigEndian.Uint64(trailer[16:24])
+	offsetTable64 := binary.BigEndian.Uint64(trailer[24:32])
 
-	if offsetIntSize < 1 || objectRefSize < 1 || numObjects < 1 {
+	if offsetIntSize < 1 || offsetIntSize > 8 || objectRefSize < 1 || objectRefSize > 8 || numObjects64 < 1 {
 		return nil, fmt.Errorf("invalid binary plist trailer")
 	}
+	// The offset table holds offsetIntSize bytes per object, so the object
+	// count is checked against the bytes after the table's start before it
+	// sizes anything. Taken as given, it was a uint64 handed to make
+	// (M26-ART-005).
+	if offsetTable64 >= uint64(len(data)) || numObjects64 > (uint64(len(data))-offsetTable64)/uint64(offsetIntSize) {
+		return nil, fmt.Errorf("offset table out of bounds")
+	}
+	if topObject64 >= numObjects64 {
+		return nil, fmt.Errorf("top object %d out of range", topObject64)
+	}
+	numObjects, offsetTableOffset := int(numObjects64), int(offsetTable64)
 	offsets := make([]int, numObjects)
 	for i := 0; i < numObjects; i++ {
 		start := offsetTableOffset + i*offsetIntSize
-		if start+offsetIntSize > len(data) {
-			return nil, fmt.Errorf("offset table out of bounds")
-		}
 		offsets[i] = int(beUint(data[start : start+offsetIntSize]))
 	}
 
-	p := &bplistParser{data: data, offsets: offsets, numObjects: numObjects, refSize: objectRefSize}
-	return p.parseObject(topObject, 0)
+	p := &bplistParser{
+		data: data, offsets: offsets, numObjects: numObjects, refSize: objectRefSize,
+		remaining: len(data), active: map[int]bool{}, leaves: map[int]string{},
+	}
+	return p.parseObject(int(topObject64), 0)
 }
 
+// bplistParser expands a binary plist's object graph into a tree of values.
+//
+// A reference is at least one byte, so a plist whose containers are each listed
+// once cannot describe more values than it has bytes: sharing a string or a
+// number, which every writer does, costs a reference apiece. Sharing a
+// container is what multiplies. An array of two references to the next array,
+// twenty levels down, is a million values from 140 bytes, and each of them was
+// parsed afresh every time it was reached (M26-ART-008). remaining is the file's
+// size in values, spent one per value produced; a plist that would expand past
+// it is refused, since a tree that large can only have been built by sharing
+// containers. active is the path from the root, so a container that holds
+// itself is named as that rather than run down to the depth cap. leaves holds
+// each string and data object once decoded, because a value budget counts
+// values and not bytes, and a shared string was decoded afresh at every
+// reference.
 type bplistParser struct {
 	data       []byte
 	offsets    []int
 	numObjects int
 	refSize    int
+	remaining  int
+	active     map[int]bool
+	leaves     map[int]string
 }
 
 func (p *bplistParser) parseObject(idx, depth int) (object.Object, error) {
@@ -240,6 +269,14 @@ func (p *bplistParser) parseObject(idx, depth int) (object.Object, error) {
 	if idx < 0 || idx >= p.numObjects {
 		return nil, fmt.Errorf("object index %d out of range", idx)
 	}
+	if p.active[idx] {
+		return nil, fmt.Errorf("binary plist object %d contains itself", idx)
+	}
+	if p.remaining <= 0 {
+		return nil, fmt.Errorf("binary plist expands to more values than it has bytes, %d: "+
+			"its containers are shared, and are not expanded past the file's own size", len(p.data))
+	}
+	p.remaining--
 	off := p.offsets[idx]
 	if off >= len(p.data) {
 		return nil, fmt.Errorf("object offset out of bounds")
@@ -272,20 +309,33 @@ func (p *bplistParser) parseObject(idx, depth int) (object.Object, error) {
 		sec := math.Float64frombits(beUint(p.slice(off+1, 8)))
 		unix := int64(sec) + cocoaEpochUnix
 		return stringObj(time.Unix(unix, 0).UTC().Format(time.RFC3339)), nil
-	case 0x4: // data
+	case 0x4, 0x5, 0x6: // data, ASCII string, UTF-16BE string
+		// Decoded once and shared: a megabyte string listed a million times is
+		// one megabyte, where decoding it at every reference was a terabyte.
+		if s, ok := p.leaves[idx]; ok {
+			return stringObj(s), nil
+		}
 		count, dataStart := p.readCount(off, int(info))
-		return stringObj(string(p.slice(dataStart, count))), nil
-	case 0x5: // ASCII string
-		count, dataStart := p.readCount(off, int(info))
-		return stringObj(string(p.slice(dataStart, count))), nil
-	case 0x6: // UTF-16BE string
-		count, dataStart := p.readCount(off, int(info))
-		return stringObj(decodeUTF16BE(p.slice(dataStart, count*2))), nil
+		var s string
+		if objType == 0x6 {
+			s = decodeUTF16BE(p.slice(dataStart, count*2))
+		} else {
+			s = string(p.slice(dataStart, count))
+		}
+		p.leaves[idx] = s
+		return stringObj(s), nil
 	case 0x8: // UID
 		n := int(info) + 1
 		return intObj(int64(beUint(p.slice(off+1, n)))), nil
 	case 0xA: // array
 		count, dataStart := p.readCount(off, int(info))
+		// The count is the file's word: it sizes nothing until the references
+		// it promises are there to read (M26-ART-005).
+		if count < 0 || dataStart > len(p.data) || count > (len(p.data)-dataStart)/p.refSize {
+			return nil, fmt.Errorf("array of %d references runs past the end of the plist", count)
+		}
+		p.active[idx] = true
+		defer delete(p.active, idx)
 		elems := make([]object.Object, 0, count)
 		for i := 0; i < count; i++ {
 			ref := int(beUint(p.slice(dataStart+i*p.refSize, p.refSize)))
@@ -298,6 +348,11 @@ func (p *bplistParser) parseObject(idx, depth int) (object.Object, error) {
 		return &object.Array{Elements: elems}, nil
 	case 0xD: // dict
 		count, dataStart := p.readCount(off, int(info))
+		if count < 0 || dataStart > len(p.data) || count > (len(p.data)-dataStart)/(2*p.refSize) {
+			return nil, fmt.Errorf("dictionary of %d pairs runs past the end of the plist", count)
+		}
+		p.active[idx] = true
+		defer delete(p.active, idx)
 		keyBase := dataStart
 		valBase := dataStart + count*p.refSize
 		pairs := map[string]object.Object{}

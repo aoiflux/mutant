@@ -1,7 +1,9 @@
 package builtin
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"time"
@@ -80,19 +82,76 @@ func evtxParseBuiltin(name string, rawBinary bool, args ...object.Object) (resul
 	}), nil)
 }
 
+// The smallest event record: its 24-byte header and the copy of its size that
+// every record ends with (libevtx, "Windows XML Event Log (EVTX) format", the
+// event record).
+//
+//mutant:format libevtx EVTX format, event record: 24-byte header and a trailing copy of the size
+const evtxRecordMinSize = evtx.EVTX_EVENT_RECORD_SIZE + 4
+
 // parseEvtxChunk parses one chunk, isolating panics/errors so a single corrupt
 // chunk cannot abort the whole file.
+//
+// The library parses as many records as the chunk header declares, from the
+// first record number to the last, and moves from one to the next by the size
+// the record states. Both are the file's word. A chunk declaring 2^64 records
+// whose first record states a size of zero parsed that record over and over,
+// keeping every copy, until the process ran out of memory; one declaring a
+// hundred thousand returned a hundred thousand copies of one event
+// (M26-ART-006). So the records are walked here first, the same way, and the
+// library is told how many are really there.
 func parseEvtxChunk(chunk *evtx.Chunk) (recs []*evtx.EventRecord) {
 	defer func() {
 		if r := recover(); r != nil {
 			recs = nil
 		}
 	}()
-	parsed, err := chunk.Parse(0)
+	n := evtxRecordsInChunk(chunk)
+	if n == 0 {
+		return nil
+	}
+	// The loop in Chunk.Parse uses the record numbers only to count, so a
+	// copy of the chunk numbered 1 to n parses exactly n records.
+	bounded := *chunk
+	bounded.Header.FirstEventRecNumber = 1
+	bounded.Header.LastEventRecNumber = uint64(n)
+	parsed, err := bounded.Parse(0)
 	if err != nil {
 		return nil
 	}
 	return parsed
+}
+
+// evtxRecordsInChunk counts the records a chunk holds, up to the number its
+// header declares. Each starts after the last, carries the record magic, and
+// states a size that covers its own header and trailing copy, stays inside the
+// chunk, and matches that copy. The walk stops at the first record that does
+// not, as the library stops at a missing magic.
+func evtxRecordsInChunk(chunk *evtx.Chunk) int {
+	first, last := chunk.Header.FirstEventRecNumber, chunk.Header.LastEventRecNumber
+	if last < first {
+		return 0
+	}
+	buf := make([]byte, evtx.EVTX_CHUNK_SIZE)
+	if _, err := chunk.Fd.Seek(chunk.Offset, io.SeekStart); err != nil {
+		return 0
+	}
+	if _, err := io.ReadFull(chunk.Fd, buf); err != nil {
+		return 0
+	}
+	n := 0
+	for off := evtx.EVTX_CHUNK_HEADER_SIZE; uint64(n) <= last-first; n++ {
+		if off+evtxRecordMinSize > len(buf) || string(buf[off:off+4]) != evtx.EVTX_EVENT_RECORD_MAGIC {
+			break
+		}
+		size := int(binary.LittleEndian.Uint32(buf[off+4 : off+8]))
+		if size < evtxRecordMinSize || size > len(buf)-off ||
+			int(binary.LittleEndian.Uint32(buf[off+size-4:off+size])) != size {
+			break
+		}
+		off += size
+	}
+	return n
 }
 
 func evtxRecordToHash(rec *evtx.EventRecord, rawBinary bool) object.Object {

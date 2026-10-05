@@ -167,31 +167,61 @@ func destListHeader(buf []byte) (version, total, pinned uint32) {
 		binary.LittleEndian.Uint32(buf[8:12])
 }
 
-// parseDestList walks the variable-length DestList entries. Field offsets are
-// stable up to the pin-status field (0x6C); the path-size field then sits at
-// 0x70 for v1 (Win7) and 0x74 for v3/v4 (Win8+/Win10), with a 4-byte trailer on
-// v3/v4. Every access is bounds-checked; a malformed entry ends iteration.
+// The DestList stream, after libyal's dtformats and JLECmd's DestListEntry,
+// which agree. An entry's fields are the same in every version up to the pin
+// status. Version 1 (Windows 7 and 8) puts the path size straight after it.
+// Every later version -- Windows 10 and 11 write 3 to 6 -- first inserts four
+// unknown bytes, the access count and eight more unknown bytes, and ends the
+// entry with four bytes after the path.
+//
+//mutant:format libyal dtformats, Jump lists format, DestList header and entry
+const (
+	destListHeaderSize     = 32
+	destEntryHostname      = 0x48
+	destEntryNumber        = 0x58
+	destEntryLastModified  = 0x64
+	destEntryPinStatus     = 0x6C
+	destEntryPathSizeV1    = 0x70
+	destEntryPathSizeLater = 0x80
+	destEntryTrailerLater  = 4
+)
+
+// parseDestList walks the variable-length DestList entries. Every access is
+// bounds-checked; a malformed entry ends iteration.
+//
+// Versions 2 and later keep the path size at 0x80. This read it at 0x74 for
+// version 3 and above, which is the access count, so the path came out of the
+// wrong bytes and the next entry was looked for at the wrong offset: on a real
+// Windows 10 or 11 jump list the walk stopped after the first entry, and every
+// later entry lost its hostname, time, pin and path (M26-ART-001).
 func parseDestList(buf []byte) []destEntry {
 	version, total, _ := destListHeader(buf)
-	entries := make([]destEntry, 0, total)
 
-	pathSizeOff := 0x70
-	trailer := 0
-	if version >= 3 {
-		pathSizeOff = 0x74
-		trailer = 4
+	pathSizeOff, trailer := destEntryPathSizeV1, 0
+	if version >= 2 {
+		pathSizeOff, trailer = destEntryPathSizeLater, destEntryTrailerLater
 	}
 
-	off := 32
+	// The count is the file's word, so it sizes nothing by itself: an entry is
+	// at least its fixed fields long, and the stream holds no more entries
+	// than fit in it. Sized by the count alone, a header claiming four billion
+	// entries asked for 240 GB before one was read (M26-ART-005).
+	capacity := 0
+	if len(buf) > destListHeaderSize {
+		capacity = (len(buf) - destListHeaderSize) / (pathSizeOff + 2 + trailer)
+	}
+	entries := make([]destEntry, 0, min(int(total), capacity))
+
+	off := destListHeaderSize
 	for len(entries) < int(total) {
 		if off+pathSizeOff+2 > len(buf) {
 			break
 		}
 		de := destEntry{
-			streamID:   binary.LittleEndian.Uint32(buf[off+0x58 : off+0x5C]),
-			hostname:   trimZeros(buf[off+0x48 : off+0x58]),
-			lastAccess: filetimeToUnix(binary.LittleEndian.Uint64(buf[off+0x64 : off+0x6C])),
-			pinned:     binary.LittleEndian.Uint32(buf[off+0x6C:off+0x70]) != 0xFFFFFFFF,
+			streamID:   binary.LittleEndian.Uint32(buf[off+destEntryNumber : off+destEntryNumber+4]),
+			hostname:   trimZeros(buf[off+destEntryHostname : off+destEntryNumber]),
+			lastAccess: filetimeToUnix(binary.LittleEndian.Uint64(buf[off+destEntryLastModified : off+destEntryPinStatus])),
+			pinned:     binary.LittleEndian.Uint32(buf[off+destEntryPinStatus:off+destEntryPinStatus+4]) != 0xFFFFFFFF,
 		}
 		pathChars := int(binary.LittleEndian.Uint16(buf[off+pathSizeOff : off+pathSizeOff+2]))
 		pathStart := off + pathSizeOff + 2

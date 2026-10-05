@@ -167,6 +167,39 @@ func TestPrefetchParseCompressedVector(t *testing.T) {
 	assertPrefetchFields(t, payload.(*object.Hash), true)
 }
 
+// TestPrefetchRunCountFollowsTheFileInformationLayout is M26-ART-002's
+// regression test. Version 30's file information comes in two lengths, and the
+// file metrics offset at 0x54 is where it ends: 0x130 for the first layout, run
+// count at 0xD0, and 0x128 for the second, eight bytes shorter, run count at
+// 0xC8 (libscca; PECmd's Version30or31). Each buffer carries a decoy at the
+// other offset, so reading the wrong one shows rather than reading a zero.
+func TestPrefetchRunCountFollowsTheFileInformationLayout(t *testing.T) {
+	for _, c := range []struct {
+		name                string
+		metricsOffset       uint32
+		runCountAt, decoyAt int
+	}{
+		{"first layout, ending at 0x130", 0x130, 0xD0, 0xC8},
+		{"second layout, ending at 0x128", 0x128, 0xC8, 0xD0},
+	} {
+		for _, version := range []uint32{30, 31} {
+			buf := buildSCCAv30()
+			binary.LittleEndian.PutUint32(buf[0:], version)
+			binary.LittleEndian.PutUint32(buf[0x54:], c.metricsOffset)
+			binary.LittleEndian.PutUint32(buf[c.runCountAt:], 42)
+			binary.LittleEndian.PutUint32(buf[c.decoyAt:], 0x00C0FFEE)
+
+			parsed, err := parsePrefetch(buf)
+			if err != nil {
+				t.Fatalf("version %d, %s: %v", version, c.name, err)
+			}
+			if got := parsed["run_count"].(*object.Integer).Value; got != 42 {
+				t.Errorf("version %d, %s: run_count = %d, want 42", version, c.name, got)
+			}
+		}
+	}
+}
+
 func TestPrefetchParseRejectsNonPrefetch(t *testing.T) {
 	dir := t.TempDir()
 	// Not an SCCA file.

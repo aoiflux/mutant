@@ -4,8 +4,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -13,6 +15,7 @@ import (
 const (
 	signingAlgorithmEd25519   = "Ed25519"
 	signatureEncodedPartCount = 5
+	signatureTimestampBytes   = 8
 )
 
 // CodeSignature represents a digital signature for bytecode
@@ -92,14 +95,23 @@ func VerifyBytecode(bytecode []byte, sig *CodeSignature) error {
 	return nil
 }
 
-// EncodeSignature serializes a code signature
+// Encode serializes a code signature. The timestamp is eight big-endian
+// bytes because it is an int64. It was written as string(rune(cs.Timestamp)),
+// which is a Unicode code point and not a number: every Unix timestamp since
+// 1970-01-13 is larger than the largest valid code point, so the conversion
+// yielded U+FFFD and the timestamp was destroyed before it reached the string
+// -- 1600000000 encoded as efbfbd and decoded as 239, as did every other real
+// timestamp (M26-SEC-009). Nothing called this pair, so there is no encoded
+// signature anywhere to stay compatible with.
 func (cs *CodeSignature) Encode() string {
+	var ts [signatureTimestampBytes]byte
+	binary.BigEndian.PutUint64(ts[:], uint64(cs.Timestamp))
 	return strings.Join([]string{
 		cs.Algorithm,
 		hex.EncodeToString(cs.PublicKey),
 		hex.EncodeToString(cs.Signature),
 		hex.EncodeToString([]byte(cs.Version)),
-		hex.EncodeToString([]byte(string(rune(cs.Timestamp)))),
+		hex.EncodeToString(ts[:]),
 	}, SEPERATOR)
 }
 
@@ -130,7 +142,16 @@ func DecodeSignature(encoded string) (*CodeSignature, error) {
 		return nil, err
 	}
 
-	timestamp := int64(timestampBytes[0])
+	// A refusal rather than a panic. This read timestampBytes[0], which
+	// indexed an empty slice when the field was absent -- a runtime panic out
+	// of a decoder handed untrusted text -- and took one byte of the eight when
+	// it was not (M26-SEC-009).
+	if len(timestampBytes) != signatureTimestampBytes {
+		return nil, fmt.Errorf("invalid signature timestamp: %d bytes, want %d",
+			len(timestampBytes), signatureTimestampBytes)
+	}
+
+	timestamp := int64(binary.BigEndian.Uint64(timestampBytes))
 
 	return &CodeSignature{
 		PublicKey: pubKey,

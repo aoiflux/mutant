@@ -73,9 +73,17 @@ issues still unfixed cannot be read off the register.
 
 **Severity** is this project's own S1-S5 scale, used to order triage. S1 is
 reserved for a silent break of an evidence or confidentiality promise: one
-where the operator is given no reason to doubt a result that is wrong. No CVSS
-vector is published, because a single vector for a tool an examiner runs by
-hand over evidence they chose would be an invented precision.
+where the operator is given no reason to doubt a result that is wrong.
+
+**A CVSS:3.1 and a CVSS:4.0 base vector are published** alongside every
+identifier, in [docs/advisories/](docs/advisories/README.md) and again in the
+header table of each page that has one. They are this project's own
+assessment and not a numbering authority's: the S1-S5 scale above is what
+triage actually uses, and the vectors are there so a reader who works in CVSS
+can compare these issues with others, and argue with the scoring rather than
+guess at it. Until 2026-10-06 this section said no vector was published,
+which had stopped being true: every identifier then assigned carried two, and
+`go test ./cmd/gendocs/` had been refusing a published advisory without both.
 
 ## Supported versions
 

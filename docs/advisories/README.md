@@ -51,14 +51,16 @@ published version.
 | [MVF-2026-0009](MVF-2026-0009.md) | S3  | 2.1.0 – 2.5.0           | 2.5.1 and 2.6.0       | An inherited environment variable chose the signing key and the trust anchor  |
 | [MVF-2026-0010](MVF-2026-0010.md) | S3  | extension 0.1.0 - 0.2.0 | extension: unreleased | The editor extension's release task passed the password in the argument list  |
 | [MVF-2026-0011](MVF-2026-0011.md) | S3  | none released           | 2.6.0                 | A ledger redacted by an older build could have lost a withdrawal silently     |
+| [MVF-2026-0012](MVF-2026-0012.md) | S2  | 2.3.0 – 2.5.0           | 2.6.0                 | A header count sized an allocation before the bytes it promised were there    |
+| [MVF-2026-0013](MVF-2026-0013.md) | S2  | 2.3.0 – 2.5.0           | 2.6.0                 | A binary plist sharing its containers expanded exponentially when parsed      |
 
 Every row above links to a page, and each page names the fixture that holds its
-fix. Six of the eleven -- MVF-2026-0002, -0003, -0004, -0006, -0008 and -0011 --
-concern code that no released version contained. They have a page anyway, and it
-says so in its own first section, because "no release is affected" is an answer
-an operator deserves to be given rather than left to infer; each one proves it at
-the tag rather than asserting it, and names the development window in which the
-defect was live.
+fix. Six of the thirteen -- MVF-2026-0002, -0003, -0004, -0006, -0008 and -0011
+-- concern code that no released version contained. They have a page anyway, and
+it says so in its own first section, because "no release is affected" is an
+answer an operator deserves to be given rather than left to infer; each one
+proves it at the tag rather than asserting it, and names the development window
+in which the defect was live.
 
 MVF-2026-0010 is the one row whose versions are not the language's: the editor
 extension versions its own releases, so its page carries both numbers, and it is
@@ -87,6 +89,8 @@ be argued with rather than guessed at.
 | [MVF-2026-0009](MVF-2026-0009.md) | M26-DOC3-001 | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N` |
 | [MVF-2026-0010](MVF-2026-0010.md) | M26-LSP-017  | `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N` |
 | [MVF-2026-0011](MVF-2026-0011.md) | M26-CUS-021  | `CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:L/A:N` | `CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N` |
+| [MVF-2026-0012](MVF-2026-0012.md) | M26-ART-005  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N` |
+| [MVF-2026-0013](MVF-2026-0013.md) | M26-ART-008  | `CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H` | `CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N` |
 
 Three things to know before reading a row.
 
@@ -111,7 +115,7 @@ it as subsequent impact as well would count it twice.
 
 ## Not assigned an identifier
 
-Two fixes in the 2.6.0 Security section deliberately have no MVF, because
+Three fixes in the 2.6.0 Security section deliberately have no MVF, because
 giving one to everything in that section would make the namespace mean
 "changed something in security" rather than "was a vulnerability".
 
@@ -125,6 +129,16 @@ giving one to everything in that section would make the namespace mean
   prompted for a passphrase before the refusal was checked. The refusal still
   came and nothing was ever issued, so no security property was broken — the
   documented order was. That is a conformance fix, and it is recorded as one.
+- **A code-signature encoder and decoder that nothing called** (internal
+  row M26-SEC-009). `CodeSignature.Encode` wrote the timestamp through
+  `string(rune(...))`, which is a code point and not a number, so every real
+  timestamp was destroyed before it was written; `DecodeSignature` read one
+  byte of that and returned 239 for all of them, and indexed an empty slice
+  when the field was absent. Both halves are real and both are fixed. Neither
+  is reachable: the pair had no caller anywhere in the toolchain, so it fails
+  the third test above -- reachable in a published release, or on a path a
+  release would reach. The custody seal, which is the one thing that does
+  carry a signature, writes its fields separately and was never affected.
 
 ## Relationship to CVE and GHSA
 

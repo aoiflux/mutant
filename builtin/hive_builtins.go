@@ -18,9 +18,22 @@ import (
 
 const hiveBinBase = 0x1000
 
+// A value longer than regfBigDataSegment bytes is stored through a big data
+// record ("db") when the hive's minor version is regfBigDataMinorVersion or
+// later, as a list of segments that each hold at most that many bytes. An older
+// hive keeps the whole value in one cell (Suhanov, "Windows registry file format
+// specification", the big data record).
+//
+//mutant:format Windows registry file format specification, big data record
+const (
+	regfBigDataSegment      = 16344
+	regfBigDataMinorVersion = 4
+)
+
 type regfHive struct {
-	data       []byte
-	rootOffset uint32 // relative to hiveBinBase
+	data         []byte
+	rootOffset   uint32 // relative to hiveBinBase
+	minorVersion uint32
 }
 
 type nkKey struct {
@@ -56,7 +69,8 @@ func openRegfHive(path string) (*regfHive, error) {
 		return nil, fmt.Errorf("not a registry hive (bad regf header)")
 	}
 	rootOffset := binary.LittleEndian.Uint32(data[0x24:0x28])
-	return &regfHive{data: data, rootOffset: rootOffset}, nil
+	minorVersion := binary.LittleEndian.Uint32(data[0x18:0x1C])
+	return &regfHive{data: data, rootOffset: rootOffset, minorVersion: minorVersion}, nil
 }
 
 // cell returns the data bytes of the cell at rel (relative to hiveBinBase), i.e.
@@ -116,13 +130,27 @@ func (h *regfHive) subkeyOffsets(nk *nkKey) []uint32 {
 	if nk.subkeyListNone {
 		return nil
 	}
-	return h.collectSubkeyList(nk.subkeyListRel, 0)
+	return h.collectSubkeyList(nk.subkeyListRel, 0, map[uint32]bool{})
 }
 
-func (h *regfHive) collectSubkeyList(rel uint32, depth int) []uint32 {
+// collectSubkeyList reads one subkey list, following an index root (ri) into
+// the lists it names. Each list is read once however many times it is named, so
+// the result holds no more offsets than the hive holds list entries.
+//
+// The walk used to recurse into an ri's entries with nothing but the depth cap
+// and no record of what it had read. A self-referencing ri cost 2^33 calls, and
+// a chain of k ri cells with two entries each returned 2^k copies of the same
+// subkeys, through every hive_* and reg_* read of a hive file and through
+// amcache_parse and shimcache_parse (M26-ART-004). The format puts only leaf
+// lists under an ri; a hive that nests them anyway is still read, once.
+func (h *regfHive) collectSubkeyList(rel uint32, depth int, seen map[uint32]bool) []uint32 {
 	if depth > 32 {
 		return nil
 	}
+	if seen[rel] {
+		return nil
+	}
+	seen[rel] = true
 	c, err := h.cell(rel)
 	if err != nil || len(c) < 4 {
 		return nil
@@ -153,7 +181,7 @@ func (h *regfHive) collectSubkeyList(rel uint32, depth int) []uint32 {
 			if base+4 > len(c) {
 				break
 			}
-			out = append(out, h.collectSubkeyList(binary.LittleEndian.Uint32(c[base:base+4]), depth+1)...)
+			out = append(out, h.collectSubkeyList(binary.LittleEndian.Uint32(c[base:base+4]), depth+1, seen)...)
 		}
 	}
 	return out
@@ -167,7 +195,9 @@ func (h *regfHive) values(nk *nkKey) []*vkValue {
 	if err != nil {
 		return nil
 	}
-	out := make([]*vkValue, 0, nk.valueCount)
+	// The count is the key's word; the list cell holds four bytes per entry,
+	// and that is all the room there is (M26-ART-005).
+	out := make([]*vkValue, 0, min(int(nk.valueCount), len(c)/4))
 	for i := 0; i < int(nk.valueCount); i++ {
 		base := i * 4
 		if base+4 > len(c) {
@@ -182,7 +212,12 @@ func (h *regfHive) values(nk *nkKey) []*vkValue {
 }
 
 // rawValueBytes returns the raw data bytes of a value, resolving inline data,
-// referenced cells, and big-data ("db") records.
+// referenced cells, and big-data ("db") records. It returns nil, and never an
+// empty slice, when the bytes cannot be read.
+//
+// A cell is read as a big data record only where the format puts one: a value
+// longer than one segment, on a hive new enough to have them. A value of 2 bytes
+// that happens to begin "db" is two bytes of data.
 func (h *regfHive) rawValueBytes(vk *vkValue) []byte {
 	size := vk.dataSize & 0x7FFFFFFF
 	if vk.dataSize&0x80000000 != 0 { // inline
@@ -196,7 +231,8 @@ func (h *regfHive) rawValueBytes(vk *vkValue) []byte {
 	if err != nil {
 		return nil
 	}
-	if len(c) >= 4 && string(c[0:2]) == "db" { // big data
+	if size > regfBigDataSegment && h.minorVersion >= regfBigDataMinorVersion &&
+		len(c) >= 8 && string(c[0:2]) == "db" {
 		return h.readBigData(c, int(size))
 	}
 	if int(size) <= len(c) {
@@ -215,15 +251,17 @@ func (h *regfHive) readBigData(dbCell []byte, size int) []byte {
 	if err != nil {
 		return nil
 	}
-	out := make([]byte, 0, size)
+	// size is the value's own word, up to 2 GiB; what the segments can hold,
+	// and the hive itself, are the real bounds (M26-ART-005).
+	out := make([]byte, 0, min(size, numSegs*regfBigDataSegment, len(h.data)))
 	for i := 0; i < numSegs && 4*i+4 <= len(segList); i++ {
 		seg, err := h.cell(binary.LittleEndian.Uint32(segList[4*i : 4*i+4]))
 		if err != nil {
 			break
 		}
 		take := len(seg)
-		if take > 16344 { // each big-data segment holds up to 16344 bytes
-			take = 16344
+		if take > regfBigDataSegment {
+			take = regfBigDataSegment
 		}
 		out = append(out, seg[:take]...)
 		if len(out) >= size {
@@ -299,28 +337,18 @@ var regValueTypeNames = map[uint32]string{
 // every read of the same value. A *object.Bytes is mutable from a script
 // (b[0] = 0), so handing back either view would let one script statement rewrite
 // the hive that later reads still parse.
+//
+// The bytes come from rawValueBytes, which is what follows a big data record.
+// This read the cell the value pointed at and took it for the value, so every
+// value over 16344 bytes -- a large REG_BINARY, a long REG_MULTI_SZ -- came back
+// as the 8 to 12 bytes of the record that indexes it, through every hive_* and
+// hive-backed reg_* read. Only shimcache_parse went the long way round
+// (M26-ART-010).
 func (h *regfHive) valueData(vk *vkValue) (string, object.Object, []byte) {
-	size := vk.dataSize & 0x7FFFFFFF
-	inline := vk.dataSize&0x80000000 != 0
-
-	var raw []byte
-	if inline {
-		n := int(size)
-		if n > 4 {
-			n = 4
-		}
-		raw = vk.inlineRaw[:n]
-	} else {
-		c, err := h.cell(vk.dataOff)
-		if err != nil {
-			// Unreadable cell: there is no data, hex or otherwise, to hand back.
-			return typeName(vk.dataType), stringObj(""), nil
-		}
-		if int(size) <= len(c) {
-			raw = c[:size]
-		} else {
-			raw = c
-		}
+	raw := h.rawValueBytes(vk)
+	if raw == nil {
+		// Unreadable cell: there is no data, hex or otherwise, to hand back.
+		return typeName(vk.dataType), stringObj(""), nil
 	}
 
 	switch vk.dataType {
