@@ -1223,8 +1223,49 @@ exhaustive lists.
   question beat 6 asks to the timeline they have just written, saying plainly
   when the finding cannot fire. That is a measurement of the output rather than
   a guess about the filesystem, so it is correct on ReFS, on FAT32 and on a
-  network share as well. The documented platform table is now the measured one.
-  (M26-EX-019)
+  network share as well. The documented platform table is now the measured
+  one, and what it measures is NTFS against WSL ext4; APFS is a separate
+  correction, below. (M26-EX-019)
+
+- **The workshop told six readers to take the pre-built corpus and never
+  said where it comes from.** The scripts and the docs offer it in six
+  places -- `build_evidence.sh` even prints "see evidence/README.md" at the
+  moment beat 6's finding cannot fire -- and `evidence/README.md` was the one
+  file that did not answer. The run sheet told the presenter to hand it over
+  without saying what they were handing over. The owner decisions of
+  2026-10-04 make a pre-built, checksummed corpus the default for every
+  attendee rather than a fallback, so the gap sat on the primary documented
+  path, and the packaging plan existed only under `plans/`, which is
+  gitignored and which no attendee can read. `evidence/README.md` now has a
+  section saying what travels together -- the 98-file case tree, the 131-row
+  modelled timeline, and a `SHA256SUMS` in the format `sha256sum -c` reads,
+  which is the convention `case_bundle` already writes -- that the presenter
+  supplies it, and how to check it on either platform; the other five
+  references name that section. No filename or URL is printed, deliberately:
+  the asset is named in the release it travels with, and a name written here
+  would be the same dangling promise one level down. (M26-EX-021)
+
+- **A measured ext4 result was explained by a mechanism that is wrong, and
+  then extended to a platform nobody had run.** `evidence/README.md` said
+  that Mark-of-the-Web, the alternate data stream, `crtime` and `ctime` are
+  "Windows + NTFS only". `ctime` is POSIX and fsagen reads it on Linux
+  unconditionally through `statx`; and a birth time belongs to the volume
+  rather than to the operating system -- APFS keeps one, and fsagen's darwin
+  path reads it from `Birthtimespec`. The single measurement behind that
+  sentence was WSL ext4, and the table it introduces has no APFS column, yet
+  four places generalised it to "ext4 or APFS", so a Mac presenter read an
+  ext4 number as a macOS number and was told to hand out a corpus they may
+  not need. Every measured number is kept; the prose is narrowed to the
+  volume it was measured on, APFS is named as unmeasured, and the reader is
+  pointed at the check both scripts already run against the timeline they
+  have just written -- which was always the right authority, since it
+  measures the output instead of predicting it from a filesystem name.
+  Measured while checking this: fsagen v0.1.0 does cross-build for darwin on
+  both architectures, so macOS is not shut out of generating at all.
+  Separately, `evidence/README.md`'s hand-run `fsagen` command omitted
+  `--on-unsupported=skip`, which both build scripts pass and which is a
+  no-op on NTFS, so the one command the document spells out was refused on
+  exactly the volumes the surrounding text is about. (M26-EX-022)
 
 - **A Windows 10 or 11 jump list lost every entry after its first.** `jumplist_parse` read a
   DestList entry's path size at 0x74 from version 3 on. The format keeps it at 0x80 from version

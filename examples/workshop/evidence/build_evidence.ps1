@@ -59,7 +59,9 @@ if ($backdated -eq 0) {
     Write-Host 'NOTE: no row in this timeline has a modification time earlier' -ForegroundColor Yellow
     Write-Host "      than its creation time, so beat 6's 'older than its own" -ForegroundColor Yellow
     Write-Host "      birth' finding will not fire here. It needs crtime, which" -ForegroundColor Yellow
-    Write-Host '      is NTFS. The pre-built corpus keeps it.' -ForegroundColor Yellow
+    Write-Host '      the volume has. The pre-built corpus keeps it:' -ForegroundColor Yellow
+    Write-Host '      evidence/README.md, under "Where the pre-built' -ForegroundColor Yellow
+    Write-Host '      corpus comes from".' -ForegroundColor Yellow
 }
 
 Write-Host ''

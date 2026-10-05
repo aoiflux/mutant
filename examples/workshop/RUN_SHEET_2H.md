@@ -18,10 +18,14 @@ them.
    `.\examples\workshop\evidence\build_evidence.ps1` on your own machine.
    Confirm it finishes and check the file count against
    [evidence/README.md](evidence/README.md): **98 files, 131 timeline rows**.
-   Generate on **NTFS**. On ext4 or APFS the script still produces a corpus,
-   but the timeline has no creation times and beat 6's central finding cannot
-   fire; hand those attendees the pre-built corpus instead. The script says so
-   when it happens.
+   Generate on **NTFS**. On a volume with no birth time the script still
+   produces a corpus, but the timeline has no creation times and beat 6's
+   central finding cannot fire. Measured on WSL ext4; **APFS is unmeasured and
+   may well keep it**, so do not tell a Mac attendee they have lost the beat --
+   the script checks the timeline it just wrote and says so when it happens.
+   Where it does, hand that attendee the pre-built corpus instead: what it is,
+   and how they check it, is *Where the pre-built corpus comes from* in
+   [evidence/README.md](evidence/README.md).
 2. **Add a Defender exclusion for the corpus folder**, and generate somewhere
    Windows Search does not index. Defender's ML detection refuses writes of
    generated PE files and its verdict is not stable across runs; Windows Search

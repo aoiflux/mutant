@@ -8,12 +8,16 @@
 # -- @latest became v0.2.0 on 2026-10-02 and the playbook is written for v0.1.0:
 #   go install github.com/aoiflux/fsagen@v0.1.0
 #
-# Mark-of-the-Web and the alternate data stream are NTFS features, so on ext4 or
-# APFS this needs --on-unsupported=skip, which is passed below. Two steps pay
-# for it: beat 3's ADS line reports nothing, and -- less obviously -- the
-# modelled timeline comes back with every crtime at 0, so beat 6's "older than
-# its own birth" finding cannot fire. This script checks for that after the run
-# and says so. Prefer NTFS, or take the pre-built corpus.
+# Mark-of-the-Web and the alternate data stream are NTFS features, so any volume
+# without named streams needs --on-unsupported=skip, which is passed below. Beat
+# 3's ADS line then reports nothing. A second cost is less obvious and depends on
+# the volume rather than on the operating system: where the file system has no
+# birth time the modelled timeline comes back with every crtime at 0, and beat
+# 6's "older than its own birth" finding cannot fire. Measured on WSL ext4, where
+# it was 0 for all 130 rows; APFS keeps a birth time and is unmeasured, so this
+# script does not guess -- it checks the timeline it just wrote and says so.
+# Prefer NTFS, or take the pre-built corpus: evidence/README.md, under "Where the
+# pre-built corpus comes from", says what it is and how to check it.
 
 set -e
 
@@ -57,7 +61,8 @@ if [ "$(awk -F'|' '$9 < $11' "$BODYFILE" | wc -l)" -eq 0 ]; then
     echo "NOTE: no row in this timeline has a modification time earlier than its"
     echo "      creation time, so beat 6's \"older than its own birth\" finding"
     echo "      will not fire here. That finding needs crtime, which is NTFS."
-    echo "      The pre-built corpus keeps it -- see evidence/README.md."
+    echo "      The pre-built corpus keeps it: evidence/README.md, under"
+    echo "      \"Where the pre-built corpus comes from\"."
 fi
 
 echo ""

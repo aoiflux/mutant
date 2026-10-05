@@ -29,6 +29,7 @@ fsagen --seed 88412 \
        --playbook examples/workshop/evidence/quilldrop.playbook.yaml \
        --timeline examples/workshop/case_quilldrop.body \
        --timeline-format bodyfile --timeline-source modelled \
+       --on-unsupported=skip \
        examples/workshop/case
 ```
 
@@ -76,10 +77,16 @@ Two rules on the bodyfile:
 - **Windows Search rewrites `.eml` files.** In an indexed folder it attaches an
   `OECustomProperty` stream within seconds. Generate outside indexed locations.
 
-Mark-of-the-Web, the alternate data stream, `crtime` and `ctime` are Windows +
-NTFS only, and that costs more than one line of output. **Generate on NTFS, or
-take the pre-built corpus.** Measured on both, same seed, same playbook,
-fsagen v0.1.0 built with go1.26.6:
+The Mark-of-the-Web and the alternate data stream are NTFS features, and beat 3
+reads both. A birth time is not: `crtime` belongs to the **volume** rather than
+to the operating system, and `ctime` is POSIX and is read everywhere. What is
+measured below is one volume, **WSL ext4**, where every birth time came back 0
+so beat 6's finding could not fire. **APFS is unmeasured** -- it keeps a birth
+time and fsagen reads one there, so do not assume a Mac loses the beat; the
+build scripts test the timeline they have just written and will say so on the
+day. **Generate on NTFS, or take the pre-built corpus** -- see *Where the
+pre-built corpus comes from*, below. Same seed, same playbook, fsagen v0.1.0
+built with go1.26.6:
 
 | | NTFS | ext4 |
 |---|---|---|
@@ -100,6 +107,41 @@ error, one fewer line. Its other half, the twelve deleted staging files, works
 on both. The build scripts test the timeline they have just written and say so
 when this happens, which is a measurement rather than a guess about the
 filesystem, so it is also right on ReFS, on FAT32 and on a network share.
+
+## Where the pre-built corpus comes from
+
+It is the same corpus these scripts generate, built once on NTFS and handed out
+so that nobody's machine has to produce it. Three things travel together:
+
+- the case tree, `examples/workshop/case/` -- **98 files**;
+- the modelled timeline the beats read, `examples/workshop/case_quilldrop.body`
+  -- **131 rows**;
+- `SHA256SUMS`, in the format `sha256sum -c` reads, which is the convention
+  `case_bundle` writes in this same toolchain.
+
+**Ask your presenter for it.** It ships as a checksummed asset beside the Mutant
+release this workshop pins, and the presenter brings it on a stick as well,
+because a room of laptops on conference wifi is not a download plan. No filename
+is printed here on purpose: the asset is named in the release it travels with,
+and a name written here would go stale the first time it changed.
+
+Check it before you trust it -- checking things is the whole session:
+
+```
+sha256sum -c SHA256SUMS                     # Linux, macOS, Git Bash
+```
+
+```
+Get-FileHash -Algorithm SHA256 <file>       # PowerShell, compare by eye
+```
+
+Every line must say `OK`. If one does not, you are holding a different corpus
+from the rest of the room, and the three exhibit digests step 9 prints will not
+match the run sheet.
+
+**If nobody gave you one**, generate it. `build_evidence.ps1` on NTFS is the path
+every number above is measured against, and on another volume the scripts still
+build a corpus and tell you what it cost.
 
 ## What is reproducible, and what is not
 

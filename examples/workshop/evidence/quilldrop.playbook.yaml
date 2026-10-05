@@ -31,12 +31,15 @@
 # exhibits this playbook writes, so beat 1 finds them above its 7.9 floor.
 #
 # NOT EVERY PLATFORM. The motw action at step 5 writes an alternate data stream,
-# which only NTFS has. On ext4 or APFS this playbook REFUSES and writes nothing
-# unless --on-unsupported=skip is passed, and even with it the modelled timeline
-# comes back with every crtime at 0 -- so beat 6's "older than its own birth"
-# finding cannot fire there, silently. Generate on NTFS, or take the pre-built
-# corpus. build_evidence.sh says so when it happens; evidence/README.md has the
-# measured table.
+# which only NTFS has. On a volume without named streams this playbook REFUSES
+# and writes nothing unless --on-unsupported=skip is passed, which both build
+# scripts do. A birth time is a separate question and belongs to the volume, not
+# the operating system: where there is none the modelled timeline comes back with
+# every crtime at 0 and beat 6's "older than its own birth" finding cannot fire,
+# silently. Measured on WSL ext4; APFS keeps a birth time and is unmeasured.
+# Generate on NTFS, or take the pre-built corpus. The build scripts check the
+# timeline they wrote and say so when it happens; evidence/README.md has the
+# measured table and says where the pre-built corpus comes from.
 
 start: 2026-03-11T09:00:00Z
 
