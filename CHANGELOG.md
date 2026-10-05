@@ -1191,6 +1191,41 @@ exhaustive lists.
   *inside* the closure is unaffected and still patches its own stream. No
   shipped program uses the refused shape. (M26-CMP-002)
 
+- **The workshop's evidence corpus can be built, and the ten beats have now
+  actually run.** `build_evidence.{sh,ps1}` could not produce the QUILLDROP
+  corpus with the generator their own install line installs: fsagen v0.1.0
+  refused the playbook, first for pairing `template:` with `content:` and then,
+  with that removed, for a `delete` whose path template redrew its random
+  component and so named files that had never been created. Nothing had ever
+  got past that, which is why all ten `.golden` files record only the “missing
+  evidence” line — the code inside `quilldrop.ready()` had never executed on
+  any machine. The lure is now built by `action: email`, so beat 2 parses a
+  real RFC 5322 message; the staging tree is deleted by reference; and a third
+  refusal that no report had recorded is fixed — `Finance/*.xlsx` filled with
+  random bytes is refused, because the extension promises an OOXML spreadsheet
+  fsagen will not fake, and both escapes it offers write text, which cannot
+  reach beat 1's 7.9 entropy floor. Those exhibits are `.xlsx.enc`, which is
+  what an encrypted spreadsheet looks like on disk, measured at 7.997,
+  and the contract document is corrected to match the generator. All ten beats
+  then ran end to end, every one exit 0, with beat 10 verifying beat 9's seal.
+  Both scripts and both attendee-facing install lines now pin
+  `fsagen@v0.1.0`; `@latest` became v0.2.0 on 2026-10-02. (M26-EX-018)
+
+- **What the workshop said about ext4 and APFS was wrong in both directions.**
+  It said the corpus “still builds” there and that only beat 3 was affected.
+  Measured: without `--on-unsupported=skip` the run exits 1 and writes no
+  corpus at all, because Mark-of-the-Web needs an alternate data stream; and
+  with that flag the modelled timeline comes back with every `crtime` at 0, so
+  beat 6 — which asks whether a file's modification time precedes its creation
+  time — reports nothing on any row and its entire anti-forensics finding
+  silently disappears. One fewer line of output and no diagnostic. Both build
+  scripts now pass the flag, which is a no-op on NTFS, and then put the
+  question beat 6 asks to the timeline they have just written, saying plainly
+  when the finding cannot fire. That is a measurement of the output rather than
+  a guess about the filesystem, so it is correct on ReFS, on FAT32 and on a
+  network share as well. The documented platform table is now the measured one.
+  (M26-EX-019)
+
 ### Security
 
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**

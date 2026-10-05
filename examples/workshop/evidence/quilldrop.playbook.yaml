@@ -4,17 +4,39 @@
 # every student's evidence is byte-identical:
 #
 #   fsagen --seed 88412 --playbook examples/workshop/evidence/quilldrop.playbook.yaml \
-#          --timeline examples/workshop/evidence/case_quilldrop.body \
-#          examples/workshop/evidence/case_quilldrop
+#          --timeline examples/workshop/case_quilldrop.body \
+#          --timeline-format bodyfile --timeline-source modelled \
+#          examples/workshop/case
 #
-# NOTE ON SCHEMA: field names below follow the documented fsagen playbook schema.
-# fsagen moves; before the workshop, validate with
+# PIN THE GENERATOR. fsagen@latest became v0.2.0 on 2026-10-02 and this file is
+# written against v0.1.0, whose playbook validation refused the version of this
+# file that shipped before it (M26-EX-018). Install exactly:
 #
-#   fsagen --generate-schema .
+#   go install github.com/aoiflux/fsagen@v0.1.0
 #
-# and reconcile anything that drifted. The .mut tools do not depend on this file
-# being exactly right -- they depend on the *paths* listed in evidence/README.md.
-# If an action name changed, fix it here; the tools keep working.
+# WHY THE TYPED BLOCKS. fsagen v0.1.0 refuses to put filler bytes into a file
+# whose extension promises a structure, because a .exe full of base32 is silent
+# wrong output. So the five exhibits the steps parse are built by the actions
+# that make the real thing -- action: email, pe:, format: chrome_history,
+# action: archive -- and not by content_len. Everything the steps read is a
+# real RFC 5322 message, a real PE, a real SQLite database and a real zip.
+#
+# ONE DEVIATION FROM evidence/README.md, deliberate. The contract asked for
+# Finance/*.xlsx above 7.9 entropy. fsagen v0.1.0 refuses .xlsx outright -- it
+# cannot build an OOXML spreadsheet and will not pretend -- and both escapes it
+# offers defeat the requirement: format: text writes low-entropy placeholder
+# text, and literal content is text too. The exhibits are therefore
+# Finance/*.xlsx.enc, the shape an encrypted spreadsheet actually has on disk,
+# and the contract was corrected to match. Measured at 7.997 on the 64 KiB
+# exhibits this playbook writes, so beat 1 finds them above its 7.9 floor.
+#
+# NOT EVERY PLATFORM. The motw action at step 5 writes an alternate data stream,
+# which only NTFS has. On ext4 or APFS this playbook REFUSES and writes nothing
+# unless --on-unsupported=skip is passed, and even with it the modelled timeline
+# comes back with every crtime at 0 -- so beat 6's "older than its own birth"
+# finding cannot fire there, silently. Generate on NTFS, or take the pre-built
+# corpus. build_evidence.sh says so when it happens; evidence/README.md has the
+# measured table.
 
 start: 2026-03-11T09:00:00Z
 
@@ -23,13 +45,16 @@ variables:
   host: MRD-FIN-07
   c2: 45.147.229.83
   lure: Invoice_MRD-88412
+  # One host for the lure link, the Mark-of-the-Web and the browser history, so
+  # the three agree and beat 3's correlation is real rather than arranged.
+  lure_host: meridian-logistics-billing.top
 
 actors:
   # The clerk's user profile: where the intrusion lands.
   - name: clerk
     base: Users/r.mehta
 
-  # Machine-wide state: startup folder, the implant's own log directory.
+  # Machine-wide state: the implant's own log directory.
   - name: machine
     base: ProgramData
 
@@ -49,205 +74,201 @@ steps:
     repeat: 40
     actions:
       - action: create
-        path: finance/close/wk${SEQ}_ledger_${RND:4}.csv
-        ext: .csv
+        path: finance/close/wk${SEQ}_ledger.csv
         content_len: 4096
       - action: create
-        path: hr/onboarding/emp_${SEQ}_${RND:3}.docx
-        ext: .docx
+        path: hr/onboarding/emp_${SEQ}.docx
         content_len: 8192
 
-  - actor: business
-    offset: 10m
-    every: 35m
-    repeat: 18
+  # -- 0b. The entropy decoys -----------------------------------------------
+  # Legitimately encrypted quarterly spreadsheets. Beat 1 reports them beside
+  # the operator's archive, which is the lesson: entropy is not a finding.
+  - actor: clerk
+    offset: 2m
+    every: 1m
+    repeat: 3
     actions:
       - action: create
-        path: ops/manifests/freight_${SEQ}.json
-        ext: .json
-        content_len: 2048
+        path: Finance/q${ITER}_close.xlsx.enc
+        content_len: 65536
+        content_kind: bytes
 
   # -- 1. The lure lands (09:14) --------------------------------------------
+  # A real multipart/mixed message. The attachment is named for a PDF and is
+  # not one; that double extension is beat 2's first finding.
   - actor: clerk
     offset: 14m
     actions:
-      - action: create
-        path: AppData/Local/Microsoft/Outlook/inbox/${VAR:lure}.eml
-        template: email
-        content: |
-          From: accounts@meridian-logistics-billing.top
-          To: r.mehta@meridianlogistics.example
-          Subject: OVERDUE: Invoice MRD-88412 - final notice before referral
-          Date: Wed, 11 Mar 2026 09:14:02 +0000
-          Message-ID: <88412.quill@meridian-logistics-billing.top>
-          Reply-To: billing-desk@meridian-logistics-billing.top
-          Content-Type: text/html; charset=utf-8
+      - action: email
+        path: Inbox/invoice.eml
+        email:
+          from: accounts@${VAR:lure_host}
+          to: ["r.mehta@meridianlogistics.example"]
+          reply_to: billing-desk@${VAR:lure_host}
+          subject: "OVERDUE: Invoice MRD-88412 - final notice before referral"
+          date: 2026-03-11T09:14:02Z
+          message_id: "<88412.quill@meridian-logistics-billing.top>"
+          body_text: |
+            Dear Accounts Payable,
 
-          <html><body>
-          <p>Dear Accounts Payable,</p>
-          <p>Invoice <b>MRD-88412</b> (EUR 41,880.00) is 31 days overdue. The
-          signed copy is attached to our secure portal:</p>
-          <p><a href="http://cdn.meridian-logistics-billing.top/inv/88412/Invoice_MRD-88412.pdf.exe">
-          Download signed invoice (PDF)</a></p>
-          <p>Failure to settle by 13/03 results in referral to collections.</p>
-          <p>Billing Desk<br>Meridian Logistics (Billing Services)</p>
-          </body></html>
+            Invoice MRD-88412 is overdue and will be referred for collection
+            on Friday. Retrieve the statement here:
 
-  # -- 2. The download (09:16) ----------------------------------------------
-  # A PE with a document-looking name. The MoTW is what makes this teachable:
-  # NTFS keeps the download's ORIGIN in an alternate data stream.
+                https://meridian-logistics-billing.top/inv/88412
+
+            Regards,
+            Meridian Logistics Billing Desk
+          attachments:
+            - name: Invoice_MRD-88412.pdf.exe
+              content_type: application/vnd.microsoft.portable-executable
+              content: |
+                This stands in for the attached body. The exhibit the steps
+                parse is the file in Downloads, which is a real PE.
+
+  # -- 2. The clerk follows the link (09:16) --------------------------------
+  # Chrome's own History database, holding the URL the message carried.
   - actor: clerk
     offset: 16m
     actions:
       - action: create
+        path: AppData/Local/Google/Chrome/History
+        format: chrome_history
+        history:
+          visits:
+            - url: https://meridianlogistics.example/ap/queue
+              title: AP queue
+              time: 2026-03-11T08:51:00Z
+              transition: typed
+            - url: https://${VAR:lure_host}/inv/88412
+              title: Invoice MRD-88412
+              time: 2026-03-11T09:16:12Z
+              transition: link
+            - url: https://${VAR:lure_host}/inv/88412/download
+              title: Download statement
+              time: 2026-03-11T09:16:40Z
+              from_visit: 2
+
+  # -- 3. The download (09:17) ----------------------------------------------
+  # A real PE wearing a PDF's name, carrying the Mark-of-the-Web that says
+  # where it came from. The HostUrl host equals the message's link host.
+  - actor: clerk
+    offset: 17m
+    actions:
+      - action: create
         path: Downloads/${VAR:lure}.pdf.exe
-        ext: .exe
-        content_len: 92160
+        content_len: 36864
+        content_kind: bytes
+        pe:
+          machine: i386
+          subsystem: console
+          imports:
+            - kernel32.dll!WinExec
+            - kernel32.dll!CreateFileW
+            - urlmon.dll!URLDownloadToFileW
+          version:
+            file_version: 1.0.0.0
+            company_name: Meridian Logistics
+            file_description: Invoice Viewer
+            original_filename: InvoiceViewer.exe
       - action: motw
         path: Downloads/${VAR:lure}.pdf.exe
         zone_id: 3
-        host_url: http://cdn.meridian-logistics-billing.top/inv/88412/Invoice_MRD-88412.pdf.exe
-        referrer_url: http://meridian-logistics-billing.top/portal/88412
+        host_url: https://${VAR:lure_host}/inv/88412/download
+        referrer_url: https://${VAR:lure_host}/inv/88412
 
-  # -- 3. The implant is written (09:17) ------------------------------------
-  # svchost.exe is a real Windows binary -- in System32. In AppData it is a lie.
+  # -- 4. The implant installs itself (09:20) -------------------------------
+  # TimeDateStamp zero: the build date was scrubbed, which is beat 4's finding.
+  # Two imported DLLs, so imphash has something to hash.
   - actor: clerk
-    offset: 17m
+    offset: 20m
     actions:
       - action: create
-        path: AppData/Roaming/MeridianSync/svchost.exe
-        ext: .exe
-        content_len: 148480
-      - action: create
-        path: AppData/Roaming/MeridianSync/config.dat
-        ext: .bin
-        content_len: 16384
-      - action: ads
-        path: AppData/Roaming/MeridianSync/svchost.exe
-        stream: quill
+        path: AppData/Roaming/MeridianSync/updater.exe
+        content_len: 94208
+        content_kind: bytes
+        pe:
+          machine: amd64
+          subsystem: gui
+          timestamp: 0
+          imports:
+            - kernel32.dll!CreateFileW
+            - kernel32.dll!WriteFile
+            - advapi32.dll!RegSetValueExW
+            - ws2_32.dll!connect
+          version:
+            file_version: 10.0.19041.1
+            company_name: Meridian Logistics
+            file_description: MeridianSync Updater
 
-  # -- 4. Persistence (09:17) ------------------------------------------------
-  - actor: machine
-    offset: 17m
-    actions:
-      - action: create
-        path: Microsoft/Windows/Start Menu/Programs/StartUp/MeridianSync.cmd
-        content: |
-          @echo off
-          start "" /min "%APPDATA%\MeridianSync\svchost.exe" --service --quiet
-      - action: create
-        path: MeridianSync/logs/agent.log
-        content: |
-          2026-03-11T09:17:44Z agent[4188] INFO  service registered
-          2026-03-11T09:17:44Z agent[4188] INFO  host=MRD-FIN-07 build=q.3.1.7
-
+  # -- 5. Persistence (09:22) -----------------------------------------------
+  # A .reg export writing a Run key that names the implant. Beat 8's critical
+  # Sigma rule is the one that looks for this.
   - actor: clerk
-    offset: 18m
+    offset: 22m
     actions:
       - action: create
-        path: Desktop/sync_register.reg
+        path: AppData/Roaming/persistence.reg
         content: |
           Windows Registry Editor Version 5.00
 
           [HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run]
-          "MeridianSync"="\"C:\\Users\\r.mehta\\AppData\\Roaming\\MeridianSync\\svchost.exe\" --service --quiet"
+          "MeridianSync"="C:\\Users\\r.mehta\\AppData\\Roaming\\MeridianSync\\updater.exe"
 
-          [HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\RunOnce]
-          "SyncRepair"="powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA"
-
-  # -- 5. The beacon: every 300 s, for hours --------------------------------
-  # Perfectly regular intervals. Humans are never this punctual; that regularity
-  # IS the detection (detect_network_beacon measures the coefficient of variation).
+  # -- 6. Beaconing, all day (09:25 onward) ---------------------------------
   - actor: machine
-    offset: 22m
-    every: 5m
-    repeat: 170
+    offset: 25m
+    every: 30m
+    repeat: 28
     actions:
       - action: append
-        path: MeridianSync/logs/agent.log
-        content: "${DATE:2006-01-02T15:04:05Z} agent[4188] DEBUG beacon seq=${SEQ} dst=45.147.229.83:443 sent=512 recv=384 rtt=41ms\n"
+        path: MeridianSync/sync.log
+        content: "${DATE:2006-01-02T15:04:05Z07:00} SYNC host=${VAR:host} peer=${VAR:c2}:443 status=OK\n"
 
-  # -- 6. Staging: documents copied to a hidden cache (22:40) ---------------
+  # -- 7. Collection staged (00:00, the small hours) ------------------------
+  # Twelve files under one id, so the archive and the deletion can both name
+  # exactly these and not a redrawn template.
   - actor: clerk
-    offset: 13h40m
-    every: 40s
-    repeat: 24
+    offset: 15h
+    every: 2s
+    repeat: 12
     actions:
       - action: create
-        path: AppData/Local/Temp/.cache/stg_${SEQ}_${RND:6}.tmp
-        ext: .csv
-        content_len: 4096
+        path: AppData/Local/Temp/staging/stg_${ITER}.tmp
+        id: staging
+        content_len: 32768
+        content_kind: bytes
 
-  # -- 7. Packaged for exfil (23:05) ----------------------------------------
-  - actor: clerk
-    offset: 14h5m
-    actions:
-      - action: create
-        path: AppData/Local/Temp/.cache/bkp_20260311.zip
-        ext: .zip
-        content_len: 61440
-      - action: create
-        path: AppData/Local/Temp/.cache/MANIFEST.txt
-        content: |
-          bkp_20260311.zip
-          24 objects staged from Documents\finance\close and Documents\hr\onboarding
-          split=none compress=deflate
-
-  # -- 8. ANTI-FORENSICS: backdate the implant (12 Mar 00:10) ---------------
-  # mtime/atime are pushed back two years. crtime is NOT settable this way, so
-  # it stays at the real moment of creation -- and a file modified two years
-  # BEFORE it was born is physically impossible. That is 09_revenant.mut's
-  # headline rule, and this is where it comes from.
+  # -- 8. The archive (00:10) -----------------------------------------------
+  # Stored, not deflated, so the members' own high entropy reaches the archive
+  # and beat 1 sees it. Members are named by id for the reason above.
   - actor: clerk
     offset: 15h10m
     actions:
-      - action: mace
-        path: AppData/Roaming/MeridianSync/svchost.exe
-        atime: 2024-01-05T08:00:00Z
-        mtime: 2024-01-05T08:00:00Z
-      - action: mace
-        path: AppData/Roaming/MeridianSync/config.dat
-        atime: 2024-01-05T08:00:00Z
-        mtime: 2024-01-05T08:00:00Z
-      - action: mace
-        path: Downloads/${VAR:lure}.pdf.exe
-        atime: 2024-01-05T08:00:00Z
-        mtime: 2024-01-05T08:00:00Z
+      - action: archive
+        path: AppData/Local/Temp/bkp_20260311.zip
+        archive:
+          method: store
+          comment: QUILLDROP staging
+          base: AppData/Local/Temp/staging
+          member_refs:
+            - staging
 
-  - actor: machine
-    offset: 15h10m
-    actions:
-      - action: mace
-        path: Microsoft/Windows/Start Menu/Programs/StartUp/MeridianSync.cmd
-        atime: 2024-01-05T08:00:00Z
-        mtime: 2024-01-05T08:00:00Z
-
-  # -- 9. ANTI-FORENSICS: cut the beacon window out of the log (00:12) ------
-  # Rotate, then truncate. The rotated copy survives; the live log is emptied.
-  # The sequence numbers in the rotated file now have a hole in them.
-  - actor: machine
-    offset: 15h12m
-    actions:
-      - action: rotate
-        path: MeridianSync/logs/agent.log
-        new_path: MeridianSync/logs/agent.log.1
-      - action: truncate
-        path: MeridianSync/logs/agent.log
-      - action: append
-        path: MeridianSync/logs/agent.log
-        content: "2026-03-12T00:12:31Z agent[4188] INFO  log rotated\n"
-
-  # -- 10. ANTI-FORENSICS: delete the staging tree (00:15) ------------------
-  # The .tmp files go. The zip stays, because the operator still needed it.
+  # -- 9. ANTI-FORENSICS (00:15) --------------------------------------------
+  # The archive's mtime is pushed back to 2024 while its crtime stays at its
+  # true 2026 birth: beat 6 reads a file older than itself. Then the staging
+  # tree goes, deleted BY ID -- ${ITER} has moved on since those files were
+  # created, so repeating the path template would name files that never existed.
+  # That is the defect fsagen refused in the shipped playbook (M26-EX-018).
   - actor: clerk
     offset: 15h15m
-    every: 1s
-    repeat: 24
     actions:
+      - action: mace
+        path: AppData/Local/Temp/bkp_20260311.zip
+        mtime: 2024-07-02T11:00:00Z
       - action: delete
-        path: AppData/Local/Temp/.cache/stg_${SEQ}_${RND:6}.tmp
+        refs: staging
 
-  # -- 11. Business carries on, oblivious ------------------------------------
+  # -- 10. Business carries on, oblivious -----------------------------------
   - actor: business
     offset: 16h
     every: 30m
@@ -255,5 +276,4 @@ steps:
     actions:
       - action: create
         path: finance/close/post_incident_${SEQ}.csv
-        ext: .csv
         content_len: 2048

@@ -13,10 +13,15 @@ them.
 
 ## Before anyone arrives
 
-1. `go install github.com/aoiflux/fsagen@latest` and run
+1. `go install github.com/aoiflux/fsagen@v0.1.0` — the version, not `@latest`,
+   which is now v0.2.0 — and run
    `.\examples\workshop\evidence\build_evidence.ps1` on your own machine.
    Confirm it finishes and check the file count against
-   [evidence/README.md](evidence/README.md).
+   [evidence/README.md](evidence/README.md): **98 files, 131 timeline rows**.
+   Generate on **NTFS**. On ext4 or APFS the script still produces a corpus,
+   but the timeline has no creation times and beat 6's central finding cannot
+   fire; hand those attendees the pre-built corpus instead. The script says so
+   when it happens.
 2. **Add a Defender exclusion for the corpus folder**, and generate somewhere
    Windows Search does not index. Defender's ML detection refuses writes of
    generated PE files and its verdict is not stable across runs; Windows Search
