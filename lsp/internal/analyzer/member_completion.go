@@ -25,7 +25,7 @@ func (s *Snapshot) MemberCompletionsAt(pos lsp.Position) ([]lsp.CompletionItem, 
 	if s == nil || s.Program == nil {
 		return nil, false
 	}
-	offset, ok := offsetForPosition(s.Source, pos)
+	offset, ok := s.ByteOffset(pos)
 	if !ok {
 		return nil, false
 	}
@@ -141,28 +141,6 @@ func errorFieldCompletionItems(prefix string, pos lsp.Position) []lsp.Completion
 	return items
 }
 
-// offsetForPosition converts a zero-based (line, character) position to a byte
-// offset in src. Characters are treated as bytes, matching the rest of the
-// analyzer's ASCII-oriented position handling.
-func offsetForPosition(src string, pos lsp.Position) (int, bool) {
-	i := 0
-	for line := 0; line < int(pos.Line); line++ {
-		nl := strings.IndexByte(src[i:], '\n')
-		if nl < 0 {
-			return 0, false
-		}
-		i += nl + 1
-	}
-	target := i + int(pos.Character)
-	if target > len(src) {
-		target = len(src)
-	}
-	if target < 0 {
-		return 0, false
-	}
-	return target, true
-}
-
 // memberAccessAt inspects src ending at offset and, if it is a `receiver.prefix`
 // member access, returns the receiver identifier and the already-typed field
 // prefix.
@@ -261,8 +239,12 @@ func (s *Snapshot) structFieldCompletionItems(typeName string, names []string, p
 func memberCompletionItems(names []string, kind lsp.CompletionItemKind, prefix string, pos lsp.Position) []lsp.CompletionItem {
 	lowerPrefix := strings.ToLower(prefix)
 	start := pos
-	if lsp.UInteger(len(prefix)) <= pos.Character {
-		start.Character = pos.Character - lsp.UInteger(len(prefix))
+	// The prefix is measured in the same units as the position it is subtracted
+	// from. len(prefix) is bytes, so on a non-ASCII prefix the edit started too
+	// far left and replaced text the user had not typed.
+	units := lsp.UInteger(utf16Len(prefix))
+	if units <= pos.Character {
+		start.Character = pos.Character - units
 	}
 	editRange := lsp.Range{Start: start, End: pos}
 

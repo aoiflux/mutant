@@ -25,8 +25,8 @@ func (s *Snapshot) StringLiteralRefs() []StringLiteralRef {
 		if !ok || lit == nil || lit.Value == "" || !rng.IsValid() {
 			continue
 		}
-		start := lsp.Position{Line: uint32(rng.Start.Line - 1), Character: uint32(rng.Start.Column - 1)}
-		end := lsp.Position{Line: uint32(rng.End.Line - 1), Character: uint32(rng.End.Column - 1)}
+		converted := s.Range(rng)
+		start, end := converted.Start, converted.End
 		// Trim the surrounding quotes for a single-line literal so the underline
 		// covers just the path text.
 		if start.Line == end.Line && end.Character >= start.Character+2 {

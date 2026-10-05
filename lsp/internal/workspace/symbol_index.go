@@ -7,7 +7,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/lsp/internal/analyzer"
-	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/sema"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -398,7 +397,7 @@ func collectUsages(snapshot *analyzer.Snapshot) ([]indexedUsage, []indexedMember
 			if _, isFieldName := fields[typed]; isFieldName {
 				continue
 			}
-			bare = append(bare, indexedUsage{name: typed.Value, rng: localprotocol.ToLSPRange(rng)})
+			bare = append(bare, indexedUsage{name: typed.Value, rng: snapshot.Range(rng)})
 		case *mast.FieldExpression:
 			if typed == nil || typed.Field == nil {
 				continue
@@ -415,7 +414,7 @@ func collectUsages(snapshot *analyzer.Snapshot) ([]indexedUsage, []indexedMember
 			member = append(member, indexedMemberUsage{
 				left:   left.Value,
 				member: typed.Field.Value,
-				rng:    localprotocol.ToLSPRange(fieldRange),
+				rng:    snapshot.Range(fieldRange),
 				inCall: isCall,
 			})
 		}

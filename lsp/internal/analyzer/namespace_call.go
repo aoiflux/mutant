@@ -123,9 +123,10 @@ func (s *Snapshot) namespacedBuiltinAt(pos lsp.Position) (name string, onField b
 
 	var best *mast.FieldExpression
 	bestSize := int(^uint(0) >> 1)
+	line, column := s.TokenPosition(pos)
 	for node, rng := range s.Program.NodePositions {
 		field, isField := node.(*mast.FieldExpression)
-		if !isField || field == nil || !rng.IsValid() || !contains(rng, pos) {
+		if !isField || field == nil || !rng.IsValid() || !rangeContains(rng, line, column) {
 			continue
 		}
 		if size := rng.End.Offset - rng.Start.Offset; size < bestSize {
@@ -144,7 +145,7 @@ func (s *Snapshot) namespacedBuiltinAt(pos lsp.Position) (name string, onField b
 	// The field's own range is the narrower of the two, so it is asked about
 	// first; anything else inside the expression is the namespace.
 	if best.Field != nil {
-		if rng, has := s.Program.NodePositions[mast.Node(best.Field)]; has && rng.IsValid() && contains(rng, pos) {
+		if rng, has := s.Program.NodePositions[mast.Node(best.Field)]; has && rng.IsValid() && rangeContains(rng, line, column) {
 			return resolved, true, true
 		}
 	}

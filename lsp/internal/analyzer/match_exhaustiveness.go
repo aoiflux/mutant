@@ -40,7 +40,6 @@ import (
 	"strings"
 
 	mast "mutant/ast"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -83,7 +82,7 @@ func lintMatchExhaustiveness(snapshot *Snapshot, lintConfig LintConfig) []lsp.Di
 		}
 
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message: fmt.Sprintf(

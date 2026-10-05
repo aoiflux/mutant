@@ -30,7 +30,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -149,7 +148,7 @@ func (c *spawnWriteCollector) reportWrites(literal *mast.FunctionLiteral, builti
 		}
 
 		c.result = append(c.result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    c.snapshot.Range(rng),
 			Severity: c.severity,
 			Source:   c.source,
 			Message: fmt.Sprintf(

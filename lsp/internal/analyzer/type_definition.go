@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	mast "mutant/ast"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -18,7 +17,7 @@ func (s *Snapshot) TypeDefinitionLocation(uri lsp.DocumentUri, pos lsp.Position)
 	}
 
 	if resolved.kind == lsp.CompletionItemKindStruct || resolved.kind == lsp.CompletionItemKindEnum {
-		return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(resolved.rng)}, true
+		return &lsp.Location{URI: uri, Range: s.Range(resolved.rng)}, true
 	}
 
 	if typeName, ok := s.structTypeNameForDeclaration(resolved.ident); ok {
@@ -77,7 +76,7 @@ func (s *Snapshot) structDefinitionLocation(uri lsp.DocumentUri, typeName string
 		if !ok {
 			return nil, false
 		}
-		return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(rng)}, true
+		return &lsp.Location{URI: uri, Range: s.Range(rng)}, true
 	}
 	return nil, false
 }
@@ -95,7 +94,7 @@ func (s *Snapshot) enumDefinitionLocation(uri lsp.DocumentUri, typeName string) 
 		if !ok {
 			return nil, false
 		}
-		return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(rng)}, true
+		return &lsp.Location{URI: uri, Range: s.Range(rng)}, true
 	}
 	return nil, false
 }
@@ -117,7 +116,7 @@ func (s *Snapshot) structDefinitionLocationForField(uri lsp.DocumentUri, fieldId
 			if !ok {
 				return nil, false
 			}
-			return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(rng)}, true
+			return &lsp.Location{URI: uri, Range: s.Range(rng)}, true
 		}
 	}
 	return nil, false
@@ -140,7 +139,7 @@ func (s *Snapshot) enumDefinitionLocationForVariant(uri lsp.DocumentUri, variant
 			if !ok {
 				return nil, false
 			}
-			return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(rng)}, true
+			return &lsp.Location{URI: uri, Range: s.Range(rng)}, true
 		}
 	}
 	return nil, false

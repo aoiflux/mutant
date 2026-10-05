@@ -26,7 +26,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -80,7 +79,7 @@ func lintSecretOption(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 				return
 			}
 			result = append(result, lsp.Diagnostic{
-				Range:    localprotocol.ToLSPRange(firstRange),
+				Range:    snapshot.Range(firstRange),
 				Severity: severity,
 				Source:   &source,
 				Message: fmt.Sprintf("`%s` refuses an option named %q: %s.", name, firstName,

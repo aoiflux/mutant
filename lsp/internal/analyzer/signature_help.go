@@ -6,7 +6,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
-	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/token"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -53,12 +52,13 @@ func (s *Snapshot) callExpressionAt(pos lsp.Position) (*mast.CallExpression, boo
 	var best *mast.CallExpression
 	bestSize := int(^uint(0) >> 1)
 
+	line, column := s.TokenPosition(pos)
 	for node, rng := range s.Program.NodePositions {
 		call, ok := node.(*mast.CallExpression)
 		if !ok || call == nil || !rng.IsValid() {
 			continue
 		}
-		if !localprotocol.ContainsPosition(rng, pos) {
+		if !rangeContains(rng, line, column) {
 			continue
 		}
 		size := rng.End.Offset - rng.Start.Offset
@@ -210,11 +210,12 @@ func (s *Snapshot) activeParameterForCall(call *mast.CallExpression, pos lsp.Pos
 		return ranges[i].rng.Start.Column < ranges[j].rng.Start.Column
 	})
 
+	line, column := s.TokenPosition(pos)
 	for _, item := range ranges {
-		if localprotocol.ContainsPosition(item.rng, pos) {
+		if rangeContains(item.rng, line, column) {
 			return item.index
 		}
-		if positionBeforeTokenPosition(pos, item.rng.Start) {
+		if positionBeforeTokenPosition(line, column, item.rng.Start) {
 			return item.index
 		}
 	}
@@ -222,9 +223,11 @@ func (s *Snapshot) activeParameterForCall(call *mast.CallExpression, pos lsp.Pos
 	return ranges[len(ranges)-1].index
 }
 
-func positionBeforeTokenPosition(pos lsp.Position, tokenPos token.Position) bool {
-	line := int(pos.Line) + 1
-	column := int(pos.Character) + 1
+// positionBeforeTokenPosition takes an already-converted 1-based line and byte
+// column, so that a caller comparing one cursor against many ranges converts it
+// once rather than per comparison -- and so that the conversion happens in one
+// place rather than here as well.
+func positionBeforeTokenPosition(line, column int, tokenPos token.Position) bool {
 	if line != tokenPos.Line {
 		return line < tokenPos.Line
 	}
@@ -239,7 +242,7 @@ func positionInsideIdentifier(s *Snapshot, ident *mast.Identifier, fallback lsp.
 	if !ok {
 		return fallback
 	}
-	return lsp.Position{Line: lsp.UInteger(rng.Start.Line - 1), Character: lsp.UInteger(rng.Start.Column - 1)}
+	return s.Position(rng.Start)
 }
 
 func (s *Snapshot) functionLiteralForBindingIdent(target *mast.Identifier) (*mast.FunctionLiteral, bool) {

@@ -3,6 +3,8 @@ package server
 import (
 	"strings"
 
+	localprotocol "mutant/lsp/internal/protocol"
+
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -87,7 +89,7 @@ func linePosition(line int, lines []string) lsp.Position {
 	if strings.HasSuffix(last, "\n") {
 		return lsp.Position{Line: lsp.UInteger(len(lines)), Character: 0}
 	}
-	return lsp.Position{Line: lsp.UInteger(len(lines) - 1), Character: lsp.UInteger(len([]rune(last)))}
+	return lsp.Position{Line: lsp.UInteger(len(lines) - 1), Character: lsp.UInteger(localprotocol.UTF16Len(last))}
 }
 
 // splitLines splits text into lines that keep their trailing newline, so

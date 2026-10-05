@@ -24,7 +24,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -89,7 +88,7 @@ func lintLifecycleState(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnos
 				return
 			}
 			result = append(result, lsp.Diagnostic{
-				Range:    localprotocol.ToLSPRange(rng),
+				Range:    snapshot.Range(rng),
 				Severity: severity,
 				Source:   &source,
 				Message: fmt.Sprintf("`%s` never moves a case to %s, so the call is refused whatever state the case "+

@@ -397,7 +397,7 @@ func (s *Server) hover(_ *glsp.Context, params *lsp.HoverParams) (*lsp.Hover, er
 	}
 	return &lsp.Hover{
 		Contents: lsp.MarkupContent{Kind: lsp.MarkupKindMarkdown, Value: text},
-		Range:    rangePtr(localprotocol.ToLSPRange(rng)),
+		Range:    rangePtr(snapshot.Range(rng)),
 	}, nil
 }
 
@@ -891,7 +891,7 @@ func lineDeleteRange(text string, line lsp.UInteger) (lsp.Range, bool) {
 	if idx == len(lines)-1 {
 		return lsp.Range{
 			Start: lsp.Position{Line: lsp.UInteger(idx), Character: 0},
-			End:   lsp.Position{Line: lsp.UInteger(idx), Character: lsp.UInteger(len([]rune(lines[idx])))},
+			End:   lsp.Position{Line: lsp.UInteger(idx), Character: lsp.UInteger(localprotocol.UTF16Len(lines[idx]))},
 		}, true
 	}
 
@@ -1042,12 +1042,12 @@ func (s *Server) prepareRename(_ *glsp.Context, params *lsp.PrepareRenameParams)
 			return nil, nil
 		}
 		return &lsp.RangeWithPlaceholder{
-			Range:       localprotocol.ToLSPRange(identRange),
+			Range:       snapshot.Range(identRange),
 			Placeholder: name,
 		}, nil
 	}
 	return &lsp.RangeWithPlaceholder{
-		Range:       localprotocol.ToLSPRange(rng),
+		Range:       snapshot.Range(rng),
 		Placeholder: placeholder,
 	}, nil
 }
@@ -1550,7 +1550,7 @@ func (s *Server) workspaceDeclarationAt(snapshot *analyzer.Snapshot, uri lsp.Doc
 		writtenBare: true,
 		declaration: &lsp.Location{
 			URI:   lsp.DocumentUri(targetURI),
-			Range: localprotocol.ToLSPRange(declared.DeclRange),
+			Range: snapshot.Range(declared.DeclRange),
 		},
 	}, true
 }
@@ -1575,13 +1575,24 @@ func (s *Server) workspaceMacroDeclaration(fromKey, name string) (workspaceDecla
 	if !addressable || targetURI == "" {
 		return workspaceDeclaration{}, false
 	}
+	// The range belongs to the target file, so it is converted with that file's
+	// own text. snapshotFor reads a document that nobody has opened, which is
+	// the usual case here -- the cursor is on a macro declared somewhere else.
+	// If that file cannot be read there is no text to convert against, and a nil
+	// Mapper answers in byte columns: the declaration is still returned, because
+	// losing go-to-definition is worse than a column that is only wrong on a
+	// line holding a non-ASCII character.
+	var mapper *localprotocol.Mapper
+	if target, ok := s.snapshotFor(lsp.DocumentUri(targetURI)); ok {
+		mapper = target.Mapper()
+	}
 	return workspaceDeclaration{
 		module:      owner,
 		name:        name,
 		writtenBare: true,
 		declaration: &lsp.Location{
 			URI:   lsp.DocumentUri(targetURI),
-			Range: localprotocol.ToLSPRange(macro.DeclRange),
+			Range: mapper.Range(macro.DeclRange),
 		},
 	}, true
 }
@@ -1706,7 +1717,10 @@ func fullDocumentRange(text string) lsp.Range {
 
 	lines := strings.Split(normalized, "\n")
 	lastLine := len(lines) - 1
-	lastCharacter := len([]rune(lines[lastLine]))
+	// UTF16Len, not len([]rune(...)): a rune outside the basic multilingual
+	// plane is one rune and two UTF-16 units, so the rune count ended a
+	// character short of the real end of the document.
+	lastCharacter := localprotocol.UTF16Len(lines[lastLine])
 
 	return lsp.Range{
 		Start: lsp.Position{Line: 0, Character: 0},

@@ -178,7 +178,7 @@ func (s *Snapshot) callHierarchyNodeAt(pos lsp.Position) (*sema.Node, bool) {
 	if graph == nil {
 		return nil, false
 	}
-	line, column := tokenPosition(pos)
+	line, column := s.TokenPosition(pos)
 	node, ok := graph.Resolve(line, column)
 	if !ok || node == nil {
 		return nil, false

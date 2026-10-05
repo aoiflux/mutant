@@ -1303,6 +1303,47 @@ exhaustive lists.
   allocation before the bytes it promises are there to read: one header could ask for 240 GB,
   which no `recover` catches (M26-ART-005).
 
+- **The language server pointed at the wrong place on any line holding a
+  non-ASCII character.** LSP 3.16 defines `Position.character` as an offset in
+  UTF-16 code units and offers no way to negotiate another encoding:
+  `positionEncoding` arrived in 3.17 and this server is built on
+  `protocol_3_16`. Mutant's lexer counts columns in BYTES, and the server
+  equated the two numbers. They agree on an ASCII line and on no other, so from
+  the first non-ASCII character of a line onwards every range sent out was too
+  far right and every position read in was taken too far left, by one unit per
+  extra UTF-8 byte.
+
+  The trigger is not a non-ASCII identifier. A non-ASCII character anywhere
+  earlier on the line does it, inside a string or a comment included, so this
+  was live for ordinary ASCII-named code -- 18 of the shipped `.mut` files carry
+  non-ASCII in a string or a comment. Everything that carries a range was
+  affected: diagnostics underlined the wrong span, go-to-definition and hover
+  resolved the wrong token or none, inlay hints landed inside words, document
+  links missed -- and the server advertises `RenameProvider`, so accepting a
+  rename applied its edit at the wrong offset in the user's own file.
+
+  The conversion now happens once, at the protocol boundary, in
+  `protocol.Mapper`. Byte columns are deliberately NOT replaced with character
+  columns: the CLI, the parser's own messages and the sweep goldens all read
+  `token.Position` as bytes and the goldens pin it, so nothing in the lexer, the
+  parser or the AST changes. Seventy-five conversion sites across thirty files
+  now go through two functions, and the three package-level converters that did
+  the arithmetic without a document in hand are deleted rather than corrected,
+  so a new call site cannot quietly reintroduce it.
+
+  Three surfaces beyond the ones reported. A semantic token carries a start and
+  a length, and both are in the protocol's units: the length was either the byte
+  difference `end-start` or `len([]rune(text))`, and a rune count is wrong too
+  for any rune outside the basic multilingual plane, which needs two UTF-16
+  units. That same rune count gave a document's last position in three more
+  places. And `lsp/api` now converts back to a byte column, so `mutant lint`
+  keeps reporting the column the parser reports.
+
+  On an ASCII document every number is unchanged, and that is asserted rather
+  than argued: the existing suite passes untouched and
+  `TestAnASCIIDocumentIsUnaffected` pins it. Each new fixture was proved to fail
+  on the old arithmetic first. (M26-LSP-027)
+
 ### Security
 
 - **A crafted artifact could kill the process parsing it, and one kind could

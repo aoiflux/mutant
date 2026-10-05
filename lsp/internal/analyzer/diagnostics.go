@@ -309,7 +309,7 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	source := "mutant-parser"
 	for _, parseErr := range snapshot.ParseErrors {
 		diagnostics = append(diagnostics, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(parseErr.Range),
+			Range:    snapshot.Range(parseErr.Range),
 			Severity: &severity,
 			Source:   &source,
 			Message:  parseErr.Msg,
@@ -404,7 +404,7 @@ func lintPlatformSupport(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 		}
 		platforms, _ := builtin.PlatformSupport(name)
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message: fmt.Sprintf("builtin `%s` is not supported on %s (supported: %s)",
@@ -458,7 +458,7 @@ func lintUnreachableCode(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 				return
 			}
 			result = append(result, lsp.Diagnostic{
-				Range:    localprotocol.ToLSPRange(rng),
+				Range:    snapshot.Range(rng),
 				Severity: severity,
 				Source:   &source,
 				Message:  fmt.Sprintf("unreachable code after `%s`", kind),
@@ -490,7 +490,7 @@ func lintUnreachableCode(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagno
 					break
 				}
 				result = append(result, lsp.Diagnostic{
-					Range:    localprotocol.ToLSPRange(rng),
+					Range:    snapshot.Range(rng),
 					Severity: severity,
 					Source:   &source,
 					Message:  "unreachable arm after `_`, which matches anything",
@@ -553,7 +553,7 @@ func lintSemicolons(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic 
 	source := DiagnosticSourceFormat
 	result := make([]lsp.Diagnostic, 0, len(problems))
 	for _, problem := range problems {
-		rng := localprotocol.ToLSPRange(problem.Range)
+		rng := snapshot.Range(problem.Range)
 		if !problem.Range.IsValid() {
 			continue
 		}
@@ -663,7 +663,7 @@ func lintDuplicateTopLevelDeclarations(snapshot *Snapshot, lintConfig LintConfig
 		}
 
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message:  message,
@@ -780,6 +780,10 @@ func rebindsAConsumedName(graph *sema.Graph, previous *sema.Node) bool {
 }
 
 func syntaxBalanceDiagnostics(sourceText string) []lsp.Diagnostic {
+	// This rule scans the bytes itself rather than reading the AST, so it needs
+	// its own index to turn the byte columns it counts into the units the
+	// protocol wants.
+	m := localprotocol.NewMapper(sourceText)
 	if sourceText == "" {
 		return nil
 	}
@@ -856,7 +860,7 @@ func syntaxBalanceDiagnostics(sourceText string) []lsp.Diagnostic {
 		case ')', ']', '}':
 			if len(stack) == 0 {
 				diagnostics = append(diagnostics, lsp.Diagnostic{
-					Range:    singleCharRange(line, col),
+					Range:    singleCharRange(m, line, col),
 					Severity: &severity,
 					Source:   &source,
 					Message:  fmt.Sprintf("unexpected closing delimiter `%c`", ch),
@@ -868,7 +872,7 @@ func syntaxBalanceDiagnostics(sourceText string) []lsp.Diagnostic {
 			top := stack[len(stack)-1]
 			if !delimitersMatch(top.token, string(ch)) {
 				diagnostics = append(diagnostics, lsp.Diagnostic{
-					Range:    singleCharRange(line, col),
+					Range:    singleCharRange(m, line, col),
 					Severity: &severity,
 					Source:   &source,
 					Message:  fmt.Sprintf("mismatched delimiter `%c`", ch),
@@ -886,7 +890,7 @@ func syntaxBalanceDiagnostics(sourceText string) []lsp.Diagnostic {
 	for i := len(stack) - 1; i >= 0; i-- {
 		open := stack[i]
 		diagnostics = append(diagnostics, lsp.Diagnostic{
-			Range:    singleCharRange(open.line, open.col),
+			Range:    singleCharRange(m, open.line, open.col),
 			Severity: &severity,
 			Source:   &source,
 			Message:  fmt.Sprintf("unclosed delimiter `%s`", open.token),
@@ -906,9 +910,18 @@ func delimitersMatch(open, close string) bool {
 		(open == "{" && close == "}")
 }
 
-func singleCharRange(line, col int) lsp.Range {
-	start := lsp.Position{Line: lsp.UInteger(line), Character: lsp.UInteger(col)}
-	end := lsp.Position{Line: lsp.UInteger(line), Character: lsp.UInteger(col + 1)}
+// singleCharRange is the range covering one character, given the 0-based line
+// and 0-based BYTE column the delimiter scanner counted to.
+//
+// The scanner walks the source a byte at a time, so its column is a byte
+// column; handing it to the client unconverted put every unbalanced-delimiter
+// diagnostic in the wrong place on a line with a non-ASCII character earlier on
+// it. The end is one character further on, which is one UTF-16 unit for a
+// delimiter because every delimiter this scanner tracks is ASCII.
+func singleCharRange(m *localprotocol.Mapper, line, col int) lsp.Range {
+	start := m.PositionAt(line, col)
+	end := start
+	end.Character++
 	return lsp.Range{Start: start, End: end}
 }
 
@@ -967,14 +980,14 @@ func lintUnusedDeclarations(snapshot *Snapshot, lintConfig LintConfig, skipNames
 			continue
 		}
 
-		pos := lsp.Position{Line: lsp.UInteger(rng.Start.Line - 1), Character: lsp.UInteger(rng.Start.Column - 1)}
+		pos := snapshot.Position(rng.Start)
 		locations, ok := snapshot.ReferenceLocations("", pos, false)
 		if ok && len(locations) > 0 {
 			continue
 		}
 
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message:  fmt.Sprintf("unused declaration `%s`", ident.Value),
@@ -1049,7 +1062,7 @@ func lintUnusedImports(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnost
 			continue
 		}
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(node.FullRange),
+			Range:    snapshot.Range(node.FullRange),
 			Severity: severity,
 			Source:   &source,
 			Message: fmt.Sprintf("unused import `%s`: the namespace is never read, "+
@@ -1084,7 +1097,7 @@ func lintUndefinedDeclarations(snapshot *Snapshot, lintConfig LintConfig) []lsp.
 			continue
 		}
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message:  message,
@@ -1527,7 +1540,7 @@ func (c *nestingCollector) maybeAddNestingDiagnostic(node mast.Node, depth int) 
 	}
 
 	c.result = append(c.result, lsp.Diagnostic{
-		Range:    localprotocol.ToLSPRange(rng),
+		Range:    c.snapshot.Range(rng),
 		Severity: c.severity,
 		Source:   c.source,
 		Message:  fmt.Sprintf("nesting depth %d exceeds recommended maximum 2; prefer guard clauses, early returns, or extracting helper functions", depth),
@@ -1907,7 +1920,7 @@ func (c *builtinCallCollector) checkDeprecated(name string, anchor mast.Node) {
 	}
 
 	c.result = append(c.result, lsp.Diagnostic{
-		Range:    localprotocol.ToLSPRange(rng),
+		Range:    c.snapshot.Range(rng),
 		Severity: c.deprecatedSev,
 		Source:   c.source,
 		Tags:     []lsp.DiagnosticTag{lsp.DiagnosticTagDeprecated},
@@ -1955,7 +1968,7 @@ func (c *builtinCallCollector) checkMultiNameBinding(names []*mast.Identifier, v
 	}
 
 	c.result = append(c.result, lsp.Diagnostic{
-		Range:    localprotocol.ToLSPRange(rng),
+		Range:    c.snapshot.Range(rng),
 		Severity: c.returnSeverity,
 		Source:   c.source,
 		Message: fmt.Sprintf("%s returns a single %s, not a (value, err) pair: %s. Bind one name.",
@@ -1987,7 +2000,7 @@ func (c *builtinCallCollector) checkCall(name string, anchor mast.Node, args []m
 		if c.aritySeverity != nil {
 			if rng, ok := c.snapshot.Program.RangeOf(anchor); ok {
 				c.result = append(c.result, lsp.Diagnostic{
-					Range:    localprotocol.ToLSPRange(rng),
+					Range:    c.snapshot.Range(rng),
 					Severity: c.aritySeverity,
 					Source:   c.source,
 					Message:  arity.message(name, len(args)),
@@ -2032,7 +2045,7 @@ func (c *builtinCallCollector) checkArgumentChoices(name string, args []mast.Exp
 			continue
 		}
 		c.result = append(c.result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    c.snapshot.Range(rng),
 			Severity: c.choiceSeverity,
 			Source:   c.source,
 			Message: fmt.Sprintf("argument %d to `%s` is one of %s, not %q; the builtin refuses any other word when it runs.",
@@ -2093,7 +2106,7 @@ func (c *builtinCallCollector) checkArgumentTypes(name string, args []mast.Expre
 			continue
 		}
 		c.result = append(c.result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    c.snapshot.Range(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
 			Message:  argTypeMessage(name, i+1, param, kind),
@@ -2138,7 +2151,7 @@ func (c *builtinCallCollector) checkArrayElements(name string, argIndex int, par
 			continue
 		}
 		c.result = append(c.result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    c.snapshot.Range(rng),
 			Severity: c.argTypeSeverity,
 			Source:   c.source,
 			Message:  elementTypeMessage(name, argIndex+1, param, elementKind),

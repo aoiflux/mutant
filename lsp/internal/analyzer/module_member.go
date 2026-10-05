@@ -33,7 +33,7 @@ const moduleMemberSource = "mutant-modules"
 // is not in the symbol table. The two disagreed about every file that declares
 // a struct named after a builtin family.
 func (s *Snapshot) localScopeAt(pos lsp.Position) sema.LocalScope {
-	return s.Graph().LocalScopeAt(tokenPosition(pos))
+	return s.Graph().LocalScopeAt(s.TokenPosition(pos))
 }
 
 // localScopeAtNode is localScopeAt for a caller holding a node rather than a
@@ -53,16 +53,18 @@ func (s *Snapshot) localScopeAtNode(node mast.Node) sema.LocalScope {
 	if !ok {
 		return sema.LocalScope{}
 	}
-	return s.Graph().LocalScopeAt(rng.Start.Line, rng.Start.Column)
+	return s.localScopeAtRange(rng)
 }
 
-// startOf is the LSP position an ast.Range begins at. Ranges are 1-based in the
-// AST and 0-based in the protocol.
-func startOf(rng mast.Range) lsp.Position {
-	return lsp.Position{
-		Line:      lsp.UInteger(rng.Start.Line - 1),
-		Character: lsp.UInteger(rng.Start.Column - 1),
-	}
+// localScopeAtRange is localScopeAt for a caller that already holds a range in
+// the AST's own coordinates.
+//
+// It exists so such a caller does not convert the range to a protocol position
+// and immediately back again. That round trip is what startOf was for, and a
+// conversion that is undone a line later is one that can be wrong in both
+// directions at once -- which is exactly what M26-LSP-027 was.
+func (s *Snapshot) localScopeAtRange(rng mast.Range) sema.LocalScope {
+	return s.Graph().LocalScopeAt(rng.Start.Line, rng.Start.Column)
 }
 
 // namespaceField is one `ns.member` in the document, with the range to report
@@ -111,8 +113,9 @@ func (s *Snapshot) fieldExpressionAt(pos lsp.Position) (namespaceField, bool) {
 		best  namespaceField
 		found bool
 	)
+	line, column := s.TokenPosition(pos)
 	for _, candidate := range s.namespaceFields() {
-		if !contains(candidate.rng, pos) {
+		if !rangeContains(candidate.rng, line, column) {
 			continue
 		}
 		span := candidate.rng.End.Offset - candidate.rng.Start.Offset
@@ -153,7 +156,7 @@ func (s *Snapshot) ModuleMemberTarget(pos lsp.Position) (moduleKey, name string,
 	}
 	return owner, field.field, lsp.Location{
 		URI:   lsp.DocumentUri(uri),
-		Range: toLSPRange(declRange),
+		Range: s.Range(declRange),
 	}, true
 }
 
@@ -188,7 +191,7 @@ func (s *Snapshot) ModuleMemberDiagnostics() []lsp.Diagnostic {
 		// the question being asked: whether `ns` is an import namespace is a
 		// property of the file, not of the point inside it.
 		resolved := s.workspace.ResolveField(
-			s.ModuleKey, s.localScopeAt(startOf(field.rng)), field.left, field.field,
+			s.ModuleKey, s.localScopeAtRange(field.rng), field.left, field.field,
 		)
 		if resolved.Kind != sema.FieldRefused || resolved.Refusal == nil {
 			continue
@@ -197,7 +200,7 @@ func (s *Snapshot) ModuleMemberDiagnostics() []lsp.Diagnostic {
 		severity := lsp.DiagnosticSeverityError
 		source := moduleMemberSource
 		diagnostics = append(diagnostics, lsp.Diagnostic{
-			Range:    toLSPRange(field.rng),
+			Range:    s.Range(field.rng),
 			Severity: &severity,
 			Source:   &source,
 			Message:  resolved.Refusal.Error(),

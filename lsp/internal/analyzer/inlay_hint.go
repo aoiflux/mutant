@@ -49,10 +49,7 @@ func (s *Snapshot) InlayHints(rng lsp.Range) []localprotocol.InlayHint {
 			if !ok || !nameRange.IsValid() {
 				continue
 			}
-			pos := lsp.Position{
-				Line:      lsp.UInteger(nameRange.End.Line - 1),
-				Character: lsp.UInteger(nameRange.End.Column - 1),
-			}
+			pos := s.Position(nameRange.End)
 			if pos.Line < rng.Start.Line || pos.Line > rng.End.Line {
 				continue
 			}
@@ -104,10 +101,7 @@ func (s *Snapshot) InlayHints(rng lsp.Range) []localprotocol.InlayHint {
 			if !ok || !argRange.IsValid() {
 				continue
 			}
-			pos := lsp.Position{
-				Line:      lsp.UInteger(argRange.Start.Line - 1),
-				Character: lsp.UInteger(argRange.Start.Column - 1),
-			}
+			pos := s.Position(argRange.Start)
 			if pos.Line < rng.Start.Line || pos.Line > rng.End.Line {
 				continue
 			}

@@ -57,7 +57,7 @@ func (s *Server) prepareCallHierarchy(_ *glsp.Context, params *lsp.CallHierarchy
 	if !found {
 		return nil, nil
 	}
-	return []lsp.CallHierarchyItem{callItem(root, uri)}, nil
+	return []lsp.CallHierarchyItem{callItem(snapshot.Mapper(), root, uri)}, nil
 }
 
 func (s *Server) callHierarchyIncomingCalls(_ *glsp.Context, params *lsp.CallHierarchyIncomingCallsParams) ([]lsp.CallHierarchyIncomingCall, error) {
@@ -71,8 +71,8 @@ func (s *Server) callHierarchyIncomingCalls(_ *glsp.Context, params *lsp.CallHie
 	calls := make([]lsp.CallHierarchyIncomingCall, 0, 4)
 	for _, caller := range snapshot.IncomingCalls(position) {
 		calls = append(calls, lsp.CallHierarchyIncomingCall{
-			From:       callItem(caller, item.URI),
-			FromRanges: lspRanges(caller.CallRanges),
+			From:       callItem(snapshot.Mapper(), caller, item.URI),
+			FromRanges: lspRanges(snapshot.Mapper(), caller.CallRanges),
 		})
 	}
 
@@ -93,8 +93,8 @@ func (s *Server) callHierarchyOutgoingCalls(_ *glsp.Context, params *lsp.CallHie
 	calls := make([]lsp.CallHierarchyOutgoingCall, 0, 4)
 	for _, callee := range snapshot.OutgoingCalls(item.SelectionRange.Start) {
 		calls = append(calls, lsp.CallHierarchyOutgoingCall{
-			To:         callItem(callee, item.URI),
-			FromRanges: lspRanges(callee.CallRanges),
+			To:         callItem(snapshot.Mapper(), callee, item.URI),
+			FromRanges: lspRanges(snapshot.Mapper(), callee.CallRanges),
 		})
 	}
 	if len(calls) == 0 {
@@ -175,9 +175,9 @@ func (s *Server) callerAt(site lsp.Location) (lsp.CallHierarchyItem, bool) {
 		return lsp.CallHierarchyItem{}, false
 	}
 
-	line, column := int(site.Range.Start.Line)+1, int(site.Range.Start.Character)+1
+	line, column := snapshot.TokenPosition(site.Range.Start)
 	if caller, found := snapshot.EnclosingCallNodeAt(line, column); found {
-		return callItem(caller, site.URI), true
+		return callItem(snapshot.Mapper(), caller, site.URI), true
 	}
 
 	name := "<file>"
@@ -204,7 +204,7 @@ func (s *Server) callItemInModule(name string, uri lsp.DocumentUri) (lsp.CallHie
 	if !found {
 		return lsp.CallHierarchyItem{}, false
 	}
-	return callItem(declared, uri), true
+	return callItem(snapshot.Mapper(), declared, uri), true
 }
 
 // snapshotFor returns an analysis of a document whether or not it is open.
@@ -231,7 +231,12 @@ func (s *Server) snapshotFor(uri lsp.DocumentUri) (*analyzer.Snapshot, bool) {
 	return s.analyzeDoc(uri, string(data)), true
 }
 
-func callItem(node analyzer.CallNode, uri lsp.DocumentUri) lsp.CallHierarchyItem {
+// callItem names one declaration for the editor.
+//
+// m is the index of the document uri names, not of the document the request came
+// from: a call hierarchy crosses files, and a range is only meaningful against
+// the text it was measured in.
+func callItem(m *localprotocol.Mapper, node analyzer.CallNode, uri lsp.DocumentUri) lsp.CallHierarchyItem {
 	rng := node.Range
 	if !rng.IsValid() {
 		rng = node.SelectionRange
@@ -244,15 +249,15 @@ func callItem(node analyzer.CallNode, uri lsp.DocumentUri) lsp.CallHierarchyItem
 		Name:           node.Name,
 		Kind:           node.Kind,
 		URI:            uri,
-		Range:          localprotocol.ToLSPRange(rng),
-		SelectionRange: localprotocol.ToLSPRange(selection),
+		Range:          m.Range(rng),
+		SelectionRange: m.Range(selection),
 	}
 }
 
-func lspRanges(ranges []mast.Range) []lsp.Range {
+func lspRanges(m *localprotocol.Mapper, ranges []mast.Range) []lsp.Range {
 	out := make([]lsp.Range, 0, len(ranges))
 	for _, rng := range ranges {
-		out = append(out, localprotocol.ToLSPRange(rng))
+		out = append(out, m.Range(rng))
 	}
 	return out
 }

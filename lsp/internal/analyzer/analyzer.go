@@ -9,6 +9,7 @@ import (
 	mast "mutant/ast"
 	"mutant/builtin"
 	"mutant/lexer"
+	localprotocol "mutant/lsp/internal/protocol"
 	mutantparser "mutant/parser"
 	"mutant/sema"
 	"mutant/token"
@@ -104,11 +105,16 @@ func (s *Snapshot) NodeAt(pos lsp.Position) (mast.Node, mast.Range, bool) {
 	var bestRange mast.Range
 	bestSize := int(^uint(0) >> 1)
 
+	// Converted once, here, and not per node: this loop visits every node in
+	// the document, and turning a protocol position into a byte column costs a
+	// walk of that position's line.
+	line, column := s.TokenPosition(pos)
+
 	for node, rng := range s.Program.NodePositions {
 		if !rng.IsValid() {
 			continue
 		}
-		if !contains(rng, pos) {
+		if !rangeContains(rng, line, column) {
 			continue
 		}
 		size := rng.End.Offset - rng.Start.Offset
@@ -457,8 +463,8 @@ func (s *Snapshot) documentSymbol(stmt mast.Statement) (lsp.DocumentSymbol, bool
 		return lsp.DocumentSymbol{
 			Name:           n.Name.Value,
 			Kind:           kind,
-			Range:          toLSPRange(stmtRange),
-			SelectionRange: toLSPRange(selection),
+			Range:          s.Range(stmtRange),
+			SelectionRange: s.Range(selection),
 		}, true
 	case *mast.StructStatement:
 		if n.Name == nil {
@@ -477,15 +483,15 @@ func (s *Snapshot) documentSymbol(stmt mast.Statement) (lsp.DocumentSymbol, bool
 			children = append(children, lsp.DocumentSymbol{
 				Name:           field.Value,
 				Kind:           lsp.SymbolKindField,
-				Range:          toLSPRange(fieldRange),
-				SelectionRange: toLSPRange(fieldRange),
+				Range:          s.Range(fieldRange),
+				SelectionRange: s.Range(fieldRange),
 			})
 		}
 		return lsp.DocumentSymbol{
 			Name:           n.Name.Value,
 			Kind:           lsp.SymbolKindStruct,
-			Range:          toLSPRange(stmtRange),
-			SelectionRange: toLSPRange(selection),
+			Range:          s.Range(stmtRange),
+			SelectionRange: s.Range(selection),
 			Children:       children,
 		}, true
 	case *mast.EnumStatement:
@@ -505,15 +511,15 @@ func (s *Snapshot) documentSymbol(stmt mast.Statement) (lsp.DocumentSymbol, bool
 			children = append(children, lsp.DocumentSymbol{
 				Name:           variant.Value,
 				Kind:           lsp.SymbolKindEnumMember,
-				Range:          toLSPRange(variantRange),
-				SelectionRange: toLSPRange(variantRange),
+				Range:          s.Range(variantRange),
+				SelectionRange: s.Range(variantRange),
 			})
 		}
 		return lsp.DocumentSymbol{
 			Name:           n.Name.Value,
 			Kind:           lsp.SymbolKindEnum,
-			Range:          toLSPRange(stmtRange),
-			SelectionRange: toLSPRange(selection),
+			Range:          s.Range(stmtRange),
+			SelectionRange: s.Range(selection),
 			Children:       children,
 		}, true
 	default:
@@ -593,32 +599,6 @@ func (s *Snapshot) leadingLineCommentForIdentifier(ident *mast.Identifier) strin
 	return strings.Join(comments, "\n")
 }
 
-func contains(rng mast.Range, pos lsp.Position) bool {
-	line := int(pos.Line) + 1
-	col := int(pos.Character) + 1
-	if isBefore(line, col, rng.Start.Line, rng.Start.Column) {
-		return false
-	}
-	if !isBefore(line, col, rng.End.Line, rng.End.Column) && !(line == rng.End.Line && col == rng.End.Column) {
-		return false
-	}
-	return true
-}
-
-func isBefore(lineA, colA, lineB, colB int) bool {
-	if lineA != lineB {
-		return lineA < lineB
-	}
-	return colA < colB
-}
-
-func toLSPRange(rng mast.Range) lsp.Range {
-	return lsp.Range{
-		Start: lsp.Position{Line: lsp.UInteger(rng.Start.Line - 1), Character: lsp.UInteger(rng.Start.Column - 1)},
-		End:   lsp.Position{Line: lsp.UInteger(rng.End.Line - 1), Character: lsp.UInteger(rng.End.Column - 1)},
-	}
-}
-
 func nodeSpecificity(node mast.Node) int {
 	if node == nil {
 		return 0
@@ -693,7 +673,7 @@ func (s *Snapshot) semanticTokenList() []semanticToken {
 	overrides := collectSemanticTokenTypeOverrides(s.Program)
 
 	tokens := make([]semanticToken, 0, len(s.Program.NodePositions)/4)
-	tokens = append(tokens, lexicalSemanticTokens(s.Source)...)
+	tokens = append(tokens, lexicalSemanticTokens(s.Mapper(), s.Source)...)
 	for node, rng := range s.Program.NodePositions {
 		if !rng.IsValid() {
 			continue
@@ -702,13 +682,13 @@ func (s *Snapshot) semanticTokenList() []semanticToken {
 		if !ok {
 			continue
 		}
-		length := tokenLength(node, rng)
+		length := s.tokenLength(node, rng)
 		if length == 0 {
 			continue
 		}
 		tokens = append(tokens, semanticToken{
 			line:   uint32(rng.Start.Line - 1),
-			start:  uint32(rng.Start.Column - 1),
+			start:  uint32(s.Position(rng.Start).Character),
 			length: length,
 			typeID: typeID,
 			mod:    mod,
@@ -838,7 +818,7 @@ func semanticTokenTypeForNode(node mast.Node, overrides map[mast.Node]semanticTo
 	}
 }
 
-func lexicalSemanticTokens(src string) []semanticToken {
+func lexicalSemanticTokens(m *localprotocol.Mapper, src string) []semanticToken {
 	l := lexer.New(src)
 	out := make([]semanticToken, 0, len(src)/8)
 	for {
@@ -853,16 +833,16 @@ func lexicalSemanticTokens(src string) []semanticToken {
 		if !tok.Start.IsValid() || !tok.End.IsValid() || tok.End.Line != tok.Start.Line {
 			continue
 		}
-		length := uint32(tok.End.Column - tok.Start.Column)
+		length := m.SpanLength(tok.Start.Line-1, tok.Start.Column-1, tok.End.Column-1)
 		if length == 0 {
-			length = uint32(len([]rune(tok.Literal)))
+			length = utf16Len(tok.Literal)
 		}
 		if length == 0 {
 			continue
 		}
 		out = append(out, semanticToken{
 			line:   uint32(tok.Start.Line - 1),
-			start:  uint32(tok.Start.Column - 1),
+			start:  uint32(m.PositionAt(tok.Start.Line-1, tok.Start.Column-1).Character),
 			length: length,
 			typeID: typeID,
 			mod:    0,
@@ -1083,7 +1063,13 @@ func isNilInterface(v any) bool {
 	}
 }
 
-func tokenLength(node mast.Node, rng mast.Range) uint32 {
+// tokenLength is a semantic token's length in UTF-16 code units.
+//
+// Every arm counted in the wrong unit before: a rune count for the literals, and
+// the byte difference end-start for everything else. The two are equal to the
+// right answer only on an ASCII line, and the literal arms are additionally
+// wrong for any rune outside the basic multilingual plane.
+func (s *Snapshot) tokenLength(node mast.Node, rng mast.Range) uint32 {
 	if !rng.IsValid() {
 		return 0
 	}
@@ -1092,11 +1078,11 @@ func tokenLength(node mast.Node, rng mast.Range) uint32 {
 		if n == nil {
 			return 0
 		}
-		return uint32(len([]rune(n.Value)))
+		return utf16Len(n.Value)
 	case *mast.IntegerLiteral:
-		return uint32(len([]rune(n.TokenLiteral())))
+		return utf16Len(n.TokenLiteral())
 	case *mast.FloatLiteral:
-		return uint32(len([]rune(n.TokenLiteral())))
+		return utf16Len(n.TokenLiteral())
 	case *mast.StringLiteral:
 		// A semantic token cannot span lines, and a triple-quoted literal --
 		// or one text piece of an interpolated one -- can. Leaving it out
@@ -1106,11 +1092,11 @@ func tokenLength(node mast.Node, rng mast.Range) uint32 {
 		if rng.End.Line != rng.Start.Line {
 			return 0
 		}
-		return uint32(len([]rune(n.TokenLiteral())))
+		return utf16Len(n.TokenLiteral())
 	default:
 		if rng.End.Line != rng.Start.Line || rng.End.Column <= rng.Start.Column {
 			return 0
 		}
-		return uint32(rng.End.Column - rng.Start.Column)
+		return s.Mapper().SpanLength(rng.Start.Line-1, rng.Start.Column-1, rng.End.Column-1)
 	}
 }

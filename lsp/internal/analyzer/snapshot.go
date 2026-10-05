@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	mast "mutant/ast"
+	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/parser"
 	"mutant/sema"
 )
@@ -58,6 +59,16 @@ type Snapshot struct {
 	// scope, so the body — and therefore the return type — can be typed from it.
 	solvedOnce sync.Once
 	solvedFns  map[*mast.FunctionLiteral]*solvedFunction
+
+	// mapperOnce guards the index that converts between the byte columns the
+	// lexer and the AST record and the UTF-16 code units Position.character is
+	// measured in. The two agree on an ASCII line and on no other, so every
+	// position crossing the protocol boundary goes through it -- see
+	// protocol.Mapper for why the conversion lives at the boundary rather than
+	// in the lexer. Built from Source on the first question that needs one, so
+	// an analysis that answers none never pays for it.
+	mapperOnce sync.Once
+	mapper     *localprotocol.Mapper
 }
 
 // solvedFunctions returns the solved parameter kinds for every user function in

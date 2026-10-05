@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	mast "mutant/ast"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -26,7 +25,7 @@ func (s *Snapshot) DocumentHighlights(uri lsp.DocumentUri, pos lsp.Position) ([]
 	highlights := make([]lsp.DocumentHighlight, 0, len(locations))
 	for _, location := range locations {
 		kind := lsp.DocumentHighlightKindRead
-		if location.Range == localprotocol.ToLSPRange(resolved.rng) || writeRanges[location.Range] {
+		if location.Range == s.Range(resolved.rng) || writeRanges[location.Range] {
 			kind = lsp.DocumentHighlightKindWrite
 		}
 		k := kind
@@ -99,7 +98,7 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 	case *mast.AssignExpression:
 		if ident, ok := node.Left.(*mast.Identifier); ok && ident != nil && ident.Value == targetName {
 			if rng, ok := s.Program.RangeOf(ident); ok {
-				out[localprotocol.ToLSPRange(rng)] = true
+				out[s.Range(rng)] = true
 			}
 		}
 		s.collectExpressionWriteRanges(node.Left, targetName, out)

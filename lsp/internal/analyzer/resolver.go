@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	mast "mutant/ast"
-	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/sema"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
@@ -82,7 +81,7 @@ func (s *Snapshot) DefinitionLocation(uri lsp.DocumentUri, pos lsp.Position) (*l
 	if !ok {
 		return nil, false
 	}
-	return &lsp.Location{URI: uri, Range: localprotocol.ToLSPRange(resolved.rng)}, true
+	return &lsp.Location{URI: uri, Range: s.Range(resolved.rng)}, true
 }
 
 // ReferenceLocations returns every place in this document that refers to
@@ -98,7 +97,7 @@ func (s *Snapshot) ReferenceLocations(uri lsp.DocumentUri, pos lsp.Position, inc
 	}
 
 	graph := s.Graph()
-	declared, ok := graph.Resolve(tokenPosition(pos))
+	declared, ok := graph.Resolve(s.TokenPosition(pos))
 	if !ok {
 		// Deliberately not the self-referring field that resolveDefinition
 		// falls back to. A field whose owning struct is unknown has no
@@ -118,13 +117,13 @@ func (s *Snapshot) ReferenceLocations(uri lsp.DocumentUri, pos lsp.Position, inc
 	if includeDeclaration && declared.DeclRange.IsValid() {
 		locations = append(locations, lsp.Location{
 			URI:   uri,
-			Range: localprotocol.ToLSPRange(declared.DeclRange),
+			Range: s.Range(declared.DeclRange),
 		})
 	}
 	for _, use := range graph.UsesOf(declared.ID) {
 		locations = append(locations, lsp.Location{
 			URI:   uri,
-			Range: localprotocol.ToLSPRange(use),
+			Range: s.Range(use),
 		})
 	}
 
@@ -144,7 +143,7 @@ func (s *Snapshot) VisibleBindingsAt(pos lsp.Position) []binding {
 		return nil
 	}
 
-	nodes := s.Graph().VisibleAt(tokenPosition(pos))
+	nodes := s.Graph().VisibleAt(s.TokenPosition(pos))
 	bindings := make([]binding, 0, len(nodes))
 	for _, node := range nodes {
 		bindings = append(bindings, bindingOf(node))
@@ -190,10 +189,10 @@ func (s *Snapshot) resolveDefinition(pos lsp.Position) (binding, bool) {
 	}
 
 	graph := s.Graph()
-	if declared, ok := graph.Resolve(tokenPosition(pos)); ok {
+	if declared, ok := graph.Resolve(s.TokenPosition(pos)); ok {
 		return bindingOf(declared), true
 	}
-	if field, rng, ok := graph.FieldNameAt(tokenPosition(pos)); ok {
+	if field, rng, ok := graph.FieldNameAt(s.TokenPosition(pos)); ok {
 		return binding{name: field.Value, ident: field, rng: rng, kind: lsp.CompletionItemKindField, named: true}, true
 	}
 	return binding{}, false
@@ -252,11 +251,4 @@ func completionKindFor(kind sema.NodeKind) lsp.CompletionItemKind {
 	}
 	// A let, a parameter and a loop binding are all a variable to an editor.
 	return lsp.CompletionItemKindVariable
-}
-
-// tokenPosition converts an editor position to the coordinates ast.Range holds.
-// The protocol counts lines and characters from zero; the lexer counts lines and
-// columns from one.
-func tokenPosition(pos lsp.Position) (line, column int) {
-	return int(pos.Line) + 1, int(pos.Character) + 1
 }

@@ -126,9 +126,16 @@ func diagnosticsOf(snapshot *analyzer.Snapshot) []Diagnostic {
 	raw := analyzer.Diagnostics(snapshot, analyzer.DefaultLintConfig())
 	out := make([]Diagnostic, 0, len(raw))
 	for _, d := range raw {
+		// Back to a byte column. A diagnostic's character is a UTF-16 offset,
+		// because that is what the protocol it was built for requires, and the
+		// CLI reports byte columns -- which is what token.Position holds, what
+		// the parser's own messages print and what the sweep goldens are
+		// written in. On an ASCII line the two are the same number, so nothing
+		// a golden pins moves.
+		line, column := snapshot.TokenPosition(d.Range.Start)
 		out = append(out, Diagnostic{
-			Line:     int(d.Range.Start.Line) + 1,
-			Column:   int(d.Range.Start.Character) + 1,
+			Line:     line,
+			Column:   column,
 			Severity: severityString(d.Severity),
 			Message:  d.Message,
 			Source:   sourceString(d.Source),

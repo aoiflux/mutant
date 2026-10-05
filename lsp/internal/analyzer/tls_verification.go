@@ -22,7 +22,6 @@ import (
 
 	mast "mutant/ast"
 	"mutant/builtin"
-	localprotocol "mutant/lsp/internal/protocol"
 
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
@@ -92,7 +91,7 @@ func lintTlsVerificationDisabled(snapshot *Snapshot, lintConfig LintConfig) []ls
 			return
 		}
 		result = append(result, lsp.Diagnostic{
-			Range:    localprotocol.ToLSPRange(rng),
+			Range:    snapshot.Range(rng),
 			Severity: severity,
 			Source:   &source,
 			Message:  message,

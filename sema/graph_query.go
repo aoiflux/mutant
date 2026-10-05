@@ -475,10 +475,15 @@ func (b *builder) membersOf(declared *Node) []*Node {
 
 // --- position arithmetic ----------------------------------------------------
 
-// rangeContains mirrors the language server's own ContainsPosition, including
-// its treatment of the end position as inside the range: a cursor immediately
-// after an identifier is still on that identifier, which is what an editor
-// means by the word.
+// rangeContains mirrors the language server's own Mapper.RangeContains,
+// including its treatment of the end position as inside the range: a cursor
+// immediately after an identifier is still on that identifier, which is what an
+// editor means by the word.
+//
+// Both sides are byte columns here and that is deliberate. The graph is asked
+// in the AST's own coordinates, and the server converts a cursor into them
+// before it asks -- see protocol.Mapper, and M26-LSP-027 for what happened
+// while nothing did.
 func rangeContains(r ast.Range, line, column int) bool {
 	if !r.IsValid() {
 		return false
