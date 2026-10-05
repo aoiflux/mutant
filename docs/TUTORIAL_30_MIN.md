@@ -229,8 +229,8 @@ form, not error handling. Given an array on the right, it takes the array apart:
 ```mutant
 let items = ["a", "b"];
 
-let updated, err = push(items, "c");   // WRONG. push returns ONE array.
-                                       // updated is "a"; err is "b"
+let wrong, err = push(items, "c");     // WRONG. push returns ONE array.
+                                       // wrong is "a"; err is "b"
 let updated = push(items, "c");        // right: ["a", "b", "c"]
 ```
 

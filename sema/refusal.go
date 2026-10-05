@@ -24,6 +24,23 @@ const (
 	// than about one expression, because a type name is the one thing in
 	// Mutant that is not module-scoped.
 	RefuseDuplicateTypeName
+
+	// RefuseDuplicateDeclaration is a declaration that declares nothing its
+	// own scope did not already hold: a second `let` of one name, or a
+	// parameter list that names one parameter twice.
+	//
+	// Appended rather than inserted. The codes are an iota and a caller may
+	// have one stored, so the order is append-only for the same reason the
+	// builtin ordinals are.
+	RefuseDuplicateDeclaration
+
+	// RefuseLoopControlOutsideLoop is a `break` or a `continue` with no loop in
+	// its own function to act on.
+	//
+	// "In its own function" is the part that was not being said. A function
+	// body is a loop boundary in both engines now, so a break inside a closure
+	// has no loop even when the call sits inside one.
+	RefuseLoopControlOutsideLoop
 )
 
 // Refusal is a resolution the language does not permit.
@@ -107,6 +124,89 @@ func duplicateNamespaceMessage(importer, namespace, first, second string) string
 // until a scan completes.
 func unresolvedImportMessage(spelling string) string {
 	return fmt.Sprintf("no indexed file matches the import %q", spelling)
+}
+
+// DuplicateDeclarationRefusal is the sentence for a `let` that declares nothing
+// new in the scope it is written in.
+//
+// The rule it reports is Go's rule for a short variable declaration, measured
+// against the Go compiler rather than taken from the spec: a declaration may
+// reuse names the same block already declared as long as at least one non-blank
+// name is new, and is refused when none is. So `let a, err = first(); let b, err
+// = second();` is two declarations of err and is allowed, because b is new --
+// which is the whole (value, err) idiom and 633 occurrences of it in the shipped
+// examples -- while `let x = 1; let x = 2;` is refused, because nothing is.
+//
+// One deviation from Go, and the compiler's refuseIfNothingIsNew has the whole
+// reason beside the code: a blank on the left counts as new, because Mutant has
+// no `_, err = f()` to offer as the remedy Go offers.
+//
+// The message names the already-declared names rather than saying "a name",
+// because with several on the left the reader needs to know which one is the
+// objection. The remedy is spelled out for the single-name case, which is the
+// one somebody reaches by mistake rather than by habit: assignment is what they
+// meant, and it is a different keyword, not a different spelling.
+func DuplicateDeclarationRefusal(already []string) *Refusal {
+	if len(already) == 1 {
+		name := already[0]
+		return &Refusal{
+			Code: RefuseDuplicateDeclaration,
+			Message: fmt.Sprintf(
+				"%s is already declared in this scope: a let declares a new variable, so to change this one write %s = ... instead, or move the declaration into a block of its own",
+				name, name,
+			),
+		}
+	}
+	return &Refusal{
+		Code: RefuseDuplicateDeclaration,
+		Message: fmt.Sprintf(
+			"this let declares nothing new: %s are all already declared in this scope, and a let needs at least one new name",
+			strings.Join(already, ", "),
+		),
+	}
+}
+
+// LoopControlRefusal is the sentence for a `break` or a `continue` that has no
+// loop to act on. keyword is the one written, so the reader is told about the
+// word they typed.
+//
+// It lives here because two engines raise it and they must not phrase it two
+// ways. That is not a tidiness argument: M26-EVL-023 is what the absence of a
+// shared rule cost. The compiler refused the shape and the tree-walking engine
+// ran it, letting the signal escape the call and drive the caller's loop -- and
+// since `mutant gen` expands macros unconditionally, a macro whose `unquote`
+// argument ran that shape spliced the wrong answer into the program with no
+// diagnostic, and in one shape crashed the built program at its first
+// instruction. One sentence in one place is how the two are kept from drifting
+// again.
+//
+// The wording is the compiler's existing sentence, unchanged. It could be more
+// precise about a `while` -- it says "for loop" -- but changing it would reach
+// into compiler/loop_boundary_test.go, which belongs to the M26-CMP-002 kit,
+// and composing the two matters more than the adjective. Rewording is separate
+// work, and now it is work in one place.
+func LoopControlRefusal(keyword string) *Refusal {
+	return &Refusal{
+		Code:    RefuseLoopControlOutsideLoop,
+		Message: keyword + " used outside of for loop",
+	}
+}
+
+// DuplicateParameterRefusal is a parameter list naming one parameter twice.
+//
+// Separate from DuplicateDeclarationRefusal because the remedy is not the same
+// sentence: there is no assignment that would have been meant, and the second
+// parameter is unreachable rather than merely redundant -- every mention of the
+// name inside the body resolves to one of the two, and which one is not
+// something the reader can see. Go refuses it as `a redeclared in this block`.
+func DuplicateParameterRefusal(name string) *Refusal {
+	return &Refusal{
+		Code: RefuseDuplicateDeclaration,
+		Message: fmt.Sprintf(
+			"parameter %s is declared twice: the second one could never be read, because every mention of %s in the body means the first",
+			name, name,
+		),
+	}
 }
 
 // duplicateTypeNameRefusal is the sentence compiler.claimTypeName raises,

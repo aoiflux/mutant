@@ -8,8 +8,8 @@ let ok, err = cache_put("ioc_cache", "ioc:1", "10.10.10.10");
 putf("cache_put: ", ok, " | err: ", err);
 putln("");
 
-let ok, err = cache_put("ioc_cache", "ioc:2", "malicious-domain.test", 30);
-putf("cache_put(ttl): ", ok, " | err: ", err);
+let ok_ttl, err = cache_put("ioc_cache", "ioc:2", "malicious-domain.test", 30);
+putf("cache_put(ttl): ", ok_ttl, " | err: ", err);
 putln("");
 
 let entry, err = cache_get("ioc_cache", "ioc:1");

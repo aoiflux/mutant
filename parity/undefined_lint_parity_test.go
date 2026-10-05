@@ -32,15 +32,26 @@ import (
 	"mutant/vm"
 )
 
-// compilerRefusesAName reports whether the compiler rejects the program for a
-// name it cannot resolve, and returns what it said. Other refusals are not this
-// rule's business, so they are not counted as agreement.
-func compilerRefusesAName(src string) (string, bool) {
+// compilerComplaint compiles the program and returns the compiler's first line
+// of complaint, if it had one. It is the shared half of the lint-parity rules:
+// each asks whether the compiler refused, and then whether it refused for the
+// reason that rule is about.
+func compilerComplaint(src string) (string, bool) {
 	err := compiler.New().Compile(parser.New(lexer.New(src)).ParseProgram())
 	if err == nil {
 		return "", false
 	}
-	message := strings.SplitN(err.Error(), "\n", 2)[0]
+	return strings.SplitN(err.Error(), "\n", 2)[0], true
+}
+
+// compilerRefusesAName reports whether the compiler rejects the program for a
+// name it cannot resolve, and returns what it said. Other refusals are not this
+// rule's business, so they are not counted as agreement.
+func compilerRefusesAName(src string) (string, bool) {
+	message, refused := compilerComplaint(src)
+	if !refused {
+		return "", false
+	}
 	return message, strings.Contains(message, "undefined")
 }
 

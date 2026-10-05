@@ -22,6 +22,26 @@ import (
 	"mutant/lsp/api"
 )
 
+// compilerRefusesADuplicate reports whether the compiler rejects the program
+// for a name declared twice in one scope, and returns what it said. Other
+// refusals are not this rule's business, so they are not counted as agreement.
+//
+// Three sentences rather than one because the rule has three shapes: a single
+// name taken twice, a whole multi-name binding with nothing new on it, and a
+// parameter list naming one parameter twice. They are sema's words -- see
+// sema.DuplicateDeclarationRefusal and sema.DuplicateParameterRefusal -- and
+// matching on them here is deliberate: if the wording changes, this test should
+// be made to say so rather than quietly passing on a substring.
+func compilerRefusesADuplicate(src string) (string, bool) {
+	message, refused := compilerComplaint(src)
+	if !refused {
+		return "", false
+	}
+	return message, strings.Contains(message, "already declared in this scope") ||
+		strings.Contains(message, "declares nothing new") ||
+		strings.Contains(message, "is declared twice")
+}
+
 // duplicateComplaints returns what the lint says about duplicate declarations,
 // and nothing else: a row may legitimately draw an unused-declaration warning.
 func duplicateComplaints(src string) []string {
@@ -129,10 +149,19 @@ let b, _ = gets();
 // because the two spellings are not synonyms. Only "duplicate top-level
 // declaration" is offered the quick fix that deletes the line, and a line is
 // safe to delete only at the top level.
+// Three of these rows are now compile errors as well as lint findings, and
+// that is the strongest form this parity can take: the editor says the same
+// thing the build says, before the build is run. The two struct rows are not --
+// a type name never enters the compiler's symbol table, so two structs of one
+// name is a lint finding about a program that compiles.
 func TestASecondDeclarationInOneScopeIsStillReported(t *testing.T) {
-	for _, c := range []struct{ name, src, want string }{
+	for _, c := range []struct {
+		name, src, want string
+		refused         bool
+	}{
 		{
-			name: "two top-level lets",
+			refused: true,
+			name:    "two top-level lets",
 			src: `let x = 1;
 let x = 2;
 x;
@@ -140,14 +169,16 @@ x;
 			want: "duplicate top-level declaration `x`",
 		},
 		{
-			name: "two lets in one function body",
+			refused: true,
+			name:    "two lets in one function body",
 			src: `let f = fn() { let a = 1; let a = 2; return a; };
 f();
 `,
 			want: "duplicate declaration `a`",
 		},
 		{
-			name: "two parameters of one function",
+			refused: true,
+			name:    "two parameters of one function",
 			src: `let f = fn(a, a) { return a; };
 7;
 `,
@@ -176,7 +207,13 @@ f();
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := evalViaVM(t, c.src); err != nil {
+			if c.refused {
+				if message, refused := compilerRefusesADuplicate(c.src); !refused {
+					t.Fatalf("the compiler accepts a second declaration in one "+
+						"scope (%q), so the editor and the build disagree:\n\n%s",
+						message, c.src)
+				}
+			} else if _, err := evalViaVM(t, c.src); err != nil {
 				t.Fatalf("the program does not compile, so the rule is not "+
 					"what is being tested: %v\n\n%s", err, c.src)
 			}

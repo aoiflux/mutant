@@ -68,19 +68,32 @@ func TestLocalSlotNamesNameEveryFrameSlot(t *testing.T) {
 // own slot. The first slot then answers to nothing -- which is what has to be
 // reported, because showing two live variables called `x` when one of them can
 // no longer be reached from any source line is worse than showing one.
+// TestASlotWhoseNameWasTakenOverReportsNoName reaches the unnamed slot through
+// a block, which is the only way left to reach it.
+//
+// It used to use `let x = 1; let x = 2;` in one body. That is a compile error
+// now, so the shape had to move -- but the phenomenon did not, and it matters
+// more than it did: a block declaring a name the function already has really
+// does take a second slot, and once the block closes the name means the first
+// slot again. The second is then live, holding a value, and reachable from no
+// source line, which is exactly the thing a debugger must not call `x`.
+//
+// Note the slots are the other way round from the old test. The outer x is
+// declared first and keeps slot 0 and its name; the block's x takes slot 1 and
+// loses the name when the block ends.
 func TestASlotWhoseNameWasTakenOverReportsNoName(t *testing.T) {
-	src := "let f = fn() {\n\tlet x = 1;\n\tlet x = 2;\n\treturn x;\n};\nf();\n"
+	src := "let f = fn() {\n\tlet x = 1;\n\tif (true) { let x = 2; }\n\treturn x;\n};\nf();\n"
 
 	fn := onlyFunction(t, compileWithPositions(t, src))
 
 	if fn.NumLocals != 2 {
 		t.Fatalf("the two declarations took %d slots, want 2", fn.NumLocals)
 	}
-	if fn.LocalNames[0] != "" {
-		t.Errorf("the shadowed slot is named %q, want no name", fn.LocalNames[0])
+	if fn.LocalNames[0] != "x" {
+		t.Errorf("the live slot is named %q, want \"x\"", fn.LocalNames[0])
 	}
-	if fn.LocalNames[1] != "x" {
-		t.Errorf("the live slot is named %q, want \"x\"", fn.LocalNames[1])
+	if fn.LocalNames[1] != "" {
+		t.Errorf("the block's slot is named %q, want no name", fn.LocalNames[1])
 	}
 }
 

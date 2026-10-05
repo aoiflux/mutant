@@ -3,11 +3,11 @@ putln("=== Cache TTL Workflow ===");
 let opened, err = cache_open("artifact_cache");
 putln("cache_open:", opened, "err:", err);
 
-let ok, err = cache_put("artifact_cache", "sha256:aaa", {"path": "C:/Temp/a.bin", "score": 18}, 120);
-putln("cache_put #1:", ok, "err:", err);
+let ok_first, err = cache_put("artifact_cache", "sha256:aaa", {"path": "C:/Temp/a.bin", "score": 18}, 120);
+putln("cache_put #1:", ok_first, "err:", err);
 
-let ok, err = cache_put("artifact_cache", "sha256:bbb", {"path": "C:/Temp/b.bin", "score": 91}, 120);
-putln("cache_put #2:", ok, "err:", err);
+let ok_second, err = cache_put("artifact_cache", "sha256:bbb", {"path": "C:/Temp/b.bin", "score": 91}, 120);
+putln("cache_put #2:", ok_second, "err:", err);
 
 let item, err = cache_get("artifact_cache", "sha256:bbb");
 putln("cache_get:", item, "err:", err);

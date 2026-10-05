@@ -120,7 +120,19 @@ func expandMacrosOnce(program ast.Node, env *object.Environment) (ast.Node, bool
 			return node
 		}
 
-		evaluated := eval(macro.Body, extendMacroEnv(macro, args))
+		// evalBlockBody for the same reason applyFunction uses it: the macro's
+		// parameters are bound in the environment being passed in, and the body
+		// shares their scope.
+		evaluated := evalBlockBody(macro.Body, extendMacroEnv(macro, args))
+
+		// The same backstop applyFunction uses, for the same reason and one
+		// step earlier: a macro body is the one body this engine runs without
+		// anything having compiled it first, so a break escaping one would be
+		// spliced into the program rather than reported.
+		if escaped := loopControlEscaped(evaluated); escaped != nil {
+			failure = fmt.Errorf("macro %s: %s", name, escaped.(*object.Error).Message)
+			return node
+		}
 
 		// A fault is the macro body giving up; report why. A bare *object.Error
 		// is not a fault any more -- it is a value the body produced, which

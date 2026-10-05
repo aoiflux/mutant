@@ -36,32 +36,37 @@ func (b *builder) statement(stmt ast.Statement) {
 		b.expression(node.Expression, nil)
 
 	case *ast.BlockStatement:
-		// No scope is opened. A block does not introduce one in Mutant:
-		// `{ let x = 1; }` leaves x bound after the closing brace.
-		for _, inner := range node.Statements {
-			b.statement(inner)
-		}
+		b.block(node)
 
 	case *ast.WhileStatement:
+		// No header scope: a while header declares nothing. Its body is an
+		// ordinary block and gets the scope every block gets.
 		b.expression(node.Condition, nil)
 		b.block(node.Body)
 
 	case *ast.ForInStatement:
-		// The bindings land in the enclosing scope, not the body, which is
-		// what the VM does with either loop form.
-		for _, name := range []*ast.Identifier{node.Key, node.Value} {
-			if rng, ok := b.rangeOf(name); ok {
-				b.declare(name.Value, name, rng, KindLoopBind)
+		// The key and value belong to the loop, and the body nests inside
+		// them -- so a body that declares a name the header declared shadows
+		// it rather than colliding with it. The compiler arranges the two the
+		// same way, and so does Go, whose for statement is a block with the
+		// body as a block inside it.
+		b.loopScope(node, func() {
+			for _, name := range []*ast.Identifier{node.Key, node.Value} {
+				if rng, ok := b.rangeOf(name); ok {
+					b.declare(name.Value, name, rng, KindLoopBind)
+				}
 			}
-		}
-		b.expression(node.Iterable, nil)
-		b.block(node.Body)
+			b.expression(node.Iterable, nil)
+			b.block(node.Body)
+		})
 
 	case *ast.ForStatement:
-		b.statement(node.Init)
-		b.expression(node.Condition, nil)
-		b.expression(node.Post, nil)
-		b.block(node.Body)
+		b.loopScope(node, func() {
+			b.statement(node.Init)
+			b.expression(node.Condition, nil)
+			b.expression(node.Post, nil)
+			b.block(node.Body)
+		})
 
 	case *ast.StructStatement:
 		b.typeStatement(node, node.Name, node.Fields, KindStruct, KindField)
@@ -424,7 +429,7 @@ func (b *builder) functionScope(literal ast.Node, params []*ast.Identifier, body
 			b.declare(param.Value, param, rng, KindParam)
 		}
 	}
-	b.block(body)
+	b.blockBody(body)
 	b.pop()
 }
 
@@ -438,15 +443,50 @@ func (b *builder) functionScope(literal ast.Node, params []*ast.Identifier, body
 // panics. `if (x) { }` has exactly that shape, and it panicked here until the
 // coverage test ran.
 //
-// A block opens no scope. `{ let x = 1; }` leaves x bound after the closing
-// brace, so the declarations inside one go to the enclosing scope.
+// A block opens a scope. `{ let x = 1; }` leaves x unbound after the closing
+// brace, and a declaration inside one may shadow a name from outside it.
+//
+// This is where the editor gets block scoping from, and it is the only place
+// it gets it from: the duplicate-declaration rule asks the graph which scope a
+// declaration is in rather than deriving scope itself, so making the walk agree
+// with the compiler is what stops the editor reporting a legal shadow as a
+// duplicate. The rule was already written to ask; only the answer was wrong.
 func (b *builder) block(body *ast.BlockStatement) {
+	if body == nil {
+		return
+	}
+	rng, _ := b.rangeOf(body)
+	b.push(b.anonSegment("block"), rng, nil)
+	b.blockBody(body)
+	b.pop()
+}
+
+// blockBody walks a body's statements into the scope already open.
+//
+// It is the function-body path. A function's parameters and its body share one
+// scope -- see functionScope -- because the compiler shares them and because Go
+// shares them: `func f(a int) { a := 1 }` is `a redeclared in this block`.
+func (b *builder) blockBody(body *ast.BlockStatement) {
 	if body == nil {
 		return
 	}
 	for _, inner := range body.Statements {
 		b.statement(inner)
 	}
+}
+
+// loopScope opens the scope a loop header's own declarations belong to and
+// walks the loop inside it.
+//
+// The scope covers the whole statement rather than just the header, for the
+// reason functionScope's does: a cursor on the `i` of `for (let i = 0; ...)` is
+// inside the scope that i belongs to, and a scope starting at the body's
+// opening brace would place it in the enclosing one.
+func (b *builder) loopScope(node ast.Node, walk func()) {
+	rng, _ := b.rangeOf(node)
+	b.push(b.anonSegment("loop"), rng, nil)
+	walk()
+	b.pop()
 }
 
 func kindForValue(value ast.Expression) NodeKind {

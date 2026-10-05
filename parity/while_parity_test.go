@@ -80,21 +80,60 @@ func TestWhileLoopSemantics(t *testing.T) {
 // `while` does not add a *second*, different answer -- so each engine is
 // compared against itself running the equivalent for loop, and the assertion
 // holds whichever way the divergence is eventually resolved.
+// TestWhileScopesItsBodyExactlyAsForDoes still asks the question it always
+// asked, and now has the answer Go gives: a loop body is a scope, so a name
+// declared inside one is gone after it, and a while and a for agree about that.
+//
+// It used to assert the two agreed by reading `inside` AFTER the loop and
+// finding it. Both loops did find it, because no loop body was a scope -- so
+// the test passed on the strength of the two engines being wrong in step. The
+// name after the loop is now the whole assertion: both forms must refuse it,
+// and refuse it in the same words.
 func TestWhileScopesItsBodyExactlyAsForDoes(t *testing.T) {
 	whileSrc := "let n = 0; while (n < 1) { let inside = 1; n = n + inside; } inside"
 	forSrc := "for (let n = 0; n < 1; n = n + 1) { let inside = 1; } inside"
 
-	if got, want := normalize(evalViaEvaluator(whileSrc)), normalize(evalViaEvaluator(forSrc)); got != want {
-		t.Errorf("evaluator scopes a while body differently from a for body: %s vs %s", got, want)
-	}
+	whileMsg, whileRefused := compilerRefusesAName(whileSrc)
+	forMsg, forRefused := compilerRefusesAName(forSrc)
 
-	whileObj, whileErr := evalViaVM(t, whileSrc)
-	forObj, forErr := evalViaVM(t, forSrc)
-	if (whileErr == nil) != (forErr == nil) {
-		t.Fatalf("VM scopes a while body differently from a for body: while %v, for %v", whileErr, forErr)
+	if !whileRefused || !forRefused {
+		t.Fatalf("a loop body is a scope, so `inside` after the loop must not resolve: "+
+			"while refused=%v (%q), for refused=%v (%q)", whileRefused, whileMsg, forRefused, forMsg)
 	}
-	if whileErr == nil && normalize(whileObj) != normalize(forObj) {
-		t.Errorf("VM scopes a while body differently from a for body: %s vs %s", normalize(whileObj), normalize(forObj))
+	if whileMsg != forMsg {
+		t.Errorf("a while body and a for body are refused in different words:\n  while: %s\n  for:   %s",
+			whileMsg, forMsg)
+	}
+}
+
+// TestBothLoopsScopeTheirBodyWithoutLosingIt is the other half: the body is a
+// scope, and scoping it must not stop the body from working. Each loop counts
+// with a name of its own and the count survives, which is what distinguishes a
+// scope from a wall.
+func TestBothLoopsScopeTheirBodyWithoutLosingIt(t *testing.T) {
+	for _, c := range []struct{ name, src, want string }{
+		{"while", "let n = 0; let seen = 0; while (n < 3) { let step = 1; n = n + step; seen = seen + step; } seen", "INTEGER(3)"},
+		{"for", "let seen = 0; for (let i = 0; i < 3; i = i + 1) { let step = 1; seen = seen + step; } seen", "INTEGER(3)"},
+		// The body redeclares the name the header declared. Go allows this --
+		// the body is a block nested inside the header's -- and the loop still
+		// terminates, because the post section is compiled after the body's
+		// scope has closed and increments the header's i. Before block scoping
+		// this program did not terminate at all.
+		{"for, body shadows the counter", "let hits = 0; for (let i = 0; i < 3; i = i + 1) { let i = 9; hits = hits + 1; } hits", "INTEGER(3)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			evaluated := normalize(evalViaEvaluator(c.src))
+			vmObj, err := evalViaVM(t, c.src)
+			if err != nil {
+				t.Fatalf("VM refused the program: %v", err)
+			}
+			if compiled := normalize(vmObj); evaluated != compiled {
+				t.Fatalf("engines disagree: evaluator %s, VM %s", evaluated, compiled)
+			}
+			if evaluated != c.want {
+				t.Fatalf("both engines answered %s, want %s", evaluated, c.want)
+			}
+		})
 	}
 }
 

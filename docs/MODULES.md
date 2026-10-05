@@ -54,6 +54,7 @@ Each module has its own top level. Two modules may both declare `label`, or
 `helper`, or `main`, and they are two different bindings — the one you write in
 a file is always that file's own.
 
+<!-- mutant:fragment -->
 ```mutant
 // lib/report.mut
 let label = "report";

@@ -788,7 +788,93 @@ exhaustive lists.
   as one. Six examples that format-on-save had bracketed in 7e7ca13 lost the brackets it added,
   and parse to the same trees as before (M26-LSP-030).
 
+- **A block is a scope, and a `let` has to declare something new. BREAKING.** A
+  name declared inside `{ ... }` now means nothing after the closing brace, and
+  may shadow a name from outside it. Every brace-delimited region is one: a bare
+  block, an `if` or `else` body, a loop body, a `match` arm. A loop header is a
+  scope with the body nested inside it, so a body may shadow the name the header
+  declared; a function's parameters and its body share one scope, so a `let` at
+  the top of a body cannot take a parameter's name. The rules are Go's, measured
+  against the Go compiler rather than read off the specification.
+  Within one scope, a `let` is refused unless at least one of the names on its
+  left is new to that scope — which is Go's rule for a short declaration, and is
+  what makes the `(value, err)` idiom work rather than a special case for it:
+  `let head, err = read(a); let tail, err = read(b);` is fine because `tail` is
+  new, while `let x = 1; let x = 2;` is refused and `x = 2` is what was meant. A
+  parameter list naming one parameter twice is refused for the same reason. The
+  blank is always allowed, however many times.
+  One deviation from Go, and it is deliberate: in Go, `_, err := f()` with `err`
+  already declared is an error and the remedy is `_, err = f()`. Mutant has no
+  multi-target assignment, so refusing it would offer no legal way to write
+  "call it and keep the error" — 27 lines of one shipped example. A blank on the
+  left therefore counts as new. Adding `_, err = f()` would close the gap and is
+  the only part of Go's rule Mutant cannot yet express.
+  What this costs: a program that declared a name inside a block and read it
+  after the block closed no longer compiles, and neither does one that threads a
+  single handle through a pipeline by rebinding it. Measured across the 123
+  shipped example programs, two needed a change — each declared `ok, err` twice
+  at one file's top level — and both are clearer for it, since one `ok` for two
+  different keys discarded the first answer before anything read it. The editor
+  agrees with the compiler because it reads scope out of the same walk: a block
+  shadow is no longer reported as a duplicate declaration, and a real duplicate
+  now is. Nothing about the bytecode, the opcodes or a frame's layout changes.
+
 ### Fixed
+
+- A `let` initializer no longer reads the binding it is about to create, and a
+  loop whose body redeclares the loop's own name no longer hangs. Both were one
+  cause: nothing in the language was a scope except a function literal, so
+  `Define` allocated a fresh slot and overwrote the name, and the name meant the
+  new slot from the first line of the statement that declared it. Inside an
+  initializer that read a slot the statement had not yet written — null at the
+  top level, and whatever an earlier call left in the frame at that offset
+  inside a function, which is why the wrong answers were plausible numbers.
+  `let total = 10` shadowed in a closure printed 301 after an unrelated call,
+  `let len = len(xs)` printed the argument array and then `%!d(string=)`, and
+  `let s = s + 1` over a parameter faulted in the VM. Worse, a `for` statement
+  compiles its post section after its body, so once the body redeclared the
+  counter, `i++` incremented the body's slot while the condition went on reading
+  the original: `for (let i = 0; i < 3; i++) { let i = 9; }` never terminated,
+  and nothing reported it. The tree-walking engine answered 1 for the same
+  program, from one name-keyed environment. Both are fixed by scoping blocks
+  correctly rather than by refusing them, so that program now terminates and
+  answers 3, which is what Go answers. The initializer reordering is also Go's
+  rule — a declared name's scope begins after its declaration — and it takes one
+  thing away: a brand-new name can no longer reach itself through a call, so
+  `let step = wrap(fn(n) { return step(n - 1); });` is `undefined variable:
+  step`, which is what Go says about the same shape. Direct recursion is
+  untouched. See the entry under Changed for the scope rules. (M26-CMP-001)
+
+- A `break` or a `continue` written inside a function no longer escapes the call
+  and drives the caller's loop. The compiler refuses such a signal — a function
+  body is a loop boundary — but the tree-walking engine ran it and let the
+  signal leave the call as the call's *value*: `unwrapReturnValue` unwraps only a
+  return, so a break fell straight through and the loop around the call obeyed
+  it. `for (let i = 0; i < 3; i++) { let f = fn() { break; }; f(); out = out + 1; }`
+  answered 0 where 3 is right, and the same held for `continue`, for `while` and
+  for `for ... in`; with the closure never called the answer was 3, which is what
+  showed the signal only escapes when the call runs. That mattered beyond the one
+  engine, because `mutant gen` runs macro definition and expansion for every
+  module with no flag behind it, so an `unquote` argument is user code the
+  tree-walker executes before anything is compiled: a macro whose argument ran
+  that shape spliced the literal 0 into the program, which then built and printed
+  it with exit 0 and no diagnostic. A function body is now a boundary in both
+  engines, the escaping signal is reported rather than returned, and macro
+  expansion names the macro it happened in. The sentence itself moved into `sema`
+  beside the other refusals, so the two engines cannot drift into two phrasings
+  of one rule again — which is what this defect was. (M26-EVL-023)
+
+- Calling a name that has no value is reported instead of crashing the
+  tree-walking engine. Macro definitions are removed before anything runs, but
+  only the top-level ones, so a `macro` literal nested inside an `unquote`
+  argument survived into code the tree-walker executes — and that engine has no
+  case for a macro literal, so the name was bound to nothing and calling it
+  dereferenced it. `mutant gen` died with a nil pointer dereference on a program
+  that is only a few lines long. It now says that a macro definition must appear
+  at the top level, where it is expanded before anything runs, which is both what
+  went wrong and what to do about it. The compiler already refused the same
+  nesting, so only the expansion path was exposed. This is the tree-walking half
+  of M26-VM-003, which was fixed in the VM.
 
 - **The disclosure policy promised an erasure nothing performed.** It said
   crypto-erasure was available and listed it among the operations, and no
@@ -1087,6 +1173,23 @@ exhaustive lists.
   instruction pointer and the opcode are what a bug report needs, and they are still printed.
   A `with_resource` closer that fails and a test that dies rather than asserting were the same
   defect and are fixed with it.
+
+- A `break` or a `continue` inside a function literal is refused at compile time
+  instead of rewriting an unrelated instruction. The compiler's record of which
+  loop a jump belongs to hung off the compiler rather than off the scope, and
+  starting a function body neither saved nor cleared it — so a `break` inside a
+  closure was recorded against the *enclosing* loop, as a position in the
+  closure's own instruction stream. The loop then patched that position in its
+  own stream, overwriting the first operand of whatever instruction sat there,
+  and the closure kept the placeholder jump nobody had patched. Nothing was
+  reported, and what went wrong depended on where the offset landed: a `break`
+  in a callback inside a `for` made an unrelated `let marker = 1;` print 1053, a
+  `continue` in one inside a `for ... in` failed with a stack underflow blamed
+  on the program's first line, and one shape took `mutant gen` down with an
+  index-out-of-range panic. A function body is now a boundary, so such a `break`
+  is what it always was — one with no loop to leave — and says so. A loop
+  *inside* the closure is unaffected and still patches its own stream. No
+  shipped program uses the refused shape. (M26-CMP-002)
 
 ### Security
 

@@ -23,6 +23,20 @@ type Compiler struct {
 	enumDefinitions   map[string][]string          // Maps enum name to tag names
 	loopContexts      []LoopContext
 
+	// declScopes is a stack of the names each open scope has itself declared,
+	// innermost last. It is what the one-declaration-per-scope rule is asked
+	// about, and it is never consulted outward: a name declared further out is
+	// visible here and may be shadowed here, which is the whole point of a
+	// scope and is the case this stack exists to stop being an error.
+	//
+	// It is on the Compiler and not on the SymbolTable because a REPL keeps one
+	// table across lines and builds a fresh Compiler for each, and `let x = 1`
+	// on one line followed by `let x = 2` on the next has to go on working.
+	// Each entry is pushed by openBlock or by enterScope and popped by its
+	// pair, so the bottom entry is the top level of whatever unit is being
+	// compiled -- a file, a module, or one REPL line.
+	declScopes []map[string]bool
+
 	// moduleDisplays maps a module key to the path a human should see for it,
 	// so an error about another module can name the file rather than repeat
 	// the absolute path the linker uses as a key. Filled by EnterModule, which
@@ -378,6 +392,7 @@ func New() *Compiler {
 		moduleDisplays:    make(map[string]string),
 		typeOwners:        make(map[string]string),
 		loopContexts:      []LoopContext{},
+		declScopes:        []map[string]bool{{}},
 	}
 }
 
@@ -421,6 +436,12 @@ type ModuleScope struct {
 // that never calls it -- the REPL, the playground, a single file -- keeps the
 // one flat global scope it always had.
 func (c *Compiler) EnterModule(scope ModuleScope) {
+	// A module's top level is its own scope. Without this reset, linking --
+	// which drives every module through one Compiler -- would read a `let
+	// helper = ...` in the second module as a duplicate of the first module's,
+	// which the symbol table already keeps apart by qualifying the store key.
+	c.declScopes = []map[string]bool{{}}
+
 	if scope.Display != "" {
 		c.moduleDisplays[scope.Key] = scope.Display
 	}
@@ -651,11 +672,10 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			c.maybeEmitRandomSecurityCheckOpcodes()
 		}
 	case *ast.BlockStatement:
-		for _, s := range node.Statements {
-			if err := c.Compile(s); err != nil {
-				return err
-			}
-		}
+		// A block is a scope. Reaching this case means the block is not a
+		// function body -- that path calls compileBlockBody directly, so that a
+		// function's parameters and its body share one scope the way Go's do.
+		return c.compileBlockScope(node)
 	case *ast.ExpressionStatement:
 		if err := c.Compile(node.Expression); err != nil {
 			return err
@@ -828,11 +848,27 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			names = []*ast.Identifier{node.Name}
 		}
 
+		if err := c.refuseIfNothingIsNew(names); err != nil {
+			return err
+		}
+
 		if len(names) <= 1 {
-			symbol := c.symbolTable.Define(node.Name.Value)
+			// The value is compiled first and the name declared after, which is
+			// M26-CMP-001 and is also Go's rule: a declared name's scope begins
+			// after its declaration, not at it. Declaring first made every
+			// mention of the name inside the initializer resolve to the slot
+			// this very statement was about to fill and had not written yet --
+			// null at the top level, and whatever an earlier call left in the
+			// frame at that offset inside a function, which is why the wrong
+			// answers were plausible numbers rather than obvious breakage.
+			//
+			// With block scoping it is also what makes `let x = 1; if (c) { let
+			// x = x + 1; }` mean what it means in Go: the initializer's x is
+			// the outer one, because the inner one does not exist yet.
 			if err := c.Compile(node.Value); err != nil {
 				return err
 			}
+			symbol := c.declare(node.Name.Value)
 			if symbol.Scope == GlobalScope {
 				c.emit(code.OpSetGlobal, symbol.Index)
 			} else {
@@ -851,7 +887,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			if ident == nil {
 				continue
 			}
-			symbol := c.symbolTable.Define(ident.Value)
+			symbol := c.declare(ident.Value)
 			if symbol.Scope == GlobalScope {
 				c.emit(code.OpSetGlobal, symbol.Index)
 			} else {
@@ -882,11 +918,43 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			c.symbolTable.DefineFunctionName(node.Name)
 		}
 		for _, param := range node.Parameters {
-			c.symbolTable.Define(param.Value)
+			// Define runs for the blank too, and must: a parameter list is
+			// positional, so `fn(_, b)` still has to give the discard slot 0 or
+			// b would read the wrong argument. Only the RULE skips the blank.
+			if param.Value != blankName && c.declaredHere(param.Value) {
+				return sema.DuplicateParameterRefusal(param.Value)
+			}
+			c.declare(param.Value)
 		}
-		if err := c.Compile(node.Body); err != nil {
+
+		// A function body is a loop boundary. loopContexts hangs off the Compiler
+		// rather than off the scope it belongs to, so without this a break or a
+		// continue inside a closure finds the enclosing loop's context and records
+		// a jump position that is an offset in the closure's stream. The loop then
+		// back-patches that position in its own stream, overwriting operand 0 of
+		// whatever instruction happens to sit there, while the closure keeps the
+		// unpatched `OpJump 9999`. Nothing reports any of it: the program loads a
+		// different constant and prints a plausible wrong number, or faults at an
+		// unrelated ip, or -- when the offset lands past the end of the enclosing
+		// stream -- takes the compiler down with it.
+		//
+		// Clearing it makes such a break what it always was: a break with no loop
+		// to leave, reported as one. A loop *inside* the closure is unaffected,
+		// because it pushes its own context onto this empty stack and patches the
+		// stream the positions actually belong to.
+		//
+		// It also settles an aliasing hazard. The loop compilers hold a
+		// &c.loopContexts[len-1] across compiling their post section; an append
+		// from inside a nested function body could reallocate the backing array
+		// and leave that pointer addressing the old one. Nothing inside a body
+		// appends to this slice any more.
+		enclosingLoops := c.loopContexts
+		c.loopContexts = nil
+		if err := c.compileBlockBody(node.Body); err != nil {
+			c.loopContexts = enclosingLoops
 			return err
 		}
+		c.loopContexts = enclosingLoops
 		// Whether the body's last value becomes the return value is a question
 		// about the last statement's syntax, not about the last instruction
 		// emitted -- the distinction leaveOneValue documents. A body ending in
@@ -980,7 +1048,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 
 	case *ast.BreakStatement:
 		if len(c.loopContexts) == 0 {
-			return fmt.Errorf("break used outside of for loop")
+			return sema.LoopControlRefusal("break")
 		}
 		jumpPos := c.emit(code.OpJump, 9999)
 		ctx := &c.loopContexts[len(c.loopContexts)-1]
@@ -988,7 +1056,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 
 	case *ast.ContinueStatement:
 		if len(c.loopContexts) == 0 {
-			return fmt.Errorf("continue used outside of for loop")
+			return sema.LoopControlRefusal("continue")
 		}
 		jumpPos := c.emit(code.OpJump, 9999)
 		ctx := &c.loopContexts[len(c.loopContexts)-1]
@@ -1295,6 +1363,15 @@ func (c *Compiler) enterScope() {
 	c.scopeIndex++
 
 	c.symbolTable = NewEnclosedSymbolTable(c.symbolTable)
+
+	// One scope for the parameters and the body together, not one each. Go
+	// draws the boundary in the same place -- `func f(a int) { a := 1 }` is
+	// `a redeclared in this block` -- and the reason is the same: the parameter
+	// and the body's first statement are as close together as two declarations
+	// can be, so a silent shadow between them is a mistake rather than an
+	// intention. Compile of the body therefore uses compileBlockBody, which
+	// opens no scope of its own.
+	c.declScopes = append(c.declScopes, map[string]bool{})
 }
 
 func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
@@ -1308,7 +1385,148 @@ func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
 	c.scopes = c.scopes[:len(c.scopes)-1]
 	c.scopeIndex--
 	c.symbolTable = c.symbolTable.Outer
+	if len(c.declScopes) > 1 {
+		c.declScopes = c.declScopes[:len(c.declScopes)-1]
+	}
 	return instructions, debug
+}
+
+// openBlock begins a scope that ends with the construct that opened it.
+//
+// Opened for every construct that is a block in Go, and for the two that have
+// no Go equivalent in the place Go's nearest construct puts it:
+//
+//   - a brace-delimited block, an if body, an else body, a match arm: the block
+//     itself, which is case *ast.BlockStatement;
+//   - a loop header: openBlock at the top of the loop's compiler, so the name a
+//     `for` or a `for ... in` declares belongs to the loop and the body nests
+//     inside it. This is what fixes the hang -- a `for` compiles its post
+//     section after its body, so once the body's scope has closed, `i++` means
+//     the header's `i` again rather than the body's;
+//   - a function's parameters and body: ONE scope, opened by enterScope, which
+//     is why the body is compiled by compileBlockBody rather than by Compile.
+//
+// A while loop gets no header scope because a while header cannot declare
+// anything; its body is an ordinary block.
+func (c *Compiler) openBlock() {
+	c.symbolTable.OpenBlock()
+	c.declScopes = append(c.declScopes, map[string]bool{})
+}
+
+// closeBlock ends the innermost scope openBlock began. It is always run, error
+// path included, because a compile that fails inside a block leaves the symbol
+// table to be reused -- the REPL's table outlives the failed line -- and a
+// block left open would go on hiding the names it shadowed.
+func (c *Compiler) closeBlock() {
+	c.symbolTable.CloseBlock()
+	if len(c.declScopes) > 1 {
+		c.declScopes = c.declScopes[:len(c.declScopes)-1]
+	}
+}
+
+// blankName is the discard. It is exempt from the one-declaration rule, as it
+// is in Go: `let _, err = first(); let _, written = second();` declares `_`
+// twice and `let _, _ = chan_send(c, v);` declares it twice in one statement,
+// and neither is a name anything can read back.
+const blankName = "_"
+
+// noteDeclared records that the innermost scope declared name.
+func (c *Compiler) noteDeclared(name string) {
+	if name == "" || name == blankName {
+		return
+	}
+	c.declScopes[len(c.declScopes)-1][name] = true
+}
+
+// declaredHere reports whether the innermost scope has itself declared name.
+func (c *Compiler) declaredHere(name string) bool {
+	return c.declScopes[len(c.declScopes)-1][name]
+}
+
+// declare allocates a slot for name and records the declaration against the
+// scope that made it. The two always happen together; splitting them is how a
+// scope comes to allow a duplicate it should have refused.
+func (c *Compiler) declare(name string) Symbol {
+	symbol := c.symbolTable.Define(name)
+	c.noteDeclared(name)
+	return symbol
+}
+
+// refuseIfNothingIsNew applies the one-declaration-per-scope rule to a `let`.
+//
+// The rule is Go's rule for a short variable declaration, measured against the
+// Go compiler rather than read off the spec: a declaration may reuse names the
+// same scope already declared provided at least one non-blank name is new, and
+// is refused when none is. `a, err := f(); b, err := g()` compiles in Go and
+// `a, err := f(); a, err := g()` is `no new variables on left side of :=`.
+//
+// That is not a softening of the rule, it is the rule. The (value, err) idiom
+// depends on it -- 53 of the 124 shipped example programs rebind one name that
+// way, 633 times between them -- and a rule that refused it would be refusing
+// the language's own convention rather than a mistake.
+// There is one deviation from Go in it, and it is the blank. In Go, `_, err :=
+// f()` with err already declared is `no new variables on left side of :=`, and
+// the remedy is `_, err = f()`. Mutant has no multi-target assignment: `_, err =
+// f()` is `no prefix parse function for , found`. So the strict rule would
+// refuse "call it and keep the error" -- 27 lines of
+// examples/forensics/record_disclosure.mut, and the same shape across the
+// examples -- while offering no legal way to write what those lines mean. A
+// refusal with no remedy makes the language worse rather than better, which is
+// the opposite of why this rule exists.
+//
+// A blank on the left therefore satisfies the rule. Nothing unsafe gets through:
+// the names are in ONE scope, so there is no question of which declaration a
+// later mention means -- the later one always wins from where it is written --
+// and shadowing, which is what block scoping exists to make correct, cannot
+// arise without a scope boundary. What is still refused is every declaration
+// that is wholly a redeclaration: `let x = 1; let x = 2;`, whose remedy is
+// `x = 2`, and `let a, err = f(); let a, err = g();`, which renames nothing.
+//
+// Adding `_, err = f()` would remove the deviation and is the named follow-on.
+func (c *Compiler) refuseIfNothingIsNew(names []*ast.Identifier) error {
+	fresh := 0
+	already := make([]string, 0, len(names))
+	for _, ident := range names {
+		if ident == nil {
+			continue
+		}
+		if ident.Value == blankName {
+			// The blank is the remedy Mutant has instead of multi-target
+			// assignment: see above. It counts as new.
+			fresh++
+			continue
+		}
+		if c.declaredHere(ident.Value) {
+			already = append(already, ident.Value)
+			continue
+		}
+		fresh++
+	}
+	if fresh == 0 && len(already) > 0 {
+		return sema.DuplicateDeclarationRefusal(already)
+	}
+	return nil
+}
+
+// compileBlockScope compiles a block as its own scope. Every block is one,
+// except a function body -- see openBlock.
+func (c *Compiler) compileBlockScope(block *ast.BlockStatement) error {
+	c.openBlock()
+	err := c.compileBlockBody(block)
+	c.closeBlock()
+	return err
+}
+
+// compileBlockBody compiles a block's statements into the scope already open.
+// It is the function-body path, where the parameters and the body share one
+// scope.
+func (c *Compiler) compileBlockBody(block *ast.BlockStatement) error {
+	for _, stmt := range block.Statements {
+		if err := c.Compile(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compiler) loadSymbol(s Symbol) {
@@ -1496,6 +1714,11 @@ func (c *Compiler) emitStoreOnly(symbol Symbol) error {
 // is patched to `head`, where the advance lives: a for-in has no post section
 // of its own, the advance *is* the post section.
 func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
+	// The header is a scope, as in a counted for: the key and value names
+	// belong to the loop, and the body nests inside so it may shadow them.
+	c.openBlock()
+	defer c.closeBlock()
+
 	if node.Value == nil {
 		return fmt.Errorf("for ... in has no name to bind")
 	}
@@ -1768,6 +1991,14 @@ func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
 }
 
 func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
+	// The header is a scope and the body nests inside it, which is how Go
+	// arranges a for statement and is what makes the body free to shadow the
+	// name the header declared. It is also the fix for the hang: the post
+	// section is compiled after the body's scope has closed, so `i++` and the
+	// condition both mean the header's `i` whatever the body declared.
+	c.openBlock()
+	defer c.closeBlock()
+
 	if node.Init != nil {
 		if err := c.Compile(node.Init); err != nil {
 			return err

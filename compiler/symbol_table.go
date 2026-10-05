@@ -23,11 +23,50 @@ type Symbol struct {
 	Index int
 }
 
+// shadowed is one binding a block scope displaced, kept so the block can put it
+// back. existed distinguishes "this name meant something else out here" from
+// "this name meant nothing out here", which are undone differently: the first
+// is restored, the second is removed.
+type shadowed struct {
+	key      string
+	previous Symbol
+	existed  bool
+}
+
+// blockFrame is one open block scope.
+//
+// A block is deliberately NOT a SymbolTable of its own. A table boundary is
+// what turns a LocalScope symbol into a FreeScope capture and what sizes a
+// frame, and a block is neither -- the VM has no notion of a block and never
+// sees one. So a block is only a view over this table's name map: declarations
+// inside it still take slots from the enclosing function's frame, and closing
+// the block puts the names back the way they were.
+//
+// The cost of that choice is that two sibling blocks do not share slots, so a
+// function with many blocks has a larger frame than it strictly needs. The
+// benefit is that no bytecode, no opcode and no frame layout changes, which is
+// what makes correct block scoping a compiler-only change.
+// This frame holds only what has to be undone. Which names a scope has itself
+// declared -- the question the one-declaration-per-scope rule asks -- is the
+// Compiler's, not the table's, and deliberately so: a REPL keeps one symbol
+// table across lines and builds a fresh Compiler for each, so a rule kept here
+// would make `let x = 1` on line 1 and `let x = 2` on line 2 a duplicate, and
+// redefining a name is most of what a REPL is for. The table owns visibility;
+// the Compiler owns the rule. See Compiler.declScopes.
+type blockFrame struct {
+	undo []shadowed
+}
+
 type SymbolTable struct {
 	Outer          *SymbolTable
 	store          map[string]Symbol
 	numDefinitions int
 	FreeSymbols    []Symbol
+
+	// blocks is the stack of block scopes open in this table right now. Empty
+	// between two statements at a function's or a module's top level, which is
+	// why it is safe for a REPL to keep one table across lines.
+	blocks []blockFrame
 
 	// capturedLocals is the set of this table's own local slots that some inner
 	// function closed over. It is populated by Resolve at the moment a capture
@@ -115,6 +154,61 @@ func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 	return s
 }
 
+// OpenBlock begins a block scope: a region whose declarations stop meaning
+// anything when it ends, and whose declarations may shadow names from outside
+// it.
+//
+// Every construct that is a block in Go is one here -- a brace-delimited block,
+// an if or else body, a loop body, a match arm -- and the two that have no Go
+// equivalent were chosen to match the nearest thing Go has: a loop header is
+// a scope with the body nested inside it, and a function's parameters share one
+// scope with its body. See Compiler.openBlock for where each is opened.
+func (st *SymbolTable) OpenBlock() {
+	st.blocks = append(st.blocks, blockFrame{})
+}
+
+// CloseBlock ends the innermost block scope, putting back every binding the
+// block's own declarations displaced.
+//
+// Undone in reverse, because one block may declare one name more than once --
+// `let a, err = f(); let b, err = g();` inside a block displaces err twice --
+// and only the first record holds what the name meant before the block.
+//
+// Slots are not reclaimed. numDefinitions only ever grows, so a name the block
+// declared keeps its slot in the frame and simply becomes unreachable, which is
+// what makes this safe to do while an inner function is already holding a
+// capture of it.
+//
+// Closing with nothing open is a no-op rather than a panic: it is what a
+// compile that failed part-way through a block unwinds to, and a compiler that
+// crashes while reporting an error reports nothing.
+func (st *SymbolTable) CloseBlock() {
+	if len(st.blocks) == 0 {
+		return
+	}
+	frame := st.blocks[len(st.blocks)-1]
+	st.blocks = st.blocks[:len(st.blocks)-1]
+	for i := len(frame.undo) - 1; i >= 0; i-- {
+		entry := frame.undo[i]
+		if entry.existed {
+			st.store[entry.key] = entry.previous
+			continue
+		}
+		delete(st.store, entry.key)
+	}
+}
+
+// noteShadowed records what a declaration displaced, so CloseBlock can put it
+// back. key is the store key, which is module-qualified at the root.
+func (st *SymbolTable) noteShadowed(key string) {
+	if len(st.blocks) == 0 {
+		return
+	}
+	frame := &st.blocks[len(st.blocks)-1]
+	previous, existed := st.store[key]
+	frame.undo = append(frame.undo, shadowed{key: key, previous: previous, existed: existed})
+}
+
 // Define allocates a slot for name in this table.
 //
 // At the root -- and only there -- the store key is qualified by the module
@@ -131,6 +225,7 @@ func (st *SymbolTable) Define(name string) Symbol {
 	} else {
 		symbol.Scope = LocalScope
 	}
+	st.noteShadowed(key)
 	st.store[key] = symbol
 	st.numDefinitions++
 	return symbol
@@ -404,10 +499,15 @@ func (st *SymbolTable) GlobalNames() []string {
 // each entry the name declared there and empty where there is none to report.
 //
 // A slot loses its name when a later declaration takes the name over, since the
-// store is keyed by name and holds one symbol per key. `let x = 1; let x = 2;`
-// allocates two slots; the second answers to `x` and the first answers to
-// nothing, which is the honest reading -- the alternative is a debugger showing
-// two variables called `x`, one of them unreachable from any source line.
+// store is keyed by name and holds one symbol per key. The way to reach that
+// now is a block -- `let x = 1; if (c) { let x = 2; }` allocates two slots, and
+// once the block has closed the name means the first again, so the second
+// answers to nothing. That is the honest reading: the alternative is a debugger
+// showing two variables called `x`, one of them unreachable from any source
+// line.
+//
+// Two `let`s of one name in ONE scope no longer reach it, because they are no
+// longer allowed; see Compiler.refuseIfNothingIsNew.
 //
 // nil at the root, where the definitions are globals rather than locals:
 // GlobalSlotNames answers for those.

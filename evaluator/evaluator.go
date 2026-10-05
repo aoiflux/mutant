@@ -275,7 +275,34 @@ func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 	return res
 }
 
+// evalBlockStatement runs a block in a scope of its own.
+//
+// The two engines have to agree about this, and until they were made to they
+// did not: the compiler gave a block no scope at all and the evaluator gave one
+// only to a call, a loop and a match arm, so `let z = 1; if (c) { let z = 2; }`
+// left z as 2 in both and Go leaves it as 1. Neither engine was right, and the
+// disagreements between them were worse than either -- a `for` whose body
+// redeclared the counter hung in the VM and terminated with the wrong answer in
+// the tree-walker, from one program.
+//
+// Assignment is unaffected and that is what makes this safe: `x = 5` inside a
+// block goes through Environment.Update, which walks outward and writes to the
+// binding that already exists. Only a `let` writes here, through Set.
+//
+// A function body does NOT come through here -- see evalBlockBody.
 func evalBlockStatement(block *ast.BlockStatement, env *object.Environment) object.Object {
+	return evalBlockBody(block, object.NewEnclosedEnvironement(env))
+}
+
+// evalBlockBody runs a block's statements in the environment it is given,
+// opening no scope.
+//
+// It is the path for the blocks that are not scopes of their own because
+// something else has already opened theirs: a function body, which shares one
+// scope with its parameters, and a macro body, which shares one with its. The
+// compiler draws the boundary in the same place, and Go draws it there too --
+// `func f(a int) { a := 1 }` is `a redeclared in this block`.
+func evalBlockBody(block *ast.BlockStatement, env *object.Environment) object.Object {
 	var res object.Object
 	for _, stmt := range block.Statements {
 		res = eval(stmt, env)
@@ -324,7 +351,14 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 			return newError("wrong number of arguments. want=%d, got=%d", len(fun.Parameters), len(args))
 		}
 		extendedEnv := extendFunctionEnv(fun, args)
-		evaluated := eval(fun.Body, extendedEnv)
+		// evalBlockBody, not eval: the parameters are already bound in
+		// extendedEnv and the body shares their scope rather than nesting
+		// inside it, so a `let` of a parameter's name is the redeclaration the
+		// compiler refuses rather than a silent shadow.
+		evaluated := evalBlockBody(fun.Body, extendedEnv)
+		if escaped := loopControlEscaped(evaluated); escaped != nil {
+			return escaped
+		}
 		return unwrapReturnValue(evaluated)
 	case *builtin.BuiltIn:
 		// Some builtins need something the builtin itself does not have: the
@@ -350,6 +384,18 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 			return &fault{err: errObj}
 		}
 		return result
+	case nil:
+		// A callee that evaluated to nothing. fn.Type() on a nil interface
+		// panics, and this arm is reachable from source: `eval` has no arm for
+		// *ast.MacroLiteral, because DefineMacros is expected to have removed
+		// the macro definitions first -- and it removes only the TOP-LEVEL
+		// ones. A macro literal nested inside an `unquote` argument therefore
+		// survives into code this engine runs, binds nil, and is then called.
+		//
+		// The message names the shape rather than the type, because there is no
+		// type to name: that is the whole of what went wrong.
+		return newError("call of a name that has no value: a macro definition " +
+			"must appear at the top level, where it is expanded before anything runs")
 	default:
 		return newError("not a function: %s", fn.Type())
 	}
@@ -361,6 +407,37 @@ func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Enviro
 		env.Set(param.Value, args[paramIdx])
 	}
 	return env
+}
+
+// loopControlEscaped reports a `break` or a `continue` that reached the end of
+// a function body with no loop in that body to act on.
+//
+// It is the backstop half of M26-EVL-023, and it is a backstop rather than the
+// fix: the compiler refuses the shape, so a program that reaches here has come
+// through a path that does not compile first. Macro expansion is exactly such a
+// path -- `mutant gen` runs DefineMacros and ExpandMacros for every module with
+// no flag, so an `unquote` argument is user code this engine executes before
+// anything is compiled. Without this, the signal left the call as its VALUE:
+// unwrapReturnValue only unwraps *object.ReturnValue, so a *object.Break fell
+// straight through, and the caller's loop obeyed a break written in a function
+// it had merely called. `for (let i = 0; i < 3; i++) { let f = fn() { break; };
+// f(); out = out + 1; }` answered 0, and a macro spliced that 0 into the
+// program with no diagnostic.
+//
+// An error, not a silent null: the alternative is a value nobody can tell from
+// a deliberate one, which is the whole defect. The words are sema's, so this
+// says what the compiler says.
+func loopControlEscaped(result object.Object) object.Object {
+	if result == nil {
+		return nil
+	}
+	switch result.Type() {
+	case object.BREAK_OBJ:
+		return newError("%s", sema.LoopControlRefusal("break").Message)
+	case object.CONTINUE_OBJ:
+		return newError("%s", sema.LoopControlRefusal("continue").Message)
+	}
+	return nil
 }
 
 func unwrapReturnValue(obj object.Object) object.Object {

@@ -218,8 +218,8 @@ array, the binding takes it apart instead of reporting an error:
 
 ```mutant
 let items = ["a", "b"];
-let updated, err = push(items, "c");   // WRONG: push returns one array
-                                       // updated is "a", err is "b"
+let wrong, err = push(items, "c");     // WRONG: push returns one array
+                                       // wrong is "a", err is "b"
 
 let updated = push(items, "c");        // right: ["a", "b", "c"]
 ```
@@ -251,6 +251,71 @@ you at your word:
 ```mutant
 let _, _ = fs_write(log_path, line);   // best-effort logging, on purpose
 ```
+
+### Scope, and one declaration per scope
+
+**A block is a scope.** A name declared inside `{ ... }` means nothing after the
+closing brace, and a name declared inside a block may shadow one from outside it.
+Every brace-delimited region is one: a bare block, an `if` or `else` body, a loop
+body, a `match` arm.
+
+```mutant
+let z = 1;
+if (true) {
+    let z = 2;      // a different z
+    putln(z);       // 2
+}
+putln(z);           // 1 -- the inner one is gone
+```
+
+A loop header is a scope, and the body nests inside it. So the body may shadow
+the name the header declared, and the loop still counts with its own:
+
+```mutant
+let hits = 0;
+for (let i = 0; i < 3; i = i + 1) {
+    let i = 9;      // the body's i, not the loop's
+    hits = hits + 1;
+}
+putln(hits);        // 3 -- the loop's own i still reached 3
+```
+
+A function's parameters and its body share **one** scope, so a `let` at the top
+of a body cannot take a parameter's name.
+
+**A `let` has to declare something new.** Within one scope, a `let` is refused
+unless at least one of the names on its left is new to that scope:
+
+<!-- mutant:fragment -->
+```mutant
+let x = 1;
+let x = 2;          // refused: x is already declared in this scope
+x = 2;              // this is what was meant
+```
+
+This is what makes the `(value, err)` idiom work rather than a special case for
+it. Reusing `err` is allowed because the value half is new each time:
+
+<!-- mutant:fragment -->
+```mutant
+let head, err = fs_read(first);
+let tail, err = fs_read(second);     // fine: tail is new
+let head, err = fs_read(third);      // refused: nothing on the left is new
+```
+
+The blank is always allowed, however many times, because there is nothing to
+read back:
+
+```mutant
+let _, err = fs_write(a, line);
+let _, err = fs_write(b, line);      // fine
+```
+
+Two things follow that are worth knowing before you hit them. A name cannot
+refer to itself through its own initializer, because a declared name's scope
+begins *after* its declaration -- `let step = wrap(fn(n) { return step(n - 1); });`
+is `undefined variable: step`. And threading one handle through a pipeline needs
+a name per stage, since rebinding it would declare nothing new.
 
 ### Loops
 
@@ -2178,13 +2243,13 @@ for.
 An investigation ends in a report, not a stdout dump.
 
 ```mutant
-let r, err = report_new("Laptop triage", {"examiner": "G. Gogia", "case_id": "IR-2026-0413"});
-let r, err = report_text(r, "Two hosts beaconed to the same domain within four minutes.");
-let r, err = report_section(r, "Indicators");
-let r, err = report_table(r, iocs, {"columns": ["type", "value", "first_seen"]});
+let opened, err = report_new("Laptop triage", {"examiner": "G. Gogia", "case_id": "IR-2026-0413"});
+let narrated, err = report_text(opened, "Two hosts beaconed to the same domain within four minutes.");
+let sectioned, err = report_section(narrated, "Indicators");
+let document, err = report_table(sectioned, iocs, {"columns": ["type", "value", "first_seen"]});
 
-let page, err = report_render(r, "html");          // the document as a string
-let wrote, err = report_write(r, "case.html");    // or straight to disk
+let page, err = report_render(document, "html");      // the document as a string
+let wrote, err = report_write(document, "case.html"); // or straight to disk
 putln(wrote["sha256"]);
 ```
 

@@ -131,13 +131,17 @@ func evalEnumInfixExpression(operator string, left, right object.Object) object.
 	return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
 }
 
-// evalMatchArmBody runs one arm's body in its own scope and answers null when
+// evalMatchArmBody answers null when
 // the body computed nothing -- a body ending in a `let`, a `for`, or nothing at
 // all. eval of such a block returns Go nil, and a match is an expression, so
 // returning that would hand a nil object.Object to whatever consumed the match.
 // The VM reaches the same answer by emitting OpNull for the same shape of body.
+// The arm's own scope is now the block's -- evalBlockStatement opens one for
+// every block -- so this no longer encloses one itself. Enclosing twice was
+// harmless but said that an arm's scope was special, and it is not: an arm is a
+// block, which is what Go's case clauses are.
 func evalMatchArmBody(arm *ast.MatchArm, env *object.Environment) object.Object {
-	result := eval(arm.Body, object.NewEnclosedEnvironement(env))
+	result := eval(arm.Body, env)
 	if result == nil {
 		return NULL
 	}

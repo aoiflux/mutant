@@ -241,23 +241,64 @@ func TestAFunctionCanCallItselfButAMultiNameLetCannot(t *testing.T) {
 
 // Mutant has fewer scopes than its syntax suggests, and the graph must not
 // invent the missing ones.
-func TestABlockOpensNoScopeAndAFunctionDoes(t *testing.T) {
-	leaked := graphOf(t, "let f = fn() { if (true) { let inner = 1; } inner; };\n")
-	if uses := leaked.UsesOf(find(t, leaked, "inner").ID); len(uses) != 1 {
-		t.Fatalf("a block opens no scope, so inner is still bound after it; got %d uses", len(uses))
+// TestABlockOpensAScopeAndSoDoesAFunction is the editor's half of block
+// scoping, and the whole of it: every rule that cares -- duplicate
+// declarations, unused declarations, go-to-definition, rename -- reads the
+// scope out of this graph rather than deriving one of its own, so this walk
+// agreeing with the compiler is what makes the editor agree with the build.
+//
+// It used to assert the opposite, and passed, because the compiler did not
+// scope a block either.
+func TestABlockOpensAScopeAndSoDoesAFunction(t *testing.T) {
+	contained := graphOf(t, "let f = fn() { if (true) { let inner = 1; } inner; };\n")
+	if uses := contained.UsesOf(find(t, contained, "inner").ID); len(uses) != 0 {
+		t.Fatalf("a block opens a scope, so inner is not bound after it; got %d uses", len(uses))
 	}
 
-	contained := graphOf(t, "let f = fn() { let inner = 1; };\ninner;\n")
-	if uses := contained.UsesOf(find(t, contained, "inner").ID); len(uses) != 0 {
-		t.Fatalf("a function body does open a scope, so inner does not escape it; got %d uses", len(uses))
+	body := graphOf(t, "let f = fn() { let inner = 1; };\ninner;\n")
+	if uses := body.UsesOf(find(t, body, "inner").ID); len(uses) != 0 {
+		t.Fatalf("a function body opens a scope, so inner does not escape it; got %d uses", len(uses))
 	}
 }
 
-func TestALoopBindingOutlivesItsLoop(t *testing.T) {
+// TestABlockShadowIsASecondBindingAndNotADuplicate is why the change was worth
+// making to the editor and not only to the compiler.
+//
+// Both declarations are live: the use inside the block means the inner one, the
+// use after it means the outer one. A rule that cannot see two bindings here
+// sees one declared twice, and offers to delete a line of a working program.
+func TestABlockShadowIsASecondBindingAndNotADuplicate(t *testing.T) {
+	g := graphOf(t, "let z = 1;\nif (true) { let z = 2; z; }\nz;\n")
+
+	declared := 0
+	for _, node := range g.Declarations() {
+		if node.Name == "z" {
+			declared++
+			if uses := g.UsesOf(node.ID); len(uses) != 1 {
+				t.Errorf("each z is used exactly once, in its own scope; this one has %d", len(uses))
+			}
+		}
+	}
+	if declared != 2 {
+		t.Fatalf("an inner z and an outer z are two bindings; got %d", declared)
+	}
+}
+
+// TestALoopBindingDoesNotOutliveItsLoop is the counterpart for a loop header.
+//
+// The binding belongs to the loop, as Go's does -- a for statement is a block
+// with the body nested inside it -- so it is gone after the closing brace. It
+// used to outlive the loop in both engines, which is the same defect in the
+// same place: there was no scope to end.
+func TestALoopBindingDoesNotOutliveItsLoop(t *testing.T) {
 	g := graphOf(t, "for (v in [1]) { }\nv;\n")
-	if uses := g.UsesOf(find(t, g, "v").ID); len(uses) != 1 {
-		t.Fatalf("a for-in binding is defined in the enclosing scope, which is "+
-			"what the VM does; got %d uses", len(uses))
+	if uses := g.UsesOf(find(t, g, "v").ID); len(uses) != 0 {
+		t.Fatalf("a for-in binding belongs to the loop, so v is unbound after it; got %d uses", len(uses))
+	}
+
+	inside := graphOf(t, "for (v in [1]) { v; }\n")
+	if uses := inside.UsesOf(find(t, inside, "v").ID); len(uses) != 1 {
+		t.Fatalf("the body is inside the header's scope, so v resolves there; got %d uses", len(uses))
 	}
 }
 
