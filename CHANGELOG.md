@@ -1306,6 +1306,21 @@ exhaustive lists.
   [docs/advisories/README.md](docs/advisories/README.md) records why.
   (M26-SEC-009)
 
+- **A key-derivation branch would have opened data under any password.**
+  `ReconstructKey` picked a derivation by the algorithm name stored beside the
+  data, and its `hkdf-sha256` arm derived the key from the stored salt alone --
+  as both the secret and the salt -- without ever reading the password. Every
+  passphrase produced the same key, so data naming that algorithm would have
+  opened under an empty one. That arm is refused now, and the unknown-algorithm
+  arm is held to returning no key material rather than a short one. Nothing
+  reached it: the only caller writes `argon2id` into the parameters itself and
+  never takes the algorithm from the data, and the one function that would have
+  read an algorithm name out of a stored blob has no callers and cannot parse
+  what its own encoder writes. So this closes a trap for the next caller rather
+  than a hole for the current one, and it carries no identifier for the same
+  reason -- [docs/advisories/README.md](docs/advisories/README.md) says which
+  test it fails. (M26-SEC-009)
+
 - **The toolchain moves to Go 1.26.6, and `golang.org/x/crypto` to v0.56.0.**
   Under go1.26.2, govulncheck found 18 standard-library vulnerabilities the code
   reaches, several through parsers that read evidence: XML inside an E01 image

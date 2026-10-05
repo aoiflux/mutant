@@ -172,7 +172,27 @@ func DeriveKeyDeterministic(sourceHash []byte, metadata string) ([]byte, *KDFPar
 	return key, params, nil
 }
 
-// ReconstructKey reconstructs a key from password and stored parameters
+// ReconstructKey derives a key again from a password and the parameters stored
+// beside the data it opens. It takes "argon2id" and nothing else.
+//
+// It used to accept "hkdf-sha256" too, and that branch derived the key from
+// params.Salt as both the secret and the salt without ever reading the
+// password: every passphrase produced the same key, so a stored blob naming
+// that algorithm opened under any password at all, an empty one included. It
+// is refused now rather than removed, so the one caller keeps compiling.
+//
+// Nothing ever reached it, which is why this closes a trap instead of changing
+// a behaviour something depended on: AESDecrypt builds its own KDFParams with
+// "argon2id" written in and never takes the algorithm from the data, and
+// DecodeParams -- the only thing that would read an algorithm name out of a
+// stored blob -- has no callers and cannot parse what KDFParams.Encode writes.
+// record_crypto.go's DeriveWrappingKey documents routing around this function
+// for exactly this reason (M26-SEC-009).
+//
+// A key that is derived without a password is what DeriveKeyDeterministic is
+// for, and it is not one a password can reconstruct: reconstructing it needs
+// nothing but the stored salt, so offering it through a function that asks for
+// a password would be the same false assurance somewhere else.
 func ReconstructKey(password string, params *KDFParams) ([]byte, error) {
 	switch params.Algorithm {
 	case "argon2id":
@@ -186,14 +206,9 @@ func ReconstructKey(password string, params *KDFParams) ([]byte, error) {
 		), nil
 
 	case "hkdf-sha256":
-		// For HKDF, we need the original source hash
-		// This should be derived from the salt which stores the source hash
-		hkdfReader := hkdf.New(sha256.New, params.Salt, params.Salt, params.Info)
-		key := make([]byte, params.KeyLen)
-		if _, err := io.ReadFull(hkdfReader, key); err != nil {
-			return nil, err
-		}
-		return key, nil
+		return nil, errors.New("hkdf-sha256 is not a password algorithm: the key it " +
+			"names is derived from the stored salt alone, so reconstructing it would " +
+			"ignore the password and open under any passphrase at all")
 
 	default:
 		return nil, fmt.Errorf("unknown KDF algorithm: %s", params.Algorithm)

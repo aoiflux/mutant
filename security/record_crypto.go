@@ -463,10 +463,14 @@ func expandFrom(ikm, salt []byte, info string, length int) ([]byte, error) {
 // of a secret in one can never be erased, and SecureZero on the slice it came
 // from leaves the copy intact.
 //
-// This does NOT call ReconstructKey. That function switches on an algorithm
-// name, and its "hkdf-sha256" branch derives the key from the salt alone and
-// ignores the password entirely -- so a file that named that algorithm would
-// open under any passphrase at all.
+// This does NOT call ReconstructKey, which switches on an algorithm name read
+// from beside the data. Until 2026-10-06 that function's "hkdf-sha256" branch
+// derived the key from the salt alone and ignored the password entirely, so
+// data naming that algorithm would have opened under any passphrase at all; it
+// refuses that branch now (M26-SEC-009). The separation stands without that
+// anyway, and is why this function exists: the parameters here come from the
+// format version rather than from the file, so there is no algorithm name to
+// switch on and nothing a file can say that changes how its own key is derived.
 func DeriveWrappingKey(passphrase []byte, salt []byte, version uint32) ([]byte, error) {
 	if len(passphrase) == 0 {
 		return nil, ErrEmptyPassphrase

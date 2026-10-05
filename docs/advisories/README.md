@@ -115,7 +115,7 @@ it as subsequent impact as well would count it twice.
 
 ## Not assigned an identifier
 
-Three fixes in the 2.6.0 Security section deliberately have no MVF, because
+Four fixes in the 2.6.0 Security section deliberately have no MVF, because
 giving one to everything in that section would make the namespace mean
 "changed something in security" rather than "was a vulnerability".
 
@@ -139,6 +139,19 @@ giving one to everything in that section would make the namespace mean
   the third test above -- reachable in a published release, or on a path a
   release would reach. The custody seal, which is the one thing that does
   carry a signature, writes its fields separately and was never affected.
+
+- **A key-derivation branch that ignored the password** (internal row
+  M26-SEC-009 as well -- the same row, a different defect in it).
+  `ReconstructKey` switched on an algorithm name stored beside the data, and
+  its `hkdf-sha256` arm derived the key from that stored salt as both the
+  secret and the salt without reading the password at all, so data naming
+  that algorithm would have opened under any passphrase, an empty one
+  included. It is refused now. It was never reachable: the one caller writes
+  `argon2id` into the parameters itself and never takes the algorithm from
+  the data, and `DecodeParams`, which is what would have read an algorithm
+  name out of a stored blob, has no callers and cannot parse what its own
+  encoder writes. So it fails the third test above as well, and closing it
+  was closing a trap for the next caller rather than a hole for this one.
 
 ## Relationship to CVE and GHSA
 
