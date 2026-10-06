@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"unicode/utf16"
 
@@ -135,21 +134,25 @@ func TestParseDestListReadsEveryEntryOfEveryVersion(t *testing.T) {
 // header whose entry count is far larger than the stream allocates by what the
 // stream can hold, not by the count. Sized by the count, 2^24 entries are 900
 // MiB before the first is read.
+//
+// The same one-entry stream is read twice, declaring one entry and declaring
+// 2^24, so what is asserted is that the count buys nothing. See
+// allocation_gap_test.go for why the absolute figure this asserted until
+// 2026-10-06 could not survive a full run of this package.
 func TestParseDestListIsNotSizedByItsCount(t *testing.T) {
-	buf := destListFixture(4, 0, destListFixtureEntry{streamID: 1, host: "H", unix: 1600000000, path: `C:\a`})
-	binary.LittleEndian.PutUint32(buf[4:], 1<<24)
+	stream := func(declared uint32) []byte {
+		buf := destListFixture(4, 0, destListFixtureEntry{streamID: 1, host: "H", unix: 1600000000, path: `C:\a`})
+		binary.LittleEndian.PutUint32(buf[4:], declared)
+		return buf
+	}
+	honest, claimed := stream(1), stream(1<<24)
 
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	got := parseDestList(buf)
-	runtime.ReadMemStats(&after)
-
+	var got []destEntry
+	requireNoAllocationGap(t, "parseDestList over a one-entry stream claiming 2^24 entries",
+		func() { _ = parseDestList(honest) },
+		func() { got = parseDestList(claimed) })
 	if len(got) != 1 || got[0].path != `C:\a` {
 		t.Fatalf("parseDestList = %+v, want the one entry the stream holds", got)
-	}
-	if grew := after.TotalAlloc - before.TotalAlloc; grew > 1<<20 {
-		t.Errorf("parseDestList allocated %d bytes for a %d-byte stream claiming 2^24 entries", grew, len(buf))
 	}
 }
 

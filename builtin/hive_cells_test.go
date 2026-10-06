@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -236,44 +235,57 @@ func TestAnIndexRootIsReadOnceHoweverOftenItIsListed(t *testing.T) {
 	})
 }
 
-// allocatedBy reports how many bytes fn allocated.
-func allocatedBy(fn func()) uint64 {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	fn()
-	runtime.ReadMemStats(&after)
-	return after.TotalAlloc - before.TotalAlloc
+// hiveClaiming builds a hive holding one REG_BINARY value whose single segment
+// is the bytes given, with the two numbers a parser could be led by set to
+// whatever is asked for: the root key's value count, and the value's recorded
+// size. The cells behind them hold the same thing whatever the numbers say,
+// which is what makes two of these comparable.
+func hiveClaiming(t *testing.T, valueCount, recordedSize uint32, segment []byte) (*regfHive, *nkKey) {
+	t.Helper()
+	b := newHiveBuilder(0)
+	binary.LittleEndian.PutUint32(b.buf[0x18:], 5)
+	vk := regfBinaryVK(b, "Huge", recordedSize, bigDataRecord(b, segment))
+	h, _ := writeHive(t, b, rootWithValues(b, valueCount, vk))
+	nk, err := h.parseNK(h.rootOffset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, nk
 }
 
 // TestAHiveIsNotSizedByTheCountsItRecords is the hive half of M26-ART-005. A key
 // whose value count is 2^24 over a one-entry list, and a value whose recorded
 // size is 256 MiB over one short segment, are read by what the cells hold. Sized
 // by their counts they asked for 128 MiB and 256 MiB.
+//
+// Each half is measured against the same hive with an honest number in place of
+// the enormous one, so what is asserted is that the number buys nothing. See
+// allocation_gap_test.go for why the absolute figure this asserted until
+// 2026-10-06 could not survive a full run of this package.
 func TestAHiveIsNotSizedByTheCountsItRecords(t *testing.T) {
-	b := newHiveBuilder(0)
-	binary.LittleEndian.PutUint32(b.buf[0x18:], 5)
-	small := patterned(100)
-	vk := regfBinaryVK(b, "Huge", 1<<28, bigDataRecord(b, small))
-	root := rootWithValues(b, 1<<24, vk)
-	h, _ := writeHive(t, b, root)
+	segment := patterned(100)
+	honest, honestKey := hiveClaiming(t, 1, uint32(len(segment)), segment)
+	manyValues, manyValuesKey := hiveClaiming(t, 1<<24, uint32(len(segment)), segment)
+	hugeValue, hugeValueKey := hiveClaiming(t, 1, 1<<28, segment)
 
-	nk, err := h.parseNK(h.rootOffset)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var values []*vkValue
-	if grew := allocatedBy(func() { values = h.values(nk) }); grew > 1<<20 {
-		t.Errorf("values() allocated %d bytes for a one-entry list claiming 2^24 values", grew)
-	}
+	requireNoAllocationGap(t, "values() over a one-entry list claiming 2^24 values",
+		func() { _ = honest.values(honestKey) },
+		func() { values = manyValues.values(manyValuesKey) })
 	if len(values) != 1 {
 		t.Fatalf("values() = %d values, want 1", len(values))
 	}
-	var raw []byte
-	if grew := allocatedBy(func() { raw = h.rawValueBytes(values[0]) }); grew > 1<<20 {
-		t.Errorf("rawValueBytes allocated %d bytes for a value whose one segment is %d bytes", grew, len(small))
+
+	honestValue := honest.values(honestKey)
+	hugeValues := hugeValue.values(hugeValueKey)
+	if len(honestValue) != 1 || len(hugeValues) != 1 {
+		t.Fatalf("values() = %d and %d, want one value in each hive", len(honestValue), len(hugeValues))
 	}
-	if !bytes.Equal(raw, small) {
-		t.Errorf("rawValueBytes = %d bytes, want the %d the segment holds", len(raw), len(small))
+	var raw []byte
+	requireNoAllocationGap(t, "rawValueBytes over a value recording 256 MiB for one short segment",
+		func() { _ = honest.rawValueBytes(honestValue[0]) },
+		func() { raw = hugeValue.rawValueBytes(hugeValues[0]) })
+	if !bytes.Equal(raw, segment) {
+		t.Errorf("rawValueBytes = %d bytes, want the %d the segment holds", len(raw), len(segment))
 	}
 }

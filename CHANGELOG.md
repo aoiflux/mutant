@@ -859,6 +859,38 @@ exhaustive lists.
 
 ### Fixed
 
+- **`go run ./cmd/gendocs -check` answers for the hand-written documents too.**
+  It compared the three artifacts it generates and nothing else, and reported
+  `docs/CAPABILITY_REFERENCE.md is up to date` in the same words whether or not
+  the documents around it agreed with the registry. Those go stale separately,
+  and regenerating the artifacts is the act that makes them stale: on
+  2026-10-06 a new builtin took the count to 694, all three artifacts were
+  regenerated and current, `-check` reported all three up to date, and
+  `go test ./...` failed three tests in `cmd/gendocs` on the commit itself.
+  Seven sentences across six documents still said 693, and the category index
+  still gave Command Execution 4 builtins and linked to
+  `#command-execution-4`, an anchor that stopped existing the moment the
+  heading it names was regenerated as `## Command Execution (5)`.
+
+  The prose counts, the per-category index and every document link were already
+  checked, by tests in `cmd/gendocs`. They are no longer written there: they
+  live in `cmd/gendocs/consistency.go`, and the tests and `-check` are two
+  callers of one implementation, so the tree `scripts/release_gate.sh` and
+  `scripts/release_gate.ps1` call consistent is the tree the suite calls
+  consistent. Each check also reports what it examined -- so many claims, rows
+  and links -- because a check whose scope nobody can see is one a reader reads
+  too much into, which is how "the generated reference is up to date" came to
+  be heard as "the documentation is up to date". A check that matches nothing
+  now fails instead of passing, and eight tests point each check at a tree that
+  is wrong on purpose, because "the check runs" is not the claim that mattered.
+
+  Writing mode reports them as well, and exits non-zero when any is wrong. That
+  is where the information is worth most: the count gendocs has just generated
+  is the count a sentence elsewhere now contradicts, and it can name the file
+  and the line to edit rather than leaving it to a five-minute suite run, or to
+  a reader. Adding or removing a builtin is a documentation change in about
+  eight places that nothing generates, and this lists them.
+
 - A `let` initializer no longer reads the binding it is about to create, and a
   loop whose body redeclares the loop's own name no longer hangs. Both were one
   cause: nothing in the language was a scope except a function literal, so
@@ -901,6 +933,67 @@ exhaustive lists.
   expansion names the macro it happened in. The sentence itself moved into `sema`
   beside the other refusals, so the two engines cannot drift into two phrasings
   of one rule again — which is what this defect was. (M26-EVL-023)
+
+- **The allocation bounds in `builtin/` measure the parser rather than the
+  process.** Six tests assert that a count written in a file's header cannot
+  size an allocation, and each measured it by reading
+  `runtime.MemStats.TotalAlloc` across the call. That counter is process-wide and
+  cumulative: everything allocated between the two readings lands in the
+  difference, by any goroutine and by the runtime itself. Against bounds as small
+  as 1 MiB it was mostly other people's memory, so the same tests passed when run
+  alone and failed in a full `go test ./builtin`. That is the worst way for a
+  test to fail — a gate that is red on a correct tree teaches people to ignore
+  red — and two staged fixes could not be gated at all while it was.
+
+  How far off the figure was is worth recording. `TestABinaryPlistIsNotSizedByItsCounts`
+  failed at 1,998,144 bytes on a tree where the fix was correct, and the parse it
+  measures allocates 8,312. More than 99% of what it asserted on had nothing to
+  do with the code under test.
+
+  Each one now runs the same parse over two fixtures differing only in the number
+  written in the header, and bounds the difference rather than the total: the
+  difference cancels the parse's own cost, which turns the assertion into whether
+  the declared count decides the size, and the lowest of several readings is
+  taken because contamination can only ever add. Measured under a full package
+  run, four of the six differences are exactly zero and the largest is 31 KiB
+  against a 4 MiB allowance, where the defects these tests exist for cost between
+  16 MiB and 900 MiB.
+
+  The twin is a wrong count too rather than a valid one — two objects where the
+  file holds one, two array references, one entry rather than 2^20, sixty-four
+  bytes of record in a forty-byte capture, a header field of twice the budget —
+  so both measurements are of the same refusal and the difference between them is
+  the cost of the number alone. Each test fails loudly if its twin is ever
+  accepted, because from that point the difference means nothing.
+  `builtin/allocation_gap_test.go` carries the reasoning, and the DestList bound
+  was found by this pass: it had the same defect and was in neither inventory.
+
+- **`plist_parse` no longer returns a value a binary plist does not contain.**
+  The declared object count was checked against the bytes from the offset
+  table's start to the end of the file, and the last thirty-two bytes of a
+  binary plist are the trailer, which is not table. The check therefore handed
+  the table the trailer's own bytes as room for offsets, so a file could declare
+  up to `32/offsetIntSize` objects more than its table holds and the offsets for
+  those were read out of the trailer. On a forty-five byte file with four-byte
+  offsets the table holds exactly one entry and nine objects were allowed; with
+  the top object pointing at one of the eight phantoms, `plist_parse` returned a
+  two-character string decoded from the trailer's bytes and no error at all.
+
+  A refusal would have been fine and a dropped value would have been bad. A
+  confident answer about an artifact that the artifact does not contain is the
+  one outcome a parser here may not have, and the input is exactly the kind an
+  examiner is handed rather than writes. The bound is now the room the table
+  really has, which refuses nothing real because a well-formed plist puts its
+  offset table immediately before the trailer. (M26-ART-035)
+
+  It was found by the entry above, and that is the useful part. The small twin
+  for the differential measurement was a count of two, chosen because it should
+  have been refused for the same reason 2^24 is; the test asserts that its twin
+  is refused, because otherwise the two measurements are of different code paths
+  and their difference means nothing. That assertion failed, which is how a
+  parser that fabricates data came to light from a change to how memory is
+  measured. The field had already been reviewed once, under M26-ART-005, and
+  this half was missed: the check's own comment stated the flawed premise.
 
 - Calling a name that has no value is reported instead of crashing the
   tree-walking engine. Macro definitions are removed before anything runs, but

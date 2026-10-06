@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,12 +24,6 @@ const repoRoot = "../.."
 // fenced as `mutant` is a program a reader will paste, and has to compile.
 const fragmentMarker = "<!-- mutant:fragment -->"
 
-// docsSkippedDirs are not documentation a reader of this repository reads.
-var docsSkippedDirs = map[string]bool{
-	".git": true, ".codegraph": true, "node_modules": true, "dist": true, "plans": true,
-	"example_output": true,
-}
-
 type fence struct {
 	file     string // repository-relative
 	line     int    // line of the opening ```
@@ -41,34 +34,14 @@ type fence struct {
 
 var fenceOpen = regexp.MustCompile("^(\\s*)```+\\s*([A-Za-z0-9_+-]*)\\s*$")
 
-// markdownFiles lists every Markdown file a reader of the repository sees.
+// markdownFiles lists every Markdown file a reader of the repository sees. The
+// walk is in consistency.go, because `gendocs -check` reads the same documents
+// and the two must not disagree about which ones they are.
 func markdownFiles(t *testing.T) []string {
 	t.Helper()
-	var files []string
-	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if docsSkippedDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(d.Name(), ".md") {
-			rel, err := filepath.Rel(repoRoot, path)
-			if err != nil {
-				return err
-			}
-			files = append(files, filepath.ToSlash(rel))
-		}
-		return nil
-	})
+	files, err := markdownFilesUnder(repoRoot)
 	if err != nil {
-		t.Fatalf("walking documentation: %v", err)
-	}
-	if len(files) == 0 {
-		t.Fatalf("found no Markdown under %s", repoRoot)
+		t.Fatal(err)
 	}
 	return files
 }

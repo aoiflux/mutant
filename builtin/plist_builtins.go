@@ -214,10 +214,18 @@ func parseBinaryPlist(data []byte) (object.Object, error) {
 		return nil, fmt.Errorf("invalid binary plist trailer")
 	}
 	// The offset table holds offsetIntSize bytes per object, so the object
-	// count is checked against the bytes after the table's start before it
-	// sizes anything. Taken as given, it was a uint64 handed to make
-	// (M26-ART-005).
-	if offsetTable64 >= uint64(len(data)) || numObjects64 > (uint64(len(data))-offsetTable64)/uint64(offsetIntSize) {
+	// count is checked against the room the table has before it sizes anything.
+	// Taken as given, it was a uint64 handed to make (M26-ART-005).
+	//
+	// That room ends where the trailer begins. Measuring to the end of the file
+	// instead counted the trailer's own thirty-two bytes as room for offsets,
+	// which let a file declare up to 32/offsetIntSize objects more than its
+	// table holds -- and the offsets for those were then read out of the
+	// trailer. A top object pointing at one came back as a value built from the
+	// trailer's bytes, with no error: a fabricated answer about an artifact,
+	// which is the one outcome a parser here may not have (M26-ART-035).
+	tableRoom := uint64(len(data)) - 32
+	if offsetTable64 >= tableRoom || numObjects64 > (tableRoom-offsetTable64)/uint64(offsetIntSize) {
 		return nil, fmt.Errorf("offset table out of bounds")
 	}
 	if topObject64 >= numObjects64 {

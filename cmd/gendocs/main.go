@@ -17,10 +17,17 @@
 // with its folded value and the reason its doc comment gives; see limits.go.
 //
 //	go run ./cmd/gendocs           # rewrite all three
-//	go run ./cmd/gendocs -check    # fail if any is out of date
+//	go run ./cmd/gendocs -check    # fail if anything is out of date
 //
 // The -check mode is the drift gate: it makes an out-of-date artifact a
 // failure rather than something a reader has to notice.
+//
+// It covers the hand-written documents too, and has to. Regenerating these
+// three artifacts is the act that makes a sentence elsewhere wrong: the count
+// gendocs writes is the count the prose now contradicts, and the heading it
+// writes is the one an anchor now misses. A -check that answered only for the
+// three files it writes reported the documentation current while six documents
+// disagreed with the registry, twice on 2026-10-06. See consistency.go.
 package main
 
 import (
@@ -83,9 +90,9 @@ func main() {
 	limits = matchExistingNewlines(limits, existingLimits)
 
 	if *check {
-		// Both artifacts are reported before exiting. Being told about one
-		// stale file, regenerating, and then being told about the other is two
-		// round trips where one will do.
+		// Every artifact is reported before exiting. Being told about one
+		// stale file, regenerating, and then being told about the next is
+		// three round trips where one will do.
 		//
 		// Compare with line endings normalised: the working tree may be checked
 		// out with CRLF, which says nothing about whether the content drifted.
@@ -102,7 +109,15 @@ func main() {
 			fmt.Fprintf(os.Stderr, "gendocs: %s is out of date; run `go run ./cmd/gendocs`\n", *limitsOutput)
 			stale = true
 		}
-		if stale {
+		// The hand-written documents are checked whether or not the generated
+		// ones are current: they go stale separately, and for separate reasons.
+		// The stale artifacts are named first, because a dead anchor into the
+		// reference is usually downstream of the reference not being current.
+		checks, err := checkDocumentConsistency(".")
+		if err != nil {
+			fail(err)
+		}
+		if reportDocProblems(checks) || stale {
 			os.Exit(1)
 		}
 		fmt.Printf("gendocs: %s is up to date (%d builtins, %d categories)\n",
@@ -110,6 +125,7 @@ func main() {
 		fmt.Printf("gendocs: %s is up to date (%d builtins highlighted)\n",
 			*grammarOutput, len(names))
 		fmt.Printf("gendocs: %s is up to date\n", *limitsOutput)
+		reportDocSummary(checks)
 		return
 	}
 
@@ -129,6 +145,58 @@ func main() {
 		fail(err)
 	}
 	fmt.Printf("gendocs: wrote %s\n", *limitsOutput)
+
+	// What has just been written is what can make a sentence gendocs does not
+	// write wrong, so this is the moment to say so, naming the lines to edit.
+	// It exits non-zero because the job is documentation that agrees with the
+	// tree, and three files have just been rewritten into a tree where it does
+	// not: somebody who ran the generator and watched it succeed would have
+	// every reason to believe the documentation was done.
+	checks, err := checkDocumentConsistency(".")
+	if err != nil {
+		fail(err)
+	}
+	if reportDocProblems(checks) {
+		fmt.Fprintln(os.Stderr, "gendocs: the three files above were written. The documents "+
+			"listed here are written by hand, and nothing generates them.")
+		os.Exit(1)
+	}
+	reportDocSummary(checks)
+}
+
+// reportDocProblems prints what the consistency checks found and reports
+// whether anything is wrong. A check that examined nothing is itself the
+// finding: a scanner that matches nothing passes every document ever written.
+func reportDocProblems(checks []docCheck) bool {
+	wrong := false
+	for _, check := range checks {
+		if shortfall := check.shortfall(); shortfall != "" {
+			fmt.Fprintf(os.Stderr, "gendocs: %s\n", shortfall)
+			wrong = true
+			continue
+		}
+		if len(check.problems) == 0 {
+			continue
+		}
+		wrong = true
+		fmt.Fprintf(os.Stderr, "gendocs: %s: %s, out of %s examined:\n", check.what,
+			plural(len(check.problems), "problem"), plural(check.examined, check.noun))
+		for _, problem := range check.problems {
+			fmt.Fprintf(os.Stderr, "gendocs:   %s\n", problem)
+		}
+	}
+	return wrong
+}
+
+// reportDocSummary says what a clean run actually covered. A check whose scope
+// nobody can see is a check a reader will read too much into, which is how
+// "the generated reference is up to date" came to be heard as "the
+// documentation is up to date".
+func reportDocSummary(checks []docCheck) {
+	for _, check := range checks {
+		fmt.Printf("gendocs: %s: %s %s\n", check.what,
+			plural(check.examined, check.noun), check.verdict)
+	}
 }
 
 // fail reports a generator error and stops. Writing half the artifacts would

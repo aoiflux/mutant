@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"unicode"
 
 	"mutant/builtin"
 )
@@ -41,41 +40,20 @@ func isHistoryDoc(rel string) bool {
 }
 
 var (
-	inlineCode   = regexp.MustCompile("`([^`\n]+)`")
-	builtinCall  = regexp.MustCompile(`^([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\(`)
-	markdownLink = regexp.MustCompile(`\]\(([^)\s]+)\)`)
-	headingLine  = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*\s*$`)
+	inlineCode  = regexp.MustCompile("`([^`\n]+)`")
+	builtinCall = regexp.MustCompile(`^([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\(`)
 )
 
 // proseLines yields each line of a Markdown file that is outside a fence, with
-// its 1-based line number.
-func proseLines(t *testing.T, rel string) []struct {
-	n    int
-	text string
-} {
+// its 1-based line number. The scanner is in consistency.go, because
+// `gendocs -check` reads the same documents the same way.
+func proseLines(t *testing.T, rel string) []proseLine {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(rel)))
+	lines, err := proseLinesOf(repoRoot, rel)
 	if err != nil {
-		t.Fatalf("reading %s: %v", rel, err)
+		t.Fatal(err)
 	}
-	var out []struct {
-		n    int
-		text string
-	}
-	inFence := false
-	for i, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			inFence = !inFence
-			continue
-		}
-		if !inFence {
-			out = append(out, struct {
-				n    int
-				text string
-			}{i + 1, line})
-		}
-	}
-	return out
+	return lines
 }
 
 // notBuiltins are snake_case calls the docs name on purpose although no
@@ -431,82 +409,17 @@ func TestCitedPathsExist(t *testing.T) {
 	}
 }
 
-// githubSlug is the anchor GitHub gives a heading: lower-cased, punctuation
-// other than hyphens and underscores dropped, spaces turned into hyphens.
-func githubSlug(heading string) string {
-	heading = strings.ReplaceAll(heading, "`", "")
-	var b strings.Builder
-	for _, r := range strings.ToLower(heading) {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '_':
-			b.WriteRune(r)
-		case r == ' ':
-			b.WriteByte('-')
-		}
-	}
-	return b.String()
-}
-
-// anchorsOf returns every heading anchor in a Markdown file, with GitHub's
-// -1, -2 suffixes for repeated headings.
-func anchorsOf(t *testing.T, rel string) map[string]bool {
-	t.Helper()
-	anchors := map[string]bool{}
-	counts := map[string]int{}
-	for _, line := range proseLines(t, rel) {
-		m := headingLine.FindStringSubmatch(line.text)
-		if m == nil {
-			continue
-		}
-		slug := githubSlug(m[2])
-		if n := counts[slug]; n > 0 {
-			anchors[slug+"-"+strconv.Itoa(n)] = true
-		} else {
-			anchors[slug] = true
-		}
-		counts[slug]++
-	}
-	return anchors
-}
-
 // TestDocumentLinksResolve is D5: a relative link lands on a file that exists,
-// and an anchor on a heading that exists.
+// and an anchor on a heading that exists. The check is in consistency.go, where
+// `gendocs -check` can run it: a stale count in the generated reference moves
+// the heading its index links to, so this is one of the things regenerating the
+// artifacts breaks.
 func TestDocumentLinksResolve(t *testing.T) {
-	anchorCache := map[string]map[string]bool{}
-	checked := 0
-	for _, file := range markdownFiles(t) {
-		dir := filepath.Dir(file)
-		for _, line := range proseLines(t, file) {
-			for _, m := range markdownLink.FindAllStringSubmatch(line.text, -1) {
-				target := m[1]
-				if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
-					continue
-				}
-				path, anchor, _ := strings.Cut(target, "#")
-				resolved := file
-				if path != "" {
-					resolved = filepath.ToSlash(filepath.Join(dir, path))
-					if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(resolved))); err != nil {
-						t.Errorf("%s:%d: link to %s, which does not exist", file, line.n, target)
-						continue
-					}
-				}
-				checked++
-				if anchor == "" || !strings.HasSuffix(resolved, ".md") {
-					continue
-				}
-				if anchorCache[resolved] == nil {
-					anchorCache[resolved] = anchorsOf(t, resolved)
-				}
-				if !anchorCache[resolved][strings.ToLower(anchor)] {
-					t.Errorf("%s:%d: link to %s, but %s has no heading with anchor #%s", file, line.n, target, resolved, anchor)
-				}
-			}
-		}
+	check, err := checkDocumentLinks(repoRoot)
+	if err != nil {
+		t.Fatalf("checking document links: %v", err)
 	}
-	if checked == 0 {
-		t.Fatal("checked no links; the scanner is broken")
-	}
+	reportDocCheck(t, check)
 }
 
 // sortedKeys is a small helper for stable failure output.
