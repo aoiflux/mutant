@@ -1054,7 +1054,7 @@ without doubling -- though `r"\d+"` says so on purpose.
 
 ## Builtins
 
-The standard library is **693 builtins** across **41 categories**.
+The standard library is **694 builtins** across **41 categories**.
 
 Those two numbers, and every count in the table below, are checked against the
 registry by `cmd/gendocs`' prose-count tests. They were not, until 2026-09-22: the
@@ -1086,7 +1086,7 @@ The complete catalog — every builtin with its typed signature, platform suppor
 | [Cache](CAPABILITY_REFERENCE.md#cache-8) | 8 | In-memory key/value cache with TTLs |
 | [Policy](CAPABILITY_REFERENCE.md#policy-5) | 5 | Allow/deny policy evaluation and tracing |
 | [Runtime Integration](CAPABILITY_REFERENCE.md#runtime-integration-3) | 3 | Sandboxed Lua execution |
-| [Command Execution](CAPABILITY_REFERENCE.md#command-execution-4) | 4 | Guarded external command execution |
+| [Command Execution](CAPABILITY_REFERENCE.md#command-execution-5) | 5 | Guarded external command execution |
 | [Cryptography](CAPABILITY_REFERENCE.md#cryptography-6) | 6 | X.509, JWT, PEM, AES-GCM |
 | [Fingerprinting](CAPABILITY_REFERENCE.md#fingerprinting-4) | 4 | imphash, JA3, NT/LM hashes |
 | [Network Intelligence](CAPABILITY_REFERENCE.md#network-intelligence-11) | 11 | IOC defang/refang, IP/CIDR, domain/eTLD+1, IOC extraction |
