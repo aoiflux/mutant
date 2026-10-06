@@ -676,11 +676,14 @@ func passphraseError(op string, err error) *object.Error {
 
 // claimKeyFilePath creates path with O_EXCL and refuses an existing file.
 //
-// The lesson is borrowed from a defect next door:
-// `security.EnsureLocalSigningKeyPair` overwrites a private key when only the
-// public half is missing. Applied to a case key the same mistake is
-// unrecoverable -- every record sealed under the old key becomes unopenable
-// and there is no copy anywhere.
+// The lesson was borrowed from a defect next door:
+// `security.EnsureLocalSigningKeyPair` used to overwrite a private key when
+// only the public half was missing. That is fixed, with this same discipline
+// (M26-SEC-003), and the reason to keep it here was always the stronger one.
+// A signing key lost that way makes every artifact already signed read as
+// tampered with; applied to a case key the same mistake is unrecoverable --
+// every record sealed under the old key becomes unopenable and there is no
+// copy anywhere.
 func claimKeyFilePath(op, path string) (*os.File, *object.Error) {
 	handle, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
@@ -696,11 +699,16 @@ func claimKeyFilePath(op, path string) (*os.File, *object.Error) {
 // writeKeyFileAtomic writes through a temp file in the same directory and a
 // rename.
 //
-// There was no atomic-write helper anywhere in this repository; this is the
+// There was no atomic-write helper anywhere in this repository; this was the
 // first, and it exists because this is the first file whose old contents cannot
 // be reproduced. Every other writer here -- `writeArtifact`, `case_write` --
 // writes a document that can be regenerated from the case, so a torn write
 // costs a re-run. A torn key file costs the case.
+//
+// `security.writeLocalKeyStoreFile` is the second, for the public half of the
+// local signing key (M26-SEC-003). It is a separate function and not a shared
+// one because this one returns an *object.Error and reads its op from a builtin
+// call, and because `security` cannot import `builtin`.
 //
 // `writeArtifact` is deliberately not reused for a second reason: it reads the
 // file back and returns its digest, and the digest of a key file is a value

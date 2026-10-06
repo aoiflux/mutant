@@ -1,7 +1,9 @@
 // threat_triage.mut — run the detection heuristics over supplied evidence.
 //
 // Feeds facts to the detection builtins (suspicious files, C2 beaconing) and the
-// IOC helpers (extraction + defanging). All offline and self-contained.
+// IOC helpers (extraction + defanging). All offline and self-contained: the
+// suspicious-file step seeds its own evidence, because a scan of paths that do
+// not exist is a scan of nothing.
 
 let header = fn(title) { putln("=== " + title + " ==="); };
 
@@ -9,12 +11,49 @@ let run = fn() {
     header("threat_triage");
 
     // Suspicious-file heuristics: double extensions, magic/extension mismatch.
-    let files = ["invoice.pdf.exe", "report.docx", "update.scr", "photo.jpg"];
+    //
+    // The files are written before they are scanned. This example used to pass
+    // four bare names that existed nowhere, and its golden recorded the answer
+    // as "nothing suspicious" — which is what a triage run over evidence the
+    // tool cannot open must never look like (M26-EX-008).
+    let dir = "example_output/threat_triage";
+    let _, mkerr = fs_mkdir(dir);          // idempotent
+    if (mkerr) {
+        putln("[error] fs_mkdir:", mkerr);
+        return false;
+    };
+
+    let seed = fn(name, body) {
+        let path = dir + "/" + name;
+        let _, werr = fs_write(path, body);
+        if (werr) {
+            putln("[error] fs_write:", werr);
+        };
+        return path;
+    };
+
+    let files = [
+        seed("invoice.pdf.exe", "benign looking content"),
+        seed("report.docx", "quarterly report, nothing to see"),
+        seed("photo.jpg", "not really a jpeg either")
+    ];
     let sus, err = detect_suspicious_files(files);
     if (err) {
         putln("[error] detect_suspicious_files:", err);
     } else {
         putln("suspicious findings:", sus);
+    };
+
+    // A path that cannot be read is reported and not skipped: `complete` goes
+    // false and `unread` says which path and why. The reason text comes from
+    // the operating system and is worded differently on each one, so only the
+    // parts that read the same everywhere are printed here.
+    let gone, gerr = detect_suspicious_files([dir + "/not_here.pdf.exe"]);
+    if (gerr) {
+        putln("[error] detect_suspicious_files:", gerr);
+    } else {
+        putln("unreadable scan, complete:", gone["complete"], "unread:", len(gone["unread"]));
+        putln("unreadable scan, name signals:", gone["unread"][0]["reasons"]);
     };
 
     // Beacon detection over synthetic, highly-periodic flows (~60s interval,

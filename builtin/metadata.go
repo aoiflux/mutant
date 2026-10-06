@@ -2467,9 +2467,10 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("a privilege-escalation score and the signals behind it", ParamHash).withFields("detected", "score", "signals")},
 	BuiltinNameDetectSuspiciousFiles: {
 		signature: "detect_suspicious_files(paths)",
-		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe).",
+		summary:   "Flags suspicious files via entropy tiers (high/very-high), executable magic under a document extension (extension_mismatch), and disguised double extensions (e.g. invoice.pdf.exe). A path that cannot be read is reported rather than skipped: it lands in `unread` with the reason the open failed, `complete` goes false, and the double-extension test still runs on its name, because a name is evidence that does not need the file opened. `detected` and `count` describe the files that were examined, so a scan that could not open half the evidence cannot come back as nothing suspicious.",
 		params:    []builtinParamDoc{param("paths", "Array of filesystem paths to inspect.", ParamArray)},
-		returns:   pairRet("the files flagged, and why each was flagged", ParamHash)},
+		returns: pairRet("the files flagged and why, the paths that could not be read, and whether every path was examined", ParamHash).
+			withFields("complete", "count", "detected", "hits", "unread")},
 	BuiltinNameSigmaParse: {
 		signature: "sigma_parse(rule)",
 		summary:   "Compiles one Sigma detection rule from YAML. The rule is validated rather than accepted: a condition naming a search identifier the detection block does not define, an `all of filter*` that matches no identifier, a modifier this engine does not implement, a rule collection, `timeframe`, `near` and aggregation pipes are all errors. That is deliberate -- a rule this engine cannot evaluate has to fail where you can see it, because a detection that silently never fires reads as coverage on a report and is a blind spot in the evidence. Supported value modifiers: contains, startswith, endswith, all, cased, re (with i/m/s), base64, base64offset, utf16/utf16le/utf16be/wide, windash, cidr, lt/lte/gt/gte, exists, fieldref. The returned hash carries the detection block verbatim, so it is a rule and not a description of one: sigma_match and sigma_scan take it straight back. Returns (rule, err).",

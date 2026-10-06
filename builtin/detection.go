@@ -417,20 +417,48 @@ func DetectSuspiciousFiles(args ...object.Object) object.Object {
 	}
 
 	hits := make([]object.Object, 0)
+	unread := make([]object.Object, 0)
 	for idx, pObj := range pathsObj.Elements {
 		pathStr, ok := pObj.(*object.String)
 		if !ok {
 			return resultAndError(nil, newError("path at index %d must be STRING", idx))
 		}
+
+		// One of the three signals is decided by the name alone, so the name is
+		// read before the file is and the answer survives a read that fails.
+		lowerPath := strings.ToLower(pathStr.Value)
+		nameReasons := make([]string, 0, 1)
+		if hasDoubleExecutableExtension(filepath.Base(lowerPath)) {
+			nameReasons = append(nameReasons, "double_extension")
+		}
+
 		data, err := os.ReadFile(pathStr.Value)
 		if err != nil {
+			// A path that could not be read used to `continue`, so a list of
+			// missing, locked or ACL-denied files came back
+			// {count: 0, detected: false, hits: []} with no error at all: a
+			// triage run over evidence this tool could not open reported
+			// nothing suspicious, which is a wrong forensic answer in the shape
+			// of a right one, and the shipped example's golden recorded it as
+			// the expected output (M26-EX-008).
+			//
+			// It is reported rather than refused. One locked file on a live
+			// system must not throw away the findings for every other path, so
+			// `unread` names what was not examined and why, `complete` is the
+			// bit a caller tests, and the name-only reasons come too, because a
+			// name is evidence that does not need the file opened.
+			unread = append(unread, makeHashObject(map[string]object.Object{
+				"path":    stringObj(pathStr.Value),
+				"error":   stringObj(err.Error()),
+				"reasons": stringArrayLiteral(nameReasons),
+			}))
 			continue
 		}
+
 		ent := shannonEntropy(data)
 		typ, _, _ := detectMagic(data)
-		lowerPath := strings.ToLower(pathStr.Value)
 		ext := filepath.Ext(lowerPath)
-		reasons := make([]string, 0)
+		reasons := make([]string, 0, 3)
 		if ent > 7.8 {
 			reasons = append(reasons, "very_high_entropy")
 		} else if ent > 7.2 {
@@ -439,27 +467,30 @@ func DetectSuspiciousFiles(args ...object.Object) object.Object {
 		if (typ == "pe" || typ == "elf") && documentExtensions[ext] {
 			reasons = append(reasons, "extension_mismatch")
 		}
-		if hasDoubleExecutableExtension(filepath.Base(lowerPath)) {
-			reasons = append(reasons, "double_extension")
-		}
+		// Appended last, so the order a caller already sees is unchanged:
+		// entropy, then the magic mismatch, then the name.
+		reasons = append(reasons, nameReasons...)
 		if len(reasons) > 0 {
-			reasonObjs := make([]object.Object, len(reasons))
-			for i, r := range reasons {
-				reasonObjs[i] = stringObj(r)
-			}
 			hits = append(hits, makeHashObject(map[string]object.Object{
 				"path":    stringObj(pathStr.Value),
 				"entropy": &object.Float{Value: ent},
 				"type":    stringObj(typ),
-				"reasons": &object.Array{Elements: reasonObjs},
+				"reasons": stringArrayLiteral(reasons),
 			}))
 		}
 	}
 
+	// `detected` and `count` still describe `hits` and nothing else, so a
+	// caller that reads them is unaffected and no number in this result
+	// describes a file the call did not open. What an unread path costs is
+	// `complete`, which is the two-bit shape used everywhere in this tree that
+	// "checked" and "passed" are different questions.
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"detected": boolObj(len(hits) > 0),
 		"count":    intObj(int64(len(hits))),
 		"hits":     &object.Array{Elements: hits},
+		"unread":   &object.Array{Elements: unread},
+		"complete": boolObj(len(unread) == 0),
 	}), nil)
 }
 

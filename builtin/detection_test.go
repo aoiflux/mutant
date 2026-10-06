@@ -186,6 +186,103 @@ func TestDetectSuspiciousFilesDoubleExtension(t *testing.T) {
 	}
 }
 
+// A path that could not be read used to `continue`, so a list of missing, locked
+// or ACL-denied files came back {count: 0, detected: false, hits: []} with no
+// error: a triage run over evidence the tool could not open reported nothing
+// suspicious (M26-EX-008). Three things have to hold at once. The call still
+// succeeds, because one locked file on a live system must not throw away the
+// findings for every other path. The path is named as unread, with a reason.
+// And the name-only signal is evaluated for it anyway, because a name is
+// evidence that does not need the file opened.
+func TestDetectSuspiciousFilesReportsWhatItCouldNotRead(t *testing.T) {
+	readable := filepath.Join(t.TempDir(), "statement.pdf.exe")
+	if err := os.WriteFile(readable, []byte("benign looking content"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "absent", "invoice.pdf.exe")
+
+	payload, errObj := unwrapPair(t, DetectSuspiciousFiles(&object.Array{Elements: []object.Object{
+		stringObj(readable), stringObj(missing),
+	}}))
+	if errObj != nil {
+		t.Fatalf("detect_suspicious_files error: %s", errObj.Inspect())
+	}
+	h := dtMustHash(t, payload)
+
+	if got := dtMustHashInt(t, h, "count"); got != 1 {
+		t.Fatalf("count = %d, want 1: the readable file's hit must survive an unreadable sibling", got)
+	}
+	if _, present := detectHashValueByKey(h, "complete"); !present {
+		t.Fatalf("the result carries no `complete` bit, so nothing in it says a path was not "+
+			"examined: %s", payload.Inspect())
+	}
+	if dtMustHashBool(t, h, "complete") {
+		t.Fatal("complete = true though one of the two paths could not be read")
+	}
+
+	unread, ok := dtMustHashValue(t, h, "unread").(*object.Array)
+	if !ok || len(unread.Elements) != 1 {
+		t.Fatalf("unread = %s, want exactly the one path that could not be read",
+			dtMustHashValue(t, h, "unread").Inspect())
+	}
+	entry := dtMustHash(t, unread.Elements[0])
+	if got := dtMustHashString(t, entry, "path"); got != missing {
+		t.Fatalf("unread names %q, want %q", got, missing)
+	}
+	if dtMustHashString(t, entry, "error") == "" {
+		t.Fatal("unread carries no reason for the failed read, so a reader cannot tell a missing " +
+			"file from one the examiner has no permission to open")
+	}
+	reasons, ok := dtMustHashValue(t, entry, "reasons").(*object.Array)
+	if !ok || !dtReasonsContain(reasons, "double_extension") {
+		t.Fatalf("unread reasons = %s, want double_extension: the name alone decides that one",
+			dtMustHashValue(t, entry, "reasons").Inspect())
+	}
+}
+
+// The whole-list case the shipped example used to demonstrate: every path
+// unreadable, and the answer came back clean with no error at all.
+//
+// detected and count still describe only what was examined, which here was
+// nothing. That is a safe answer only because `complete` is false beside them --
+// the caller is told the scan did not happen, rather than that it found nothing.
+func TestDetectSuspiciousFilesOnAllUnreadablePathsIsNotClean(t *testing.T) {
+	dir := t.TempDir()
+	paths := &object.Array{Elements: []object.Object{
+		stringObj(filepath.Join(dir, "gone", "invoice.pdf.exe")),
+		stringObj(filepath.Join(dir, "gone", "report.docx")),
+	}}
+
+	payload, errObj := unwrapPair(t, DetectSuspiciousFiles(paths))
+	if errObj != nil {
+		t.Fatalf("detect_suspicious_files error: %s", errObj.Inspect())
+	}
+	h := dtMustHash(t, payload)
+
+	// Asserted in this order on purpose. These three were the whole answer on
+	// the defective version, and they say "clean" -- so the test states what
+	// their absence of company costs before it asks for the company, and a run
+	// against the defect fails with that sentence rather than with "missing
+	// key".
+	hits, ok := dtMustHashValue(t, h, "hits").(*object.Array)
+	if !ok || len(hits.Elements) != 0 || dtMustHashBool(t, h, "detected") ||
+		dtMustHashInt(t, h, "count") != 0 {
+		t.Fatalf("detected/count/hits describe a file this call never opened: %s", payload.Inspect())
+	}
+	if _, present := detectHashValueByKey(h, "complete"); !present {
+		t.Fatalf("the result carries no `complete` bit, so {detected: false, count: 0, hits: []} "+
+			"is the entire answer for two paths that were never opened, and a scan that did not "+
+			"happen cannot be told apart from a scan that found nothing: %s", payload.Inspect())
+	}
+	if dtMustHashBool(t, h, "complete") {
+		t.Fatal("complete = true though not one path could be read")
+	}
+	unread, ok := dtMustHashValue(t, h, "unread").(*object.Array)
+	if !ok || len(unread.Elements) != 2 {
+		t.Fatalf("unread = %s, want both paths", dtMustHashValue(t, h, "unread").Inspect())
+	}
+}
+
 func TestDetectErrors(t *testing.T) {
 	tests := []struct {
 		name string
