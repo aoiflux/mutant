@@ -416,8 +416,23 @@ func reclassAffected(op string, session *ledgerSession, previous *recordSession,
 		}
 		var merged []heldRange
 		var heldBytes, withheldNow uint64
+		// The runs come off the LEDGER and the segments out of the record the
+		// caller opened, so the two can disagree about the same record. The
+		// bound for that used to sit in the loop condition below, which stopped
+		// the loop early and said nothing: held_bytes, withheld_now and the
+		// caller's withheld total all came out understated, with no finding to
+		// show for it and no way for a reader to tell. A silently wrong number
+		// is the one thing a builtin here may not produce, so the disagreement
+		// is refused, loudly, before any of it is counted.
 		for _, run := range runs {
-			for index := run[0]; index <= run[1] && index < uint64(len(previous.segments)); index++ {
+			if run[1] >= uint64(len(previous.segments)) {
+				return nil, 0, newError("%s: disclosure %s grants segments %d-%d and the record it "+
+					"names has %d, so the ledger and this record disagree about it",
+					op, row.node.get("disclosure.uid"), run[0], run[1], len(previous.segments))
+			}
+		}
+		for _, run := range runs {
+			for index := run[0]; index <= run[1]; index++ {
 				segment := previous.segments[index]
 				segStart, segEnd := segment.Offset, segment.Offset+uint64(segment.Length)
 				k := sort.Search(len(changes), func(k int) bool { return changes[k].offset+changes[k].length > segStart })

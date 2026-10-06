@@ -1004,7 +1004,17 @@ func disclosureReportRuns(out *strings.Builder, runs any) {
 		r, _ := row.(map[string]any)
 		label := stringField(r, "label")
 		if label == "" {
-			label = "(a class this case could not name) `" + stringField(r, "class")[:16] + "`"
+			// stringField returns "" for a key that is absent or not a string,
+			// and this row is read out of a manifest, so a fixed [:16] is a
+			// panic waiting for a manifest that omits the class or shortens it.
+			// Nothing in this tree writes one today, which is why this is a
+			// guard and not a filed defect; it costs one comparison, and a
+			// short tag is still worth showing whole.
+			class := stringField(r, "class")
+			if len(class) > 16 {
+				class = class[:16]
+			}
+			label = "(a class this case could not name) `" + class + "`"
 		}
 		fmt.Fprintf(out, "| %v+%v | %v-%v | %s |\n", r["offset"], r["length"], r["first_segment"], r["last_segment"], label)
 	}
@@ -1066,6 +1076,19 @@ func DiscloseVerify(args ...object.Object) object.Object {
 	}
 
 	v := &discloseVerification{op: op, dir: dir, manifest: manifest}
+	// Deferred rather than called after the checks, so the handle is released
+	// however the checks end. It was a plain call at the end of the function,
+	// and M26-REC-008's panic jumped straight over it: the verification aborted
+	// with the record still open, and the caller's next os.Rename of the package
+	// failed with "being used by another process". recordLoad sessions made here
+	// are not registered in recordHandles, so nothing else would ever close
+	// this one. The nil test is inside the closure because checkRecord, below,
+	// is what sets v.record.
+	defer func() {
+		if v.record != nil {
+			v.record.file.Close()
+		}
+	}()
 	v.checkSeal()
 	v.checkFiles()
 	v.checkRecord()
@@ -1074,9 +1097,6 @@ func DiscloseVerify(args ...object.Object) object.Object {
 	v.checkGrantOpens()
 	v.checkLedger(root)
 	v.checkLedgerMatchesPackage()
-	if v.record != nil {
-		v.record.file.Close()
-	}
 	return resultAndError(v.result(root != nil), nil)
 }
 
@@ -1336,6 +1356,38 @@ func (v *discloseVerification) checkGrantOpens() {
 		v.add("grant_opens", false, "the record or the grant could not be read")
 		return
 	}
+	// Every other check here records a finding and lets the next one run, which
+	// is what a verifier owes its reader: one bad field must not hide the state
+	// of everything else. This check cannot be written that way, because the
+	// loop below indexes the record with numbers that came out of the grant.
+	// GrantFile.shell bounds those by the GRANT's own segment count and never by
+	// the record in the package (security/record_grant.go, the run-list check),
+	// so a grant issued for a longer record of the same case indexes past the
+	// end of this one. A disclosure package is untrusted input on the
+	// recipient's side. That was an index out of range and not a nil
+	// dereference -- [10] with length 8 as first reported, [8] with length 8
+	// under the arrangement disclose_bounds_test.go builds, since the first
+	// granted segment is already past the end there -- and it aborted the whole
+	// verification instead of reporting a failed check, leaking the record
+	// handle with it (M26-REC-008).
+	//
+	// grant_names_record already made this comparison and recorded it as a
+	// finding. Reading that finding would not be enough: the record-open path
+	// treats the same error as fatal and this path treats it as advisory, so a
+	// check that leans on a predecessor's severity is one refactor away from
+	// indexing again. The condition is therefore repeated where the indexing is,
+	// which is the reason GrantFile.shell gives for re-checking a run list
+	// ParseGrantFile has already refused.
+	//
+	// It runs before the passphrase request on purpose: nothing here needs the
+	// key to establish that this grant was not issued for this record, and
+	// asking for a secret in order to check something already known to be wrong
+	// is not a question worth putting to the examiner.
+	if errObj := disclosureGrantNamesRecord(v.op, v.grantFile, v.record); errObj != nil {
+		v.add("grant_opens", false, "no granted segment was decrypted, because the grant was not "+
+			"issued for the record in this package: "+errObj.Message)
+		return
+	}
 	grantPath := filepath.Join(v.dir, discloseGrantName)
 	request := security.PassphraseRequest{Purpose: v.op, Path: grantPath, Confirm: false}
 	passphrase, err := security.RequestPassphrase(request)
@@ -1355,6 +1407,17 @@ func (v *discloseVerification) checkGrantOpens() {
 	total := uint64(len(v.record.segments))
 	buffer := make([]byte, 0, v.record.header.SegmentSize+64)
 	for _, index := range grant.Indices() {
+		// The gate above is sufficient while shell bounds every index by the
+		// grant's own segment count, and that is a number read off a file in the
+		// package. Checked again here for the reason shell states about its own
+		// bound: an index whose range depends on a check made somewhere else is
+		// one refactor away from being out of range. `total` is already in hand
+		// for SegmentAAD, so this costs one comparison per granted segment.
+		if index >= total {
+			v.add("grant_opens", false, fmt.Sprintf("the grant names segment %d and this record has "+
+				"%d segments, so it was not issued for the record in this package", index, total))
+			return
+		}
 		segment := v.record.segments[index]
 		if uint64(cap(buffer)) < segment.StoredLength {
 			buffer = make([]byte, segment.StoredLength)
