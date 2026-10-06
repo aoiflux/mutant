@@ -107,17 +107,54 @@ toolchain() {
   fi
 }
 
+# crlf_to_lf SRC DST: copy SRC with the CR of a CRLF pair removed, and nothing
+# else touched. `tr -d '\r'` deleted EVERY CR, so a blob git stores with CR CR LF
+# -- the shape M26-TEST-001 found in lexer.go -- came out clean here while the
+# PowerShell twin flagged the same bytes. Pure bash rather than sed: BSD sed on
+# macOS does not read '\r' in a pattern as a carriage return, and with a real CR in
+# the script it appends a final newline to a file that has none, which would hide
+# a missing trailing newline from gofmt on exactly that one platform.
+crlf_to_lf() {
+  local line
+  {
+    while IFS= read -r line; do printf '%s\n' "${line%$'\r'}"; done
+    # read leaves a last line that has no newline in $line and returns non-zero.
+    # Printing it without one keeps a missing final newline missing, which gofmt
+    # is entitled to report.
+    [ -n "$line" ] && printf '%s' "${line%$'\r'}"
+  } <"$1" >"$2"
+  return 0
+}
+
 gofmt_lf() {
-  local log="$1" copy="$LOG_DIR/gofmt-lf"
+  local log="$1" copy="$LOG_DIR/gofmt-lf" f status=0 unformatted count
   # Untracked files git does not ignore are the ones a change is about to add.
-  git ls-files --cached --others --exclude-standard '*.go' | while IFS= read -r f; do
-    mkdir -p "$copy/$(dirname "$f")"
-    tr -d '\r' <"$f" >"$copy/$f"
-  done
-  local unformatted; unformatted="$("$("$GO" env GOROOT)/bin/gofmt" -l "$copy")"
-  echo "$unformatted" >"$log"
+  # Process substitution, not a pipe: a pipe runs the loop in a subshell, where
+  # a failed copy could not fail the step.
+  while IFS= read -r f; do
+    mkdir -p "$copy/$(dirname "$f")" || return 1
+    crlf_to_lf "$f" "$copy/$f" || return 1
+  done < <(git ls-files --cached --others --exclude-standard '*.go')
+  # gofmt reports a file it cannot PARSE on stderr, exits non-zero, and prints
+  # NOTHING on stdout. Deciding the step on stdout alone therefore passed a Go
+  # file with a syntax error -- and three committed files are compiled by no
+  # other step than cross-compile, which --quick skips. Both streams are kept and
+  # the exit status decides.
+  unformatted="$("$("$GO" env GOROOT)/bin/gofmt" -l "$copy" 2>"$log.gofmt-stderr")" || status=$?
+  # Appended, never `>`: step() has already written gofmt's own stderr here, and
+  # truncating the log erases the only record of what it objected to.
+  {
+    [ -n "$unformatted" ] && echo "$unformatted"
+    [ -s "$log.gofmt-stderr" ] && cat "$log.gofmt-stderr"
+  } >>"$log"
+  rm -f "$log.gofmt-stderr"
+  if [ "$status" -ne 0 ]; then
+    echo "gofmt exited $status; it could not parse at least one file (see $log)"
+    return 1
+  fi
   if [ -n "$unformatted" ]; then
-    echo "$(echo "$unformatted" | wc -l | tr -d ' ') file(s) not gofmt-clean (see $log)"
+    count="$(echo "$unformatted" | wc -l | tr -d ' ')"
+    echo "$count file(s) not gofmt-clean (see $log)"
     return 1
   fi
 }

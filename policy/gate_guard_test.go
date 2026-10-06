@@ -92,8 +92,21 @@ func TestEveryGateGoCommandChoosesCgo(t *testing.T) {
 // contributor to run scripts/release_gate.sh, which a checkout can only do if git
 // recorded the script as executable. A Windows checkout never notices a missing
 // bit (core.filemode is off there), so the index is the only place to check it.
+//
+// Every tracked .sh, not only the ones under scripts/. Reading `-- scripts` alone
+// is what let lsp/build.sh stay 100644 while its own usage line and three
+// documentation sites invoke it as ./lsp/build.sh, which is exactly the failure
+// M26-TEST-005 fixed for the four scripts under scripts/ (M26-TEST-012).
+//
+// There is no allowlist for scripts documented to be run through `sh`, although
+// the row proposed one. The executable bit is never WRONG on such a script, while
+// a missing bit is a documented failure, so an exemption buys nothing and a
+// hand-maintained list of them is the shape M26-TEST-009 is about. Deriving the
+// list from how the documentation invokes each script was tried and misclassified
+// three of the seven tracked scripts, so it is not a rule that can be always
+// correct.
 func TestShellScriptsAreCommittedExecutable(t *testing.T) {
-	cmd := exec.Command("git", "ls-files", "--stage", "--", "scripts")
+	cmd := exec.Command("git", "ls-files", "--stage", "--", "*.sh")
 	cmd.Dir = repositoryRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -112,7 +125,7 @@ func TestShellScriptsAreCommittedExecutable(t *testing.T) {
 		}
 	}
 	if scripts == 0 {
-		t.Fatal("git lists no shell scripts under scripts/; the pattern no longer matches them")
+		t.Fatal("git lists no tracked shell scripts; the pattern no longer matches them")
 	}
 }
 
@@ -238,6 +251,167 @@ func versionLess(a, b string) bool {
 		}
 	}
 	return false
+}
+
+// TestGateGofmtStepHonoursGofmtsExitStatus: both twins used to decide the gofmt
+// step on gofmt -l's STDOUT alone. gofmt reports a file it cannot PARSE on stderr,
+// exits non-zero and prints nothing on stdout, so a Go file with a syntax error
+// made the step report PASS -- and three committed files are compiled by no other
+// step than cross-compile, which --quick skips, so for them this was the only
+// check there was (M26-TEST-010).
+//
+// The bash twin also wrote its result with `echo ... >"$log"`, which truncated the
+// step log after step() had already appended gofmt's stderr to it, erasing the one
+// record of what gofmt objected to. So the guard is for both: the status is read,
+// and the log is appended to rather than replaced.
+func TestGateGofmtStepHonoursGofmtsExitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		script string
+		status string
+	}{
+		{"scripts/release_gate.sh", "status"},
+		{"scripts/release_gate.ps1", "LASTEXITCODE"},
+	} {
+		step, from := gateGofmtStep(t, tc.script)
+		if !strings.Contains(step, tc.status) {
+			t.Errorf("%s: the gofmt step (from line %d) never reads %s, so a file gofmt "+
+				"cannot parse passes the step: it prints nothing on stdout and says so only "+
+				"in its exit status", tc.script, from, tc.status)
+		}
+		if strings.Contains(tc.script, ".sh") && gateTruncatesLog.MatchString(gateStripComments(step)) {
+			t.Errorf("%s: the gofmt step (from line %d) truncates its log with a single >, "+
+				"which erases the stderr step() has already written there; append with >>", tc.script, from)
+		}
+	}
+}
+
+// TestGateLFCopyKeepsAStrayCarriageReturn: the bash twin built its LF copies with
+// `tr -d` over every CR, not only the CR of a CRLF pair, so a blob git stores with
+// CR CR LF came out clean -- the shape M26-TEST-001 found in lexer.go. The
+// PowerShell twin replaces only CRLF and flagged the same bytes, so the two twins
+// disagreed about one tree (M26-TEST-010).
+func TestGateLFCopyKeepsAStrayCarriageReturn(t *testing.T) {
+	step, from := gateGofmtStep(t, "scripts/release_gate.sh")
+	// A raw string: in a double-quoted Go literal \\r is one carriage return
+	// byte, and the needle then matches nothing at all. The first version of this
+	// guard was written that way and passed on the pre-fix script.
+	if strings.Contains(gateStripComments(step), `tr -d '\r'`) {
+		t.Errorf("scripts/release_gate.sh: the gofmt step (from line %d) strips CRs with "+
+			"tr -d, which deletes every CR and not only the CR of a CRLF pair, so a file "+
+			"stored with CR CR LF reads as clean here while the PowerShell twin flags it", from)
+	}
+	ps, psFrom := gateGofmtStep(t, "scripts/release_gate.ps1")
+	if !strings.Contains(ps, `Replace("`+"`"+`r`+"`"+`n", "`+"`"+`n")`) {
+		t.Errorf("scripts/release_gate.ps1: the gofmt step (from line %d) no longer "+
+			"replaces CRLF specifically; replacing every CR would pass a blob stored with "+
+			"CR CR LF", psFrom)
+	}
+}
+
+// TestGofmtReportsAnUnparseableFileOnlyThroughItsExitStatus pins the fact the step
+// above now depends on. If a future gofmt ever names an unparseable file on stdout,
+// the reasoning in that step is no longer the reason it is written that way, and
+// this test is where that shows up.
+func TestGofmtReportsAnUnparseableFileOnlyThroughItsExitStatus(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.go"), []byte("package p\nfunc (\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	cmd := exec.Command(gofmtPath(t), "-l", dir)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("gofmt -l exited 0 on a file it cannot parse")
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Errorf("gofmt -l named the unparseable file on stdout (%q); the gate step's "+
+			"exit-status check is written because it does not", got)
+	}
+	if !strings.Contains(stderr.String(), "bad.go") {
+		t.Errorf("gofmt -l did not name the unparseable file on stderr either: %q", stderr.String())
+	}
+}
+
+// TestGofmtFlagsAFileWithAStrayCarriageReturn pins the other half: keeping the CR
+// of a CRLF pair is enough for gofmt to catch a blob stored with CR CR LF, which
+// is why the copy step strips one CR rather than all of them.
+func TestGofmtFlagsAFileWithAStrayCarriageReturn(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stray.go"), []byte("package p\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(gofmtPath(t), "-l", dir).Output()
+	if err != nil {
+		t.Fatalf("gofmt -l failed on a parseable file: %v", err)
+	}
+	if !strings.Contains(string(out), "stray.go") {
+		t.Error("gofmt -l did not flag a file carrying a stray CR, so leaving that CR in " +
+			"the LF copy would no longer catch a blob stored with CR CR LF")
+	}
+}
+
+// gateTruncatesLog matches a single > redirect to the step log and not the >> that
+// appends to it, which a plain substring test cannot tell apart: >>"$log" contains
+// >"$log". The step log is written to by step() before the step runs, so a single
+// > throws away what is already there.
+var gateTruncatesLog = regexp.MustCompile(`(^|[^>])>"\$log"`)
+
+// gateStripComments drops whole-line comments from a shell or PowerShell fragment.
+// Without it a guard reads the comment that explains why the code no longer does
+// the thing, and reports the explanation as the defect -- which is what the first
+// version of the two guards above did.
+func gateStripComments(fragment string) string {
+	var kept []string
+	for _, line := range strings.Split(fragment, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// gateGofmtStep returns the gofmt step of one twin as one string, with the line it
+// starts on, so a guard reads the step rather than the whole script.
+func gateGofmtStep(t *testing.T, rel string) (string, int) {
+	t.Helper()
+	lines := gateScriptLines(t, rel)
+	start, end := -1, len(lines)
+	for n, line := range lines {
+		if start < 0 {
+			if strings.HasPrefix(line, "gofmt_lf()") || strings.Contains(line, `Invoke-Step "gofmt`) {
+				start = n
+			}
+			continue
+		}
+		if line == "}" {
+			end = n + 1
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("%s: found no gofmt step; this guard no longer knows where to look", rel)
+	}
+	return strings.Join(lines[start:end], "\n"), start + 1
+}
+
+// gofmtPath is the gofmt of the toolchain running the test, which is the one the
+// gate uses: it reads GOROOT from the same go command rather than trusting PATH.
+func gofmtPath(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Skipf("no go command to ask for GOROOT (%v)", err)
+	}
+	path := filepath.Join(strings.TrimSpace(string(out)), "bin", "gofmt")
+	if runtime.GOOS == "windows" {
+		path += ".exe"
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("no gofmt at %s (%v)", path, err)
+	}
+	return path
 }
 
 // gateCgoWant is the CGO_ENABLED value a gate command line must set.

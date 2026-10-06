@@ -130,6 +130,11 @@ Invoke-Step "gofmt (on LF copies)" {
     # CRLF file; formatting is judged on the content git stores, which is LF.
     # Untracked files git does not ignore are included: they are the ones a
     # change is about to add.
+    #
+    # Only the CR of a CRLF pair is replaced, which is deliberate and is the half
+    # of M26-TEST-010 this twin already had right: a blob stored with CR CR LF
+    # keeps a CR here and is flagged. The bash twin used to strip every CR and so
+    # passed those same bytes; it now does what this line does.
     $copy = Join-Path $LogDir "gofmt-lf"
     $files = git ls-files --cached --others --exclude-standard '*.go'
     foreach ($f in $files) {
@@ -138,8 +143,19 @@ Invoke-Step "gofmt (on LF copies)" {
         [IO.File]::WriteAllText($dest, [IO.File]::ReadAllText((Join-Path $repoRoot $f)).Replace("`r`n", "`n"))
     }
     $gofmt = Join-Path (& $Go env GOROOT).Trim() "bin/gofmt"
-    $unformatted = & $gofmt -l $copy
+    # gofmt reports a file it cannot PARSE on stderr, exits non-zero, and prints
+    # NOTHING on stdout, so deciding the step on stdout alone passed a Go file
+    # with a syntax error. Three committed files are compiled by no other step
+    # than cross-compile, which -Quick skips, so this was their only check.
+    $stderrFile = "$log.gofmt-stderr"
+    $unformatted = & $gofmt -l $copy 2>$stderrFile
+    $code = $LASTEXITCODE
     $unformatted | Out-File -Encoding utf8 $log
+    if (Test-Path $stderrFile) {
+        Get-Content $stderrFile | Out-File -Encoding utf8 -Append $log
+        Remove-Item $stderrFile
+    }
+    if ($code -ne 0) { throw "gofmt exited $code; it could not parse at least one file (see $log)" }
     if ($unformatted) { throw "$(@($unformatted).Count) file(s) not gofmt-clean (see $log)" }
 }
 
