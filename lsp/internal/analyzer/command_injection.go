@@ -27,6 +27,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strings"
 
 	mast "mutant/ast"
 	"mutant/builtin"
@@ -78,6 +79,37 @@ var commandSinks = map[string]commandSink{
 	builtin.BuiltinNameLuaRunString: {index: 0, interpreter: "the Lua interpreter"},
 }
 
+// commandArgvSinks are the builtins that hand a program its arguments directly
+// rather than handing a whole string to a shell, and so need the other half of
+// this rule: the one that reports a spliced element only where something will
+// parse it.
+var commandArgvSinks = map[string]string{
+	// exec_argv(argv)
+	builtin.BuiltinNameExecArgv: "a shell",
+}
+
+// commandIntroducingFlags are the argv elements after which the next element is
+// a command for an interpreter to read, rather than an argument for a program
+// to receive.
+//
+// The list is short deliberately, and every entry is a flag a shell documents:
+// -c for the POSIX shells and fish, its clustered forms for a login or
+// interactive one, /C and /K for cmd.exe, and -Command for PowerShell. A flag
+// that is not here is read as an ordinary argument, which is the direction
+// every rule in this family errs in. `-xvzc` ending in a c does not make tar's
+// next argument a command, and reporting it would teach the reader to ignore
+// the rule.
+var commandIntroducingFlags = map[string]struct{}{
+	"-c":       {},
+	"-lc":      {},
+	"-ic":      {},
+	"-ec":      {},
+	"-lic":     {},
+	"-command": {},
+	"/c":       {},
+	"/k":       {},
+}
+
 func lintCommandInjection(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	if snapshot == nil || snapshot.Program == nil || snapshot.Program.NodePositions == nil {
 		return nil
@@ -94,6 +126,14 @@ func lintCommandInjection(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagn
 	shadowed := namesBoundAnywhere(snapshot.Program.Statements)
 	forEachBuiltinCall(snapshot.Program.Statements, shadowed,
 		func(name string, _ mast.Node, call *mast.CallExpression, bindings map[string]mast.Expression) {
+			if interpreter, isArgvSink := commandArgvSinks[name]; isArgvSink {
+				if diagnostic, found := argvInjectionDiagnostic(
+					snapshot, call, bindings, shadowed, name, interpreter, severity, &source); found {
+					result = append(result, diagnostic)
+				}
+				return
+			}
+
 			sink, isSink := commandSinks[name]
 			if !isSink {
 				return
@@ -127,6 +167,78 @@ func lintCommandInjection(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagn
 		})
 
 	return result
+}
+
+// argvInjectionDiagnostic reports a value spliced into an argv element that an
+// interpreter is going to parse, and reports nothing else.
+//
+// exec_argv hands a program its arguments directly, so an element is one
+// argument whatever it holds, and a value spliced into one is ordinarily
+// nothing to report -- that is the reason the builtin exists. It stops being
+// nothing when an earlier element is a flag telling the program to read a
+// command from the next one, because from there the element is syntax again.
+//
+// So this looks at the flags and not at argv[0]. exec_string gives any bare
+// name the command with -c now, so there is no closed set of shells left to
+// recognise, and a program nobody here has heard of, given -c, parses its
+// argument exactly as bash does.
+func argvInjectionDiagnostic(
+	snapshot *Snapshot,
+	call *mast.CallExpression,
+	bindings map[string]mast.Expression,
+	shadowed map[string]struct{},
+	name string,
+	interpreter string,
+	severity *lsp.DiagnosticSeverity,
+	source *string,
+) (lsp.Diagnostic, bool) {
+	argument := argumentAt(call, 0)
+	if argument == nil {
+		return lsp.Diagnostic{}, false
+	}
+	array, isArray := resolveOneHop(argument, bindings).(*mast.ArrayLiteral)
+	if !isArray || array == nil {
+		return lsp.Diagnostic{}, false
+	}
+
+	flag := ""
+	for _, element := range array.Elements {
+		if element == nil {
+			continue
+		}
+		resolved := resolveOneHop(element, bindings)
+
+		if flag == "" {
+			text, fixed := literalString(resolved)
+			if !fixed {
+				continue
+			}
+			if _, introduces := commandIntroducingFlags[strings.ToLower(strings.TrimSpace(text))]; introduces {
+				flag = strings.TrimSpace(text)
+			}
+			continue
+		}
+
+		spliced, how, found := splicedValue(resolved)
+		if !found || isSanitized(spliced, bindings, shadowed) {
+			continue
+		}
+		rng, hasRange := snapshot.Program.RangeOf(spliced)
+		if !hasRange {
+			continue
+		}
+
+		return lsp.Diagnostic{
+			Range:    snapshot.Range(rng),
+			Severity: severity,
+			Source:   source,
+			Message: fmt.Sprintf(
+				"This value is %s a command `%s` gives to %s, because an earlier element of the argv is `%s`, which tells it to read a command from the next one. From there the value is syntax and not an argument: a space adds a word, and `;`, `|`, `&&` or `$(...)` start a command of their own. Give the value its own argv element so the program receives it as one argument, and if it genuinely has to reach a command, check it against a list of the values you allow first.",
+				how, name, interpreter, flag),
+		}, true
+	}
+
+	return lsp.Diagnostic{}, false
 }
 
 // splicedValue finds the first piece of a command string that is not fixed

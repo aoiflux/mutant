@@ -2134,13 +2134,22 @@ var builtinDocs = map[string]builtinDoc{
 		summary:   "Executes a shell command string via security-guarded command execution.",
 		params: []builtinParamDoc{
 			param("command", "Command text to execute.", ParamString),
-			param("shell?", "Optional shell executable (defaults to powershell).", ParamString),
+			param("shell?", "Optional shell NAME, not a path and not a command line: powershell, pwsh, cmd, batch, bash and sh are invoked with their own flags, and any other bare name is run with -c. Defaults to powershell on Windows and sh elsewhere.", ParamString),
 		},
-		returns: pairRet("the command's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
+		platformNote: "The shell names powershell, cmd and batch run Windows executables; off Windows they resolve only where interop provides them, such as WSL. sh and bash are the portable choices, and pwsh runs PowerShell 7 wherever it is installed. Any other name -- zsh, dash, ksh, fish -- is given the command with -c, which every POSIX shell and fish, csh, tcsh, nu and xonsh all accept; a shell whose flag differs is reached through exec_argv instead. A shell that is not installed is reported in the error field, not raised.",
+		returns:      pairRet("the command's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
+	BuiltinNameExecArgv: {
+		signature: "exec_argv(argv)",
+		summary:   "Runs a program with exactly the arguments given, with no shell in between.",
+		params: []builtinParamDoc{
+			param("argv", "Array of strings. The first names the program; the rest reach it as they stand. Nothing parses them, so a value in one is a single argument however it is spelled.", ParamArray),
+		},
+		platformNote: "This is where a shell exec_string does not know the flags for is reached, by writing the invocation out: exec_argv([\"zsh\", \"-lc\", cmd]) or exec_argv([\"fish\", \"-c\", cmd]). It also runs a program with no shell at all, which is the safer choice wherever a value has to reach a command line. A program that is not installed is reported in the error field, not raised.",
+		returns:      pairRet("the program's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
 	BuiltinNameCmdBuilder: {
 		signature: "cmd_builder(shell?)",
 		summary:   "Creates a command builder object for step-wise command composition.",
-		params:    []builtinParamDoc{param("shell?", "Optional shell executable (defaults to powershell).", ParamString)},
+		params:    []builtinParamDoc{param("shell?", "Optional shell NAME, not a path and not a command line: powershell, pwsh, cmd, batch, bash and sh are invoked with their own flags, and any other bare name is run with -c. Defaults to powershell on Windows and sh elsewhere.", ParamString)},
 		returns:   pairRet("a fresh command builder", ParamHash).withFields("lines", "shell")},
 	BuiltinNameCmdAdd: {
 		signature: "cmd_add(builder, arg)",

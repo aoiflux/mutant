@@ -17,7 +17,7 @@ func ExecString(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument to `exec_string` at position=1 must be STRING, got %s", args[0].Type()))
 	}
 
-	shell := "powershell"
+	shell := security.DefaultShellName()
 	if len(args) == 2 {
 		shellArg, isString := args[1].(*object.String)
 		if !isString {
@@ -30,12 +30,53 @@ func ExecString(args ...object.Object) object.Object {
 	return resultAndError(commandResultHash(result), nil)
 }
 
+// ExecArgv runs a program with exactly the arguments given and no shell in
+// between.
+//
+// It is the companion to exec_string rather than a replacement for it. Where
+// exec_string knows the flags for the shells it names and gives any other name
+// the command with -c, this one knows nothing and interprets nothing: the
+// caller writes the invocation out, which is what makes a shell whose flag is
+// not -c reachable at all.
+//
+// Every element is required to be a string rather than converted to one. A
+// number or a hash in an argv is a mistake in the script, and converting it
+// would run a command the author did not write.
+func ExecArgv(args ...object.Object) object.Object {
+	if len(args) != 1 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	}
+
+	argvArg, ok := args[0].(*object.Array)
+	if !ok {
+		return resultAndError(nil, newError("argument to `exec_argv` at position=1 must be ARRAY, got %s", args[0].Type()))
+	}
+	if len(argvArg.Elements) == 0 {
+		return resultAndError(nil, newError("argument to `exec_argv` at position=1 must hold at least the program to run"))
+	}
+
+	argv := make([]string, 0, len(argvArg.Elements))
+	for i, element := range argvArg.Elements {
+		value, isString := element.(*object.String)
+		if !isString {
+			return resultAndError(nil, newError("argument to `exec_argv` at position=1 index=%d must be STRING, got %s", i, element.Type()))
+		}
+		argv = append(argv, value.Value)
+	}
+	if strings.TrimSpace(argv[0]) == "" {
+		return resultAndError(nil, newError("argument to `exec_argv` at position=1 index=0 must name the program to run"))
+	}
+
+	result := security.ExecuteArgv(argv, "builtin:exec_argv")
+	return resultAndError(commandResultHash(result), nil)
+}
+
 func CmdBuilder(args ...object.Object) object.Object {
 	if len(args) > 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=0 or 1", len(args)))
 	}
 
-	shell := "powershell"
+	shell := security.DefaultShellName()
 	if len(args) == 1 {
 		shellArg, ok := args[0].(*object.String)
 		if !ok {

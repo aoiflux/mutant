@@ -4,30 +4,22 @@
 package security
 
 import (
-	"bytes"
 	"os"
 	"strconv"
 	"strings"
 )
 
 const (
-	linuxProcSelfStatusPath      = "/proc/self/status"
-	linuxTracerPidPrefix         = "TracerPid:"
-	linuxParentCmdlinePathPrefix = "/proc/"
-	linuxParentCmdlinePathSuffix = "/cmdline"
-	linuxNullByteTrimSet         = "\x00"
-	linuxLDPreloadVar            = "LD_PRELOAD"
-	linuxLDPreloadLengthLimit    = 50
-	linuxForcedExitCode          = 1
+	linuxProcSelfStatusPath   = "/proc/self/status"
+	linuxTracerPidPrefix      = "TracerPid:"
+	linuxParentCommPathPrefix = "/proc/"
+	linuxParentCommPathSuffix = "/comm"
+	linuxLDPreloadVar         = "LD_PRELOAD"
+	linuxLDPreloadLengthLimit = 50
+	linuxForcedExitCode       = 1
 )
 
 var (
-	linuxDebuggerPatterns = []string{
-		"gdb", "lldb", "valgrind",
-		"radare2", "ida", "ghidra", "angr", "frida",
-		"rr", "pernosco",
-	}
-
 	linuxDebuggerEnvVars = []string{
 		"GDB_OPTS",
 		"GDBHISTFILE",
@@ -95,29 +87,30 @@ func isTracingDetected() bool {
 	return false
 }
 
-// isParentDebugger checks if the parent process is a known debugger
-// Looks for gdb, lldb, valgrind, strace, ltrace, etc.
+// isParentDebugger checks whether the parent process is one of the debuggers
+// in linuxDebuggerProcessNames, by the name of its executable and nothing else.
+//
+// /proc/<ppid>/comm is the kernel's own name for the parent: no path, no
+// arguments, and at most fifteen characters, which every name in the list fits
+// inside. Reading /proc/<ppid>/cmdline instead and searching the whole of it is
+// what made an ordinary argument look like a debugger, and in secure mode that
+// ends the run (M26-TMP-002).
+//
+// A parent whose comm cannot be read is not a debugger. The file is gone for a
+// reaped parent and unreadable under some container policies, and this is the
+// weaker of the two checks the Linux detector makes -- isTracingDetected is the
+// one that finds a debugger actually attached -- so it fails towards silence
+// rather than terminating a run over a file it could not open.
 func isParentDebugger() bool {
 	ppid := os.Getppid()
 
-	// Try to read parent process cmdline
-	cmdlinePath := linuxParentCmdlinePathPrefix + strconv.Itoa(ppid) + linuxParentCmdlinePathSuffix
-	cmdlineData, err := os.ReadFile(cmdlinePath)
+	commPath := linuxParentCommPathPrefix + strconv.Itoa(ppid) + linuxParentCommPathSuffix
+	commData, err := os.ReadFile(commPath)
 	if err != nil {
 		return false
 	}
 
-	// Parse cmdline (null-separated)
-	cmdline := string(bytes.Trim(cmdlineData, linuxNullByteTrimSet))
-	cmdline = strings.ToLower(cmdline)
-
-	for _, pattern := range linuxDebuggerPatterns {
-		if strings.Contains(cmdline, pattern) {
-			return true
-		}
-	}
-
-	return false
+	return debuggerProcessNameMatches(string(commData), linuxDebuggerProcessNames)
 }
 
 // hasDebuggerEnvironmentMarkers checks for environment variables set by debuggers

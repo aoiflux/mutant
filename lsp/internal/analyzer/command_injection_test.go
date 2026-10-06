@@ -6,15 +6,30 @@ import (
 )
 
 // injectionMessages returns the messages of every commandInjection diagnostic
-// in src. Its one message says "The interpreter parses the finished string".
+// in src.
+//
+// A diagnostic carries no rule name, so the rule is recognised by a sentence.
+// It has two messages: one for a value spliced into a command string, and one
+// for a value spliced into an argv element that something will parse anyway.
 func injectionMessages(t *testing.T, src string) []string {
 	t.Helper()
+
+	marks := []string{
+		"The interpreter parses the finished string",
+		"which tells it to read a command from the next one",
+	}
 
 	snapshot := New().Analyze(src)
 	out := make([]string, 0, 2)
 	for _, d := range Diagnostics(snapshot, DefaultLintConfig()) {
-		if d.Source != nil && *d.Source == "mutant-lint" && strings.Contains(d.Message, "The interpreter parses the finished string") {
-			out = append(out, d.Message)
+		if d.Source == nil || *d.Source != "mutant-lint" {
+			continue
+		}
+		for _, mark := range marks {
+			if strings.Contains(d.Message, mark) {
+				out = append(out, d.Message)
+				break
+			}
 		}
 	}
 	return out
@@ -63,6 +78,24 @@ let out, err = lua_run_string(script);`,
 			`let command = "ping -c 1 " + host;
 let out, err = exec_string(command);`,
 			"concatenated into the command `exec_string`",
+		},
+		{
+			// exec_argv hands a program its arguments directly, so an element
+			// is normally one argument whatever is in it. The -c before it is
+			// what puts this one back inside something that parses it.
+			"a value concatenated into an argv element after -c",
+			`let out, err = exec_argv(["sh", "-c", "grep " + pattern + " /var/log/syslog"]);`,
+			"because an earlier element of the argv is `-c`",
+		},
+		{
+			"a value interpolated into an argv element after a clustered -lc",
+			`let out, err = exec_argv(["zsh", "-lc", "cat ${path}"]);`,
+			"interpolated into a command `exec_argv` gives to a shell",
+		},
+		{
+			"a value concatenated into an argv element after cmd's /C",
+			`let out, err = exec_argv(["cmd.exe", "/C", "type " + path]);`,
+			"an earlier element of the argv is `/C`",
 		},
 		{
 			"a call result interpolated",
@@ -129,6 +162,29 @@ let out, err = lua_run_string(script);`,
 		{
 			"a builder line that is fixed text",
 			`let b2, err = cmd_add(b, "Get-Process | ConvertTo-Json");`,
+		},
+		{
+			// The reason exec_argv exists. grep receives the pattern as one
+			// argument however it is spelled, so there is no syntax for a
+			// space or a semicolon in it to become.
+			"a value concatenated into an argv element with no command flag",
+			`let out, err = exec_argv(["grep", "-n", "name " + pattern, "/etc/passwd"]);`,
+		},
+		{
+			// A path after the program is a path. Reporting it would be
+			// reporting the safe shape, which is how a rule gets switched off.
+			"a value concatenated into a path argument",
+			`let out, err = exec_argv(["bash", "/tmp/" + name]);`,
+		},
+		{
+			// -xvzc ends in a c and introduces nothing; tar's next argument is
+			// a file name.
+			"a flag that merely ends in c",
+			`let out, err = exec_argv(["tar", "-xvzc", "/tmp/" + name]);`,
+		},
+		{
+			"an argv of fixed text",
+			`let out, err = exec_argv(["sh", "-c", "systeminfo"]);`,
 		},
 		{
 			"concatenation that never reaches a command",

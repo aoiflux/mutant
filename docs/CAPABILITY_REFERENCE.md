@@ -5,7 +5,7 @@
 > Do not hand-edit the tables below: signatures, parameter types, platforms, and
 > counts are all read from the metadata, and edits here are overwritten.
 
-This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **693 registered builtins** across **41 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
+This is the canonical, category-grouped catalog of every Mutant builtin. There are currently **694 registered builtins** across **41 capability categories**. For language syntax and keywords see [MUTANT_LANGUAGE_REFERENCE.md](MUTANT_LANGUAGE_REFERENCE.md); deep-dive guides are linked per category below.
 
 ## How to read this reference
 
@@ -24,7 +24,7 @@ Almost every builtin is cross-platform. The exceptions:
 | `process_memory_scan` | windows, linux | fails honestly on other platforms |
 | `process_modules` | windows, linux | fails honestly on other platforms |
 
-`process_kill` and `reg_open` work on all platforms but have platform-specific behavior in one path; hover in the editor shows the note.
+`exec_argv`, `exec_string`, `process_kill`, and `reg_open` work on all platforms but have platform-specific behavior in one path; hover in the editor shows the note.
 
 ---
 
@@ -523,7 +523,7 @@ Embed and securely execute Lua in a restricted sandbox (no `io`, dangerous `os.*
 | `lua_run_http(url: STRING) -> (HASH, ERROR)` | all | Fetches and runs a Lua script from an HTTP endpoint in a restricted sandbox (no io, no os.execute/exit/remove; only safe base/math/string/table/os-time libraries). |
 | `lua_run_string(code: STRING) -> (HASH, ERROR)` | all | Runs a Lua script from a string. |
 
-## Command Execution (4)
+## Command Execution (5)
 
 Guarded execution of external commands, subject to the `command_exec` capability policy.
 
@@ -532,6 +532,7 @@ Guarded execution of external commands, subject to the `command_exec` capability
 | `cmd_add(builder: HASH, arg: STRING) -> (HASH, ERROR)` | all | Appends an argument to a command builder. |
 | `cmd_builder(shell?: STRING) -> (HASH, ERROR)` | all | Creates a command builder object for step-wise command composition. |
 | `cmd_run(builder: HASH) -> (HASH, ERROR)` | all | Executes a composed command and returns run output metadata. |
+| `exec_argv(argv: ARRAY) -> (HASH, ERROR)` | all | Runs a program with exactly the arguments given, with no shell in between. |
 | `exec_string(command: STRING, shell?: STRING) -> (HASH, ERROR)` | all | Executes a shell command string via security-guarded command execution. |
 
 ## Cryptography (6)

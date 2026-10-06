@@ -579,6 +579,27 @@ exhaustive lists.
   names one of them where the editor names them all.
   `mutant.lint.rules.macroSafety.severity` sets it.
 
+- **`exec_argv(argv)` runs a program with exactly the arguments given, and no
+  shell in between.** The first element names the program and the rest reach it
+  as they stand, so a value in one is a single argument however it is spelled --
+  a space does not add a word and a `;` starts nothing. It is where a shell
+  `exec_string` does not know the flags for is reached, by writing the
+  invocation out: `exec_argv(["zsh", "-lc", cmd])`, or `exec_argv(["fish",
+  "-c", cmd])`. It is also the way to run a program with no shell at all, which
+  is the better choice wherever a value has to reach a command line. A program
+  that is not installed is reported in the result's `error` field with an exit
+  code of -1; an argv that is not an array of strings, or that names no program,
+  is a caller mistake and comes back as an error object. The same attempt
+  record, the same timeout and the same output cap apply as to `exec_string`, so
+  it is not a way around the command controls.
+
+  `commandInjection` knows about it, and reports the one shape where an element
+  is not just an argument: a value spliced into an element that follows `-c`,
+  `-lc`, `/C` or `-Command`, which tells the program to read a command from the
+  next element. It looks at the flag and not at the program, because there is no
+  closed set of shells left to recognise. A spliced element with no such flag
+  before it is not reported, because that is the whole point of the builtin.
+
 ### Changed
 
 - **A bare `--password` is refused.** 2.5.0 warned on it and promised the next
@@ -818,6 +839,23 @@ exhaustive lists.
   agrees with the compiler because it reads scope out of the same walk: a block
   shadow is no longer reported as a duplicate declaration, and a real duplicate
   now is. Nothing about the bytecode, the opcodes or a frame's layout changes.
+
+- **`exec_string` and `cmd_builder` accept any shell the host has, by name.**
+  `powershell`, `pwsh`, `cmd`, `batch`, `bash` and `sh` keep their own
+  invocations, where `-c` would be wrong or where the executable is not the
+  name. Any other bare name -- `zsh`, `dash`, `ksh`, `mksh`, `fish`, `nu` -- is
+  given the command with `-c`, which is the one convention every POSIX shell
+  shares and which fish, csh, tcsh, nu and xonsh share with them, so no list
+  here has to be kept correct for a shell nobody here has tried. A shell whose
+  flag is not `-c` is reached through `exec_argv` instead. A shell that is not
+  installed is reported in the result's `error` field, as it was before.
+
+  What is refused is a value that is not a shell name: a path like `/bin/sh`, or
+  a command line like `sh -c`. Either would have been looked up as one long file
+  name and come back as not found, which reads as "that shell is not installed"
+  when the argument was never a shell name -- so it now says which of the two
+  went wrong. This widens the `-c` part of the fix recorded under Fixed below,
+  which reached `bash` and `sh` only.
 
 ### Fixed
 
@@ -1366,6 +1404,77 @@ exhaustive lists.
   right match, and they are unchanged. `docs/TUTORIAL_30_MIN.md` and
   `docs/SANDBOX_DETECTION.md` record the type and why it names two things.
   (M26-TMP-003)
+
+- **A longer process name was read as a shorter one, and in both directions.**
+  The Windows sandbox detector ran `tasklist` and searched the whole dump for
+  each process name it knows, so a name that merely held one of them was read as
+  being it. Forwards, that halted a run with nothing wrong with it: the guest
+  tools and integration services are worth between 70 and 85 each, all at or
+  above the 70 that counts as detected, so one process called `myvmtoolsd.exe`
+  was enough on its own. Backwards it did the opposite and turned the detector
+  off -- a name holding `vmwp.exe` made it decide this machine was a Hyper-V
+  *host*, and the host role gates the CPUID vendor, the device listing and the
+  SMBIOS table off, so a Hyper-V guest went undetected. The listing is now asked
+  for as CSV and read into a set of image names, each compared whole. The format
+  mattered too: the default table cuts the name column at 25 characters, which
+  13 of the 312 processes on the machine this was written on exceed, and one of
+  its own rows is `System Idle Process`, whose name holds spaces.
+  (M26-TMP-020)
+
+  `USERPROFILE` was searched the same way for the Windows Sandbox account's
+  profile folder, and that signal alone is worth 95, so a directory that merely
+  held the name -- a copy of that profile kept elsewhere -- halted the run. A
+  profile variable is that directory, not something containing it, so the path
+  now has to end there. The neighbouring `USERNAME` check already compared
+  whole. (M26-TMP-021)
+
+  This corrects the entry above. It reported that the three remaining callers of
+  the substring helper all search a blob where a substring is the right match;
+  two of those three were these `tasklist` reads, and a listing of names is not
+  that kind of blob. The one that is -- the contents of a cgroup file on Linux
+  -- is unchanged, and is now the only caller left.
+
+- **On Linux the parent-debugger check searched the parent's command line, so
+  ordinary words were read as debuggers.** It read the whole of
+  `/proc/<ppid>/cmdline`, arguments included, lowercased it and looked for each
+  name in its list as a substring. `rr` is in that list and is inside `current`,
+  `terraform` and `mirror`; `ida` is inside `validate` and `candidate`. Run on
+  real Linux, a parent whose arguments held `cases/current/triage.mu`,
+  `terraform` or `validate the image` was reported as a debugger in all three
+  cases, and in secure mode that ends the run. The check now reads
+  `/proc/<ppid>/comm` -- the executable's name, not its arguments -- and compares
+  it exactly; all three report clean, and a parent whose executable really is
+  named `gdb` is still detected. No names were added to the list: every candidate
+  sets `TracerPid` while it is actually tracing, which the other check already
+  catches, so more names would only widen the collision set for no gain. An
+  unreadable `comm` fails open, because not knowing what started a program is not
+  evidence that a debugger did. (M26-TMP-002)
+
+- **`exec_string` and `cmd_run` could not run a command on Linux or macOS at
+  all.** The shell defaulted to `powershell` on every platform, and the
+  non-Windows shells were handed the command as a file path instead of after
+  `-c`, so `bash` exited 127 with the whole command treated as a script name and
+  `sh` was not reachable by any spelling. The default is now `powershell` on
+  Windows and `sh` everywhere else, `bash` and `sh` are given `-c`, and `pwsh`
+  runs the real `pwsh` binary. Three deliberate behaviour changes go with that.
+  On WSL, `exec_string` with no shell argument used to reach PowerShell through
+  Windows interop and now runs `sh -c`, so a script that relied on that must name
+  `powershell` explicitly. `exec_string(cmd, "bash")` on Windows goes from doing
+  nothing to running the command inside WSL. And `pwsh` stops silently running
+  PowerShell 5.1. Windows' own default is unchanged, and `powershell`, `cmd` and
+  `batch` keep working by name on every platform. (M26-TMP-005)
+
+- **On macOS the parent-debugger check had the same defect with a worse list.**
+  The output of `ps -o comm=` was substring-matched, and the list holds the bare
+  words `trace`, which is inside `ltrace`, `dtrace` and `pytrace`, and `heap`,
+  which is inside `heaptrack`; `xcode` matched anything invoked by path under
+  `/Applications/Xcode.app`. The base name is now compared exactly, through the
+  same matcher and the same lists as the Linux side -- both lists moved into the
+  untagged file, so one function serves both platforms and both platforms' rules
+  are testable from any host. This was found while fixing M26-TMP-002, and
+  neither row mentioned it. Alongside it, `go build` and `go vet` now pass for
+  `linux` and `darwin`: nothing had ever compiled these paths, which is how two
+  platforms' worth of this check went unexamined. (M26-TMP-019)
 
 ### Security
 

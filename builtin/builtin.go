@@ -76,6 +76,7 @@ var Builtins = []BuiltinDefinition{
 	{BuiltinNameSandboxStatus, &BuiltIn{SandboxStatus}},
 	{BuiltinNameSecurityDiagnostics, &BuiltIn{SecurityDiagnostics}},
 	{BuiltinNameExecString, &BuiltIn{ExecString}},
+	{BuiltinNameExecArgv, &BuiltIn{ExecArgv}},
 	{BuiltinNameCmdBuilder, &BuiltIn{CmdBuilder}},
 	{BuiltinNameCmdAdd, &BuiltIn{CmdAdd}},
 	{BuiltinNameCmdRun, &BuiltIn{CmdRun}},

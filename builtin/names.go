@@ -51,6 +51,7 @@ const (
 	BuiltinNameSandboxStatus         = "sandbox_status"
 	BuiltinNameSecurityDiagnostics   = "security_diagnostics"
 	BuiltinNameExecString            = "exec_string"
+	BuiltinNameExecArgv              = "exec_argv"
 	BuiltinNameCmdBuilder            = "cmd_builder"
 	BuiltinNameCmdAdd                = "cmd_add"
 	BuiltinNameCmdRun                = "cmd_run"

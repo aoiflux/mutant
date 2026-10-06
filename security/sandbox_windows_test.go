@@ -9,7 +9,7 @@ import (
 )
 
 func TestDetectSandboxWindowsFromTasklistHyperV(t *testing.T) {
-	detection := detectSandboxWindowsFromTasklist("vmicheartbeat.exe vmictimesync.exe")
+	detection := detectSandboxWindowsFromTasklist(tasklistCSV("vmicheartbeat.exe", "vmictimesync.exe"))
 	if detection.Type != windowsSandboxTypeHyperV {
 		t.Fatalf("expected %s detection, got %q", windowsSandboxTypeHyperV, detection.Type)
 	}
@@ -22,7 +22,7 @@ func TestDetectSandboxWindowsFromTasklistHyperV(t *testing.T) {
 }
 
 func TestDetectSandboxWindowsFromTasklistHyperVVmicsvc(t *testing.T) {
-	detection := detectSandboxWindowsFromTasklist("svchost.exe vmicsvc.exe")
+	detection := detectSandboxWindowsFromTasklist(tasklistCSV("svchost.exe", "vmicsvc.exe"))
 	if detection.Type != windowsSandboxTypeHyperV {
 		t.Fatalf("expected %s detection, got %q", windowsSandboxTypeHyperV, detection.Type)
 	}
@@ -87,15 +87,39 @@ func TestIsWindowsHyperVPnPOutputNegative(t *testing.T) {
 	}
 }
 
+// tasklistCSV renders image names the way tasklist /fo csv /nh prints them, so
+// that a fixture is the shape the detector is given rather than a shape that
+// only a substring search would have read.
+func tasklistCSV(names ...string) string {
+	var out strings.Builder
+	for _, name := range names {
+		out.WriteString(`"` + name + `","1234","Services","0","5,000 K"` + "\r\n")
+	}
+	return out.String()
+}
+
 func TestHasWindowsHyperVHostProcesses(t *testing.T) {
-	if !hasWindowsHyperVHostProcesses("svchost.exe vmcompute.exe") {
+	if !hasWindowsHyperVHostProcesses(windowsImageNames(tasklistCSV("svchost.exe", "vmcompute.exe"))) {
 		t.Fatalf("expected Hyper-V host process set to be detected")
 	}
 }
 
 func TestHasWindowsHyperVHostProcessesNegative(t *testing.T) {
-	if hasWindowsHyperVHostProcesses("svchost.exe explorer.exe") {
+	if hasWindowsHyperVHostProcesses(windowsImageNames(tasklistCSV("svchost.exe", "explorer.exe"))) {
 		t.Fatalf("expected non-host process list to be ignored")
+	}
+}
+
+// TestHasWindowsHyperVHostProcessesMatchesTheWholeImageName is the false
+// negative this family had, and the worse direction for a detector: the host
+// role gates the CPUID vendor, the PnP listing and the SMBIOS table off, so
+// reading one of these names inside a longer one turns Hyper-V guest detection
+// off on a machine that is a Hyper-V guest.
+func TestHasWindowsHyperVHostProcessesMatchesTheWholeImageName(t *testing.T) {
+	for _, name := range []string{"notvmwp.exe", "myvmcompute.exe", "vmms.exe.bak", "xvmms.exe"} {
+		if hasWindowsHyperVHostProcesses(windowsImageNames(tasklistCSV("svchost.exe", name))) {
+			t.Fatalf("expected %q not to count as a Hyper-V host process", name)
+		}
 	}
 }
 
@@ -123,14 +147,14 @@ func TestIsWindowsHyperVRegistryBIOSOutputNegative(t *testing.T) {
 }
 
 func TestDetectSandboxWindowsFromTasklistHostHyperVProcessesNoSignal(t *testing.T) {
-	detection := detectSandboxWindowsFromTasklist("vmcompute.exe vmwp.exe vmms.exe")
+	detection := detectSandboxWindowsFromTasklist(tasklistCSV("vmcompute.exe", "vmwp.exe", "vmms.exe"))
 	if detection.Type != "" || detection.Confidence != 0 {
 		t.Fatalf("expected no sandbox signal from host Hyper-V processes, got type=%q confidence=%d", detection.Type, detection.Confidence)
 	}
 }
 
 func TestDetectSandboxWindowsFromTasklistHostWSLProcessesNoSignal(t *testing.T) {
-	detection := detectSandboxWindowsFromTasklist("wslhost.exe wslservice.exe vmmemwsl.exe")
+	detection := detectSandboxWindowsFromTasklist(tasklistCSV("wslhost.exe", "wslservice.exe", "vmmemwsl.exe"))
 	if detection.Type != "" || detection.Confidence != 0 {
 		t.Fatalf("expected no sandbox signal from host WSL processes, got type=%q confidence=%d", detection.Type, detection.Confidence)
 	}
@@ -331,14 +355,84 @@ func detectSandboxWindowsFromTasklist(tasklist string) sandboxDetection {
 		indicators = append(indicators, indicator)
 	}
 
-	addWindowsProcessIndicators(tasklist, add)
+	addWindowsProcessIndicators(windowsImageNames(tasklist), add)
 	return finalizeWindowsDetection(typeScore, indicators)
 }
 
 func TestDetectSandboxWindowsFromTasklistHostWindowsSandboxProcessesNoSignal(t *testing.T) {
-	detection := detectSandboxWindowsFromTasklist("WindowsSandbox.exe SandboxClient.exe")
+	detection := detectSandboxWindowsFromTasklist(tasklistCSV("WindowsSandbox.exe", "SandboxClient.exe"))
 	if detection.Type != "" || detection.Confidence != 0 {
 		t.Fatalf("expected no sandbox signal from host Windows Sandbox processes, got type=%q confidence=%d", detection.Type, detection.Confidence)
+	}
+}
+
+// TestDetectSandboxWindowsFromTasklistMatchesTheWholeImageName covers the other
+// five process signals in the same table. Each of them is worth at least the
+// threshold on its own, so a name that merely holds one of theirs was a halt.
+func TestDetectSandboxWindowsFromTasklistMatchesTheWholeImageName(t *testing.T) {
+	for _, name := range []string{
+		"myvmtoolsd.exe", "vmwaretray.exe.bak", "xvboxservice.exe",
+		"notxenservice.exe", "myqemu-ga.exe", "notsbiectrl.exe",
+		"myvmicheartbeat.exe", "vmicvss.exe.old",
+	} {
+		detection := detectSandboxWindowsFromTasklist(tasklistCSV("svchost.exe", name))
+		if detection.Type != "" || detection.Confidence != 0 {
+			t.Fatalf("expected %q to score nothing, got type=%q confidence=%d", name, detection.Type, detection.Confidence)
+		}
+	}
+}
+
+// TestDetectSandboxWindowsFromTasklistStillFindsTheRealTools is the other half:
+// narrowing the match must not have cost any of the detections it is for.
+func TestDetectSandboxWindowsFromTasklistStillFindsTheRealTools(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		kind string
+	}{
+		{"vmtoolsd.exe", windowsSandboxTypeVMware},
+		{"vmwaretray.exe", windowsSandboxTypeVMware},
+		{"vboxservice.exe", windowsSandboxTypeVirtualBox},
+		{"vboxtray.exe", windowsSandboxTypeVirtualBox},
+		{"xenservice.exe", windowsSandboxTypeXen},
+		{"qemu-ga.exe", windowsSandboxTypeKVMQEMU},
+		{"sbiectrl.exe", windowsSandboxTypeSandboxie},
+		{"sandboxiedcomlaunch.exe", windowsSandboxTypeSandboxie},
+		{"vmicheartbeat.exe", windowsSandboxTypeHyperV},
+	} {
+		detection := detectSandboxWindowsFromTasklist(tasklistCSV("svchost.exe", tc.name))
+		if detection.Type != tc.kind {
+			t.Fatalf("expected %q to be typed %q, got %q", tc.name, tc.kind, detection.Type)
+		}
+		if detection.Confidence < SandboxDetectedThreshold {
+			t.Fatalf("expected %q to clear the threshold, got %d", tc.name, detection.Confidence)
+		}
+	}
+}
+
+// TestIsWindowsWdagProfilePath pins the Windows Sandbox profile check. The
+// signal is worth 95, so it halts on its own, and it used to fire on any path
+// that held the folder name anywhere inside it.
+func TestIsWindowsWdagProfilePath(t *testing.T) {
+	for _, profile := range []string{
+		`C:\Users\WDAGUtilityAccount`,
+		`c:\users\wdagutilityaccount`,
+		`C:\Users\WDAGUtilityAccount\`,
+		` C:\Users\WDAGUtilityAccount `,
+	} {
+		if !isWindowsWdagProfilePath(profile) {
+			t.Fatalf("expected %q to be the Windows Sandbox profile", profile)
+		}
+	}
+	for _, profile := range []string{
+		`D:\backup\Users\WDAGUtilityAccount-old`,
+		`C:\Users\WDAGUtilityAccountBackup`,
+		`C:\Users\WDAGUtilityAccount\Desktop`,
+		`C:\Users\gaurav`,
+		``,
+	} {
+		if isWindowsWdagProfilePath(profile) {
+			t.Fatalf("expected %q not to be the Windows Sandbox profile", profile)
+		}
 	}
 }
 

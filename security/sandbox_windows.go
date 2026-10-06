@@ -177,15 +177,14 @@ func detectSandboxWindows() (sandboxDetection, error) {
 		add(windowsSandboxTypeWindowsSB, windowsConfidenceWdagSignals, windowsIndicatorEnvWdagUser)
 	}
 	if profile, ok := os.LookupEnv(windowsEnvUserProfile); ok {
-		profile = strings.ToLower(strings.TrimSpace(profile))
-		if strings.Contains(profile, windowsPathWdagProfile) {
+		if isWindowsWdagProfilePath(profile) {
 			add(windowsSandboxTypeWindowsSB, windowsConfidenceWdagSignals, windowsIndicatorEnvWdagProfile)
 		}
 	}
 
 	hyperVHostRoleDetected := false
-	if out, err := exec.Command("tasklist").CombinedOutput(); err == nil {
-		procs := strings.ToLower(string(out))
+	if out, err := exec.Command("tasklist", "/fo", "csv", "/nh").CombinedOutput(); err == nil {
+		procs := windowsImageNames(string(out))
 		addWindowsProcessIndicators(procs, add)
 		hyperVHostRoleDetected = hasWindowsHyperVHostProcesses(procs)
 	}
@@ -307,8 +306,26 @@ func isWindowsHyperVPnPOutput(pnpOutput string) bool {
 	return strings.Contains(out, "vmbus") || strings.Contains(out, "virtual machine bus") || strings.Contains(out, "hyper-v heartbeat") || strings.Contains(out, "hyper-v guest shutdown")
 }
 
-func hasWindowsHyperVHostProcesses(procs string) bool {
-	return containsAny(strings.ToLower(procs), windowsHyperVHostProcesses)
+// isWindowsWdagProfilePath reports whether a USERPROFILE is the Windows Sandbox
+// account's own profile directory, which is C:\Users\WDAGUtilityAccount.
+//
+// The path has to end there. One that merely holds the fragment is a different
+// directory -- a copy of that profile kept somewhere, say -- and this signal is
+// worth 95 on its own, so reading a folder name as the sandbox halts the run.
+func isWindowsWdagProfilePath(profile string) bool {
+	path := strings.ToLower(strings.TrimSpace(profile))
+	return strings.HasSuffix(strings.TrimRight(path, `\/`), windowsPathWdagProfile)
+}
+
+// hasWindowsHyperVHostProcesses reports whether the Hyper-V host's own service
+// processes are running, which means this machine is the host rather than one
+// of its guests.
+//
+// It gates three guest signals off, so a name that merely holds one of these --
+// notvmwp.exe would do it -- is not a false alarm but its opposite: every
+// Hyper-V guest signal the detector has, suppressed, on a machine that is one.
+func hasWindowsHyperVHostProcesses(procs map[string]struct{}) bool {
+	return hasAnyImageName(procs, windowsHyperVHostProcesses)
 }
 
 func isWindowsRegistryVirtualMachineKeyOutput(out string) bool {
@@ -322,27 +339,32 @@ func isWindowsHyperVRegistryBIOSOutput(systemManufacturerOut string, systemProdu
 	return strings.Contains(manufacturer, "microsoft corporation") && strings.Contains(product, "virtual machine")
 }
 
-func addWindowsProcessIndicators(procs string, add func(kind string, confidence int, indicator string)) {
-	procs = strings.ToLower(procs)
+// windowsProcessSignals are the guest tools and integration services that a
+// hypervisor installs inside the machines it runs, and the type each one names.
+//
+// Every name is compared exactly against the listing's own image names, and
+// every confidence here is at or above the threshold, so a name that merely
+// holds one of these is not a near miss: it is a halt. They are a table rather
+// than a run of ifs so that the rule they share is stated once.
+var windowsProcessSignals = []struct {
+	names      []string
+	kind       string
+	confidence int
+	mark       string
+}{
+	{[]string{"vmtoolsd.exe", "vmwaretray.exe"}, windowsSandboxTypeVMware, windowsConfidenceVmProcessTools, windowsIndicatorProcVMwareTools},
+	{[]string{"vboxservice.exe", "vboxtray.exe"}, windowsSandboxTypeVirtualBox, windowsConfidenceVmProcessTools, windowsIndicatorProcVboxTools},
+	{[]string{"xenservice.exe"}, windowsSandboxTypeXen, windowsConfidenceVmProcessTools, windowsIndicatorProcXenService},
+	{[]string{"qemu-ga.exe"}, windowsSandboxTypeKVMQEMU, windowsConfidenceVmProcessTools, windowsIndicatorProcQemuAgent},
+	{[]string{"sbiectrl.exe", "sandboxiedcomlaunch.exe"}, windowsSandboxTypeSandboxie, windowsConfidenceSandboxieEnv, windowsIndicatorProcSandboxie},
+	{windowsHyperVProcesses, windowsSandboxTypeHyperV, windowsConfidenceHyperVIntegration, windowsIndicatorProcHyperVGuest},
+}
 
-	if strings.Contains(procs, "vmtoolsd.exe") || strings.Contains(procs, "vmwaretray.exe") {
-		add(windowsSandboxTypeVMware, windowsConfidenceVmProcessTools, windowsIndicatorProcVMwareTools)
-	}
-	if strings.Contains(procs, "vboxservice.exe") || strings.Contains(procs, "vboxtray.exe") {
-		add(windowsSandboxTypeVirtualBox, windowsConfidenceVmProcessTools, windowsIndicatorProcVboxTools)
-	}
-	if strings.Contains(procs, "xenservice.exe") {
-		add(windowsSandboxTypeXen, windowsConfidenceVmProcessTools, windowsIndicatorProcXenService)
-	}
-	if strings.Contains(procs, "qemu-ga.exe") {
-		add(windowsSandboxTypeKVMQEMU, windowsConfidenceVmProcessTools, windowsIndicatorProcQemuAgent)
-	}
-	if strings.Contains(procs, "sbiectrl.exe") || strings.Contains(procs, "sandboxiedcomlaunch.exe") {
-		add(windowsSandboxTypeSandboxie, windowsConfidenceSandboxieEnv, windowsIndicatorProcSandboxie)
-	}
-
-	if containsAny(procs, windowsHyperVProcesses) {
-		add(windowsSandboxTypeHyperV, windowsConfidenceHyperVIntegration, windowsIndicatorProcHyperVGuest)
+func addWindowsProcessIndicators(procs map[string]struct{}, add func(kind string, confidence int, indicator string)) {
+	for _, signal := range windowsProcessSignals {
+		if hasAnyImageName(procs, signal.names) {
+			add(signal.kind, signal.confidence, signal.mark)
+		}
 	}
 }
 

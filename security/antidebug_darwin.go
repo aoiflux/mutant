@@ -28,13 +28,6 @@ const (
 )
 
 var (
-	darwinParentDebuggerPatterns = []string{
-		"lldb", "gdb", "xcode", "simulator", "instruments",
-		"dtrace", "fs_usage", "sample", "trace", "sc_usage",
-		"leaks", "malloc_history", "heap", "vmmap",
-		"frida-server", "idb", "appium",
-	}
-
 	darwinDebuggerEnvVars = []string{
 		"LLDB_DEBUGSERVER_PORT",
 		"LLDB_MasterPort",
@@ -121,27 +114,33 @@ func isProcessBeingTraced() bool {
 	return (info.Flag & P_TRACED) != 0
 }
 
-// isParentDebuggerDarwin checks if the parent process is a known debugger
+// isParentDebuggerDarwin checks whether the parent process is one of the
+// debuggers in darwinDebuggerProcessNames, by the name of its executable.
+//
+// macOS has no /proc, so the parent's name comes from ps, and the name is
+// compared exactly rather than searched for inside what ps printed. Searching
+// matched far more than it meant to even on a bare name: the list holds "trace",
+// which matched ltrace, pytrace and dtrace, and "heap", which matched
+// heaptrack, so an ordinary parent was reported as a debugger -- and in secure
+// mode that ends the run (M26-TMP-019). `ps -o comm=` on this platform is
+// documented to print the executable's path, which if it holds makes the same
+// list match every tool under /Applications/Xcode.app through the entry
+// "xcode"; taking the base name covers both readings and needs neither to be
+// settled.
+//
+// A parent whose name cannot be read is not a debugger, for the same reason as
+// on Linux: isTracedDarwin is the check that finds one actually attached, and
+// this one should err towards silence.
 func isParentDebuggerDarwin() bool {
 	ppid := os.Getppid()
 
-	// Try to get parent process name via /proc
-	// Note: macOS /proc is limited, so we use ps command
 	cmd := exec.Command(darwinPsCommand, "-o", "comm=", "-p", strconv.Itoa(ppid))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}
 
-	parentName := strings.ToLower(strings.TrimSpace(string(output)))
-
-	for _, pattern := range darwinParentDebuggerPatterns {
-		if strings.Contains(parentName, pattern) {
-			return true
-		}
-	}
-
-	return false
+	return debuggerProcessNameMatches(string(output), darwinDebuggerProcessNames)
 }
 
 // hasDebuggerEnvironmentMarkersDarwin checks for debugger environment markers on macOS
