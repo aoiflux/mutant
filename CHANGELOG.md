@@ -1344,6 +1344,29 @@ exhaustive lists.
   `TestAnASCIIDocumentIsUnaffected` pins it. Each new fixture was proved to fail
   on the old arithmetic first. (M26-LSP-027)
 
+- **The sandbox detector named WSL on a machine that had no WSL.** On Windows a
+  parent process named `bash.exe` scored 90 under the type `WSL`, over the 70
+  that counts as detected. Git for Windows, MSYS2 and Cygwin all ship a
+  `bash.exe`, so a program started from any of those shells was halted and told
+  it was running under WSL. The halt is intended and is unchanged -- an emulated
+  shell is one of the environments the detector exists to notice -- but the type
+  is now `MSYS/Cygwin or legacy WSL`, which is everything that name can prove:
+  the legacy WSL launcher is called `bash.exe` as well, and the two cannot be
+  separated there, because the parent is read from `tasklist`, whose image-name
+  column is a basename and never a path. A run that is really under WSL is still
+  reported as `WSL`, since it scores from its context environment and its UNC
+  working directory too, and the tie-break prefers the specific type.
+
+  The parent name was also compared as a substring, so a name that merely held
+  one of the list's entries scored the same 90: `notwsl.exe` and `mywsl.exe`
+  hold `wsl.exe`, and `gitbash.exe` holds `bash.exe`. None of those is a shell
+  or a launcher and none of them scores at all now -- a single name is compared
+  whole. The three other callers of the substring helper search a blob -- a
+  `tasklist` dump, the contents of a cgroup file -- where a substring is the
+  right match, and they are unchanged. `docs/TUTORIAL_30_MIN.md` and
+  `docs/SANDBOX_DETECTION.md` record the type and why it names two things.
+  (M26-TMP-003)
+
 ### Security
 
 - **A crafted artifact could kill the process parsing it, and one kind could

@@ -25,7 +25,7 @@ func TestSandboxDetectionIsCachedForTheProcess(t *testing.T) {
 
 	sandboxCached = sandboxDetection{
 		Type:       "sentinel-hypervisor",
-		Confidence: sandboxDetectedThreshold + 1,
+		Confidence: SandboxDetectedThreshold + 1,
 		Indicators: []string{"sentinel:indicator"},
 	}
 	sandboxCachedErr = nil
@@ -37,8 +37,8 @@ func TestSandboxDetectionIsCachedForTheProcess(t *testing.T) {
 	if typ != "sentinel-hypervisor" {
 		t.Fatalf("detection ran again: got type %q, want the cached sentinel", typ)
 	}
-	if confidence != sandboxDetectedThreshold+1 {
-		t.Fatalf("detection ran again: got confidence %d, want %d", confidence, sandboxDetectedThreshold+1)
+	if confidence != SandboxDetectedThreshold+1 {
+		t.Fatalf("detection ran again: got confidence %d, want %d", confidence, SandboxDetectedThreshold+1)
 	}
 
 	if !IsSandboxed() {
@@ -65,7 +65,7 @@ func TestSandboxIndicatorsAreCopiedOutOfTheCache(t *testing.T) {
 	}
 	sandboxCached = sandboxDetection{
 		Type:       "sentinel-hypervisor",
-		Confidence: sandboxDetectedThreshold + 1,
+		Confidence: SandboxDetectedThreshold + 1,
 		Indicators: []string{"sentinel:indicator"},
 	}
 

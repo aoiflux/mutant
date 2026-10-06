@@ -95,7 +95,7 @@ func detectCPUIDHypervisor() AntiTamperSignal {
 	if err != nil {
 		return unmeasuredSignal(ProbeCPUIDHypervisor, "not measured: the sandbox detector failed: "+err.Error())
 	}
-	if sandboxType != sandboxTypeNone && confidence >= sandboxDetectedThreshold {
+	if sandboxType != SandboxTypeNone && confidence >= SandboxDetectedThreshold {
 		return makeSignal(ProbeCPUIDHypervisor, true, ConfidenceCPUIDHypervisorDetected, "sandbox_type="+sandboxType)
 	}
 

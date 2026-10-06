@@ -157,7 +157,7 @@ func TestDetectSandboxWindowsFromEnvWSLENV(t *testing.T) {
 	if detection.Confidence != windowsConfidenceWslEnvOnly {
 		t.Fatalf("expected WSLENV-only confidence %d, got %d", windowsConfidenceWslEnvOnly, detection.Confidence)
 	}
-	if detection.Confidence >= sandboxDetectedThreshold {
+	if detection.Confidence >= SandboxDetectedThreshold {
 		t.Fatalf("expected WSLENV-only signal to stay below sandbox threshold, got %d", detection.Confidence)
 	}
 }
@@ -179,6 +179,65 @@ func TestDetectSandboxWindowsFromParentWSLHost(t *testing.T) {
 	}
 	if detection.Confidence < windowsConfidenceWslParent {
 		t.Fatalf("expected WSL parent confidence >= %d, got %d", windowsConfidenceWslParent, detection.Confidence)
+	}
+}
+
+// TestDetectSandboxWindowsFromParentGitBashIsReportedTruthfully is the filed
+// half of M26-TMP-003. Git for Windows, MSYS2 and Cygwin all ship a bash.exe,
+// and that name scored 90 under the type WSL, so a plain Windows host with no
+// WSL installed was told it was running under WSL. The halt is intended and is
+// asserted here; the label was not, and is asserted too.
+func TestDetectSandboxWindowsFromParentGitBashIsReportedTruthfully(t *testing.T) {
+	for _, parent := range []string{"bash.exe", "BASH.EXE", " bash.exe "} {
+		detection := detectSandboxWindowsFromParent(parent)
+		if detection.Type == windowsSandboxTypeWSL {
+			t.Fatalf("parent %q is the shell Git for Windows, MSYS2 and Cygwin all ship, and "+
+				"the legacy WSL launcher shares its name, so it must not be reported as %q",
+				parent, windowsSandboxTypeWSL)
+		}
+		if detection.Type != windowsSandboxTypePosixShell {
+			t.Fatalf("parent %q: expected type %q, got %q",
+				parent, windowsSandboxTypePosixShell, detection.Type)
+		}
+		if detection.Confidence < SandboxDetectedThreshold {
+			t.Fatalf("parent %q must still count as detected: expected confidence >= %d, got %d",
+				parent, SandboxDetectedThreshold, detection.Confidence)
+		}
+	}
+}
+
+// TestDetectSandboxWindowsFromParentMatchesTheWholeName is the half found while
+// fixing the first. Both name lists were compared with containsAny, a substring
+// search, so an image name that merely held one of their entries scored 90 as
+// though it were that entry. None of these is a shell or a launcher.
+func TestDetectSandboxWindowsFromParentMatchesTheWholeName(t *testing.T) {
+	for _, parent := range []string{
+		"notwsl.exe", "mywsl.exe", "wslhost.exe.bak", "mywslhost.exe",
+		"gitbash.exe", "bash.exe.bak", "mybash.exe",
+	} {
+		detection := detectSandboxWindowsFromParent(parent)
+		if detection.Type != "" || detection.Confidence != 0 {
+			t.Fatalf("parent %q only holds a name from one of the lists and is not one, so it "+
+				"must not score at all; got %q at confidence %d",
+				parent, detection.Type, detection.Confidence)
+		}
+	}
+}
+
+// TestDetectSandboxWindowsFromParentStillFindsWSL is the other direction: the
+// names that do mean WSL still score as WSL, in any case and with surrounding
+// space, so narrowing the match did not disable it.
+func TestDetectSandboxWindowsFromParentStillFindsWSL(t *testing.T) {
+	for _, parent := range []string{"wsl.exe", "wslhost.exe", "WSLHOST.EXE", " wsl.exe "} {
+		detection := detectSandboxWindowsFromParent(parent)
+		if detection.Type != windowsSandboxTypeWSL {
+			t.Fatalf("parent %q is a WSL launcher; expected %q, got %q",
+				parent, windowsSandboxTypeWSL, detection.Type)
+		}
+		if detection.Confidence < windowsConfidenceWslParent {
+			t.Fatalf("parent %q: expected confidence >= %d, got %d",
+				parent, windowsConfidenceWslParent, detection.Confidence)
+		}
 	}
 }
 
@@ -225,6 +284,38 @@ func TestFinalizeWindowsDetectionTieBreakPrefersHyperV(t *testing.T) {
 	detection := finalizeWindowsDetection(typeScore, []string{windowsIndicatorWMICBaseboardHV, windowsIndicatorEnvWSLContext})
 	if detection.Type != windowsSandboxTypeHyperV {
 		t.Fatalf("expected tie-break to prefer %q, got %q", windowsSandboxTypeHyperV, detection.Type)
+	}
+}
+
+// TestFinalizeWindowsDetectionTieBreakPrefersWSLOverTheAmbiguousShell is why a
+// real WSL run is not reported under the type a bash.exe parent gets. A Windows
+// build reached from WSL scores WSL from its context environment and its UNC
+// working directory too, and where one of those ties with the parent-name score
+// the specific type has to win (M26-TMP-003).
+func TestFinalizeWindowsDetectionTieBreakPrefersWSLOverTheAmbiguousShell(t *testing.T) {
+	typeScore := map[string]int{
+		windowsSandboxTypeWSL:        windowsConfidenceWslCwd,
+		windowsSandboxTypePosixShell: windowsConfidenceBashParent,
+	}
+	detection := finalizeWindowsDetection(typeScore, []string{windowsIndicatorCwdWSLUNC, windowsIndicatorParentBash})
+	if detection.Type != windowsSandboxTypeWSL {
+		t.Fatalf("expected tie-break to prefer %q, got %q", windowsSandboxTypeWSL, detection.Type)
+	}
+}
+
+// TestFinalizeWindowsDetectionTieBreakPrefersTheShellOverAGenericVM is the other
+// side of the same priority entry, and the side that needs it: a type absent
+// from the priority map scores 0 there and silently loses every tie, so naming
+// the shell would lose to the generic VM bucket without the entry. At an equal
+// score the shell is the more specific answer and has to win (M26-TMP-003).
+func TestFinalizeWindowsDetectionTieBreakPrefersTheShellOverAGenericVM(t *testing.T) {
+	typeScore := map[string]int{
+		windowsSandboxTypePosixShell: 60,
+		windowsSandboxTypeVM:         60,
+	}
+	detection := finalizeWindowsDetection(typeScore, []string{windowsIndicatorParentBash, windowsIndicatorCPUHypervisor})
+	if detection.Type != windowsSandboxTypePosixShell {
+		t.Fatalf("expected tie-break to prefer %q, got %q", windowsSandboxTypePosixShell, detection.Type)
 	}
 }
 
@@ -308,6 +399,6 @@ func detectSandboxWindowsFromParent(parentName string) sandboxDetection {
 		indicators = append(indicators, indicator)
 	}
 
-	addWindowsWSLParentIndicators(parentName, add)
+	addWindowsParentProcessIndicators(parentName, add)
 	return finalizeWindowsDetection(typeScore, indicators)
 }

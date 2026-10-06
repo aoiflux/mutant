@@ -54,8 +54,8 @@ func SandboxStatus(args ...object.Object) object.Object {
 		indicators = nil
 	}
 
-	detected := confidence >= 70
-	if statusType == "none" {
+	detected := confidence >= security.SandboxDetectedThreshold
+	if statusType == security.SandboxTypeNone {
 		detected = false
 	}
 
@@ -108,8 +108,8 @@ func SecurityDiagnostics(args ...object.Object) object.Object {
 	sandboxType, sandboxConfidence, sandboxErr := security.DetectSandboxType()
 	sandboxIndicators, indicatorsErr := security.GetSandboxIndicators()
 
-	sandboxDetected := sandboxConfidence >= 70
-	if sandboxType == "none" {
+	sandboxDetected := sandboxConfidence >= security.SandboxDetectedThreshold
+	if sandboxType == security.SandboxTypeNone {
 		sandboxDetected = false
 	}
 
@@ -151,7 +151,7 @@ func detectionType(detected bool, name string) string {
 	if detected {
 		return name
 	}
-	return "none"
+	return security.SandboxTypeNone
 }
 
 func detectionConfidence(detected bool) int64 {

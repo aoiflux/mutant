@@ -12,18 +12,27 @@ type sandboxDetection struct {
 	Indicators []string
 }
 
-// sandboxDetectedThreshold is the confidence from which a run counts as
+// SandboxDetectedThreshold is the confidence from which a run counts as
 // sandboxed, and from which the cpuid_hypervisor probe reports one. A detector
 // adds up its indicators' confidences per sandbox type; on Linux, for one, the
 // specific indicators -- a Docker or WSL marker, a VM vendor in the CPU or the
 // firmware -- reach it alone, and the generic ones, such as the CPU's
 // hypervisor flag, do not.
 //
+// It is exported because builtin/security_status.go answers the same question
+// for the status builtin's "detected" field, and answered it from a literal 70
+// until 2.6.0. Two copies of one rule disagree the moment either moves, and
+// this one moving is how the builtin would have started publishing a different
+// answer from the detector's own.
+//
 //mutant:limit score
-const sandboxDetectedThreshold = 70
+const SandboxDetectedThreshold = 70
 
 const (
-	sandboxTypeNone = "none"
+	// SandboxTypeNone is the type DetectSandboxType reports when it found
+	// nothing, and is exported for the same reason as the threshold above:
+	// builtin/security_status.go compared against the bare string.
+	SandboxTypeNone = "none"
 	// minConfidenceScore and maxConfidenceScore are the ends of the scale
 	// every detector scores on, and a score is clamped into them.
 	//
@@ -42,7 +51,7 @@ func IsSandboxed() bool {
 	if err != nil {
 		return false
 	}
-	return confidence >= sandboxDetectedThreshold
+	return confidence >= SandboxDetectedThreshold
 }
 
 // DetectSandboxType returns the most likely sandbox type and confidence (0-100).
@@ -50,7 +59,7 @@ func DetectSandboxType() (string, int, error) {
 	result, err := detectSandbox()
 	if err != nil {
 		securityDevLogf("sandbox detect error=%v", err)
-		return sandboxTypeNone, minConfidenceScore, err
+		return SandboxTypeNone, minConfidenceScore, err
 	}
 	if result.Confidence < minConfidenceScore {
 		result.Confidence = minConfidenceScore
@@ -59,12 +68,12 @@ func DetectSandboxType() (string, int, error) {
 		result.Confidence = maxConfidenceScore
 	}
 	if result.Type == "" || result.Confidence == minConfidenceScore {
-		securityDevLogf("sandbox detected=false type=none confidence=0 indicators=")
-		return sandboxTypeNone, minConfidenceScore, nil
+		securityDevLogf("sandbox detected=false type=%s confidence=0 indicators=", SandboxTypeNone)
+		return SandboxTypeNone, minConfidenceScore, nil
 	}
 	securityDevLogf(
 		"sandbox detected=%t type=%s confidence=%d indicators=%s",
-		result.Confidence >= sandboxDetectedThreshold,
+		result.Confidence >= SandboxDetectedThreshold,
 		result.Type,
 		result.Confidence,
 		strings.Join(result.Indicators, ","),

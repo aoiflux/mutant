@@ -313,11 +313,11 @@ func TestSandboxDetectionAPIs(t *testing.T) {
 	}
 
 	isSandboxed := IsSandboxed()
-	if isSandboxed && confidence < sandboxDetectedThreshold {
-		t.Fatalf("expected confidence >= %d when sandboxed, got %d", sandboxDetectedThreshold, confidence)
+	if isSandboxed && confidence < SandboxDetectedThreshold {
+		t.Fatalf("expected confidence >= %d when sandboxed, got %d", SandboxDetectedThreshold, confidence)
 	}
-	if !isSandboxed && confidence >= sandboxDetectedThreshold {
-		t.Fatalf("expected confidence < %d when not sandboxed, got %d", sandboxDetectedThreshold, confidence)
+	if !isSandboxed && confidence >= SandboxDetectedThreshold {
+		t.Fatalf("expected confidence < %d when not sandboxed, got %d", SandboxDetectedThreshold, confidence)
 	}
 }
 

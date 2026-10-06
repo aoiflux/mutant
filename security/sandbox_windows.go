@@ -25,6 +25,7 @@ const (
 	windowsSandboxTypeKVMQEMU    = "KVM/QEMU"
 	windowsSandboxTypeHyperV     = "Hyper-V"
 	windowsSandboxTypeVM         = "VM"
+	windowsSandboxTypePosixShell = "MSYS/Cygwin or legacy WSL"
 
 	windowsConfidenceFileDriver        = 80
 	windowsConfidenceSandboxieFile     = 85
@@ -35,6 +36,7 @@ const (
 	windowsConfidenceWslEnvOnly        = 35
 	windowsConfidenceWslCwd            = 90
 	windowsConfidenceWslParent         = 90
+	windowsConfidenceBashParent        = 90
 	windowsConfidenceWdagSignals       = 95
 	windowsConfidenceVmProcessTools    = 70
 	windowsConfidenceHyperVIntegration = 80
@@ -79,6 +81,7 @@ const (
 	windowsIndicatorEnvWdagProfile    = "windows:env:userprofile_wdag"
 	windowsIndicatorCwdWSLUNC         = "windows:cwd:wsl_unc_path"
 	windowsIndicatorParentWSL         = "windows:process_parent:wsl"
+	windowsIndicatorParentBash        = "windows:process_parent:bash"
 	windowsIndicatorProcVMwareTools   = "windows:process:vmware_tools"
 	windowsIndicatorProcVboxTools     = "windows:process:virtualbox_tools"
 	windowsIndicatorProcXenService    = "windows:process:xenservice"
@@ -126,7 +129,8 @@ var (
 		"vmickvpexchange.exe",
 	}
 	windowsHyperVHostProcesses = []string{"vmcompute.exe", "vmwp.exe", "vmms.exe"}
-	windowsWSLParentNames      = []string{"wsl.exe", "wslhost.exe", "bash.exe"}
+	windowsWSLParentNames      = []string{"wsl.exe", "wslhost.exe"}
+	windowsBashParentNames     = []string{"bash.exe"}
 
 	modkernel32                = syscall.NewLazyDLL("kernel32.dll")
 	procGetSystemFirmwareTable = modkernel32.NewProc("GetSystemFirmwareTable")
@@ -166,7 +170,7 @@ func detectSandboxWindows() (sandboxDetection, error) {
 		addWindowsWSLCwdIndicators(wd, add)
 	}
 	if parent, err := getWindowsParentProcessName(os.Getppid); err == nil {
-		addWindowsWSLParentIndicators(parent, add)
+		addWindowsParentProcessIndicators(parent, add)
 	}
 
 	if user, ok := os.LookupEnv(windowsEnvUsername); ok && strings.EqualFold(strings.TrimSpace(user), windowsWdagUtilityAccount) {
@@ -364,10 +368,32 @@ func addWindowsWSLCwdIndicators(cwd string, add func(kind string, confidence int
 	}
 }
 
-func addWindowsWSLParentIndicators(parentName string, add func(kind string, confidence int, indicator string)) {
+// addWindowsParentProcessIndicators scores the parent process image name.
+//
+// Two names mean WSL: wsl.exe and wslhost.exe. bash.exe is scored separately,
+// under a type that names both of the things it can be, because it cannot be
+// narrowed any further here -- getWindowsParentProcessName returns tasklist's
+// image-name column, which is a basename and never a path, so an MSYS, Git for
+// Windows or Cygwin shell and the legacy WSL launcher are the same string at
+// this point. Scoring it as WSL told a plain Windows host with no WSL installed
+// that it was running under WSL. The halt that follows is intended: an emulated
+// shell is one of the environments this detector exists to notice.
+//
+// A real WSL run is still reported as WSL rather than under the ambiguous type.
+// It scores WSL from its context environment (95) and its UNC working directory
+// (90) as well, and finalizeWindowsDetection prefers WSL where those tie with
+// this 90.
+//
+// Each name is compared whole, and not as a substring: a parent named
+// notwsl.exe or mywsl.exe holds "wsl.exe" and gitbash.exe holds "bash.exe", so
+// each of them scored 90 as WSL without being WSL (M26-TMP-003).
+func addWindowsParentProcessIndicators(parentName string, add func(kind string, confidence int, indicator string)) {
 	parent := strings.ToLower(strings.TrimSpace(parentName))
-	if containsAny(parent, windowsWSLParentNames) {
+	if equalsAny(parent, windowsWSLParentNames) {
 		add(windowsSandboxTypeWSL, windowsConfidenceWslParent, windowsIndicatorParentWSL)
+	}
+	if equalsAny(parent, windowsBashParentNames) {
+		add(windowsSandboxTypePosixShell, windowsConfidenceBashParent, windowsIndicatorParentBash)
 	}
 }
 
@@ -439,6 +465,7 @@ func finalizeWindowsDetection(typeScore map[string]int, indicators []string) san
 		windowsSandboxTypeSandboxie:  80,
 		windowsSandboxTypeCuckoo:     80,
 		windowsSandboxTypeWSL:        70,
+		windowsSandboxTypePosixShell: 65,
 		windowsSandboxTypeVM:         60,
 	}
 

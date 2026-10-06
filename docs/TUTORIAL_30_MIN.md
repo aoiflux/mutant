@@ -120,11 +120,14 @@ $ mutant prog.mu --compat
 and the artifact is still verified. `--dev` is the one that weakens the key.
 See [EXECUTION_MODES.md](EXECUTION_MODES.md).
 
-> **Known false positive.** On Windows, launching `mutant` from **Git Bash**
-> (or MSYS2/Cygwin) is scored as WSL at confidence 90, because the parent
-> process is named `bash.exe` — the same name as the real WSL launcher. The
-> same machine runs fine from PowerShell or `cmd`. If you see
-> `windows:process_parent:wsl` and you are not in WSL, this is why.
+> **Expected, and mislabelled before 2.6.0.** On Windows, launching `mutant`
+> from **Git Bash** (or MSYS2/Cygwin) is detected and secure mode halts. That is
+> intended: an emulated shell is one of the environments the detector exists to
+> notice. What was wrong is what it reported. Until 2.6.0 the type was `WSL`,
+> which was untrue on a machine with no WSL installed; it is now
+> `MSYS/Cygwin or legacy WSL`, which is everything a `bash.exe` parent can
+> prove. The behaviour is the same on every version: run from PowerShell or
+> `cmd`, or pass `--compat` to make the halt a warning.
 
 ---
 

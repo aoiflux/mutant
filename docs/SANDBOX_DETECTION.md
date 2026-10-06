@@ -98,8 +98,9 @@ VM/sandbox heuristics currently include:
 - Process markers from tasklist: vmtoolsd.exe, vmwaretray.exe, vboxservice.exe,
   vboxtray.exe, xenservice.exe, qemu-ga.exe, sbiectrl.exe,
   sandboxiedcomlaunch.exe
-- Parent-process and working-directory markers for WSL, and the WDAG account and
-  profile path for Windows Sandbox
+- Parent-process and working-directory markers for WSL, a bash.exe parent for an
+  MSYS/Cygwin shell or the legacy WSL launcher, and the WDAG account and profile
+  path for Windows Sandbox
 - CPUID hypervisor vendor leaf
 - Baseboard and computer-system manufacturer/model, via wmic with a powershell
   Get-CimInstance fallback
@@ -107,7 +108,14 @@ VM/sandbox heuristics currently include:
   HKLM\SOFTWARE\Microsoft\VirtualMachine and HKLM\HARDWARE\DESCRIPTION\System\BIOS
 
 Potential types include: VMware, VirtualBox, Xen, KVM/QEMU, Sandboxie, Cuckoo,
-Hyper-V, WSL, Windows Sandbox
+Hyper-V, WSL, Windows Sandbox, MSYS/Cygwin or legacy WSL
+
+"MSYS/Cygwin or legacy WSL" is the type a bash.exe parent process gets, and it
+names both because that name cannot be narrowed: the parent is read from
+tasklist, whose image-name column is a basename and never a path, so a Git for
+Windows, MSYS2 or Cygwin shell and the legacy WSL launcher are indistinguishable
+there. A run that is really under WSL scores WSL from its context environment
+and its UNC working directory as well, and is reported as WSL.
 
 ### macOS
 
