@@ -150,9 +150,19 @@ func TestUnquoteConvertsEveryLiteralValue(t *testing.T) {
 // exposed. It is the tree-walking sibling of the VM defect fixed in 8daed8e,
 // where calling a non-function silently called whatever sat at stack[0].
 //
-// The arm landed in cf79eb4 and nothing tested it: the diagnostic's text
-// appeared exactly once in the tree, in evaluator.go, so any later refactor of
-// applyFunction could have dropped it without a single failure.
+// The arm landed in cf79eb4, and so did a guard for it:
+// parity.TestCallingANameWithNoValueIsReportedAndNotAPanic drives the same
+// nesting and fails with the nil dereference if the arm is removed, which was
+// measured on a scratch copy with it taken out. An earlier version of this
+// comment said nothing tested the arm, on the evidence that the diagnostic's
+// text appears once in the tree; that was wrong, because the parity test
+// matches on the substrings "no value" and "top level" rather than the
+// sentence.
+//
+// What that test does not assert is the diagnostic's whole text, or that it
+// names the macro being expanded. Both are checked below, in the package that
+// owns the arm, so a reword that kept those two substrings still has to keep
+// the rest.
 func TestMacroNestedInUnquoteIsRefusedNotPanicked(t *testing.T) {
 	got := expandExpectingError(t, `let show = macro() { quote(unquote(fn() { let inner = macro() { quote(2); }; return inner(); }())); };
 putln(show());`)
