@@ -1569,6 +1569,22 @@ exhaustive lists.
   `linux` and `darwin`: nothing had ever compiled these paths, which is how two
   platforms' worth of this check went unexamined. (M26-TMP-019)
 
+- The lexer reads source as the runes it is written in, so a program that names a variable
+  `grün`, `café` or `вода` compiles and runs instead of hanging the tool that read it. The cursor
+  was declared a rune but filled from a single byte, and the first byte of a multi-byte letter is
+  itself a letter in Latin-1, so a name was taken to end one byte into itself: every letter whose
+  UTF-8 form begins `0xc3` read as the same identifier, which made `xà` and `xÅ` one variable, and
+  `mutant fmt` wrote the truncated halves back over the author's file as bytes that were not UTF-8
+  at all. Separately, the scan dispatched on `unicode.IsNumber` while the number reader looped on
+  `unicode.IsDigit`; a superscript two or a vulgar fraction is the first but not the second, so the
+  reader took nothing and the token had no width, and a lexer that hands out the same token for
+  ever is read for ever — `mutant`, `mutant lint` and `mutant fmt` all spun instead of answering,
+  and so did the language server. Both predicates are now `IsDigit`, and `NextToken` guarantees
+  that a token which is not the last one consumed at least one rune, so a disagreement of that kind
+  can cost a wrong token but not the process. Unicode identifiers are supported rather than
+  refused, and are not normalised, which is the rule Go uses for its own. Invalid UTF-8 is reported
+  one position at a time instead of being silently misread. (M26-LEX-001, M26-LEX-002)
+
 ### Security
 
 - **A crafted artifact could kill the process parsing it, and one kind could

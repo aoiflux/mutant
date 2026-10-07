@@ -5,6 +5,7 @@ import (
 
 	"mutant/token"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Lexer is the data structure for our lexer
@@ -41,11 +42,39 @@ func New(input string) *Lexer {
 	return l
 }
 
-// NextToken method makes use of lexer data structure
-// Uses switch cases to identify whether a certain character
-// in source code is legal or not. Zetsu language only
-// supports ascii characters
+// NextToken returns the next token of the input. It guarantees that the stream
+// it produces ends: every token but EOF consumes at least one rune, so a caller
+// draining the lexer reaches EOF.
+//
+// That guarantee needs stating because it was once untrue, and the cost of it
+// being untrue was the whole compiler. The switch below dispatches on one
+// predicate and the readers loop on another; a rune the dispatch claims but no
+// reader consumes yields a token of zero width, which the next call produces
+// again, and again. Nothing notices, because a lexer is not asked whether it is
+// finished -- it is read until EOF, and the parser's recovery loop does exactly
+// that. So the two halves are kept apart here: scanToken classifies a rune, and
+// this decides whether the classification got anywhere.
 func (l *Lexer) NextToken() token.Token {
+	tok := l.scanToken()
+	if tok.Type == token.EOF || tok.End.Offset > tok.Start.Offset {
+		return tok
+	}
+
+	// Reaching here is a disagreement between a dispatch arm and its reader, not
+	// bad input: every spelling of bad input lands on ILLEGAL, and ILLEGAL
+	// advances. Report the rune and step over it, so a mistake of that kind
+	// costs one wrong token instead of the process.
+	tok.Type = token.ILLEGAL
+	tok.Literal = string(l.ch)
+	l.readRune()
+	tok.End = l.currentPos()
+	return tok
+}
+
+// scanToken reads one token: identifiers and numbers through the readers below,
+// everything else decided by the switch. It is NextToken without the promise
+// that it moved.
+func (l *Lexer) scanToken() token.Token {
 	var tok token.Token
 
 	l.skipTrivia()
@@ -247,7 +276,15 @@ func (l *Lexer) NextToken() token.Token {
 			tok.Start = start
 			tok.End = l.currentPos()
 			return tok
-		} else if unicode.IsNumber(l.ch) {
+		} else if unicode.IsDigit(l.ch) {
+			// IsDigit, matching readNumber's own loop, and not IsNumber. They are
+			// not the same set: IsNumber also holds for the characters whose
+			// Unicode category is No or Nl -- a superscript two, a vulgar
+			// fraction, a Roman numeral -- and readNumber, which loops on
+			// IsDigit, consumes none of them. Dispatching on the wider predicate
+			// handed those runes to a reader that would not take them, and a
+			// reader that takes nothing returns a token of no width. This is the
+			// stall: `let x = 2²;` never finished lexing.
 			val, isFloat := l.readNumber()
 			tok.Literal = val
 			if isFloat {
@@ -282,14 +319,14 @@ func (l *Lexer) currentPos() token.Position {
 	}
 }
 
+// prevRune is the rune before the cursor, or 0 at the start of input. Only
+// readNumber asks for it, to tell a decimal point from a field selector.
 func (l *Lexer) prevRune() rune {
-	var prev rune
-	if l.readPosition >= len(l.input) {
-		prev = 0
-	} else {
-		prev = rune(l.input[l.readPosition-2])
+	if l.position <= 0 {
+		return 0
 	}
-	return prev
+	r, _ := utf8.DecodeLastRuneInString(l.input[:l.position])
+	return r
 }
 func (l *Lexer) readRune() {
 	// If the currently-active character is a newline, this call moves the
@@ -302,10 +339,22 @@ func (l *Lexer) readRune() {
 		l.lineStart = l.readPosition
 	}
 
+	// The cursor is a rune, so it is decoded as one. Reading a byte and widening
+	// it was the same expression for ASCII and for nothing else: it produced the
+	// first byte of a multi-byte letter, and that byte is itself a letter in
+	// Latin-1 -- 0xc3 is A-tilde -- so the scan took it as the whole letter,
+	// stopped one byte into the name, and left the rest to be lexed as something
+	// else. Every letter whose UTF-8 form starts 0xc3 then read as the same
+	// identifier, which is how two different names became one variable.
+	//
+	// Invalid UTF-8 decodes to RuneError with a width of 1. No scan predicate
+	// claims RuneError, so bad bytes become one ILLEGAL token each: reported,
+	// one position at a time, rather than silently misread.
+	width := 1
 	if l.readPosition >= len(l.input) {
 		l.ch = 0
 	} else {
-		l.ch = rune(l.input[l.readPosition])
+		l.ch, width = utf8.DecodeRuneInString(l.input[l.readPosition:])
 	}
 
 	// readPosition runs one past the end and keeps going -- a scan that calls
@@ -319,16 +368,13 @@ func (l *Lexer) readRune() {
 	// That source is wrong either way, but wrong source is reported, not
 	// crashed on.
 	l.position = min(l.readPosition, len(l.input))
-	l.readPosition++
+	l.readPosition += width
 }
+
+// nextRune is peekRune under the name readNumber reads better with, where it
+// stands beside prevRune.
 func (l *Lexer) nextRune() rune {
-	var next rune
-	if l.readPosition >= len(l.input) {
-		next = 0
-	} else {
-		next = rune(l.input[l.readPosition])
-	}
-	return next
+	return l.peekRune()
 }
 
 // readQuotedBody returns the source text between the quotes of an ordinary
@@ -536,18 +582,34 @@ func (l *Lexer) peekRune() rune {
 	if l.readPosition >= len(l.input) {
 		return 0
 	}
-	return rune(l.input[l.readPosition])
+	r, _ := utf8.DecodeRuneInString(l.input[l.readPosition:])
+	return r
 }
 
-// peekRuneAt looks n characters ahead of the cursor; peekRuneAt(1) is
-// peekRune. Only the string readers need to look further than one, to tell
-// """ from an empty string followed by something else.
+// peekRuneAt looks n runes ahead of the cursor; peekRuneAt(1) is peekRune. Only
+// the string readers need to look further than one, to tell """ from an empty
+// string followed by something else.
+//
+// Runes, not bytes: the delimiters it is asked about are ASCII, but what sits
+// between the cursor and them need not be, and stepping a fixed number of bytes
+// would land inside a letter and compare its tail against a quote.
 func (l *Lexer) peekRuneAt(n int) rune {
-	idx := l.readPosition + n - 1
-	if idx < 0 || idx >= len(l.input) {
+	if n < 1 {
 		return 0
 	}
-	return rune(l.input[idx])
+	idx := l.readPosition
+	for i := 1; i < n; i++ {
+		if idx >= len(l.input) {
+			return 0
+		}
+		_, width := utf8.DecodeRuneInString(l.input[idx:])
+		idx += width
+	}
+	if idx >= len(l.input) {
+		return 0
+	}
+	r, _ := utf8.DecodeRuneInString(l.input[idx:])
+	return r
 }
 
 // unescape decodes the backslash sequences an ordinary string literal
