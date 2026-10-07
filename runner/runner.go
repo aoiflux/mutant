@@ -607,9 +607,27 @@ func runvm(bytecode *compiler.ByteCode, password string, secureMode bool) (error
 	}
 
 	last := machine.LastPoppedStackElement()
+
+	// A program that pushed nothing -- an empty file, or one holding only a
+	// comment -- leaves the slot LastPoppedStackElement reads at nil, and
+	// calling Inspect on it killed the run with a Go nil-pointer panic and a
+	// goroutine dump, exit 2, where exiting 0 silently was the whole of what
+	// was wanted (M26-RUN-006). repl.go and dap/session.go both checked this
+	// already; this is the one caller that did not.
+	if last == nil {
+		return nil, ""
+	}
 	if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
 		return nil, ""
 	}
+
+	// The echo reaches no sink, so what putln refuses this used to print.
+	if withheld, ok := builtin.WithheldEcho(last); ok {
+		io.WriteString(os.Stdout, withheld)
+		io.WriteString(os.Stdout, "\n")
+		return nil, ""
+	}
+
 	io.WriteString(os.Stdout, last.Inspect())
 	io.WriteString(os.Stdout, "\n")
 	reportUncaughtError(last)

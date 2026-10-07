@@ -22,9 +22,17 @@ package builtin
 // is the limit stated below. sqlite_query is not a sink: it runs against a
 // copy it deletes, and binding a buffer as a parameter sends it nowhere.
 //
-// The check walks arrays, hashes and struct fields, so a buffer inside a
-// container is caught too. It never renders what it finds: the refusal names
-// the record, the classes and the length, and not one byte.
+// The check walks arrays, hashes, struct fields and the values an error
+// carries, so a buffer inside a container is caught too. It never renders what
+// it finds: the refusal names the record, the classes and the length, and not
+// one byte.
+//
+// The sinks are not the only way out. The runtime prints values nobody called a
+// builtin to print -- a traceback's arguments, the debugger's variables pane,
+// and the value a finished program is echoed as -- and those reach no sink, so
+// refuseClassified never sees them. FindClassified and DescribeClassified are
+// exported for them, so that "does this hold classified plaintext" has one
+// definition rather than four that drift.
 //
 // # What this does not do, said as loudly as what it does
 //
@@ -47,6 +55,7 @@ package builtin
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"mutant/object"
@@ -57,10 +66,14 @@ import (
 // clean: a guard that gives up in the permissive direction is not a guard.
 const classifiedWalkDepth = 64
 
-// classifiedFind returns the first classified buffer inside a value, or nil.
+// FindClassified returns the first classified buffer inside a value, or nil.
 // deep reports that the value was nested past classifiedWalkDepth and could
 // not be looked at all the way down.
-func classifiedFind(value object.Object) (found *object.Bytes, deep bool) {
+//
+// A nil Value on the returned buffer means the mark was found on a value still
+// sealed, where the plaintext length is not knowable from here;
+// DescribeClassified says so rather than reporting zero bytes.
+func FindClassified(value object.Object) (found *object.Bytes, deep bool) {
 	seen := map[uintptr]bool{}
 	var walk func(object.Object, int) *object.Bytes
 	walk = func(v object.Object, depth int) *object.Bytes {
@@ -106,6 +119,46 @@ func classifiedFind(value object.Object) (found *object.Bytes, deep bool) {
 					return hit
 				}
 			}
+		// An error carries whatever the raiser knew, and errorObj.go names
+		// "the bytes actually read, the record that was being parsed" among
+		// the things Related is for. Inspect renders each of those through the
+		// value's own Inspect, and a buffer's Inspect is its entire hex, so
+		// one `putln(err)` printed the whole of a classified buffer and no
+		// sink saw it: this walk had no arm for an error at all
+		// (M26-REC-007). Names are walked in sorted order, so which buffer a
+		// refusal names does not change from run to run.
+		case *object.Error:
+			if !classifiedVisit(seen, o) {
+				return nil
+			}
+			names := make([]string, 0, len(o.Related))
+			for name := range o.Related {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				if hit := walk(o.Related[name], depth+1); hit != nil {
+					return hit
+				}
+			}
+
+		// A value still at rest. encObj.go keeps the mark beside the
+		// ciphertext for exactly this reason, in its own words: "without this
+		// a buffer lost its mark the moment it was bound to a name, and every
+		// sink check downstream passed it." Nothing here read it. That matters
+		// because DecryptObject recurses into an array, a hash and a struct,
+		// so their elements arrive as plaintext objects -- but it hands a cell
+		// back by pointer without touching what is inside, since a cell is a
+		// storage location that OpSetFree writes through. So a captured
+		// variable reaches a sink as a cell whose value is still sealed, and
+		// `Cell -> Encrypted` was a hole straight through the check. The mark
+		// is enough to refuse on; the length is not ours to state, so the
+		// buffer handed back carries the mark and a nil Value.
+		case *object.Encrypted:
+			if o.Classified != nil {
+				return &object.Bytes{Classified: o.Classified}
+			}
+
 		case *object.MultiValue:
 			for _, element := range o.Values {
 				if hit := walk(element, depth+1); hit != nil {
@@ -138,9 +191,10 @@ func classifiedVisit(seen map[uintptr]bool, container any) bool {
 	return true
 }
 
-// classifiedDescribe names where a classified buffer came from, and nothing
-// about what it holds.
-func classifiedDescribe(b *object.Bytes) string {
+// DescribeClassified names where a classified buffer came from, and nothing
+// about what it holds. Exported alongside FindClassified, and for the same
+// reason.
+func DescribeClassified(b *object.Bytes) string {
 	c := b.Classified
 	names := make([]string, 0, len(c.Tags))
 	for i, tag := range c.Tags {
@@ -157,8 +211,44 @@ func classifiedDescribe(b *object.Bytes) string {
 			names = append(names, "a class this run cannot name")
 		}
 	}
-	return fmt.Sprintf("%d bytes of plaintext read from record %s, classified %s",
-		len(b.Value), c.RecordUID, strings.Join(names, " and "))
+	// A nil Value is the mark found on a value still sealed. An empty buffer
+	// read out of a record is a legitimate result and is []byte{}, not nil, so
+	// the two do not collide.
+	size := fmt.Sprintf("%d bytes of plaintext", len(b.Value))
+	if b.Value == nil {
+		size = "a sealed value"
+	}
+	return fmt.Sprintf("%s read from record %s, classified %s",
+		size, c.RecordUID, strings.Join(names, " and "))
+}
+
+// WithheldEcho returns the line the runtime prints in place of a program's
+// last value when that value holds classified plaintext, and false when the
+// value may be echoed as it is.
+//
+// The echo is not a builtin call. `mutant prog.mu` prints what the program
+// ended on, and so do the REPL and the debug adapter when a session steps to
+// the end, and none of them passes through a sink -- so a program whose last
+// expression was a buffer read out of a classified record printed the whole
+// buffer as hex, through Inspect, having refused to print it through putln one
+// line earlier (M26-REC-006). The three callers share this so that the three
+// say the same thing.
+//
+// The replacement goes where the value would have gone rather than to a
+// diagnostic stream, because the shape of the output is what tells a reader
+// that something was withheld rather than absent.
+func WithheldEcho(value object.Object) (string, bool) {
+	found, deep := FindClassified(value)
+	switch {
+	case found != nil:
+		return fmt.Sprintf("<%s; not echoed. `%s(buffer, reason)` returns a copy that may be>",
+			DescribeClassified(found), BuiltinNameRecordRelease), true
+	case deep:
+		return fmt.Sprintf("<nested more than %d levels deep, too deep to check for classified "+
+			"plaintext, and a value that could not be checked is not echoed>",
+			classifiedWalkDepth), true
+	}
+	return "", false
 }
 
 // ClassifiedSinks returns the builtins that refuse classified plaintext
@@ -192,11 +282,11 @@ func ClassifiedSources() []string {
 // plaintext, and a refusal naming the first one that does.
 func refuseClassified(op string, args ...object.Object) *object.Error {
 	for i, arg := range args {
-		found, deep := classifiedFind(arg)
+		found, deep := FindClassified(arg)
 		if found != nil {
 			return newError("%s: argument %d holds %s. Classified plaintext does not leave the process by "+
 				"this route; `%s(buffer, reason)` returns a copy that may, and records that you released it",
-				op, i+1, classifiedDescribe(found), BuiltinNameRecordRelease)
+				op, i+1, DescribeClassified(found), BuiltinNameRecordRelease)
 		}
 		if deep {
 			return newError("%s: argument %d is nested more than %d levels deep, too deep to check for "+
@@ -271,7 +361,7 @@ func RecordRelease(args ...object.Object) object.Object {
 			classes[i] = c.Labels[i]
 		}
 	}
-	session.appendEvent(now, op, fmt.Sprintf("released %s: %s", classifiedDescribe(buffer), reason), map[string]any{
+	session.appendEvent(now, op, fmt.Sprintf("released %s: %s", DescribeClassified(buffer), reason), map[string]any{
 		"record_uid": c.RecordUID,
 		"classes":    strings.Join(classes, ", "),
 		"tags":       strings.Join(c.Tags, ","),

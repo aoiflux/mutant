@@ -585,7 +585,10 @@ sink call sites**, in [`builtin/classified.go`](../builtin/classified.go):
 `cache_put`, `ledger_add_node`, `ledger_add_edge`, `db_add_artifact` and
 `db_add_relation` refuse
 an argument that holds a marked buffer, directly or anywhere inside an array,
-hash, struct, enum payload or captured variable, and a value nested too deep to
+hash, struct, enum payload, captured variable, **the values an error carries in
+`Related`**, or **a value still sealed** — `object.Encrypted` keeps the mark
+beside its ciphertext, and a captured variable reaches a sink as a cell that
+`DecryptObject` deliberately does not open — and a value nested too deep to
 check is refused rather than passed. `report_table` and `report_list` are on the
 list because they render a cell to text as it is added: by the time a report
 reaches `report_render` or `report_write` there is no buffer left in it to find. The refusal names the record, the classes and the length, and not one
@@ -599,6 +602,23 @@ dedup key, for `contains` and `index_of`, and for hash-key ordering, so a previe
 there would make two distinct buffers compare equal, silently, in six subsystems
 at once. A marked buffer and an unmarked one holding the same bytes are the same
 value to all of them, and a test holds it there.
+
+**The run time's own output is checked too, and not by `Inspect()`.** Three
+places print a value without any builtin being called: a traceback's arguments,
+the debugger's variables pane, and the value a finished program is echoed as by
+`mutant prog.mu`, by the REPL and by the debug adapter at the end of a session.
+None of them is a sink call, so none of them went through the check, and a
+program that had just been refused a `putln` of a marked buffer printed the
+whole of it one line later by ending on it. They now ask the same walk the
+sinks ask — `builtin.FindClassified` — **before** rendering anything, and print
+a notice naming the record and the classes in place of the value. Putting the
+check there rather than in `Inspect()` is what keeps the paragraph above true:
+`Inspect()` stays the identity function the six subsystems rely on, and the one
+caller that wanted a preview is the one that asks for it. The notice is not
+subject to the display's length cap, because the cap exists to bound a value
+whose size the program chose and a notice is bounded by construction — capped at
+a traceback's 48 characters it truncated before naming the record, which is the
+only thing it is for.
 
 `record_release(buffer, reason)` is the deliberate way out. It requires a reason
 and an open case, writes into the case timeline which record and which classes

@@ -283,10 +283,11 @@ func (vm *VM) frameArguments(frame *Frame) (args []string) {
 			break
 		}
 
-		// Stack values are encrypted at rest; decryptForUse is what every
-		// other reader of the stack goes through, and it returns the value
-		// untouched when it is not encrypted.
-		value := renderArgValue(vm.decryptForUse(vm.stack[slot]))
+		// Stack values are encrypted at rest, and a captured parameter is
+		// held in a cell that decryptForUse deliberately does not open, so
+		// unwrapForDisplay takes the cell off and decrypts what was inside
+		// it. decryptForUse alone returned the cell, ciphertext and all.
+		value := renderArgValue(vm.unwrapForDisplay(vm.stack[slot]))
 		if i < len(fn.Params) && fn.Params[i] != "" {
 			value = fn.Params[i] + "=" + value
 		}
@@ -305,27 +306,12 @@ func (vm *VM) frameArguments(frame *Frame) (args []string) {
 // renderArgValue renders one argument compactly. An absent value is a slot the
 // caller never filled, which happens when a frame is inspected before its
 // arguments are in place.
+//
+// The rendering itself is in vm/display.go, which the debugger's variables pane
+// calls too: this was the same code in both files, and a traceback and a pane
+// differ in how much room they have and in nothing else.
 func renderArgValue(obj object.Object) string {
-	if obj == nil {
-		return "<unset>"
-	}
-
-	// Bytes renders as full hex deliberately, because Inspect doubles as the
-	// identity function for equality and deduplication. A traceback is the one
-	// caller that only ever wanted a preview, so it asks for one rather than
-	// materialising a megabyte of hex to then cut it back to forty characters.
-	if buf, ok := obj.(*object.Bytes); ok {
-		return buf.Preview(maxRenderedArgValue / 4)
-	}
-
-	text := strings.Join(strings.Fields(obj.Inspect()), " ")
-	if len(text) > maxRenderedArgValue {
-		text = text[:maxRenderedArgValue-3] + "..."
-	}
-	if text == "" {
-		return string(obj.Type())
-	}
-	return text
+	return renderForDisplay(obj, maxRenderedArgValue)
 }
 
 // RuntimeError is a VM failure carrying the call stack it happened on.

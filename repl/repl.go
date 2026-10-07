@@ -483,6 +483,12 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 		}
 		if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
 			// No-op result; keep the REPL quiet.
+		} else if withheld, ok := builtin.WithheldEcho(last); ok {
+			// The REPL echoes every line's value, so it is the shortest route
+			// from a classified record to a terminal: `record_read(r, 0, 40)`
+			// typed at the prompt printed the buffer whole.
+			io.WriteString(out, withheld)
+			io.WriteString(out, "\n")
 		} else if last != nil {
 			io.WriteString(out, last.Inspect())
 			io.WriteString(out, "\n")

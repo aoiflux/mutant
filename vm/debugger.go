@@ -794,17 +794,12 @@ func (d *Debugger) variable(name string, raw object.Object) Variable {
 // with the cell a captured local lives in taken off. A cell is a storage
 // location rather than a value, and showing one would show an address where the
 // program sees a number.
+//
+// This was the only reader of the stack that got the order right, and the
+// traceback's frameArguments did not, so the two lines live in
+// vm.unwrapForDisplay now and both go through them.
 func (d *Debugger) unwrap(raw object.Object) object.Object {
-	if raw == nil {
-		return nil
-	}
-	if cell, ok := raw.(*object.Cell); ok {
-		if cell.Value == nil {
-			return nil
-		}
-		raw = cell.Value
-	}
-	return d.vm.decryptForUse(raw)
+	return d.vm.unwrapForDisplay(raw)
 }
 
 // Children expands the value behind a handle. Handles come from Variable.Ref
@@ -1026,26 +1021,14 @@ func hasChildren(value object.Object) bool {
 // renderDebugValue renders one value for a variables pane: on one line, capped,
 // and truncated rather than summarised so that what is shown is a prefix of
 // what is there.
+//
+// A pane has more room than a traceback line and that is the only way the two
+// differ, so the rendering is one function in vm/display.go and this is the
+// pane's cap. The pane was the worse of the two to leak through: at 256 it
+// printed a 31-byte classified buffer whole, where the traceback's 48 cut it
+// to 12 bytes.
 func renderDebugValue(value object.Object) string {
-	if value == nil {
-		return "<unset>"
-	}
-
-	// Bytes renders as full hex through Inspect, because Inspect doubles as the
-	// identity function for equality. A pane only ever wanted a preview, so it
-	// asks for one rather than building a megabyte of hex to then cut it back.
-	if buf, ok := value.(*object.Bytes); ok {
-		return buf.Preview(maxDebugValue / 4)
-	}
-
-	text := strings.Join(strings.Fields(value.Inspect()), " ")
-	if len(text) > maxDebugValue {
-		text = text[:maxDebugValue-3] + "..."
-	}
-	if text == "" {
-		return string(value.Type())
-	}
-	return text
+	return renderForDisplay(value, maxDebugValue)
 }
 
 // clearUnsetLocals blanks the slots between a new frame's arguments and the end

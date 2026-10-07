@@ -1646,6 +1646,31 @@ exhaustive lists.
 
 ### Security
 
+- **The run time printed what `putln` had just refused to print.** A buffer read out of a
+  classified record is refused by `putln`, `fs_write`, `report_render` and thirteen other
+  builtins. It was not refused by the three places the run time prints a value with no builtin
+  involved: a traceback's arguments, the debugger's variables pane, and the value a finished
+  program is echoed as by `mutant prog.mu`, by the REPL and by a debug session that steps to the
+  end. A program that ended on the buffer printed all of it; a function that failed with one as a
+  parameter printed the front of it; the variables pane, which has four times the room, printed
+  more than either. The three now ask the same walk the sinks ask, before rendering anything, and
+  print a notice naming the record and the classes instead. The walk itself gained two carriers
+  it had no arm for: the values an error holds in `Related` -- so `putln(err)` no longer prints a
+  buffer the error was built around -- and a value still sealed, which is how a captured variable
+  reaches a sink, since a cell is handed back by pointer without being opened. One renderer now
+  serves the traceback and the pane, which were the same twenty lines in two files.
+- **An empty program crashed the runner.** A file with nothing in it, or only a comment, compiled
+  and then died with a Go nil-pointer panic and a goroutine dump, exit 2, because the value it
+  ended on was read without checking for nil -- exiting quietly was the whole of what was wanted.
+  The REPL and the debug adapter both checked already. A new file run from the editor was the
+  common way to see it.
+- **A traceback reported a captured parameter as its ciphertext.** A parameter an inner function
+  closes over lives in a cell, and decrypting a cell returns the cell, because the write-through
+  a closure needs would be lost in a copy. The traceback rendered what was inside: `f(n=[153 72
+  150 254 248 119 238 27])` where `n` was 2999, with different bytes on every run, so the
+  traceback could not be compared between runs either. It takes the cell off first now, which is
+  what the debugger already did.
+
 - **A crafted artifact could kill the process parsing it, and one kind could
   do it silently.** A count read straight out of a registry hive, a jump list
   or a binary plist sized an allocation before the bytes it promised were

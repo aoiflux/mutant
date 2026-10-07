@@ -391,6 +391,10 @@ func (s *session) publishResultValue() {
 	if multi, ok := last.(*object.MultiValue); ok && multi.IsVoid() {
 		return
 	}
+	if withheld, ok := builtin.WithheldEcho(last); ok {
+		_ = s.event("output", outputBody{Category: "stdout", Output: withheld + "\n"})
+		return
+	}
 	_ = s.event("output", outputBody{Category: "stdout", Output: last.Inspect() + "\n"})
 }
 
