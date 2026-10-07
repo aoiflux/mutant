@@ -3,6 +3,7 @@ package compiler
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	mathrand "math/rand"
 	"mutant/ast"
@@ -43,6 +44,12 @@ type Compiler struct {
 	// runs for every module in dependency order, so a module's imports are
 	// always already in here by the time its own body is compiled.
 	moduleDisplays map[string]string
+
+	// structBindings records which of a module's value names certainly hold a
+	// struct, and of what type, so that a field the declaration does not
+	// contain is refused here rather than at run time. compiler/struct_fields.go
+	// is the whole of the rule, including why it is keyed per module.
+	structBindings map[string]string
 
 	// typeOwners records which module declared each struct or enum name.
 	// Unlike values, type names are one flat namespace for the whole program:
@@ -390,6 +397,7 @@ func New() *Compiler {
 		structDefinitions: make(map[string][]*ast.Identifier),
 		enumDefinitions:   make(map[string][]string),
 		moduleDisplays:    make(map[string]string),
+		structBindings:    make(map[string]string),
 		typeOwners:        make(map[string]string),
 		loopContexts:      []LoopContext{},
 		declScopes:        []map[string]bool{{}},
@@ -537,6 +545,12 @@ func (c *Compiler) EnablePolymorphismWithSeed(level int, seed int64) {
 func (c *Compiler) Compile(node ast.Node) error {
 	if program, ok := node.(*ast.Program); ok {
 		c.absorbPositions(program)
+
+		// Before any statement of it is compiled, because the scan's answer
+		// depends on what the whole program does with a name -- an assignment
+		// below a function that reads the name is what keeps that read from
+		// being refused. See compiler/struct_fields.go.
+		c.noteStructBindings(program)
 	}
 
 	origin, fromMacro := c.macroOrigins[node]
@@ -1065,6 +1079,9 @@ func (c *Compiler) compileNode(node ast.Node) error {
 	case *ast.StructStatement:
 		// Store struct definition
 		if err := c.claimTypeName("struct", node.Name.Value); err != nil {
+			return err
+		}
+		if err := refuseDuplicateFields(node); err != nil {
 			return err
 		}
 		c.structDefinitions[node.Name.Value] = node.Fields
@@ -2106,6 +2123,17 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 				base.Value, steps[0].field, steps[0].field, c.moduleName(key),
 			)
 		}
+
+		// A write to a field the declaration does not contain used to add one,
+		// so the record stopped matching its type and the field the author
+		// meant to change kept its old value. Only the first hop is checked:
+		// `p.a.b = v` writes through p.a, whose type is not a question the
+		// compiler can answer.
+		if structType, tracked := c.structTypeOfBinding(base.Value); tracked {
+			if err := c.checkFieldIsDeclared(structType, steps[0].field, true); err != nil {
+				return err
+			}
+		}
 	}
 
 	symbol, resolved := c.symbolTable.Resolve(base.Value)
@@ -2465,6 +2493,17 @@ func (c *Compiler) compileFieldExpression(node *ast.FieldExpression) error {
 		case sema.FieldValueAccess:
 			// An ordinary field read on a value. Fall through to OpGetField,
 			// which is also where a.b.c, f().x and arr[0].x arrive directly.
+			//
+			// A bare name is also the one receiver whose type the compiler can
+			// be certain of, so it is the one place a field the declaration does
+			// not contain is refused before the program runs. a.b.c arrives
+			// here too, as its own inner node: `p.a` is checked, and `.c` on
+			// whatever `p.a` holds is not a type anything here knows.
+			if structType, tracked := c.structTypeOfBinding(ident.Value); tracked {
+				if err := c.checkFieldIsDeclared(structType, node.Field.Value, false); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -2483,25 +2522,55 @@ func (c *Compiler) compileStructLiteral(node *ast.StructLiteral) error {
 	if !ok {
 		return fmt.Errorf("undefined struct type: %s", structName)
 	}
-	if len(typeDef) != len(node.Fields) {
-		return fmt.Errorf("struct %s expects %d fields, got %d", structName, len(typeDef), len(node.Fields))
-	}
 
 	fieldExprByName := make(map[string]ast.Expression, len(node.Fields))
+	written := make([]string, 0, len(node.Fields))
 	for _, field := range node.Fields {
 		if field == nil || field.Name == nil {
 			return fmt.Errorf("invalid field initializer in struct %s", structName)
 		}
+		if _, twice := fieldExprByName[field.Name.Value]; twice {
+			// Caught here rather than folded into the report below, because a
+			// name written twice is not a name that disagrees with the
+			// declaration -- and because one of the two values is silently
+			// dropped, which is its own reason to refuse.
+			return errors.New(object.DuplicateStructFieldLiteralMessage(structName, field.Name.Value))
+		}
 		fieldExprByName[field.Name.Value] = field.Value
+		written = append(written, field.Name.Value)
+	}
+
+	// The field count is not checked separately any more: it is reported as the
+	// field NAMES that differ, which is what the author has to change either
+	// way. That is only equivalent because a repeated name is refused -- above
+	// for a literal, and at the declaration by refuseDuplicateFields. A repeat
+	// is the one way the counts can differ while the name sets agree, and it
+	// used to be the count check that caught it.
+	declaredNames := make([]string, 0, len(typeDef))
+	declared := make(map[string]bool, len(typeDef))
+	for _, field := range typeDef {
+		declaredNames = append(declaredNames, field.Value)
+		declared[field.Value] = true
+	}
+
+	var unknown, missing []string
+	for _, name := range written {
+		if !declared[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	for _, field := range typeDef {
+		if _, set := fieldExprByName[field.Value]; !set {
+			missing = append(missing, field.Value)
+		}
+	}
+	if len(unknown) > 0 || len(missing) > 0 {
+		return errors.New(object.StructLiteralRefusal(structName, unknown, missing, declaredNames))
 	}
 
 	typeNameIndex := c.addConstant(&object.String{Value: structName})
 	for _, field := range typeDef {
-		expr, exists := fieldExprByName[field.Value]
-		if !exists {
-			return fmt.Errorf("missing field %s for struct %s", field.Value, structName)
-		}
-		if err := c.Compile(expr); err != nil {
+		if err := c.Compile(fieldExprByName[field.Value]); err != nil {
 			return err
 		}
 	}

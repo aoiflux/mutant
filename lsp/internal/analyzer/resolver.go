@@ -187,12 +187,30 @@ func (s *Snapshot) resolveDefinition(pos lsp.Position) (binding, bool) {
 	if s == nil || s.Program == nil {
 		return binding{}, false
 	}
+	line, column := s.TokenPosition(pos)
+	return s.resolveDefinitionAt(line, column)
+}
+
+// resolveDefinitionAt is resolveDefinition for a caller that already holds the
+// AST's own coordinates, and it is where the work is done.
+//
+// It mirrors localScopeAtRange, and exists for the reason that one gives: the
+// name graph is measured in the same 1-based line and byte column the AST is, so
+// a caller holding a mast.Range would otherwise convert it to a protocol
+// position and have resolveDefinition convert it straight back. That round trip
+// is what startOf was for, and a conversion undone a line later can be wrong in
+// both directions at once -- M26-LSP-027. Going through PositionAt instead would
+// also be off by one on both axes, since it documents 0-based inputs.
+func (s *Snapshot) resolveDefinitionAt(line, column int) (binding, bool) {
+	if s == nil || s.Program == nil {
+		return binding{}, false
+	}
 
 	graph := s.Graph()
-	if declared, ok := graph.Resolve(s.TokenPosition(pos)); ok {
+	if declared, ok := graph.Resolve(line, column); ok {
 		return bindingOf(declared), true
 	}
-	if field, rng, ok := graph.FieldNameAt(s.TokenPosition(pos)); ok {
+	if field, rng, ok := graph.FieldNameAt(line, column); ok {
 		return binding{name: field.Value, ident: field, rng: rng, kind: lsp.CompletionItemKindField, named: true}, true
 	}
 	return binding{}, false

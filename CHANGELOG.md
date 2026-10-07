@@ -1605,6 +1605,45 @@ exhaustive lists.
   declaration named — which only `OpSetField` can produce — prints it last, in
   sorted order, rather than hiding it. Ordering operators on structs are still
   refused, and the editor already said so. (M26-EVL-004)
+- **A struct's fields are fixed by its declaration, in both engines and in the
+  editor.** Reading a field no struct declared gave null, and writing one added
+  it. So a mistyped read was an absent value that compared unequal to
+  everything, printed as nothing and flowed on into whatever used it; and a
+  mistyped write left the field the author meant to change holding its old
+  value while the record gained one its type never declared, the write appearing
+  to succeed. Both are refused now. The compiler refuses them before the program
+  runs wherever it can prove what the receiver holds -- a name bound once from a
+  struct literal and never assigned again -- both engines refuse the rest in the
+  same words, and the language server says those words first. An error's unknown
+  field is still null, for its own reason: a field a stripped build stamps
+  nothing into still has to read, which is now written where it is relied on
+  rather than deferring to a struct rule it no longer shares.
+  (M26-CMP-017, M26-CMP-018)
+
+- **`P { a: 1, c: 3 }` said "missing field b" and never mentioned `c`.** One
+  mistyped field name makes two faults -- a name the declaration does not
+  contain, and a declared field nothing set -- and only the second was reported,
+  so the author was sent to look at a field they had not touched. Both are
+  reported together now, which is what identifies the pair as one typo:
+  `struct P has no field c and needs a value for field b: it declares a, b`. The
+  separate field-count refusal is gone: a count that differs means the names
+  differ, and the names are what has to change either way. The one exception is
+  a field name written twice, which is why a repeat is now refused where it was
+  written -- `struct P declares field a twice`, `struct P sets field a twice` --
+  rather than two steps later as "expects 2 fields, got 1", which named neither
+  the mistake nor its line. (M26-CMP-019)
+
+- **A struct literal meant something different in each engine.** The
+  tree-walking evaluator checked none of the three things the compiler checks, so
+  a literal of an undeclared type, one missing a declared field, and one naming a
+  field the type does not declare were all values there and all refused by the
+  compiler. That engine is what computes `unquote(...)` during macro expansion,
+  so it is not dead code. It makes the same three checks now, and macro expansion
+  is given the program's struct declarations, so a type the program plainly
+  declares is not refused as undeclared inside an unquote. Nothing a program can
+  write reached the old laxness: a struct has no source form, so it could never
+  be spliced back out of an unquote in the first place. (M26-EVL-019)
+
 ### Security
 
 - **A crafted artifact could kill the process parsing it, and one kind could

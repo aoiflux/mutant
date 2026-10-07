@@ -11,6 +11,20 @@ func DefineMacros(program *ast.Program, env *object.Environment) {
 	definitions := []int{}
 
 	for i, statement := range program.Statements {
+		// A struct declaration is recorded as well as left where it is. The
+		// evaluator validates a struct literal against its declaration, and a
+		// literal inside `unquote(...)` is evaluated here -- in an environment
+		// that otherwise holds nothing but macros, so a type the program plainly
+		// declares would have been refused as undeclared.
+		//
+		// Top level only, which is where DefineMacros already looks and where
+		// a type declaration belongs. A struct declared inside a block is still
+		// compiled; it is only invisible to an unquote, which no struct can
+		// cross anyway -- convertObjectToASTNode has no case for one.
+		if structStmt, isStruct := statement.(*ast.StructStatement); isStruct {
+			evalStructStatement(structStmt, env)
+		}
+
 		if isMacroDefinition(statement) {
 			addMacro(statement, env)
 			definitions = append(definitions, i)

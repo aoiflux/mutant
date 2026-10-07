@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"mutant/ast"
@@ -1422,17 +1423,27 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			case *object.Struct:
 				val, exists := target.Fields[fieldName]
 				if !exists {
-					val = global.Null
+					// This used to be null. A struct's field set is declared in
+					// the program, so a name outside it is a mistake, and the
+					// null made it a value instead: it compared unequal to
+					// everything, printed as nothing, and flowed on into
+					// whatever read it. The compiler refuses this before the
+					// program runs wherever it can prove the receiver's type;
+					// this is the rest.
+					return errors.New(object.UnknownStructFieldMessage(
+						target.TypeName, fieldName, target.FieldNames()))
 				}
 				if err := vm.push(val); err != nil {
 					return err
 				}
 			case *object.Error:
-				// Errors read like structs, deliberately. An unknown name gives
-				// null here exactly as it does above, so inspecting an error
-				// never introduces a failure mode that inspecting a struct does
-				// not already have -- and a field that a stripped build stamps
-				// nothing into still reads, as 0 or "".
+				// An unknown name is null on an error and a refusal on a struct.
+				// That was one rule and is now two, because the reasons were
+				// never the same: a struct's field set is declared in the
+				// program, so a name outside it can be reported, while an
+				// error's field set is the runtime's own and a field a stripped
+				// build stamps nothing into still has to read, as 0 or "".
+				// TestUnknownErrorFieldIsNullNotAFault keeps this half.
 				val, exists := target.Field(fieldName)
 				if !exists {
 					val = global.Null
@@ -1461,6 +1472,15 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			value := vm.pop()
 			obj := vm.pop()
 			if structObj, ok := obj.(*object.Struct); ok {
+				if _, declared := structObj.Fields[fieldName]; !declared {
+					// Writing a field the type does not declare used to add it.
+					// The record then stopped matching its declaration, two
+					// records of one type could hold different field sets, and
+					// the field the author meant to change kept its old value --
+					// with the write appearing to succeed.
+					return errors.New(object.UnknownStructFieldWriteMessage(
+						structObj.TypeName, fieldName, structObj.FieldNames()))
+				}
 				structObj.Fields[fieldName] = value
 				if err := vm.push(structObj); err != nil {
 					return err

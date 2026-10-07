@@ -73,8 +73,14 @@ func TestStructDefinition(t *testing.T) {
 	testIntegerObject(t, evaluated, 42)
 }
 
+// The struct statement in each of these is not decoration. This engine used to
+// build a literal of any type name, declared or not, while the compiler refused
+// all three ways a literal can be wrong -- so these tests were pinning a
+// program the compiler has never accepted. evalStructLiteral validates the same
+// three things now (M26-EVL-019), and the declaration is what makes them legal
+// programs rather than what makes the tests pass.
 func TestStructLiteral(t *testing.T) {
-	input := "Point { x: 10, y: 20 }"
+	input := "struct Point { x; y; }; Point { x: 10, y: 20 }"
 	evaluated := testEval(input)
 	result, ok := evaluated.(*object.Struct)
 	if !ok {
@@ -100,6 +106,7 @@ func TestStructLiteral(t *testing.T) {
 
 func TestFieldAccess(t *testing.T) {
 	input := `
+	struct Point { x; y; };
 	let p = Point { x: 5, y: 15 };
 	p.x
 	`
@@ -109,6 +116,7 @@ func TestFieldAccess(t *testing.T) {
 
 func TestFieldAssignment(t *testing.T) {
 	input := `
+	struct Point { x; y; };
 	let p = Point { x: 5, y: 15 };
 	p.x = 25;
 	p.x
@@ -157,6 +165,7 @@ func TestEnumVariantAccess(t *testing.T) {
 
 func TestStructWithComplexValues(t *testing.T) {
 	input := `
+	struct Point { x; y; };
 	let p = Point { x: 1 + 2, y: 3 * 4 };
 	p.x + p.y
 	`
@@ -166,6 +175,7 @@ func TestStructWithComplexValues(t *testing.T) {
 
 func TestStructInArray(t *testing.T) {
 	input := `
+	struct Point { x; y; };
 	let p1 = Point { x: 1, y: 2 };
 	let p2 = Point { x: 3, y: 4 };
 	let points = [p1, p2];

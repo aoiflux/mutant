@@ -123,7 +123,7 @@ func TestBrowserReportsRealVMErrors(t *testing.T) {
 		{
 			name:     "struct literal field names are validated",
 			input:    `struct P { x; y; }; let p = P { x: 1, z: 2 };`,
-			wantPart: "missing field y for struct P",
+			wantPart: "struct P has no field z and needs a value for field y",
 		},
 		{
 			name:     "calling with too few arguments is an error, not a panic",

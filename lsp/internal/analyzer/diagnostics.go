@@ -327,6 +327,11 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 	// so they cannot know what an import names and must not guess.
 	diagnostics = append(diagnostics, snapshot.ModuleMemberDiagnostics()...)
 
+	// A field a struct does not declare, on the same terms and for the same
+	// reason: the build will refuse it, so the editor says so in the compiler's
+	// own words. lsp/internal/analyzer/struct_field.go.
+	diagnostics = append(diagnostics, snapshot.StructFieldDiagnostics()...)
+
 	duplicateDiagnostics := lintDuplicateTopLevelDeclarations(snapshot, lintConfig)
 	diagnostics = append(diagnostics, duplicateDiagnostics...)
 	diagnostics = append(diagnostics, lintUnusedDeclarations(snapshot, lintConfig, duplicateNamesFromDiagnostics(duplicateDiagnostics))...)

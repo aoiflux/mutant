@@ -722,8 +722,18 @@ func structFieldsKey(name string) string {
 }
 
 func evalStructStatement(node *ast.StructStatement, env *object.Environment) object.Object {
+	// A name declared twice is refused here as it is in the compiler: Fields is
+	// a map, so one of the two could never hold a value of its own, and the
+	// literal's refusal reports the field names that differ rather than the
+	// count -- which is only equivalent while a repeat is impossible.
+	seen := make(map[string]bool, len(node.Fields))
 	fieldNames := make([]object.Object, 0, len(node.Fields))
 	for _, field := range node.Fields {
+		if seen[field.Value] {
+			return newError("%s", object.DuplicateStructFieldDeclarationMessage(
+				node.Name.Value, field.Value))
+		}
+		seen[field.Value] = true
 		fieldNames = append(fieldNames, &object.String{Value: field.Value})
 	}
 
@@ -812,6 +822,11 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 		value := evalAssignedValue(node, env)
 		if isError(value) {
 			return value
+		}
+
+		if _, declared := structObj.Fields[fieldExpr.Field.Value]; !declared {
+			return newError("%s", object.UnknownStructFieldWriteMessage(
+				structObj.TypeName, fieldExpr.Field.Value, structObj.FieldNames()))
 		}
 
 		// Assign the field
@@ -988,12 +1003,14 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 		if val, ok := structObj.Fields[node.Field.Value]; ok {
 			return val
 		}
-		return NULL
+		return newError("%s", object.UnknownStructFieldMessage(
+			structObj.TypeName, node.Field.Value, structObj.FieldNames()))
 	}
 
-	// Errors read like structs, mirroring the VM's OpGetField. Both engines go
-	// through object.Error.Field, which is the only way the two can be trusted
-	// to agree about a field set that will grow.
+	// An error's unknown field is still null, and a struct's is now a refusal:
+	// the VM's OpGetField says why the two parted. Both engines still go through
+	// object.Error.Field, which is the only way they can be trusted to agree
+	// about a field set that will grow.
 	if errObj, ok := left.(*object.Error); ok {
 		if val, ok := errObj.Field(node.Field.Value); ok {
 			return val
@@ -1004,17 +1021,58 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 	return newError("cannot access field %s on type %s", node.Field.Value, left.Type())
 }
 
+// evalStructLiteral builds a struct, refusing the same four shapes the compiler
+// refuses: an undeclared type, an unknown field name, a declared field nothing
+// set, and a field initializer with no name.
+//
+// It used to check none of them, which made a struct literal mean something
+// different in each engine -- the divergence parity/ exists to prevent. This
+// engine is what computes `unquote(...)` during macro expansion, so it is not
+// dead code, and it was the laxer of the two.
 func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.Object {
+	declaredNames, isDeclared := declaredStructFields(node.Name.Value, env)
+	if !isDeclared {
+		// The compiler's words, because it is the same refusal.
+		return newError("undefined struct type: %s", node.Name.Value)
+	}
+
+	declared := make(map[string]bool, len(declaredNames))
+	for _, name := range declaredNames {
+		declared[name] = true
+	}
+
 	// Evaluate all field values
 	fields := make(map[string]object.Object, len(node.Fields))
 	written := make([]string, 0, len(node.Fields))
+	var unknown []string
 	for _, fieldVal := range node.Fields {
+		if fieldVal == nil || fieldVal.Name == nil {
+			return newError("invalid field initializer in struct %s", node.Name.Value)
+		}
+		if _, twice := fields[fieldVal.Name.Value]; twice {
+			return newError("%s", object.DuplicateStructFieldLiteralMessage(
+				node.Name.Value, fieldVal.Name.Value))
+		}
 		val := eval(fieldVal.Value, env)
 		if isError(val) {
 			return val
 		}
 		fields[fieldVal.Name.Value] = val
 		written = append(written, fieldVal.Name.Value)
+		if !declared[fieldVal.Name.Value] {
+			unknown = append(unknown, fieldVal.Name.Value)
+		}
+	}
+
+	var missing []string
+	for _, name := range declaredNames {
+		if _, set := fields[name]; !set {
+			missing = append(missing, name)
+		}
+	}
+	if len(unknown) > 0 || len(missing) > 0 {
+		return newError("%s", object.StructLiteralRefusal(
+			node.Name.Value, unknown, missing, declaredNames))
 	}
 
 	return &object.Struct{
@@ -1028,27 +1086,42 @@ func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.
 // in: the order the struct's own declaration gave them, however the literal was
 // written.
 //
-// The literal's written order is the fallback, for a literal naming a type that
-// was never declared. This evaluator accepts one where the compiler refuses it,
-// and a printed record is a poor place to discover that, so the order the
-// author wrote is the better of the two answers available.
+// The literal's written order is the fallback. evalStructLiteral now refuses a
+// literal whose type was never declared, so nothing a program can write reaches
+// it; it stays because a printed record is a poor place to discover that a
+// caller built a struct some other way.
 func structFieldOrder(typeName string, written []string, env *object.Environment) []string {
-	declared, found := env.Get(structFieldsKey(typeName))
+	order, found := declaredStructFields(typeName, env)
 	if !found {
 		return written
 	}
-	fields, isArray := declared.(*object.Array)
+	return order
+}
+
+// declaredStructFields reads a struct's declared field names out of the
+// environment, in declaration order, and reports whether the type is declared
+// at all.
+//
+// It is the evaluator's whole view of a struct declaration, and the one place
+// evalStructStatement's key is read, so a validation and a render order can
+// never disagree about what a type declares.
+func declaredStructFields(typeName string, env *object.Environment) ([]string, bool) {
+	stored, found := env.Get(structFieldsKey(typeName))
+	if !found {
+		return nil, false
+	}
+	fields, isArray := stored.(*object.Array)
 	if !isArray {
-		return written
+		return nil, false
 	}
 
-	order := make([]string, 0, len(fields.Elements))
+	names := make([]string, 0, len(fields.Elements))
 	for _, element := range fields.Elements {
 		name, isString := element.(*object.String)
 		if !isString {
-			return written
+			return nil, false
 		}
-		order = append(order, name.Value)
+		names = append(names, name.Value)
 	}
-	return order
+	return names, true
 }

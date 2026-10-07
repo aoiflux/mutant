@@ -42,22 +42,23 @@ func (s *Struct) Type() ObjectType {
 // struct has one, so it renders in that: `P { b: 2, a: 1 }` for a struct that
 // declares b before a, however the literal was written.
 //
-// A name Fields holds that FieldOrder does not comes last, in sorted order.
-// Nothing a program can write reaches that today -- the compiler fills exactly
-// the declared fields -- but dropping a field that is there would hide a value
-// from the one function whose job is to show it.
-func (s *Struct) Inspect() string {
-	var out bytes.Buffer
-
-	fields := make([]string, 0, len(s.Fields))
+// FieldNames returns the struct's field names in the order Inspect renders
+// them: the declaration's order first, then any name Fields holds that
+// FieldOrder does not, sorted.
+//
+// Nothing a program can write reaches that second group today -- the compiler
+// fills exactly the declared fields, and since 2.6.0 nothing may add one -- but
+// dropping a field that is there would hide a value from the two functions
+// whose job is to show it.
+func (s *Struct) FieldNames() []string {
+	names := make([]string, 0, len(s.Fields))
 	shown := make(map[string]bool, len(s.Fields))
 	for _, name := range s.FieldOrder {
-		value, declared := s.Fields[name]
-		if !declared || shown[name] {
+		if _, declared := s.Fields[name]; !declared || shown[name] {
 			continue
 		}
 		shown[name] = true
-		fields = append(fields, fmt.Sprintf("%s: %s", name, value.Inspect()))
+		names = append(names, name)
 	}
 
 	if len(shown) != len(s.Fields) {
@@ -68,9 +69,20 @@ func (s *Struct) Inspect() string {
 			}
 		}
 		sort.Strings(rest)
-		for _, name := range rest {
-			fields = append(fields, fmt.Sprintf("%s: %s", name, s.Fields[name].Inspect()))
-		}
+		names = append(names, rest...)
+	}
+	return names
+}
+
+// The order is FieldNames', which every refusal that lists the fields also
+// reads, so a message and the value it is about never disagree.
+func (s *Struct) Inspect() string {
+	var out bytes.Buffer
+
+	names := s.FieldNames()
+	fields := make([]string, 0, len(names))
+	for _, name := range names {
+		fields = append(fields, fmt.Sprintf("%s: %s", name, s.Fields[name].Inspect()))
 	}
 
 	out.WriteString(s.TypeName)
@@ -108,4 +120,97 @@ func (s *Struct) Equals(other *Struct) bool {
 		}
 	}
 	return true
+}
+
+// A field a struct does not declare is refused, and these are the words every
+// decider refuses it with.
+//
+// One set of words rather than one per engine. The compiler refuses this where
+// it can prove the receiver's type, both engines refuse it where it cannot, and
+// the editor says it before either runs -- four wordings for one mistake is how
+// parity/ gets its rows. The evaluator's enum refusal records the alternative
+// taken there: "the VM's words, because they are the same refusal", copied by
+// hand into the other engine.
+//
+// Each takes the declared names rather than reading them off a value, because
+// the compiler has a declaration and no value, while the engines have a value
+// whose field set that declaration fixed.
+
+// UnknownStructFieldMessage is a read of a field the type does not declare.
+func UnknownStructFieldMessage(typeName, field string, declared []string) string {
+	return fmt.Sprintf("struct %s has no field %s: %s", typeName, field, declaresClause(declared))
+}
+
+// UnknownStructFieldWriteMessage is a write to one.
+//
+// A write says more than a read, because until 2.6.0 it silently created the
+// field: the author may be expecting it to, so the message says the field set is
+// fixed rather than only that the name is unknown.
+func UnknownStructFieldWriteMessage(typeName, field string, declared []string) string {
+	return fmt.Sprintf(
+		"cannot set field %s on struct %s: %s, and a struct's fields are fixed by its declaration",
+		field, typeName, declaresClause(declared))
+}
+
+// StructLiteralRefusal is a literal whose field names are not the declaration's.
+//
+// Both directions in one message, because one typo makes one of each: a field
+// the declaration does not contain, and a declared field nothing set. Reporting
+// only the second is what `P { a: 1, c: 3 }` used to do -- it said "missing
+// field b", which sent the author to look at a field they had not touched.
+func StructLiteralRefusal(typeName string, unknown, missing, declared []string) string {
+	var faults []string
+	if len(unknown) > 0 {
+		faults = append(faults, fmt.Sprintf("has no %s %s",
+			pluralField(len(unknown)), strings.Join(unknown, ", ")))
+	}
+	if len(missing) > 0 {
+		faults = append(faults, fmt.Sprintf("needs %s for %s %s",
+			pluralValue(len(missing)), pluralField(len(missing)), strings.Join(missing, ", ")))
+	}
+	if len(faults) == 0 {
+		// Unreachable from a caller that checked first; an empty refusal would
+		// be worse than a vague one.
+		return fmt.Sprintf("struct %s: %s", typeName, declaresClause(declared))
+	}
+	return fmt.Sprintf("struct %s %s: %s",
+		typeName, strings.Join(faults, " and "), declaresClause(declared))
+}
+
+// A field name written twice. Two messages because they are two mistakes: a
+// declaration that repeats one is incoherent, and a literal that sets one twice
+// has a value it silently drops.
+//
+// They exist because the struct-literal refusal reports the field NAMES that
+// differ rather than the field COUNT, and a repeated name is the one way the
+// counts can differ while the name sets agree. Refusing a repeat at its own
+// source is what makes "a count that differs means the names differ" true.
+
+func DuplicateStructFieldDeclarationMessage(typeName, field string) string {
+	return fmt.Sprintf("struct %s declares field %s twice", typeName, field)
+}
+
+func DuplicateStructFieldLiteralMessage(typeName, field string) string {
+	return fmt.Sprintf("struct %s sets field %s twice", typeName, field)
+}
+
+func declaresClause(declared []string) string {
+	if len(declared) == 0 {
+		return "it declares no fields"
+	}
+	return "it declares " + strings.Join(declared, ", ")
+}
+
+func pluralField(n int) string {
+	if n == 1 {
+		return "field"
+	}
+	return "fields"
+}
+
+func pluralValue(n int) string {
+	if n == 1 {
+		return "a value"
+	}
+	return "values"
 }
