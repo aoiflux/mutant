@@ -192,7 +192,11 @@ if ($Quick) {
 } else {
     Invoke-Step "race detector (test binaries only)" {
         Param($log)
-        if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { return "SKIP: no gcc on PATH; the race detector needs cgo" }
+        # A SKIP does not fail the gate, so a host with no C compiler used to
+        # report success over no race coverage at all. A full gate fails when
+        # the detector cannot run; -Quick is the one place a skip is agreed,
+        # and it records one without reaching here.
+        if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { throw "no gcc on PATH; the race detector needs cgo, and a full gate cannot pass without it (-Quick records the skip)" }
         Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "1" } -Exe $Go -Arguments (@("test", "-race", "-count=1", "-timeout", "45m") + $racePackages)
     }
 }

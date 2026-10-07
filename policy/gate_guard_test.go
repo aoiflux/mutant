@@ -197,6 +197,43 @@ func TestFullGateRunsGovulncheck(t *testing.T) {
 	}
 }
 
+// TestFullGateFailsWhenTheRaceDetectorCannotRun: the race detector is the only
+// step that needs a C compiler, and a host without one used to record the step
+// as skipped -- which does not fail the gate, so the run ended in "Release gate
+// passed" over no race coverage at all. A full gate fails instead. --quick and
+// -Quick are the one place a skip is the agreed answer, and they record one
+// without consulting gcc, so the fix must not take that away either
+// (M26-TEST-004).
+func TestFullGateFailsWhenTheRaceDetectorCannotRun(t *testing.T) {
+	for _, gate := range []struct{ script, quickSkip, fails string }{
+		{"scripts/release_gate.sh", `"race detector" SKIP)  SKIP: --quick`, "return 1"},
+		{"scripts/release_gate.ps1", `Step = "race detector"; Status = "SKIP"`, "throw"},
+	} {
+		quick, checked := false, false
+		for n, line := range gateScriptLines(t, gate.script) {
+			if strings.Contains(line, gate.quickSkip) {
+				quick = true
+			}
+			if !strings.Contains(line, "gcc") || !strings.Contains(line, "cgo") {
+				continue
+			}
+			checked = true
+			if strings.Contains(line, "SKIP") {
+				t.Errorf("%s:%d records a skip when gcc is missing, so a full gate reports success having never run the race detector: %s", gate.script, n+1, strings.TrimSpace(line))
+			}
+			if !strings.Contains(line, gate.fails) {
+				t.Errorf("%s:%d notices that gcc is missing but does not %s, so the step does not fail: %s", gate.script, n+1, gate.fails, strings.TrimSpace(line))
+			}
+		}
+		if !checked {
+			t.Errorf("%s no longer decides what to do when gcc is missing; the race step needs cgo, so something must. Update this test if the check moved off one line", gate.script)
+		}
+		if !quick {
+			t.Errorf("%s does not record the race detector as skipped with %q, so a quick run may now fail where a skip is the agreed answer", gate.script, gate.quickSkip)
+		}
+	}
+}
+
 // goModFloors are the lowest versions go.mod may name. Each was raised to clear
 // vulnerabilities govulncheck found reachable (or, for x/crypto, required) on
 // the version before it, so going back under one reintroduces them.

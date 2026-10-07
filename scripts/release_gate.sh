@@ -174,8 +174,14 @@ cross_compile() {
 
 go_test() { run "$1" env CGO_ENABLED=0 "$GO" test ./... -count=1; }
 
+# A SKIP does not fail the gate, so a host with no C compiler used to print
+# "Release gate passed" over no race coverage at all -- the Linux baseline did
+# exactly that. A full gate therefore fails when the detector cannot run.
+# --quick is the one place a skip is the agreed answer, and it records one
+# without reaching here. (The example sweep, named in the same report, has no
+# skip path: it builds and runs, or it fails.)
 race() {
-  if ! command -v gcc >/dev/null 2>&1; then echo "SKIP: no gcc; the race detector needs cgo"; return 0; fi
+  if ! command -v gcc >/dev/null 2>&1; then echo "no gcc; the race detector needs cgo, and a full gate cannot pass without it (--quick records the skip)"; return 1; fi
   # shellcheck disable=SC2086
   run "$1" env CGO_ENABLED=1 "$GO" test -race -count=1 -timeout 45m $RACE_PACKAGES
 }
