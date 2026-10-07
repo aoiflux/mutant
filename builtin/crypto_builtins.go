@@ -30,8 +30,7 @@ import (
 // next library along may answer the other, over the identical token. A JWS
 // signature covers the base64 text and holds over both readings, so it is no
 // help. jwt_decode reports `verified: false` and so was never a false
-// verification; it was two readers disagreeing (proposed as a row of its own;
-// see plans/review-2.6.0/p1-seal-tail/README.md).
+// verification; it was two readers disagreeing (M26-BLT-025).
 func decodeJSONToObject(data []byte, what string) (object.Object, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()

@@ -454,8 +454,7 @@ func loadRegistryHiveFromJSON(path string) (*registryHive, *object.Error) {
 	// the rest is a silent drop of evidence: reg_keys, reg_value and the
 	// timeline would all answer from part of a file with nothing saying so.
 	// Not a sealed document, so this is not the row's own defect; it is the
-	// same wrong, and the check was already written (proposed as a row of its
-	// own; see plans/review-2.6.0/p1-seal-tail/README.md).
+	// same wrong, and the check was already written (M26-BLT-026).
 	if err := security.RefuseTrailingContent(decoder, "the hive"); err != nil {
 		return nil, newError("reg_open: %s: %s", path, err.Error())
 	}
