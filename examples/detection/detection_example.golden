@@ -3,4 +3,4 @@ detect_persistence: {count: 2, detected: true, hits: [{category: autorun_keys, e
 detect_injection: {detected: false, matched_signatures: [], pe_headers: 1, reasons: [], score: 0, shellcode_hits: 0} err:
 detect_network_beacon: {detected: true, hits: [{bytes_cv: 0.000000, confidence: low, count: 3, dst: c2.example, interval_cv: 0.000000, interval_mean_s: 0.000000, interval_stddev_s: 0.000000, reasons: [high_frequency], score: 50}]} err:
 detect_priv_esc: {detected: true, score: 50, signals: [token_theft, lsass_access]} err:
-detect_suspicious_files: {count: 0, detected: false, hits: []} err:
+detect_suspicious_files: {complete: true, count: 0, detected: false, hits: [], unread: []} err:
