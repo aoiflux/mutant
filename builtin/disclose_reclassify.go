@@ -289,6 +289,29 @@ func reclassWrite(op string, session *ledgerSession, facts disclosureCaseFacts, 
 		}
 		return existing, false, nil
 	}
+	// One record is reclassified once. A second reclassification of the same
+	// record is a forward fork, and both successors walk back to one line and
+	// share its chain of versions: disclosing them in turn wrote a version each
+	// time, alternating between their partitions, and called every earlier
+	// disclosure stale although neither redaction had changed. Refused rather
+	// than given a line per successor, because the ledger would then hold two
+	// answers to "what is in force for this evidence" and nothing to choose
+	// between them. Read under the lock this function already holds, so two
+	// callers cannot both find no successor (M26-REC-023).
+	successors, err := reclassSuccessors(session, oldUID)
+	if err != nil {
+		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
+	}
+	for _, successor := range successors {
+		if successor == newUID {
+			continue
+		}
+		return disclosureNode{}, false, newError("%s: record %s is already recorded as reclassified by record %s, and "+
+			"a record is reclassified once. Both would share one line of redaction versions, so disclosing them in "+
+			"turn would write a version apiece and call the earlier disclosures stale although neither "+
+			"reclassification changed what a view releases. Record %s as reclassifying %s, which is where the line "+
+			"now ends", op, oldUID, successor, newUID, successor)
+	}
 	if err := caseLedgerStateRefusal(g, facts.caseUID, caseActDefine); err != nil {
 		return disclosureNode{}, false, newError("%s: %s", op, err.Error())
 	}

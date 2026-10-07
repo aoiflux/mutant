@@ -176,6 +176,50 @@ func redactionReclassifies(ledger *ledgerSession, recordUID string) ([]string, e
 	return out, nil
 }
 
+// reclassSuccessors returns the uids of the records the ledger records AS
+// reclassifying a record -- the opposite direction from redactionReclassifies,
+// sorted and without repeats.
+//
+// A record may be reclassified once. disclose_reclassified refuses a second,
+// because both successors walk back through this edge to the same line and so
+// share one chain of versions: disclosing them in turn wrote a version each
+// time, alternating between their two partitions, and called every disclosure
+// but the last stale although neither record's redaction had changed. Which
+// reclassification was in force for the line was decided by whichever had been
+// disclosed last (M26-REC-023).
+func reclassSuccessors(ledger *ledgerSession, recordUID string) ([]string, error) {
+	record, found, err := disclosureFind(ledger.graph, disclosureNodeRecord, "record.uid", recordUID)
+	if err != nil || !found {
+		return nil, err
+	}
+	edges, err := ledger.store.EdgesOf(record.id, store.DirectionInbound, []store.EdgeType{disclosureEdgeSupersedes})
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, edge := range edges {
+		node, err := ledger.graph.GetNode(edge.Src)
+		if err != nil {
+			return nil, err
+		}
+		if !node.HasLabel(disclosureNodeRecord) {
+			return nil, fmt.Errorf("node %d is recorded as reclassifying record %s and is not a record",
+				edge.Src, recordUID)
+		}
+		decoded, err := disclosureDecode(node)
+		if err != nil {
+			return nil, err
+		}
+		if successor := decoded.get("record.uid"); !seen[successor] {
+			seen[successor] = true
+			out = append(out, successor)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // redactionLine returns the record whose uid keys the line of versions a
 // record's redaction is kept in. See the file comment for where the walk
 // stops, and why there.

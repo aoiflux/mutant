@@ -186,6 +186,69 @@ func TestTheLineIsKeptByTheNearestRecordWithVersions(t *testing.T) {
 	}
 }
 
+// supersedesEdge records one record as reclassifying another by writing the
+// edge directly, bypassing disclose_reclassified. That is how a ledger comes to
+// hold a shape the builtin refuses to write -- a store written by an older
+// version of this program, or edited by hand -- and the walk has to be sound on
+// one, so the test that proves it builds one deliberately (M26-REC-023).
+func (f *discloseFixture) supersedesEdge(t *testing.T, session *ledgerSession, newUID, oldUID string) {
+	t.Helper()
+	caseUID := openCaseUID(t)
+	disclosureLedgerMu.Lock()
+	defer disclosureLedgerMu.Unlock()
+	find := func(uid string) disclosureNode {
+		node, found, err := disclosureFind(session.graph, disclosureNodeRecord, "record.uid", uid)
+		if err != nil || !found {
+			t.Fatalf("record %s is not in the ledger: found=%v err=%v", uid, found, err)
+		}
+		return node
+	}
+	newNode, oldNode := find(newUID), find(oldUID)
+	w, err := caseBeginWrite(session, caseUID, "IR-REC", custodyNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.tx.edge(newNode.id, oldNode.id, disclosureEdgeSupersedes, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.tx.commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A record is reclassified once. Two records reclassifying one both walk back to
+// its line and share the single chain of versions kept there, so disclosing them
+// in turn wrote a version apiece -- alternating between their two partitions --
+// and called every disclosure but the last stale, although neither
+// reclassification had changed what a view releases. Whichever had been
+// disclosed last was the one in force for the evidence. The second is refused
+// instead, and the refusal names where the line now ends so the caller can
+// record it there (M26-REC-023).
+func TestARecordIsReclassifiedOnce(t *testing.T) {
+	f := newDiscloseFixture(t)
+	ledger := intObj(f.ledger)
+	first, firstUID := f.reseal(t, recordArray(
+		mustHash(t, RecordClassifyRange(intObj(0), intObj(160), stringObj("restricted"))),
+	))
+	second, _ := f.reseal(t, recordArray(
+		mustHash(t, RecordClassifyRange(intObj(0), intObj(160), stringObj("open"))),
+	))
+	mustHash(t, DiscloseReclassified(ledger, first, f.record))
+	mustRefuse(t, "a second record reclassifying one", DiscloseReclassified(ledger, second, f.record),
+		"is already recorded as reclassified by record "+firstUID)
+
+	// Asking the first question again is still free: the same pair is found and
+	// nothing is written, which the refusal must not have taken away.
+	if again := mustHash(t, DiscloseReclassified(ledger, first, f.record)); mustHashBoolValue(t, again, "recorded") {
+		t.Fatalf("the same reclassification was recorded twice: %s", again.Inspect())
+	}
+	// And the refusal's advice is accepted: the line ends at first, so second
+	// reclassifying first is recorded.
+	if ok := mustHash(t, DiscloseReclassified(ledger, second, first)); !mustHashBoolValue(t, ok, "recorded") {
+		t.Fatalf("reclassifying the head of the line was not recorded: %s", ok.Inspect())
+	}
+}
+
 // The walk back ends where the ledger gives it no single way back: at a record
 // that reclassifies two, which starts a line of its own, and -- rather than
 // going round -- in a ledger recording two records as reclassifying each other.
@@ -205,8 +268,13 @@ func TestALineWalkEndsWhereTheLedgerGivesItNoSingleWayBack(t *testing.T) {
 	if got, err := redactionLine(session, cUID); err != nil || got != cUID {
 		t.Fatalf("the line of a record reclassifying two is %q: %v", got, err)
 	}
-	mustHash(t, DiscloseReclassified(ledger, b, a))
-	mustHash(t, DiscloseReclassified(ledger, a, b))
+	// b reclassifying a, and a reclassifying b, are both refused now: a and b
+	// each already have c recorded as reclassifying them, and a record is
+	// reclassified once (M26-REC-023). The walk still has to end rather than go
+	// round on a ledger that holds the cycle anyway, so the two edges are
+	// written directly.
+	f.supersedesEdge(t, session, bUID, aUID)
+	f.supersedesEdge(t, session, aUID, bUID)
 	for _, uid := range []string{aUID, bUID} {
 		if got, err := redactionLine(session, uid); err != nil || (got != aUID && got != bUID) {
 			t.Fatalf("the line of %s, in a ledger going round, is %q: %v", uid, got, err)
