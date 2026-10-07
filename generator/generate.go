@@ -113,8 +113,14 @@ func loadOrBootstrapSigningPrivateKey() ([]byte, error) {
 // The entry path is recorded in the image so a runtime error can name the
 // program it came from. stripDebug removes that name and every line table
 // before encoding: line tables are a reverse-engineering aid, and a release
-// artifact is the thing that leaves the machine. Polymorphism strips them too,
-// unconditionally and for a second reason -- see ByteCode.StripDebugInfo.
+// artifact is the thing that leaves the machine. Polymorphism does NOT strip
+// them. This comment said it did, and docs/MODULES.md said it with it, until
+// both were corrected on 2026-10-07: StripDebugInfo is called below under
+// stripDebug alone, which is the release flag, so a `mutant gen` artifact keeps
+// every module's name and source text at any mutation level (M26-DOC1-001).
+// The engine remaps the tables rather than dropping them, which is what lets a
+// mutated artifact still report a position -- see ByteCode.StripDebugInfo,
+// whose own comment has always said so.
 //
 // The module graph is walked, linked and driven through ONE compiler, with
 // ByteCode() called exactly once. That is forced by the bytecode format, not

@@ -431,3 +431,78 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestOnlyReleaseIsDocumentedAsStrippingDebugInfo holds docs/MODULES.md and
+// generator/generate.go to what the code actually does. Both used to say that
+// `mutant release` "and any build with polymorphic mutation" strip the
+// file-to-line map. Only release strips: StripDebugInfo is called under the
+// release flag alone, so an artifact from `mutant gen` carries every module's
+// file name and full source text at any mutation level, and a traceback from it
+// names a module and quotes its line in a directory holding no source at all.
+// The prose was the defect rather than the behaviour, which is published on
+// purpose -- a reader acts on a sentence like that, and this one read as
+// permission to hand a mutated artifact to someone they would not hand the
+// source to (M26-DOC1-001).
+//
+// Both halves are checked, so whichever side moves next the other is reported
+// instead of quietly diverging: the document must still say that release is the
+// only build that strips, and the generator must still guard its call with the
+// release flag. If polymorphism is ever made to strip, this test is what says
+// the sentence has to change with it.
+func TestOnlyReleaseIsDocumentedAsStrippingDebugInfo(t *testing.T) {
+	const doc = "docs/MODULES.md"
+	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Collapsed to single spaces so the check does not depend on where the
+	// paragraph happens to wrap.
+	flat := strings.Join(strings.Fields(string(raw)), " ")
+
+	const promise = "`mutant release` is the only build that strips it"
+	if !strings.Contains(flat, promise) {
+		t.Errorf("%s no longer says %q. Release is the only build that strips debug information; if that ever changes, the comment in generator/generate.go has to change with it", doc, promise)
+	}
+	for _, wrong := range []string{
+		"any build with polymorphic mutation strip",
+		"polymorphic mutation strips",
+		"polymorphism strips",
+	} {
+		if strings.Contains(strings.ToLower(flat), wrong) {
+			t.Errorf("%s says %q, and it does not: StripDebugInfo runs only under the release flag, so a gen artifact keeps the map at every mutation level", doc, wrong)
+		}
+	}
+
+	const gen = "generator/generate.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filepath.Join(repoRoot, filepath.FromSlash(gen)), nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, guarded := 0, 0
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "StripDebugInfo" {
+			calls++
+		}
+		stmt, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		if cond, ok := stmt.Cond.(*ast.Ident); !ok || cond.Name != "stripDebug" {
+			return true
+		}
+		ast.Inspect(stmt.Body, func(inner ast.Node) bool {
+			if sel, ok := inner.(*ast.SelectorExpr); ok && sel.Sel.Name == "StripDebugInfo" {
+				guarded++
+			}
+			return true
+		})
+		return true
+	})
+	if calls == 0 {
+		t.Fatalf("%s no longer calls StripDebugInfo at all, and %s describes when it runs", gen, doc)
+	}
+	if guarded != calls {
+		t.Errorf("%s calls StripDebugInfo %d time(s) but only %d are guarded by stripDebug. %s says release is the only build that strips, so either the guard comes back or the document changes", gen, calls, guarded, doc)
+	}
+}

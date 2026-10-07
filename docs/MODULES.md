@@ -226,9 +226,15 @@ traceback (most recent call first):
 	    |              ^^^^^^^^^^^^
 ```
 
-The file-to-line map is debug information. `mutant release` and any build with
-polymorphic mutation strip it along with the rest, so a released artifact does
-not carry the layout of your source tree.
+The file-to-line map is debug information, and `mutant release` is the only
+build that strips it. A gen artifact carries the map at every mutation level,
+along with each module's file name and its full source text, which is why the
+traceback above can name a module file and quote its line in a directory that
+holds no source at all. Polymorphism does not strip: the engine moves every
+instruction and remaps the tables, because a mutated artifact still has to be
+able to report a position. So anyone who can run a gen artifact, which means
+anyone holding its password, can recover the source of every module in it, and
+only `mutant release` leaves the layout of your source tree behind.
 
 ## Editor support
 
