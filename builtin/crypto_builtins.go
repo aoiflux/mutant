@@ -15,15 +15,31 @@ import (
 	"strings"
 
 	"mutant/object"
+	"mutant/security"
 )
 
 // decodeJSONToObject parses JSON bytes into a Mutant object, matching json_parse's
-// number handling (integers stay INTEGER, decimals become FLOAT).
-func decodeJSONToObject(data []byte) (object.Object, error) {
+// number handling (integers stay INTEGER, decimals become FLOAT) and its rule
+// that a document holds one value. `what` names the thing being read, because
+// a token whose header holds two documents and one whose claims do are
+// different problems for whoever is holding the token.
+//
+// A JWT segment holding `{"alg":"none"}{"alg":"RS256"}` was read as the first
+// object and the rest ignored, and `alg` is the field that decides whether a
+// signature is checked at all -- so this build answered one thing where the
+// next library along may answer the other, over the identical token. A JWS
+// signature covers the base64 text and holds over both readings, so it is no
+// help. jwt_decode reports `verified: false` and so was never a false
+// verification; it was two readers disagreeing (proposed as a row of its own;
+// see plans/review-2.6.0/p1-seal-tail/README.md).
+func decodeJSONToObject(data []byte, what string) (object.Object, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	if err := security.RefuseTrailingContent(dec, what); err != nil {
 		return nil, err
 	}
 	return jsonValueToObject(v)
@@ -91,7 +107,7 @@ func JWTDecode(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("jwt_decode: bad header: %s", err.Error()))
 	}
-	header, err := decodeJSONToObject(headerBytes)
+	header, err := decodeJSONToObject(headerBytes, "the token's header")
 	if err != nil {
 		return resultAndError(nil, newError("jwt_decode: header is not JSON: %s", err.Error()))
 	}
@@ -99,7 +115,7 @@ func JWTDecode(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("jwt_decode: bad payload: %s", err.Error()))
 	}
-	claims, err := decodeJSONToObject(payloadBytes)
+	claims, err := decodeJSONToObject(payloadBytes, "the token's claims")
 	if err != nil {
 		return resultAndError(nil, newError("jwt_decode: payload is not JSON: %s", err.Error()))
 	}

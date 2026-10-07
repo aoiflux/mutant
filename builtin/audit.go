@@ -390,6 +390,17 @@ func AuditVerify(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("audit_verify: %s is not an audit log: %s", path, err.Error()))
 	}
 
+	// The head commits to the entries of the document decoded above and to
+	// nothing else in the file. This verifier decodes once and then loops
+	// over the array inside that one document, so a file holding a second log
+	// after the first was walked as the first and reported intact. The one
+	// property stated above is that "editing an entry changes its hash";
+	// appending a document edits no entry, which is exactly why the head
+	// cannot see it (M26-CUS-026).
+	if err := security.RefuseTrailingContent(decoder, "the audit log"); err != nil {
+		return resultAndError(nil, newError("audit_verify: %s is not verified: %s", path, err.Error()))
+	}
+
 	algorithm := stringField(document, "algorithm")
 	if algorithm != auditChainVersion {
 		return resultAndError(nil, newError(

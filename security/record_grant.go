@@ -690,8 +690,12 @@ func ParseGrantFile(data []byte) (*GrantFile, error) {
 	if err := decoder.Decode(&f); err != nil {
 		return nil, fmt.Errorf("this is not a grant file: %w", err)
 	}
-	if decoder.More() {
-		return nil, errors.New("this is not a grant file: the document is followed by more JSON")
+	// Was decoder.More(), which answers false in front of a stray `}` or `]`
+	// as well as at the end of the input. A grant is authenticated over
+	// canonical(), rebuilt from the decoded fields, so a byte More() skipped
+	// was a byte nothing in the file covered (M26-CUS-026).
+	if err := RefuseTrailingContent(decoder, "the grant file"); err != nil {
+		return nil, fmt.Errorf("this grant file is not verified: %w", err)
 	}
 	if f.Format != GrantFileFormat {
 		return nil, fmt.Errorf("this is not a grant file: its format is %q", f.Format)

@@ -296,6 +296,17 @@ func custodyManifestDocument(op, path string) (map[string]any, *object.Error) {
 		return nil, newError("%s: %s is not a manifest: %s", op, path, err.Error())
 	}
 
+	// The seal covers the document the decoder just read and nothing after
+	// it, so a file holding a second document is a file the seal does not
+	// cover -- and both readers of this function reported it verified
+	// (M26-CUS-026). Refused here rather than as a failed check inside
+	// custodyVerifyDocument, because what a seal says about the first of two
+	// documents is not a weaker claim about the file: it is a claim about
+	// something that is not the file.
+	if err := security.RefuseTrailingContent(decoder, "the manifest"); err != nil {
+		return nil, newError("%s: %s is not verified: %s", op, path, err.Error())
+	}
+
 	if _, ok := document["seal"].(map[string]any); !ok {
 		return nil, newError("%s: %s has no seal; it was not written by `case_write`", op, path)
 	}

@@ -1066,6 +1066,14 @@ func DiscloseVerify(args ...object.Object) object.Object {
 	if err := decoder.Decode(&manifest); err != nil {
 		return resultAndError(nil, newError("%s: %s is not a disclosure manifest: %s", op, manifestPath, err.Error()))
 	}
+	// Refused beside the format and the version checks, before any of the
+	// eleven. A finding would have been the wrong shape: every other finding
+	// here is about the package the manifest describes, and this one is about
+	// which bytes the manifest is. A package whose manifest carried a second
+	// copy of itself passed all eleven (M26-CUS-026).
+	if err := security.RefuseTrailingContent(decoder, "the disclosure manifest"); err != nil {
+		return resultAndError(nil, newError("%s: %s is not verified: %s", op, manifestPath, err.Error()))
+	}
 	if stringField(manifest, "format") != discloseManifestFormat {
 		return resultAndError(nil, newError("%s: %s is not a disclosure manifest; its format is %q", op,
 			manifestPath, stringField(manifest, "format")))

@@ -1686,6 +1686,26 @@ exhaustive lists.
 
 ### Security
 
+- **A file this build verifies holds one document, and every parser now reads all of it.** Nine
+  parsers decoded the first JSON document in a file and stopped. Bytes after it were never looked
+  at, never hashed and never covered by the signature the verifier went on to report as holding —
+  so a case manifest, a disclosure manifest, an audit log, a case key file, a record header, a
+  record footer, a grant file, a registry hive and both segments of a JSON Web Token could each
+  carry a second document that nothing had checked, and the file was reported verified. The seal
+  is computed over the document the decoder returned, which is exactly why the tail changed no
+  hash and raised no finding: an examiner was told a file verified when part of it had never been
+  read. Six of the nine had no check at all. The other three had one, and it was not enough:
+  `decoder.More()` reports that there is nothing further to read whenever the next character is
+  `}` or `]`, so a document followed by a single closing brace passed — and every byte after that
+  brace went unexamined, a whole second document included. All nine now ask one shared check that
+  accepts only the end of the input, and refuse with the byte offset the document ended at, as a
+  verification failure rather than a parse success. Trailing whitespace still parses, deliberately:
+  a rewrite interrupted between the truncate and the write leaves a key file padded with newlines,
+  and refusing to open it would turn a survivable crash into a lost case key. `jwt_decode` is the
+  one with a second lesson in it — a header segment holding two documents gave this build one
+  answer for `alg`, the field that decides whether a signature is checked at all, and the next
+  library along another. (M26-CUS-026, M26-CUS-031, M26-REC-028, M26-BLT-025, M26-BLT-026)
+
 - **The run time printed what `putln` had just refused to print.** A buffer read out of a
   classified record is refused by `putln`, `fs_write`, `report_render` and thirteen other
   builtins. It was not refused by the three places the run time prints a value with no builtin

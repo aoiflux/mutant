@@ -1533,6 +1533,15 @@ func ParseCaseKeyFile(data []byte) (*CaseKeyFile, error) {
 	if err := decoder.Decode(&f); err != nil {
 		return nil, fmt.Errorf("this is not a case key file: %w", err)
 	}
+	// The file MAC and the signature are both computed over CanonicalFile(),
+	// rebuilt field by field from what was just decoded, so neither can see a
+	// byte the decoder did not read. A key file with a second document
+	// appended parsed as the first, authenticated, and opened the same case
+	// key (M26-CUS-026). Worded as a verification failure and not as "this is
+	// not a case key file", because it is one, and then some.
+	if err := RefuseTrailingContent(decoder, "the case key file"); err != nil {
+		return nil, fmt.Errorf("this key file is not verified: %w", err)
+	}
 	if f.Format != CaseKeyFileFormat {
 		return nil, fmt.Errorf("this is not a case key file: its format is %q", f.Format)
 	}

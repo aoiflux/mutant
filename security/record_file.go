@@ -709,8 +709,14 @@ func ParseRecordHeader(data []byte) (*RecordHeader, error) {
 	if err := decoder.Decode(header); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrRecordFormat, err.Error())
 	}
-	if decoder.More() {
-		return nil, fmt.Errorf("%w: the header is followed by more JSON", ErrRecordFormat)
+	// Was decoder.More(); see json_tail.go for the `}` it does not answer
+	// for. A record this program wrote has no room for a tail -- the length
+	// prefix is exactly as long as MarshalRecordHeader's output and record.go
+	// checks the file's total length exactly -- and the footer's signature
+	// covers these bytes, so this closes a gap in what the doc comment above
+	// promises rather than a false verification (M26-CUS-026).
+	if err := RefuseTrailingContent(decoder, "the record header"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrRecordFormat, err.Error())
 	}
 	if header.Format != RecordFileFormat {
 		return nil, fmt.Errorf("%w: its format is %q", ErrRecordFormat, header.Format)
@@ -801,8 +807,8 @@ func ParseRecordFooter(data []byte) (*RecordFooter, error) {
 	if err := decoder.Decode(footer); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrRecordFormat, err.Error())
 	}
-	if decoder.More() {
-		return nil, fmt.Errorf("%w: the footer is followed by more JSON", ErrRecordFormat)
+	if err := RefuseTrailingContent(decoder, "the record footer"); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrRecordFormat, err.Error())
 	}
 	if _, err := hexOfLength(footer.SegmentsRoot, sha256.Size); err != nil {
 		return nil, fmt.Errorf("%w: the footer's segment root is not a SHA-256 digest", ErrRecordFormat)
