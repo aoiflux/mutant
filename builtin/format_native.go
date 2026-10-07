@@ -33,9 +33,10 @@ const (
 	// Every decoder here is pointed at evidence, and evidence is written by
 	// whoever is under investigation. A deeply-nested document is the cheapest
 	// possible way to blow a Go stack -- conversion is recursive, and a few
-	// hundred bytes of input can describe a hundred thousand levels. The
-	// underlying libraries mostly bound this themselves (CBOR defaults to 32
-	// levels); this is the backstop for the ones that do not.
+	// hundred bytes of input can describe a hundred thousand levels. CBOR's
+	// and YAML's libraries bound their own recursion; TOML's and MessagePack's
+	// do not, so those documents are measured against this before they are
+	// decoded (format_shape.go), and checked here again on the way out.
 	maxNativeDepth = 256
 	// maxNativeNodes bounds total values produced from one document, so a
 	// small input cannot expand into an unbounded number of Mutant objects.
@@ -112,20 +113,46 @@ func convertNative(value any, depth int, budget *nativeCounter) (object.Object, 
 	// reduced to its low 64 bits is exactly the kind of wrong answer this
 	// language must not give.
 	case big.Int:
-		return stringObj(v.String()), nil
+		return stringObj(bigIntText(&v)), nil
 	case *big.Int:
 		if v == nil {
 			return &object.Null{}, nil
 		}
-		return stringObj(v.String()), nil
+		return stringObj(bigIntText(v)), nil
 
-	// YAML timestamps and TOML datetimes arrive already parsed. They render in
-	// RFC 3339 with nanoseconds, which is what the time_ and timestamp_
+	// YAML timestamps and TOML offset datetimes name an instant. They render
+	// in RFC 3339 with nanoseconds, which is what the time_ and timestamp_
 	// families read back.
+	//
+	// A TOML local date-time, date or time names no instant at all. The
+	// library hands it over in the host's zone under a marker name, and
+	// converting that to UTC made one file say a different time on every host
+	// and label it Z (M26-DAT-015). It is rendered as it was written.
 	case time.Time:
+		switch v.Location().String() {
+		case "datetime-local":
+			return stringObj(v.Format("2006-01-02T15:04:05.999999999")), nil
+		case "date-local":
+			return stringObj(v.Format("2006-01-02")), nil
+		case "time-local":
+			return stringObj(v.Format("15:04:05.999999999")), nil
+		}
 		return stringObj(v.UTC().Format(time.RFC3339Nano)), nil
 
 	case []any:
+		elements := make([]object.Object, 0, len(v))
+		for _, item := range v {
+			converted, err := convertNative(item, depth+1, budget)
+			if err != nil {
+				return nil, err
+			}
+			elements = append(elements, converted)
+		}
+		return &object.Array{Elements: elements}, nil
+
+	// A TOML array of tables, [[name]], arrives as a slice of tables rather
+	// than a slice of any, and was refused as an unknown type (M26-DAT-016).
+	case []map[string]any:
 		elements := make([]object.Object, 0, len(v))
 		for _, item := range v {
 			converted, err := convertNative(item, depth+1, budget)
@@ -174,6 +201,29 @@ func convertNative(value any, depth int, budget *nativeCounter) (object.Object, 
 	default:
 		return nil, fmt.Errorf("unsupported decoded value of Go type %T", value)
 	}
+}
+
+// maxDecimalIntegerBytes bounds the integers rendered as decimal text. Turning
+// a number into decimal costs more than linear time in its length -- a 512 KiB
+// DER INTEGER took 550 ms, and four times that length twelve times as long
+// (M26-DAT-029) -- and no integer a real document carries comes near it: a
+// certificate serial is at most 20 bytes, an RSA-8192 modulus 1 KiB. A longer
+// one is rendered in hexadecimal, which costs linear time and is as exact.
+//
+//mutant:limit bytes
+const maxDecimalIntegerBytes = 4096
+
+// bigIntText renders an integer too wide for the VM's INTEGER as exact text:
+// decimal, or "0x"-prefixed hexadecimal once it is longer than
+// maxDecimalIntegerBytes. Neither is ever truncated or rounded.
+func bigIntText(v *big.Int) string {
+	if (v.BitLen()+7)/8 <= maxDecimalIntegerBytes {
+		return v.String()
+	}
+	if v.Sign() < 0 {
+		return "-0x" + new(big.Int).Neg(v).Text(16)
+	}
+	return "0x" + v.Text(16)
 }
 
 // uintToObject keeps an unsigned value honest when it will not fit the VM's
@@ -295,6 +345,25 @@ func convertToNative(obj object.Object, rawBytes bool, depth int) (any, error) {
 		}
 		return out, nil
 	case *object.Hash:
+		if rawBytes {
+			// CBOR and MessagePack have typed map keys, so an INTEGER or
+			// BOOLEAN key stays one. Spelled as text, COSE's integer labels did
+			// not round-trip, and {1: v} and {"1": v} encoded to the same bytes
+			// (M26-DAT-014).
+			out := make(map[any]any, len(v.Pairs))
+			for _, pair := range v.Pairs {
+				key, err := nativeKeyTyped(pair.Key)
+				if err != nil {
+					return nil, err
+				}
+				converted, err := convertToNative(pair.Value, rawBytes, depth+1)
+				if err != nil {
+					return nil, err
+				}
+				out[key] = converted
+			}
+			return out, nil
+		}
 		out := make(map[string]any, len(v.Pairs))
 		for _, pair := range v.Pairs {
 			key, err := nativeKeyText(pair.Key)
@@ -323,6 +392,21 @@ func convertToNative(obj object.Object, rawBytes bool, depth int) (any, error) {
 		return out, nil
 	default:
 		return nil, fmt.Errorf("unsupported value type: %s", obj.Type())
+	}
+}
+
+// nativeKeyTyped turns a hash key into the Go key a format with typed keys
+// writes: a STRING as text, an INTEGER as an integer, a BOOLEAN as a boolean.
+func nativeKeyTyped(key object.Object) (any, error) {
+	switch k := key.(type) {
+	case *object.String:
+		return k.Value, nil
+	case *object.Integer:
+		return k.Value, nil
+	case *object.Boolean:
+		return k.Value, nil
+	default:
+		return nil, fmt.Errorf("hash key must be STRING, INTEGER or BOOLEAN, got %s", key.Type())
 	}
 }
 

@@ -1,9 +1,11 @@
 package builtin
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -159,11 +161,19 @@ func MsgpackParse(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
+	// The library recurses once per level and sizes each container from the
+	// count in its header before reading an element, so the document's shape
+	// is measured before the library sees it (M26-DAT-004; format_shape.go).
+	if err := msgpackShapeCheck(data); err != nil {
+		return resultAndError(nil, newError("msgpack_parse: %s", err.Error()))
+	}
+
 	decoder := msgpack.NewDecoder(strings.NewReader(string(data)))
 	// Loose decoding coerces whatever it finds into the nearest Go kind, which
 	// is exactly wrong for evidence: the point of reading a msgpack blob is to
 	// learn that a field was a bin and not a str.
 	decoder.UseLooseInterfaceDecoding(false)
+	decoder.SetMapDecoder(msgpackDecodeMap)
 
 	raw, err := decoder.DecodeInterface()
 	if err != nil {
@@ -183,6 +193,47 @@ func MsgpackParse(args ...object.Object) object.Object {
 	return resultAndError(value, nil)
 }
 
+// msgpackDecodeMap reads a map for DecodeInterface with its keys as they were
+// written. The library's own reads every key as a string, so a map with an
+// integer key could not be read at all, and a key written twice kept its last
+// value without a word. A key that repeats is refused, and so is one that is an
+// array or a map, which no hash can hold. A binary key reads as text, as it
+// always has, and repeating a text key that way is a repeat too.
+func msgpackDecodeMap(d *msgpack.Decoder) (any, error) {
+	n, err := d.DecodeMapLen()
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, nil
+	}
+	// n is no larger than the bytes left: msgpackShapeCheck read this header.
+	out := make(map[any]any, n)
+	for i := 0; i < n; i++ {
+		key, err := d.DecodeInterface()
+		if err != nil {
+			return nil, err
+		}
+		switch k := key.(type) {
+		case []byte:
+			key = string(k)
+		case []any:
+			return nil, errors.New("a map key is an array, which cannot be a hash key")
+		case map[any]any, map[string]any:
+			return nil, errors.New("a map key is a map, which cannot be a hash key")
+		}
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("map key %#v appears twice", key)
+		}
+		value, err := d.DecodeInterface()
+		if err != nil {
+			return nil, err
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
 func MsgpackEncode(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
@@ -195,13 +246,99 @@ func MsgpackEncode(args ...object.Object) object.Object {
 	var out strings.Builder
 	encoder := msgpack.NewEncoder(&out)
 	// Sorted keys for the same reason CBOR encodes canonically: the bytes have
-	// to be reproducible if anything downstream hashes them.
+	// to be reproducible if anything downstream hashes them. The library sorts
+	// only a map whose keys are all strings, so the walk sorts the rest.
 	encoder.SetSortMapKeys(true)
 	encoder.UseCompactInts(true)
-	if err := encoder.Encode(value); err != nil {
+	if err := msgpackEncodeSorted(encoder, value); err != nil {
 		return resultAndError(nil, newError("msgpack_encode: %s", err.Error()))
 	}
 	return resultAndError(&object.Bytes{Value: []byte(out.String())}, nil)
+}
+
+// msgpackEncodeSorted writes a value with every map's keys in one fixed order.
+// A map whose keys are all strings comes out exactly as SetSortMapKeys writes
+// it; one with an INTEGER or BOOLEAN key would otherwise come out in Go's map
+// order, which changes from run to run.
+func msgpackEncodeSorted(enc *msgpack.Encoder, value any) error {
+	switch v := value.(type) {
+	case map[any]any:
+		keys := make([]any, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return msgpackKeyLess(keys[i], keys[j]) })
+		if err := enc.EncodeMapLen(len(v)); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if err := enc.Encode(key); err != nil {
+				return err
+			}
+			if err := msgpackEncodeSorted(enc, v[key]); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if err := enc.EncodeMapLen(len(v)); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			if err := enc.EncodeString(key); err != nil {
+				return err
+			}
+			if err := msgpackEncodeSorted(enc, v[key]); err != nil {
+				return err
+			}
+		}
+		return nil
+	case []any:
+		if err := enc.EncodeArrayLen(len(v)); err != nil {
+			return err
+		}
+		for _, item := range v {
+			if err := msgpackEncodeSorted(enc, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return enc.Encode(v)
+	}
+}
+
+// msgpackKeyLess orders map keys false, true, then integers by value, then
+// strings in Go's order -- the order SetSortMapKeys gives a map of strings.
+func msgpackKeyLess(a, b any) bool {
+	if ra, rb := msgpackKeyRank(a), msgpackKeyRank(b); ra != rb {
+		return ra < rb
+	}
+	switch x := a.(type) {
+	case bool:
+		return !x && b.(bool)
+	case int64:
+		return x < b.(int64)
+	case string:
+		return x < b.(string)
+	}
+	return false
+}
+
+func msgpackKeyRank(key any) int {
+	switch key.(type) {
+	case bool:
+		return 0
+	case int64:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // --- Protocol Buffers (schemaless) ---
@@ -209,9 +346,17 @@ func MsgpackEncode(args ...object.Object) object.Object {
 const (
 	// maxProtobufDepth bounds how far the submessage heuristic will descend.
 	maxProtobufDepth = 32
-	// maxProtobufFields bounds fields reported from one message.
+	// maxProtobufFields bounds the fields one call reports, counted across
+	// every nested message it reads rather than per message. A payload is read
+	// again as a message at every level it nests to, so a per-message bound let
+	// a 1.2 MB input hold 404 MiB (M26-DAT-012).
 	maxProtobufFields = 1 << 18
 )
+
+// errProtobufBudget is the one failure a nested reading passes up instead of
+// treating it as "not a message": running out of fields is about the whole
+// call, not about one payload.
+var errProtobufBudget = fmt.Errorf("the message expands past %d fields, counting every nested message read", maxProtobufFields)
 
 // ProtobufParse walks a protobuf message without a schema.
 //
@@ -231,20 +376,22 @@ func ProtobufParse(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	fields, err := walkProtobuf(data, 0)
+	budget := maxProtobufFields
+	fields, err := walkProtobuf(data, 0, &budget)
 	if err != nil {
 		return resultAndError(nil, newError("protobuf_parse: %s", err.Error()))
 	}
 	return resultAndError(&object.Array{Elements: fields}, nil)
 }
 
-func walkProtobuf(data []byte, depth int) ([]object.Object, error) {
+func walkProtobuf(data []byte, depth int, budget *int) ([]object.Object, error) {
 	fields := make([]object.Object, 0, 8)
 	offset := 0
 	for len(data) > 0 {
-		if len(fields) >= maxProtobufFields {
-			return nil, fmt.Errorf("message has more than %d fields", maxProtobufFields)
+		if *budget <= 0 {
+			return nil, errProtobufBudget
 		}
+		*budget--
 		number, wireType, tagLen := protowire.ConsumeTag(data)
 		if tagLen < 0 {
 			return nil, fmt.Errorf("at offset %d: %s", offset, protowire.ParseError(tagLen).Error())
@@ -258,7 +405,12 @@ func walkProtobuf(data []byte, depth int) ([]object.Object, error) {
 			"offset":    intObj(int64(offset - tagLen)),
 		}
 
-		consumed, err := decodeProtobufValue(field, data, wireType, depth)
+		consumed, err := decodeProtobufValue(field, data, number, wireType, depth, budget)
+		// The budget error is passed up as it is, never wrapped, so it is
+		// compared directly.
+		if err == errProtobufBudget {
+			return nil, err
+		}
 		if err != nil {
 			return nil, fmt.Errorf("field %d at offset %d: %s", number, offset-tagLen, err.Error())
 		}
@@ -288,7 +440,7 @@ func protobufWireName(t protowire.Type) string {
 	}
 }
 
-func decodeProtobufValue(field map[string]object.Object, data []byte, wireType protowire.Type, depth int) (int, error) {
+func decodeProtobufValue(field map[string]object.Object, data []byte, number protowire.Number, wireType protowire.Type, depth int, budget *int) (int, error) {
 	switch wireType {
 	case protowire.VarintType:
 		value, n := protowire.ConsumeVarint(data)
@@ -333,25 +485,47 @@ func decodeProtobufValue(field map[string]object.Object, data []byte, wireType p
 		if text, ok := printableProtobufString(payload); ok {
 			field["text"] = stringObj(text)
 		}
-		if depth < maxProtobufDepth && len(payload) > 0 {
-			if nested, err := walkProtobuf(payload, depth+1); err == nil {
+		if len(payload) > 0 {
+			if depth >= maxProtobufDepth {
+				// Past the depth limit the nested reading is not tried, and
+				// that is said, so an absent "message" never reads as "these
+				// bytes are not a message".
+				field["message_unchecked"] = boolObj(true)
+				return n, nil
+			}
+			before := *budget
+			nested, err := walkProtobuf(payload, depth+1, budget)
+			switch {
+			case err == nil:
 				field["message"] = &object.Array{Elements: nested}
+			case err == errProtobufBudget:
+				return 0, err
+			default:
+				// Not a message: the fields read while finding that out are
+				// not reported, so they do not count against the budget.
+				*budget = before
 			}
 		}
 		return n, nil
 
 	case protowire.StartGroupType:
-		payload, n := protowire.ConsumeGroup(protowire.Number(0), data)
+		// The end-group marker repeats the group's field number, and the
+		// library checks it against the number it is given; it was given 0,
+		// so every real group failed (M26-DAT-011).
+		payload, n := protowire.ConsumeGroup(number, data)
 		if n < 0 {
 			return 0, protowire.ParseError(n)
 		}
-		if depth < maxProtobufDepth {
-			nested, err := walkProtobuf(payload, depth+1)
-			if err != nil {
-				return 0, err
-			}
-			field["message"] = &object.Array{Elements: nested}
+		// A group's contents are its fields, not one reading of its bytes, so
+		// they are reported or the call is refused -- never skipped.
+		if depth >= maxProtobufDepth {
+			return 0, fmt.Errorf("groups nest deeper than %d levels", maxProtobufDepth)
 		}
+		nested, err := walkProtobuf(payload, depth+1, budget)
+		if err != nil {
+			return 0, err
+		}
+		field["message"] = &object.Array{Elements: nested}
 		return n, nil
 
 	default:
@@ -610,7 +784,7 @@ func decodeDERUniversal(tag int, content []byte) (object.Object, bool) {
 		}
 		return stringObj(text), true
 	case 23: // UTCTime
-		return derTime(content, []string{"060102150405Z0700", "0601021504Z0700"})
+		return derUTCTime(content)
 	case 24: // GeneralizedTime
 		return derTime(content, []string{
 			"20060102150405Z0700", "20060102150405.999999999Z0700",
@@ -623,9 +797,10 @@ func decodeDERUniversal(tag int, content []byte) (object.Object, bool) {
 
 // derInteger reads a two's-complement integer of any width. A certificate
 // serial is routinely 20 bytes, so anything that does not fit an int64 becomes
-// decimal text rather than a truncation -- a serial reduced to its low 64 bits
+// exact text rather than a truncation -- a serial reduced to its low 64 bits
 // is a different serial, and reporting it as this one would be a lie the whole
-// language is built to avoid.
+// language is built to avoid. The text is decimal, or hexadecimal for an
+// integer longer than maxDecimalIntegerBytes (bigIntText).
 func derInteger(content []byte) (object.Object, bool) {
 	if len(content) == 0 {
 		return nil, false
@@ -637,7 +812,7 @@ func derInteger(content []byte) (object.Object, bool) {
 	if value.IsInt64() {
 		return intObj(value.Int64()), true
 	}
-	return stringObj(value.String()), true
+	return stringObj(bigIntText(value)), true
 }
 
 // derOID renders an OID as its dotted form. The first byte packs two arcs, but
@@ -698,6 +873,25 @@ func derBMPString(content []byte) (string, bool) {
 		return "", false
 	}
 	return decoded, true
+}
+
+// derUTCTime reads a UTCTime's two-digit year the way X.509 does (RFC 5280
+// 4.1.2.5.1): 50 to 99 are 1950 to 1999, and 00 to 49 are 2000 to 2049. Go's
+// "06" layout puts 50 to 68 in the 2000s, which read a 1950 certificate as
+// one from 2050 (M26-DAT-013). Each of those years is a leap year exactly when
+// the year a century earlier is, so moving it back keeps every date valid.
+func derUTCTime(content []byte) (object.Object, bool) {
+	for _, layout := range []string{"060102150405Z0700", "0601021504Z0700"} {
+		parsed, err := time.Parse(layout, string(content))
+		if err != nil {
+			continue
+		}
+		if parsed.Year() >= 2050 {
+			parsed = parsed.AddDate(-100, 0, 0)
+		}
+		return stringObj(parsed.UTC().Format(time.RFC3339Nano)), true
+	}
+	return nil, false
 }
 
 // derTime renders a certificate time as RFC 3339 in UTC, so it sorts and

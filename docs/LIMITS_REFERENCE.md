@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-50 limits in 5 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 125 limits that are not named yet; `policy/limit_budget.go` lists each one.
+52 limits in 5 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 125 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -32,7 +32,9 @@ and are not listed.
 | `httpTLSHandshakeTimeout` | 10s | duration | -- | httpTLSHandshakeTimeout bounds the TLS handshake of one connection. | `builtin/http.go` |
 | `maxBuiltinResultBytes` | 32 MiB | bytes | -- | maxBuiltinResultBytes bounds a result whose size the script picks outright: a repeat count, a pad width, a number of random bytes. Uncapped, one mistyped count does not fail -- it leaves the process alive holding tens of gibibytes of the host's commit charge, printing nothing and surviving every ordinary kill, so the case it was opened for is never released. | `builtin/result_limit.go` |
 | `maxCaseReason` | 4 KiB | bytes | -- | maxCaseReason bounds a reason or a name written into a case record. It is written into a signed commit that is never compacted away, so it is a sentence and not a document. | `builtin/case_lifecycle.go` |
+| `maxDecimalIntegerBytes` | 4 KiB | bytes | -- | maxDecimalIntegerBytes bounds the integers rendered as decimal text. Turning a number into decimal costs more than linear time in its length -- a 512 KiB DER INTEGER took 550 ms, and four times that length twelve times as long (M26-DAT-029) -- and no integer a real document carries comes near it: a certificate serial is at most 20 bytes, an RSA-8192 modulus 1 KiB. A longer one is rendered in hexadecimal, which costs linear time and is as exact. | `builtin/format_native.go` |
 | `maxEmailMultipartDepth` | 16 | depth | -- | maxEmailMultipartDepth bounds how deeply multipart parts may nest inside one another. Mail as it is written nests three or four deep -- a multipart/mixed holding a multipart/related holding a multipart/alternative -- and every level is walked with its own boundary, so a message nested deeper than this is one built to make the walk recurse, and is refused rather than followed. | `builtin/email_forensics.go` |
+| `maxJSONDepth` | 10,000 | depth | -- | maxJSONDepth bounds how deeply arrays and objects may nest in one document. It is the bound encoding/json's own decoder applied while these builtins used it, kept the same now that they read a document token by token, so nothing that parsed before is refused for its depth. | `builtin/json.go` |
 | `maxRedactionLine` | 4,096 | count | -- | maxRedactionLine bounds the walk back through a record's reclassifications. Each step is a reclassification an examiner recorded, so a line longer than this is not one anybody recorded by hand, and the walk refuses it rather than following it. | `builtin/redaction_version.go` |
 | `maxRoleBundleViews` | 256 | count | -- | maxRoleBundleViews bounds one bundle's view list. A bundle cannot usefully hold more views than a case would ever declare, and a longer list is one with repeats in it, which are refused on their own account anyway. | `builtin/recipient_role.go` |
 | `maxSearchContext` | 4 KiB | bytes | -- | maxSearchContext bounds the context at a page. A context is for recognising a hit; the passage around one is record_read's to return. | `builtin/record_search.go` |

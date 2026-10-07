@@ -1644,6 +1644,46 @@ exhaustive lists.
   write reached the old laxness: a struct has no source form, so it could never
   be spliced back out of an unquote in the first place. (M26-EVL-019)
 
+- **`toml_parse` and `msgpack_parse` crashed the process on a deeply nested document.** Both
+  libraries recurse once per level, and nothing bounded them: convertNative's depth check runs on
+  what they return, after the recursion. Two million levels overflowed the stack, a fatal error no
+  `recover` catches. A document's shape is now measured from its bytes first, and one nested past
+  256 levels is refused (M26-DAT-004). The same measurement refuses a TOML key of more than 256
+  dotted parts, which the library re-walked once per part -- 16,000 parts took 7.9 s
+  (M26-DAT-033) -- and a MessagePack container declaring more values than its bytes can hold,
+  which the library allocated before reading one: five bytes asked for 64 GiB (M26-DAT-034).
+
+- **`toml_parse` moved local date-times by the host's UTC offset and labelled them Z.** A TOML
+  local date-time, date or time names no instant, and is now rendered as it was written; an offset
+  date-time is still rendered in UTC (M26-DAT-015). An array of tables, `[[name]]`, is read rather
+  than refused (M26-DAT-016).
+
+- **Three decoders let the last copy of a repeated key win without a word.** `json_parse`,
+  `ndjson_parse` and `msgpack_parse` refuse a key written twice in one object, as the CBOR and YAML
+  readers already did (M26-DAT-035, M26-DAT-036). `msgpack_parse` reads integer map keys, which it
+  could not, and `cbor_encode` and `msgpack_encode` write INTEGER and BOOLEAN keys as what they
+  are rather than as text: COSE's `{1: -7}` round-trips, and `{1: v}` no longer encodes the same
+  as `{"1": v}` (M26-DAT-014).
+
+- **`json_parse` read a document's first value and dropped the rest.** It requires exactly one
+  now, and so does every `ndjson_parse` line, where a stray `}` used to pass (M26-DAT-017). An
+  integer too wide for INTEGER comes back as its exact decimal text, not a rounded FLOAT
+  (M26-DAT-018), and text that is not UTF-8, or half a surrogate pair, is refused rather than
+  rewritten to U+FFFD (M26-DAT-037).
+
+- **`protobuf_parse` refused every group, and could hold hundreds of times its input.** A group is
+  read with its own field number (M26-DAT-011), one field budget covers every nested reading
+  (M26-DAT-012), and past the 32-level limit a group is refused rather than skipped while a
+  length-delimited field says `message_unchecked: true` (M26-DAT-038).
+
+- **`der_parse` read a UTCTime from 1950-1968 as 2050-2068**, and took superlinear time over a
+  huge INTEGER. Two-digit years follow RFC 5280 (M26-DAT-013), and an integer longer than 4 KiB
+  is rendered as exact hexadecimal, in `cbor_parse` as well (M26-DAT-029).
+
+- **`xml_find` returned one element several times, out of document order**, and four `**` over
+  a chain of sixty elements returned 595,665 results. Each element comes back once, in document
+  order (M26-DAT-019).
+
 ### Security
 
 - **The run time printed what `putln` had just refused to print.** A buffer read out of a

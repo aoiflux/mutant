@@ -489,7 +489,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameHttpPost:    {signature: "http_post(url, body, contentType?)", summary: "Performs an HTTP POST request. contentType defaults to application/octet-stream when omitted.", params: []builtinParamDoc{param("url", "Absolute request URL.", ParamString), param("body", "Request body: STRING sent as-is, HASH or STRUCT encoded as JSON.", ParamString, ParamHash, ParamStruct), param("contentType?", "Optional Content-Type header (default application/octet-stream).", ParamString)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
 	BuiltinNameHttpRequest: {signature: "http_request(method, url, body, headers)", summary: "Performs an HTTP request with a body and a headers hash. All four arguments are required; the timeout is a fixed 30s (not configurable).", params: []builtinParamDoc{param("method", "HTTP verb (GET/POST/etc).", ParamString), param("url", "Absolute request URL.", ParamString), param("body", "Request body: STRING sent as-is, HASH or STRUCT encoded as JSON.", ParamString, ParamHash, ParamStruct), param("headers", "Request headers as a hash or struct.", ParamHash, ParamStruct)}, returns: pairRet("the response status, headers, and body", ParamHash).withFields("body", "error", "headers", "status")},
 	BuiltinNameJsonParse: {
-		signature: "json_parse(text)", summary: "Parses JSON text into Mutant values.",
+		signature: "json_parse(text)", summary: "Parses one JSON value into Mutant values. Exactly one: data after the value, a key repeated within one object, bytes that are not UTF-8 and a \\u escape that is half a surrogate pair are refused rather than quietly resolved. An integer too wide for INTEGER comes back as its exact decimal text, as it does from every other decoder.",
 		params:  []builtinParamDoc{param("text", "JSON string input.", ParamString)},
 		returns: pairRet("the decoded value: a scalar, array, or hash, depending on the JSON", ParamAny)},
 	// objectToJSONValue (builtin/json.go) handles scalars, null, arrays, and
@@ -532,7 +532,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("the root element", ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
 	BuiltinNameXmlFind: {
 		signature: "xml_find(node, selector)",
-		summary:   "Selects descendants of a parsed element by a slash-separated path. Three rules, not XPath: a name matches an element, * matches any single level, ** matches any number of levels including none (so \"**/Task\" also finds a direct child).",
+		summary:   "Selects descendants of a parsed element by a slash-separated path. Three rules, not XPath: a name matches an element, * matches any single level, ** matches any number of levels including none (so \"**/Task\" also finds a direct child). Each element is returned once, in document order, however many ways the path reaches it.",
 		params: []builtinParamDoc{
 			param("node", "A node from xml_parse or a previous xml_find.", ParamHash),
 			// Named "selector", not "path": webrepl's browser-safe filter reads a
@@ -543,7 +543,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the matching nodes, in document order", ParamArray).ofElem(ParamHash).withFields("attrs", "children", "name", "namespace", "text")},
 	BuiltinNameNdjsonParse: {
 		signature: "ndjson_parse(data)",
-		summary:   "Parses newline-delimited JSON (NDJSON/JSONL) -- the wire format of Zeek, Elastic bulk and OCSF streams. Blank lines are skipped; a malformed line fails with its line number rather than silently truncating the stream.",
+		summary:   "Parses newline-delimited JSON (NDJSON/JSONL) -- the wire format of Zeek, Elastic bulk and OCSF streams. Blank lines are skipped; every other line is read as json_parse reads a document, and a malformed line fails with its line number rather than silently truncating the stream.",
 		params:    []builtinParamDoc{param("data", "NDJSON text or buffer.", ParamBytes, ParamString)},
 		returns:   pairRet("one decoded value per line", ParamArray).ofElem(ParamAny)},
 	BuiltinNameNdjsonStringify: {
@@ -569,7 +569,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the YAML text", ParamString)},
 	BuiltinNameTomlParse: {
 		signature: "toml_parse(data)",
-		summary:   "Parses TOML into a hash. TOML datetimes become RFC 3339 strings, so they sort against every other timestamp the language produces.",
+		summary:   "Parses TOML into a hash. Offset date-times become RFC 3339 strings in UTC, so they sort against every other timestamp the language produces; local date-times, dates and times name no instant and keep the form they were written in (1979-05-27T07:32:00, 1979-05-27, 07:32:00). Arrays and inline tables nested past 256 levels, and keys of more than 256 dotted parts, are refused before decoding.",
 		params:    []builtinParamDoc{param("data", "TOML text or buffer.", ParamBytes, ParamString)},
 		returns:   pairRet("the decoded table", ParamHash)},
 	BuiltinNameTomlStringify: {
@@ -584,29 +584,29 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("the decoded value", ParamAny)},
 	BuiltinNameCborEncode: {
 		signature: "cbor_encode(value)",
-		summary:   "Serializes a Mutant value as canonical CBOR: map keys are sorted and integers use their shortest form, so hash_sha256(cbor_encode(v)) is a stable identifier for v. A buffer encodes as a CBOR byte string.",
+		summary:   "Serializes a Mutant value as canonical CBOR: map keys are sorted, INTEGER and BOOLEAN keys stay integers and booleans, and integers use their shortest form, so hash_sha256(cbor_encode(v)) is a stable identifier for v. A buffer encodes as a CBOR byte string.",
 		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
 			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
 		returns: pairRet("the encoded bytes", ParamBytes)},
 	BuiltinNameMsgpackParse: {
 		signature: "msgpack_parse(data)",
-		summary:   "Parses MessagePack -- agent check-ins, queue payloads, Fluentd forward traffic. Binary values decode to buffers, not text. Input carrying more than one value is reported rather than ignored: a blob that decodes and keeps going is either a stream or not what it was thought to be.",
+		summary:   "Parses MessagePack -- agent check-ins, queue payloads, Fluentd forward traffic. Binary values decode to buffers, not text; map keys keep their type, and a key repeated in one map is refused. Input carrying more than one value is reported rather than ignored: a blob that decodes and keeps going is either a stream or not what it was thought to be. A document nested past 256 levels, or whose containers declare more values than its bytes can hold, is refused before it is decoded.",
 		params:    []builtinParamDoc{param("data", "MessagePack bytes.", ParamBytes, ParamString)},
 		returns:   pairRet("the decoded value", ParamAny)},
 	BuiltinNameMsgpackEncode: {
 		signature: "msgpack_encode(value)",
-		summary:   "Serializes a Mutant value as MessagePack with sorted map keys and compact integers, so the output is deterministic for a given value.",
+		summary:   "Serializes a Mutant value as MessagePack with sorted map keys and compact integers, so the output is deterministic for a given value. INTEGER and BOOLEAN keys are written as integers and booleans, not as text.",
 		params: []builtinParamDoc{param("value", "Value to encode: a scalar, buffer, null, array, hash, or struct.",
 			ParamString, ParamBytes, ParamInt, ParamFloat, ParamBool, ParamNull, ParamArray, ParamHash, ParamStruct)},
 		returns: pairRet("the encoded bytes", ParamBytes)},
 	BuiltinNameProtobufParse: {
 		signature: "protobuf_parse(data)",
-		summary:   "Walks protobuf wire format without a .proto -- the situation an analyst holding a gRPC capture is actually in. Each field reports {field, wire_type, offset} plus every reading its bytes admit: a varint as itself, as zigzag and as bool; a length-delimited field as bytes, plus text and message when those parse. Naming the ambiguity is the honest thing a schemaless reader can do.",
+		summary:   "Walks protobuf wire format without a .proto -- the situation an analyst holding a gRPC capture is actually in. Each field reports {field, wire_type, offset} plus every reading its bytes admit: a varint as itself, as zigzag and as bool; a length-delimited field as bytes, plus text and message when those parse. Naming the ambiguity is the honest thing a schemaless reader can do. Past 32 levels the message reading is not tried, and message_unchecked: true says so; a group's fields are always read, or the call is refused. One call reports at most 262,144 fields, counted across every nested reading.",
 		params:    []builtinParamDoc{param("data", "Protobuf-encoded bytes.", ParamBytes, ParamString)},
 		returns:   pairRet("one hash per field, in wire order", ParamArray).ofElem(ParamHash).withFields("field", "offset", "wire_type")},
 	BuiltinNameDerParse: {
 		signature: "der_parse(data)",
-		summary:   "Walks DER/ASN.1 structurally, without a schema -- what x509_parse and pem_decode already need internally, and what a certificate extension or a Kerberos ticket needs when no ASN.1 module is at hand. Each node reports {offset, header_len, length, class, tag, constructed, tag_name}, constructed nodes carry children, and primitives carry raw value bytes plus a decoded rendering for universal types (OIDs dotted, big INTEGERs as decimal text rather than truncated, times as RFC 3339). BER indefinite length is refused by name.",
+		summary:   "Walks DER/ASN.1 structurally, without a schema -- what x509_parse and pem_decode already need internally, and what a certificate extension or a Kerberos ticket needs when no ASN.1 module is at hand. Each node reports {offset, header_len, length, class, tag, constructed, tag_name}, constructed nodes carry children, and primitives carry raw value bytes plus a decoded rendering for universal types (OIDs dotted, big INTEGERs as exact text -- decimal, or 0x-prefixed hexadecimal past 4 KiB -- rather than truncated, times as RFC 3339, with a UTCTime's two-digit year read as RFC 5280 reads it: 50 to 99 are the 1900s). BER indefinite length is refused by name.",
 		params:    []builtinParamDoc{param("data", "DER-encoded bytes.", ParamBytes, ParamString)},
 		returns:   pairRet("the top-level nodes, each a tree", ParamArray).ofElem(ParamHash).withFields("class", "constructed", "header_len", "length", "offset", "tag", "tag_name")},
 	BuiltinNameLuaRunString: {signature: "lua_run_string(code)", summary: "Runs a Lua script from a string.", returns: pairRet("the script's result, or the error it raised", ParamHash).withFields("error", "ok", "result", "schema_version"), params: []builtinParamDoc{param("code", "Lua source to run.", ParamString)}},

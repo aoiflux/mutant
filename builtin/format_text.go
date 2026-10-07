@@ -653,50 +653,98 @@ func XmlFind(args ...object.Object) object.Object {
 	}
 
 	matches := make([]object.Object, 0, 8)
-	if err := xmlWalk(node, segments, &matches); err != nil {
+	start := xmlPathClosure(segments, []int{0})
+	if xmlPathDone(segments, start) {
+		matches = append(matches, node)
+	}
+	if err := xmlFindBelow(node, segments, start, &matches, 0); err != nil {
 		return resultAndError(nil, newError("xml_find: %s", err.Error()))
 	}
 	return resultAndError(&object.Array{Elements: matches}, nil)
 }
 
-func xmlWalk(node *object.Hash, segments []string, out *[]object.Object) error {
-	if len(segments) == 0 {
-		*out = append(*out, node)
-		return nil
+// xmlFindBelow visits every element below node once, in document order, and
+// keeps those the path selects.
+//
+// The path is matched the way a pattern is, not by recursing over it: each
+// element carries the positions in the path its ancestors have reached, and
+// `**` simply stays where it is for as many levels as it likes. The recursive
+// match it replaces reached one element once per way `**` could split the
+// levels above it, so "**/dir/**/file" returned a file twice, "**/x" listed a
+// direct child before a deeper one that came first in the document, and
+// "**/**/**/**/a" over a chain of 60 elements returned 595,665 results
+// (M26-DAT-019).
+func xmlFindBelow(node *object.Hash, segments []string, states []int, out *[]object.Object, depth int) error {
+	if depth >= maxXMLDepth {
+		return fmt.Errorf("elements nest deeper than %d levels", maxXMLDepth)
 	}
 	children, err := xmlChildren(node)
 	if err != nil {
 		return err
 	}
-
-	// `**` matches here as well as deeper: it is applied to the current node
-	// against the rest of the path, then to every child with itself still in
-	// front. That is what makes "**/x" find a direct child named x.
-	if segments[0] == "**" {
-		if err := xmlWalk(node, segments[1:], out); err != nil {
-			return err
-		}
-		for _, child := range children {
-			if err := xmlWalk(child, segments, out); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	for _, child := range children {
 		name, err := xmlNodeName(child)
 		if err != nil {
 			return err
 		}
-		if segments[0] != "*" && segments[0] != name {
+		next := xmlPathStep(segments, states, name)
+		if len(next) == 0 {
 			continue
 		}
-		if err := xmlWalk(child, segments[1:], out); err != nil {
+		if xmlPathDone(segments, next) {
+			*out = append(*out, child)
+		}
+		if err := xmlFindBelow(child, segments, next, out, depth+1); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// xmlPathStep moves each position in the path down one element named name: a
+// name or `*` that matches moves past itself, and `**` stays put, since it can
+// take any number of levels.
+func xmlPathStep(segments []string, states []int, name string) []int {
+	next := make([]int, 0, len(states))
+	for _, s := range states {
+		if s == len(segments) {
+			continue
+		}
+		switch segment := segments[s]; {
+		case segment == "**":
+			next = append(next, s)
+		case segment == "*" || segment == name:
+			next = append(next, s+1)
+		}
+	}
+	return xmlPathClosure(segments, next)
+}
+
+// xmlPathClosure adds, for every position at a `**`, the position after it:
+// `**` may also take no levels at all, which is what makes "**/x" find a
+// direct child. Each position appears once.
+func xmlPathClosure(segments []string, states []int) []int {
+	seen := make([]bool, len(segments)+1)
+	out := make([]int, 0, len(states))
+	for _, s := range states {
+		for ; !seen[s]; s++ {
+			seen[s] = true
+			out = append(out, s)
+			if s == len(segments) || segments[s] != "**" {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func xmlPathDone(segments []string, states []int) bool {
+	for _, s := range states {
+		if s == len(segments) {
+			return true
+		}
+	}
+	return false
 }
 
 func xmlChildren(node *object.Hash) ([]*object.Hash, error) {
@@ -771,14 +819,12 @@ func NdjsonParse(args ...object.Object) object.Object {
 		if text == "" {
 			continue
 		}
-		decoder := json.NewDecoder(strings.NewReader(text))
-		decoder.UseNumber()
-		var raw any
-		if err := decoder.Decode(&raw); err != nil {
+		// One line is one document, read as json_parse reads one: a stray
+		// '}' or ']' after the value used to pass, because the check for a
+		// second value looked only for the start of one (M26-DAT-017).
+		raw, err := decodeJSONDocument(text)
+		if err != nil {
 			return resultAndError(nil, newError("ndjson_parse: line %d: %s", line, err.Error()))
-		}
-		if decoder.More() {
-			return resultAndError(nil, newError("ndjson_parse: line %d carries more than one JSON value", line))
 		}
 		value, err := jsonValueToObject(raw)
 		if err != nil {
@@ -906,8 +952,15 @@ func TomlParse(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
+	// The library recurses once per array or inline table, and re-walks a
+	// dotted key once per part, so the document's shape is measured before the
+	// library sees it (M26-DAT-004; format_shape.go).
+	doc := string(stripBOM(data))
+	if err := tomlShapeCheck(doc); err != nil {
+		return resultAndError(nil, newError("toml_parse: %s", err.Error()))
+	}
 	var raw map[string]any
-	if _, err := toml.Decode(string(stripBOM(data)), &raw); err != nil {
+	if _, err := toml.Decode(doc, &raw); err != nil {
 		return resultAndError(nil, newError("toml_parse: %s", err.Error()))
 	}
 	value, err := nativeToObject(raw)
