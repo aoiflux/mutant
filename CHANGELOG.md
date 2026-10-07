@@ -1585,6 +1585,26 @@ exhaustive lists.
   refused, and are not normalised, which is the rule Go uses for its own. Invalid UTF-8 is reported
   one position at a time instead of being silently misread. (M26-LEX-001, M26-LEX-002)
 
+- A struct now prints its fields in the order its own declaration gave them, and
+  two structs are compared field by field rather than by their printed text.
+  `Struct.Inspect` ranged a Go map, which yields a different order on every CALL
+  rather than merely on every run, and Inspect was the identity both engines
+  compared structs by. So `p == q` for two records built from the same literal
+  answered true about one time in six for a six-field struct, `p == p` was
+  usually false, `p == q` and `p != q` could both answer true in a single
+  statement, and printing one record twice printed it two ways — all without a
+  diagnostic. `contains`, `index_of` and `unique` asked the same question through
+  the same identity, so a search for a record that was present found it about
+  half the time and a dedup kept both copies of one record. A struct holding
+  another struct, or held in an array, was wrong for the same reason. Equality is
+  now `object.ValuesEqual`, one definition shared by `==` in both engines and by
+  the collection builtins, so a search cannot answer differently from the
+  comparison written by hand; it also means a string that spells `P { a: 1 }` is
+  no longer equal to the struct, which it was in both engines, as a buffer,
+  an error and an enum value already were not. A struct with a field that no
+  declaration named — which only `OpSetField` can produce — prints it last, in
+  sorted order, rather than hiding it. Ordering operators on structs are still
+  refused, and the editor already said so. (M26-EVL-004)
 ### Security
 
 - **A crafted artifact could kill the process parsing it, and one kind could

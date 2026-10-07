@@ -1392,9 +1392,12 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 				fields[fieldName] = fieldValue
 			}
 
+			// fieldNames came from the struct's own definition above, in
+			// declaration order, which is the order Inspect renders.
 			structObj := &object.Struct{
-				TypeName: typeName,
-				Fields:   fields,
+				TypeName:   typeName,
+				FieldOrder: fieldNames,
+				Fields:     fields,
 			}
 			if err := vm.push(structObj); err != nil {
 				return err
@@ -2219,6 +2222,15 @@ func (vm *VM) execComparison(op code.Opcode) error {
 		return vm.execEnumComparison(op, left, right)
 	}
 
+	// Structs, for the same reason again and with the sharpest edge of the
+	// four: a struct renders as `P { b: 2, a: 1 }`, so under the fallback the
+	// string spelling that text was equal to the record itself -- and until
+	// Inspect was given an order, the fallback could not even answer that two
+	// structs built from one literal were equal.
+	if ltype == object.STRUCT_OBJ || rtype == object.STRUCT_OBJ {
+		return vm.execStructComparison(op, left, right)
+	}
+
 	switch op {
 	case code.OpEqual:
 		return vm.push(nativeBoolToBooleanObject(right.Inspect() == left.Inspect()))
@@ -2244,6 +2256,36 @@ func (vm *VM) execEnumComparison(op code.Opcode, left, right object.Object) erro
 	equal := leftOK && rightOK &&
 		leftEnum.TypeName == rightEnum.TypeName &&
 		leftEnum.Tag == rightEnum.Tag
+
+	switch op {
+	case code.OpEqual:
+		return vm.push(nativeBoolToBooleanObject(equal))
+	case code.OpUnEqual:
+		return vm.push(nativeBoolToBooleanObject(!equal))
+	default:
+		return fmt.Errorf("unknown operator: %d (%s %s)", op, left.Type(), right.Type())
+	}
+}
+
+// execStructComparison decides equality for any comparison with a struct on
+// either side. Two structs are equal when they are the same type and hold an
+// equal value under every field name; a struct is never equal to a value of
+// another type, whatever it renders as.
+//
+// Structs used to reach the Inspect fallback, and Inspect ranged a Go map.
+// Ranging a map yields a different order on every call -- not merely on every
+// run -- so two structs built from the same literal were usually unequal, and a
+// struct was usually unequal to itself. Giving Inspect a declaration order
+// settles what is printed. It does not make a render the right thing to
+// compare, for exactly the reason it is not for bytes, errors and enum values.
+//
+// Ordering is undefined, as it is for those three. The operand domains behind
+// the analyzer's diagnostics are derived from these functions, and `<` on two
+// records has no meaning worth inventing here.
+func (vm *VM) execStructComparison(op code.Opcode, left, right object.Object) error {
+	leftStruct, leftOK := left.(*object.Struct)
+	rightStruct, rightOK := right.(*object.Struct)
+	equal := leftOK && rightOK && leftStruct.Equals(rightStruct)
 
 	switch op {
 	case code.OpEqual:

@@ -89,6 +89,11 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	// equal to the variant itself. Mirrors the VM's execEnumComparison.
 	case left.Type() == object.ENUM_VALUE_OBJ || right.Type() == object.ENUM_VALUE_OBJ:
 		return evalEnumInfixExpression(operator, left, right)
+	// Structs, for the same reason: a struct renders as `P { b: 2, a: 1 }`, so
+	// under the fallback a string spelling that text was equal to the record.
+	// Mirrors the VM's execStructComparison.
+	case left.Type() == object.STRUCT_OBJ || right.Type() == object.STRUCT_OBJ:
+		return evalStructInfixExpression(operator, left, right)
 	case operator == "==":
 		return nativeBoolToBoolObject(left.Inspect() == right.Inspect())
 	case operator == "!=":
@@ -121,6 +126,24 @@ func evalEnumInfixExpression(operator string, left, right object.Object) object.
 	equal := leftOK && rightOK &&
 		leftEnum.TypeName == rightEnum.TypeName &&
 		leftEnum.Tag == rightEnum.Tag
+
+	switch operator {
+	case "==":
+		return nativeBoolToBoolObject(equal)
+	case "!=":
+		return nativeBoolToBoolObject(!equal)
+	}
+	return newError("unknown operator: %s%s%s", left.Type(), operator, right.Type())
+}
+
+// evalStructInfixExpression handles every operator with a struct on either
+// side. Only `==` and `!=` are defined; two structs are equal when they are the
+// same type and every field holds an equal value, and a struct is never equal
+// to a value of another type. This mirrors the VM's execStructComparison.
+func evalStructInfixExpression(operator string, left, right object.Object) object.Object {
+	leftStruct, leftOK := left.(*object.Struct)
+	rightStruct, rightOK := right.(*object.Struct)
+	equal := leftOK && rightOK && leftStruct.Equals(rightStruct)
 
 	switch operator {
 	case "==":

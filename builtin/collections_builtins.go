@@ -6,26 +6,16 @@ import (
 	"mutant/object"
 )
 
-// objectsEqual compares two objects by value for scalars, falling back to
-// Inspect() for composite types.
+// objectsEqual is how `contains` and `index_of` decide that an element is the
+// one being looked for.
+//
+// It is object.ValuesEqual, the same definition `==` is built on, so a search
+// cannot answer differently from the comparison a caller would have written by
+// hand. It used to be a second copy of that switch, and the copy had no struct
+// case: `contains(records, r)` was a coin toss for as long as comparing two
+// structs was.
 func objectsEqual(a, b object.Object) bool {
-	if a.Type() != b.Type() {
-		return false
-	}
-	switch av := a.(type) {
-	case *object.Integer:
-		return av.Value == b.(*object.Integer).Value
-	case *object.Float:
-		return av.Value == b.(*object.Float).Value
-	case *object.String:
-		return av.Value == b.(*object.String).Value
-	case *object.Boolean:
-		return av.Value == b.(*object.Boolean).Value
-	case *object.Null:
-		return true
-	default:
-		return a.Inspect() == b.Inspect()
-	}
+	return object.ValuesEqual(a, b)
 }
 
 func requireArrayArg(op string, arg object.Object, pos int) (*object.Array, *object.Error) {

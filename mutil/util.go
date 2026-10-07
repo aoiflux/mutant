@@ -207,7 +207,15 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 			}
 			fields[name] = encValue
 		}
-		encObj = &object.Struct{TypeName: structObj.TypeName, Fields: fields}
+		// FieldOrder is copied rather than shared. Every value the VM stores
+		// round-trips through here, and a stored value must not alias the one
+		// handed in; dropping the field entirely would lose the struct's
+		// declaration order on the first assignment.
+		encObj = &object.Struct{
+			TypeName:   structObj.TypeName,
+			FieldOrder: append([]string(nil), structObj.FieldOrder...),
+			Fields:     fields,
+		}
 
 	case object.ENUM_VALUE_OBJ:
 		enumObj := obj.(*object.EnumValue)
@@ -485,7 +493,11 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 			}
 			fields[name] = decValue
 		}
-		return &object.Struct{TypeName: structObj.TypeName, Fields: fields}, nil
+		return &object.Struct{
+			TypeName:   structObj.TypeName,
+			FieldOrder: append([]string(nil), structObj.FieldOrder...),
+			Fields:     fields,
+		}, nil
 
 	case object.ENUM_VALUE_OBJ:
 		enumObj := decObj.(*object.EnumValue)

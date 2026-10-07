@@ -704,24 +704,31 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 	return NULL
 }
 
+// structDefinitionKey and structFieldsKey are the two spellings a struct
+// occupies in the environment: one saying the type exists, one holding its
+// field names in the order the declaration gave them.
+//
+// The order used to be stored one field per key, under a name built with
+// string(rune(i)) -- so the first field's key held a NUL byte. Nothing ever
+// read any of them, which is why evalStructLiteral had no order to hand a
+// struct and Inspect was left ranging a Go map. One array under one key is
+// something a reader can find.
+func structDefinitionKey(name string) string {
+	return "__struct_" + name
+}
+
+func structFieldsKey(name string) string {
+	return structDefinitionKey(name) + "_fields"
+}
+
 func evalStructStatement(node *ast.StructStatement, env *object.Environment) object.Object {
-	// Store struct definition as a special marker object in environment
-	// We'll use a simple approach: store field names in environment with prefix
-	structDefKey := "__struct_" + node.Name.Value
-	fieldNames := []string{}
+	fieldNames := make([]object.Object, 0, len(node.Fields))
 	for _, field := range node.Fields {
-		fieldNames = append(fieldNames, field.Value)
+		fieldNames = append(fieldNames, &object.String{Value: field.Value})
 	}
 
-	// Create a simple marker to track this is a struct definition
-	defMarker := &object.String{Value: "struct:" + node.Name.Value}
-	env.Set(structDefKey, defMarker)
-
-	// Store field list
-	for i, fieldName := range fieldNames {
-		fieldKey := structDefKey + "_field_" + string(rune(i))
-		env.Set(fieldKey, &object.String{Value: fieldName})
-	}
+	env.Set(structDefinitionKey(node.Name.Value), &object.String{Value: "struct:" + node.Name.Value})
+	env.Set(structFieldsKey(node.Name.Value), &object.Array{Elements: fieldNames})
 
 	return NULL
 }
@@ -999,17 +1006,49 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 
 func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.Object {
 	// Evaluate all field values
-	fields := make(map[string]object.Object)
+	fields := make(map[string]object.Object, len(node.Fields))
+	written := make([]string, 0, len(node.Fields))
 	for _, fieldVal := range node.Fields {
 		val := eval(fieldVal.Value, env)
 		if isError(val) {
 			return val
 		}
 		fields[fieldVal.Name.Value] = val
+		written = append(written, fieldVal.Name.Value)
 	}
 
 	return &object.Struct{
-		TypeName: node.Name.Value,
-		Fields:   fields,
+		TypeName:   node.Name.Value,
+		FieldOrder: structFieldOrder(node.Name.Value, written, env),
+		Fields:     fields,
 	}
+}
+
+// structFieldOrder answers the order Inspect should render a literal's fields
+// in: the order the struct's own declaration gave them, however the literal was
+// written.
+//
+// The literal's written order is the fallback, for a literal naming a type that
+// was never declared. This evaluator accepts one where the compiler refuses it,
+// and a printed record is a poor place to discover that, so the order the
+// author wrote is the better of the two answers available.
+func structFieldOrder(typeName string, written []string, env *object.Environment) []string {
+	declared, found := env.Get(structFieldsKey(typeName))
+	if !found {
+		return written
+	}
+	fields, isArray := declared.(*object.Array)
+	if !isArray {
+		return written
+	}
+
+	order := make([]string, 0, len(fields.Elements))
+	for _, element := range fields.Elements {
+		name, isString := element.(*object.String)
+		if !isString {
+			return written
+		}
+		order = append(order, name.Value)
+	}
+	return order
 }
