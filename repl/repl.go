@@ -391,6 +391,9 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 	// could be misled about. The announcement exists for artifacts that outlive
 	// the process; a REPL session produces none.
 	replPassword := mutil.GetPwd()
+	// One sealer for the whole session: it is what remembers which instruction
+	// length the constants carried between lines are currently encrypted under.
+	replSealer := mutil.NewReplSealer(replPassword)
 	symbolTable := compiler.NewSymbolTable()
 	for i, v := range builtin.Builtins {
 		symbolTable.DefineBuiltin(i, v.Name)
@@ -458,8 +461,18 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 			continue
 		}
 
-		byteCode := comp.ByteCode()
-		byteCode = mutil.EncryptByteCode(byteCode, replPassword)
+		// replSealer, not mutil.EncryptByteCode: the pool carries forward, so a
+		// function compiled on an earlier line is already encrypted and has to
+		// be re-keyed to this line's instruction length rather than encrypted
+		// again. See mutil.ReplSealer.
+		byteCode, sealErr := replSealer.Seal(comp.ByteCode())
+		if sealErr != nil {
+			if lineReader != nil {
+				lineReader.AddHistory(line, true)
+			}
+			errrs.PrintMachineError(out, sealErr.Error())
+			continue
+		}
 		constants = byteCode.Constants
 
 		machine := vm.NewWithGlobalStoreAndPassword(byteCode, globals, replPassword)
@@ -468,7 +481,8 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 				lineReader.AddHistory(line, true)
 			}
 			globals = machine.GlobalStore()
-			machine.CleanupRuntimeSensitiveData(false, false)
+			// No CleanupRuntimeSensitiveData here; see the note at the end of
+			// the loop.
 			errrs.PrintMachineError(out, err.Error())
 			continue
 		}
@@ -506,7 +520,29 @@ func Start(in io.Reader, out io.Writer, version string, enableMacros bool, theme
 			io.WriteString(out, "\n")
 		}
 		globals = machine.GlobalStore()
-		machine.CleanupRuntimeSensitiveData(false, false)
+		// Deliberately no CleanupRuntimeSensitiveData. Its stack sweep calls
+		// clearObjectSensitiveData on every stack slot, and a REPL's stack
+		// slots alias the state the session carries to the next line: an
+		// *object.Encrypted constant has its payload zeroed and its Value set
+		// to nil, and a closure's captured cells have their values dropped.
+		// Both are shared objects, not copies -- the constant pool is threaded
+		// through compiler.NewWithState and a global holds the very
+		// *object.CompiledFunction the pool holds.
+		//
+		// The damage was invisible only because M26-TOOL-013 made a call to an
+		// earlier line's function fail before it could be noticed. With that
+		// fixed, the sweep is what broke the next two cases: a constant in a
+		// function body used on a second call read back as ENCRYPTED
+		// ("unsupported types for binary operation: INTEGER, ENCRYPTED",
+		// because DecryptObject cannot XOR an emptied payload and the caller
+		// keeps the undecrypted object), and a closure called after the line
+		// that created it dereferenced a nil cell. (M26-TOOL-014)
+		//
+		// Removing it costs nothing it was achieving. A stack slot that is not
+		// shared becomes garbage the moment this VM is dropped, and a slot that
+		// is shared is exactly the one that must not be wiped; the sweep cannot
+		// tell them apart. serve.go and webrepl/repl.go reached the same
+		// conclusion for the same reason and say so in the same place.
 	}
 }
 

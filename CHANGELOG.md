@@ -2226,6 +2226,26 @@ exhaustive lists.
   refuse something real. (M26-NET-027, and M26-NET-034 for the result size a million flow rows
   still reaches)
 
+- **Neither REPL could call a function defined on an earlier line.** `let add = fn(a, b) { a + b };`
+  and then `add(1, 2);` failed in both the terminal and the browser REPL, and the error said the
+  program had been built by a newer version of mutant. Each line is its own program, and the
+  keystream its bytecode is sealed with is derived from that line's instruction length -- the
+  number the VM recovers and derives its one decryption key from. The constant pool carries from
+  line to line, so sealing it again on every line encrypted a function compiled earlier a second
+  time, under the new line's key, and the VM then read the earlier line's ciphertext as opcodes.
+  Both REPLs now seal through one shared helper that re-keys a carried-over function from the
+  length it was sealed under to this line's, in place on the same function object so that a
+  closure held in a global agrees with the pool; a line it cannot re-key is refused rather than
+  half-written. Integers and strings bound on an earlier line were never affected, because each
+  records the seed it was encrypted under (M26-TOOL-013). Fixing that exposed a second defect
+  behind it: the terminal REPL wiped its own session after every line. The per-line cleanup's
+  stack sweep emptied the shared encrypted constants and dropped closures' captured values, so a
+  function that used a literal could not be called twice and a closure could not be called at all
+  after the line that created it -- the same hazard `net_serve` and the browser REPL already
+  avoid, and they now all avoid it for the same stated reason (M26-TOOL-040). The unknown-opcode
+  message no longer names one cause: it says the instruction did not decode, and that the bytecode
+  may be damaged or decrypted with the wrong key, or may come from a newer mutant.
+
 ### Security
 
 - **A string literal in an open document can no longer send the language server

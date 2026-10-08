@@ -1605,17 +1605,37 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 				return err
 			}
 		default:
-			// An opcode this build does not know. It reaches here in exactly one
-			// way: bytecode compiled by a newer toolchain, since opcodes are only
-			// ever appended and a value once emitted never changes meaning.
+			// An opcode this build does not know. Refusing is the whole point of
+			// the arm: without it the switch simply matched nothing, the
+			// instruction pointer advanced by one, and the operand bytes of the
+			// instruction it did not recognise were executed as opcodes -- a
+			// program that runs to completion and answers with nonsense. Refusing
+			// to run half of it is the same choice Run() already makes for a
+			// builtin this runtime lacks.
 			//
-			// Saying so is the whole point of the arm. Without it the switch
-			// simply matched nothing, the instruction pointer advanced by one,
-			// and the operand bytes of the instruction it did not recognise were
-			// executed as opcodes -- a program that runs to completion and
-			// answers with nonsense. Refusing to run half of it is the same
-			// choice Run() already makes for a builtin this runtime lacks.
-			return vm.runtimeErrorfAt(ip, op, "unknown opcode %d: this program was built by a newer version of mutant", byte(op))
+			// Naming one cause was wrong. The arm used to state flatly that the
+			// program was built by a newer version of mutant, reasoning that
+			// opcodes are only ever appended so an unknown value can only come
+			// from a newer toolchain. That holds for the byte the compiler
+			// emitted; it does not hold for the byte that arrives here, which is
+			// whatever the instruction stream decrypted to. An opcode that
+			// decodes to nothing is just as likely to mean the stream did not
+			// decrypt -- the key derives from (instruction length, password), so
+			// bytecode decrypted under the wrong length produces uniformly random
+			// opcodes, which is precisely what the REPL's own re-encryption bug
+			// (M26-TOOL-013) did to a function defined on an earlier line. Every
+			// such session was told to upgrade mutant.
+			//
+			// Both causes are therefore named, in the order a reader can act on:
+			// the local one first. The fix for M26-TOOL-013 removes the only
+			// known in-tree way to reach this through decryption, so the
+			// remaining ones are damaged or truncated bytecode, a wrong
+			// --password, and a genuinely newer toolchain that added an opcode
+			// without raising the container version (a newer container version is
+			// refused earlier, by resolveBuiltins, with its own message).
+			return vm.runtimeErrorfAt(ip, op,
+				"unknown opcode %d: this instruction did not decode -- the bytecode may be damaged or decrypted with the wrong key, or it may have been built by a newer version of mutant",
+				byte(op))
 		}
 	}
 
