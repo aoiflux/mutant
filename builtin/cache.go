@@ -1,15 +1,11 @@
 package builtin
 
 import (
-	"context"
 	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	crankcql "github.com/shreybatra/crankdb/cql"
-	crankserver "github.com/shreybatra/crankdb/server"
 
 	"mutant/object"
 )
@@ -20,7 +16,7 @@ type cacheEntry struct {
 
 type cacheStore struct {
 	entries map[string]cacheEntry
-	db      *crankserver.Database
+	values  map[string][]byte
 	stats   cacheStoreStats
 }
 
@@ -40,12 +36,15 @@ var runtimeCacheStores = struct {
 	stores: map[string]*cacheStore{},
 }
 
-var crankRuntime = struct {
-	sync.Mutex
-	server *crankserver.CrankServer
-}{
-	server: &crankserver.CrankServer{},
-}
+// cacheValues serialises reads and writes of every store's values map.
+//
+// One process-wide lock rather than one per store, deliberately: the values
+// used to be held by calling a gRPC server method in-process, which required
+// swapping a package-level global in the backend for the duration of the call,
+// so a single process-wide lock is the serialisation this code has always had.
+// Keeping it means the change cannot introduce a concurrency difference. It is
+// held only across a single map read or write.
+var cacheValues sync.Mutex
 
 func CacheOpen(args ...object.Object) object.Object {
 	if len(args) != 1 {
@@ -65,7 +64,7 @@ func CacheOpen(args ...object.Object) object.Object {
 	if !exists {
 		runtimeCacheStores.stores[nameObj.Value] = &cacheStore{
 			entries: map[string]cacheEntry{},
-			db:      crankserver.NewDatabase(),
+			values:  map[string][]byte{},
 		}
 	}
 	runtimeCacheStores.Unlock()
@@ -294,7 +293,7 @@ func CacheClear(args ...object.Object) object.Object {
 	runtimeCacheStores.Lock()
 	removed := int64(len(store.entries))
 	store.entries = map[string]cacheEntry{}
-	store.db = crankserver.NewDatabase()
+	store.values = map[string][]byte{}
 	store.stats.clears++
 	runtimeCacheStores.Unlock()
 
@@ -324,7 +323,7 @@ func CacheClose(args ...object.Object) object.Object {
 
 	runtimeCacheStores.Lock()
 	store.entries = map[string]cacheEntry{}
-	store.db = nil
+	store.values = nil
 	runtimeCacheStores.Unlock()
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -374,62 +373,50 @@ func cacheSetJSON(store *cacheStore, key string, value object.Object) *object.Er
 		return newError("cache backend encode: %s", err.Error())
 	}
 
-	db := cacheStoreDBSnapshot(store)
-	if db == nil {
+	values := cacheStoreValuesSnapshot(store)
+	if values == nil {
 		return newError("cache backend set: cache is closed")
 	}
 
-	crankRuntime.Lock()
-	orig := crankserver.Db
-	crankserver.Db = db
-	_, callErr := crankRuntime.server.Set(context.Background(), &crankcql.DataPacket{
-		Key:      key,
-		DataType: crankcql.DataType_JSON,
-		JsonVal:  jsonBytes,
-	})
-	crankserver.Db = orig
-	crankRuntime.Unlock()
+	cacheValues.Lock()
+	values[key] = jsonBytes
+	cacheValues.Unlock()
 
-	if callErr != nil {
-		return newError("cache backend set: %s", callErr.Error())
-	}
 	return nil
 }
 
-// cacheStoreDBSnapshot reads store.db under the same lock that CacheClear/
-// CacheClose use to write it, avoiding a data race and a nil-deref after close.
-// The returned pointer stays valid for the caller even if the store is closed
-// concurrently (the in-flight op completes on the pre-close database).
-func cacheStoreDBSnapshot(store *cacheStore) *crankserver.Database {
+// cacheStoreValuesSnapshot reads store.values under the same lock that
+// CacheClear/CacheClose use to write it, avoiding a data race and a nil-deref
+// after close. The returned map stays usable for the caller even if the store
+// is closed concurrently: CacheClose replaces the field, it does not clear the
+// map, so an in-flight operation completes against the pre-close values.
+func cacheStoreValuesSnapshot(store *cacheStore) map[string][]byte {
 	runtimeCacheStores.RLock()
-	db := store.db
+	values := store.values
 	runtimeCacheStores.RUnlock()
-	return db
+	return values
 }
 
 func cacheGetJSON(store *cacheStore, key string) (object.Object, *object.Error) {
-	db := cacheStoreDBSnapshot(store)
-	if db == nil {
+	values := cacheStoreValuesSnapshot(store)
+	if values == nil {
 		return nil, newError("cache backend get: cache is closed")
 	}
 
-	crankRuntime.Lock()
-	orig := crankserver.Db
-	crankserver.Db = db
-	packet, callErr := crankRuntime.server.Get(context.Background(), &crankcql.GetCommandRequest{Key: key})
-	crankserver.Db = orig
-	crankRuntime.Unlock()
+	cacheValues.Lock()
+	jsonBytes, found := values[key]
+	cacheValues.Unlock()
 
-	if callErr != nil {
-		return nil, newError("cache backend get: %s", callErr.Error())
-	}
-
-	if packet.GetDataType() != crankcql.DataType_JSON {
-		return nil, newError("cache backend get: unsupported type %s", packet.GetDataType().String())
+	// "not found" is load-bearing, not decoration: CacheGet matches this
+	// message to recognise an entry whose value has gone and correct its own
+	// bookkeeping from a hit to a miss. The old backend returned a gRPC
+	// NotFound status whose text happened to contain the same two words.
+	if !found {
+		return nil, newError("cache backend get: key not found")
 	}
 
 	var raw any
-	if err := json.Unmarshal(packet.GetJsonVal(), &raw); err != nil {
+	if err := json.Unmarshal(jsonBytes, &raw); err != nil {
 		return nil, newError("cache backend decode: %s", err.Error())
 	}
 

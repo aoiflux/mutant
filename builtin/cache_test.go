@@ -1,6 +1,9 @@
 package builtin
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,4 +206,75 @@ func cacheTestMustHashValue(t *testing.T, hash *object.Hash, key string) object.
 		t.Fatalf("missing hash key %q", key)
 	}
 	return pair.Value
+}
+
+// TestCachingASecretWritesItNowhere is M26-BLT-005. The cache used to store a
+// value by calling a gRPC server method in-process, and that method logged
+// what it was handed: `log.Printf("key: %v , valType: %v , value: %v", ...)`.
+// mutant never redirected the standard logger, so every cache_put wrote its key
+// and its value to the process's stderr with a timestamp, and every cache_delete
+// wrote the key. refuseClassified stops a classified value before it reaches
+// that call and nothing else was stopped, so a cached password went to terminal
+// scrollback and to any redirected stderr. The reported case was a script
+// caching "hunter2" under "admin_password" and finding both in err.txt.
+//
+// The check is the whole standard logger and not a substring of one call: any
+// future backend that logs is caught the same way. Both the key and the value
+// are sentinels, because the old line carried both.
+func TestCachingASecretWritesItNowhere(t *testing.T) {
+	const (
+		cacheName = "t_cache_no_log"
+		key       = "admin_password_sentinel"
+		secret    = "hunter2-sentinel-must-not-be-logged"
+	)
+
+	var logged bytes.Buffer
+	previous := log.Writer()
+	flags := log.Flags()
+	prefix := log.Prefix()
+	log.SetOutput(&logged)
+	t.Cleanup(func() {
+		log.SetOutput(previous)
+		log.SetFlags(flags)
+		log.SetPrefix(prefix)
+	})
+
+	if _, errObj := unwrapPair(t, CacheOpen(stringObj(cacheName))); errObj != nil {
+		t.Fatalf("unexpected cache_open error: %s", errObj.Inspect())
+	}
+	t.Cleanup(func() { CacheClose(stringObj(cacheName)) })
+
+	if _, errObj := unwrapPair(t, CachePut(stringObj(cacheName), stringObj(key), stringObj(secret))); errObj != nil {
+		t.Fatalf("unexpected cache_put error: %s", errObj.Inspect())
+	}
+
+	// Read it back, so that a cache which silently stored nothing cannot pass
+	// this test by writing nothing to the log either.
+	payload, errObj := unwrapPair(t, CacheGet(stringObj(cacheName), stringObj(key)))
+	if errObj != nil {
+		t.Fatalf("unexpected cache_get error: %s", errObj.Inspect())
+	}
+	hashPayload, ok := payload.(*object.Hash)
+	if !ok {
+		t.Fatalf("cache_get payload is not HASH. got=%T", payload)
+	}
+	value, ok := cacheTestMustHashValue(t, hashPayload, "value").(*object.String)
+	if !ok || value.Value != secret {
+		t.Fatalf("cache did not return what it was given, so this test proves nothing")
+	}
+
+	// cache_delete logged the key too, by writing a null over the value.
+	if _, errObj := unwrapPair(t, CacheDelete(stringObj(cacheName), stringObj(key))); errObj != nil {
+		t.Fatalf("unexpected cache_delete error: %s", errObj.Inspect())
+	}
+
+	if got := logged.String(); got != "" {
+		t.Errorf("the cache wrote %d bytes to the standard logger; it must write none, because that goes to the operator's stderr: %q", len(got), got)
+	}
+	if strings.Contains(logged.String(), secret) {
+		t.Errorf("the cached value reached the standard logger, which is the defect M26-BLT-005 names")
+	}
+	if strings.Contains(logged.String(), key) {
+		t.Errorf("the cached key reached the standard logger")
+	}
 }
