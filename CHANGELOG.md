@@ -2246,6 +2246,20 @@ exhaustive lists.
   message no longer names one cause: it says the instruction did not decode, and that the bytecode
   may be damaged or decrypted with the wrong key, or may come from a newer mutant.
 
+- **`process_kill` refuses a thread id of the running script's own process, not
+  just its pid.** The refuse-self guard compared its argument with the process
+  id and nothing else, and a thread id is not that number: `process_threads()`
+  reports one per OS thread, each positive and well inside `int32`. On Linux a
+  signal addressed to a non-leader thread id is delivered to the whole thread
+  group, so `process_kill(process_threads()["tids"][0])` ended the run through a
+  documented pair of builtins while the guard that exists to refuse exactly that
+  reported nothing. `process_kill` now asks the operating system, at the moment
+  of the call, whether the number names a thread of this process, and refuses it
+  with a sentence saying which process the number belongs to. The thread set is
+  read on every call and never cached, because a Go runtime starts and retires
+  threads on its own schedule and a cached set is a guard with a hole that opens
+  by itself. A pid belonging to any other process is unaffected. (M26-NET-029)
+
 ### Security
 
 - **A string literal in an open document can no longer send the language server

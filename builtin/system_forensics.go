@@ -393,6 +393,33 @@ func ProcessKill(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("process_kill refuses to kill current process"))
 	}
 
+	// The guard above compares the argument with the pid and nothing else, and
+	// a thread id of this process is not that number. process_threads() reports
+	// one per OS thread, each positive and well inside int32, so neither that
+	// comparison nor the pid range check M26-NET-005 adds sees it. On Linux a
+	// signal addressed to a non-leader thread id is delivered to the whole
+	// thread group, so process_kill(process_threads()["tids"][0]) ended the run
+	// through a documented pair of builtins while the guard that exists to
+	// refuse exactly that reported nothing (M26-NET-029). Nothing is truncated
+	// on that path -- the number reaches the process it names -- which is why it
+	// is a different defect from M26-NET-005 and needs a different check.
+	//
+	// Asked here rather than folded into that range check: a range narrows a
+	// number, and this is not a range. It is a question about which process the
+	// number names, answered against procfs at the moment of the kill.
+	//
+	// Both bits of the answer are read, so that the two cases this does NOT
+	// refuse are written down rather than inferred. Answered and not a thread:
+	// procfs answered and the id is not one of ours. Not answered: this host has
+	// no procfs thread directory for this process, and so hands a script no
+	// thread id either -- see sfIsThreadOfThisProcess.
+	isThread, answered := sfIsThreadOfThisProcess(pid)
+	if answered && isThread {
+		return resultAndError(nil, newError("process_kill refuses %d: that is not another "+
+			"process, it is a thread of this one (pid %d), and a signal sent to a thread is "+
+			"delivered to the whole thread group -- it would end this run", pid, os.Getpid()))
+	}
+
 	if runtime.GOOS == "windows" {
 		if len(args) == 2 && sig != syscall.SIGKILL {
 			return resultAndError(nil, newError("process_kill on windows only supports SIGKILL semantic"))
