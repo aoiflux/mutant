@@ -20,7 +20,6 @@ require (
 	github.com/open-policy-agent/opa v1.19.0
 	github.com/saferwall/pe v1.6.5
 	github.com/shirou/gopsutil/v3 v3.24.5
-	github.com/shreybatra/crankdb v0.1.0-beta.2
 	github.com/sourcegraph/jsonrpc2 v0.2.2
 	github.com/tliron/glsp v0.2.2
 	github.com/yuin/gopher-lua v1.1.2
@@ -78,8 +77,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	golang.org/x/arch v0.29.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
-	google.golang.org/grpc v1.83.2 // indirect
 	modernc.org/libc v1.75.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.0 // indirect
