@@ -1684,6 +1684,32 @@ exhaustive lists.
   a chain of sixty elements returned 595,665 results. Each element comes back once, in document
   order (M26-DAT-019).
 
+- **An HTTP message head is bounded in fields as well as in bytes.** Nothing
+  bounded how many header fields a head could carry, and the cost of a field is
+  not its length: each one becomes an entry in an `http.Header` and then a pair
+  in the hash the builtin hands back, which is held as a VM variable and
+  re-encrypted on every store. With a 1 MiB head bound in place, 87,964
+  one-line fields fitted in 1,044,485 bytes on the wire and grew the heap by
+  33,246,576 -- 31.8 times what arrived. A head is now capped at 100 fields, and
+  a head past the cap is refused rather than trimmed: a hash holding the first
+  hundred fields of a larger head would be a wrong answer with nothing in it to
+  say so. The refusal says how many fields arrived as well as how many are
+  allowed, because the difference between 101 and 90,000 is the difference
+  between a verbose client and an attack. The cap counts the lines that
+  arrived, not the distinct names, so a head spelling one name ninety thousand
+  times is ninety thousand fields and not one. It applies to every builtin in
+  this build that turns an HTTP head into a hash: `http_conn_read_request`,
+  `http_conn_read_response`, their two `_head` variants, `http_parse_request`,
+  `http_parse_response` (M26-NET-028), and `http_get`, `http_post` and
+  `http_request`, whose response head had no byte bound of its own beyond
+  `net/http`'s 10 MiB transport default (M26-NET-032). **This is a behaviour
+  change**: a script reading a head of more than 100 fields used to get a hash
+  and now gets an error. 100 is Apache httpd's `LimitRequestFields` default and
+  Tomcat's `maxHeaderCount` default; `net/http` has no field count of its own.
+  Email headers are deliberately not capped at this figure -- a real message
+  accumulates a `Received` field per hop -- and `email_parse` and its four
+  siblings are unchanged.
+
 ### Security
 
 - **A field named twice in a sealed document was authenticated away.** `encoding/json` keeps the

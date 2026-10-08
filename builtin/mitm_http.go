@@ -106,6 +106,9 @@ func HTTPConnReadRequestHead(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("http_conn_read_request_head: %s", err.Error()))
 	}
+	if fieldErr := checkHTTPHeaderFields(req.Header); fieldErr != nil {
+		return resultAndError(nil, newError("http_conn_read_request_head: %s", fieldErr.Error()))
+	}
 
 	host := req.Host
 	query := ""
@@ -144,6 +147,9 @@ func HTTPConnReadResponseHead(args ...object.Object) object.Object {
 	resp, err := http.ReadResponse(mc.buffered(), nil)
 	if err != nil {
 		return resultAndError(nil, newError("http_conn_read_response_head: %s", err.Error()))
+	}
+	if fieldErr := checkHTTPHeaderFields(resp.Header); fieldErr != nil {
+		return resultAndError(nil, newError("http_conn_read_response_head: %s", fieldErr.Error()))
 	}
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"status":         intObj(int64(resp.StatusCode)),
@@ -323,6 +329,17 @@ func applyReadDeadline(mc *managedConn, timeoutMs int64) {
 }
 
 func requestToHash(opName string, req *http.Request) (object.Object, *object.Error) {
+	// Refused ahead of the body read, and without closing the body: Close()
+	// on a net/http body fully consumes what is left of it
+	// (net/http/transfer.go:1003-1006 in go1.26.6), so closing here would
+	// drain the body of a message just refused -- and against a peer that
+	// declares a body and never sends it, that drain waits for the deadline.
+	// The connection stays the script's to close, as it is on every other
+	// error return in this file (M26-NET-028).
+	if fieldErr := checkHTTPHeaderFields(req.Header); fieldErr != nil {
+		return nil, newError("%s: %s", opName, fieldErr.Error())
+	}
+
 	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxHTTPBodyBytes))
 	_ = req.Body.Close()
 	if err != nil {
@@ -353,6 +370,12 @@ func requestToHash(opName string, req *http.Request) (object.Object, *object.Err
 }
 
 func responseToHash(opName string, resp *http.Response) (object.Object, *object.Error) {
+	// Ahead of the body read and without closing it, for the reason written
+	// out in requestToHash above (M26-NET-028).
+	if fieldErr := checkHTTPHeaderFields(resp.Header); fieldErr != nil {
+		return nil, newError("%s: %s", opName, fieldErr.Error())
+	}
+
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBodyBytes))
 	_ = resp.Body.Close()
 	if err != nil {

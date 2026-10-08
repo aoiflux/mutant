@@ -117,7 +117,12 @@ let leaf, err = tls_sign_cert(ca_cert, ca_key, leaf_opts);
 | `http_conn_read_response` | `(handle, timeoutMs)` | parsed response off a live socket |
 
 The `http_conn_read_*` builtins read exactly one message with correct
-`Content-Length` / chunked framing (bodies are capped at 32 MiB). Byte reads
+`Content-Length` / chunked framing (bodies are capped at 32 MiB). A head
+carrying more than 100 header fields is refused rather than trimmed, by every
+builtin on this page that returns a `headers` hash and by `http_get`,
+`http_post` and `http_request`: the cost of a field is not its length, so a
+bound counted in bytes does not see a head of a hundred thousand five-byte
+fields. Repeats of one field name each count as a field. Byte reads
 (`net_conn_read`) and framed reads share the same buffered stream per handle, so
 they can be mixed safely on one connection.
 

@@ -262,6 +262,21 @@ func httpResponseOrError(resp *http.Response, err error) object.Object {
 	}
 	defer resp.Body.Close()
 
+	// A response head past the cap is refused before the io.ReadAll below,
+	// which has no size bound of its own (M26-NET-021), and before the
+	// headers hash is built. The deferred Close above still runs, so the body
+	// is still drained for connection reuse: what this saves is the unbounded
+	// read into memory and the hash that outlives the call, not the bytes on
+	// the wire.
+	//
+	// This family's head budget is not the interception builtins': httpClient's
+	// transport sets no MaxResponseHeaderBytes, so net/http's default of 10
+	// MiB applies (net/http/transport.go:333 in go1.26.6), which is ten times
+	// the head and so ten times the field count (M26-NET-032).
+	if err := checkHTTPHeaderFields(resp.Header); err != nil {
+		return httpErrorResult(err)
+	}
+
 	rawBody, readErr := io.ReadAll(resp.Body)
 	bodyStr := ""
 	if readErr == nil {
