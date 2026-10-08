@@ -582,3 +582,51 @@ func TestMissingAssetErrorDistinguishesAbsentFromCorrupt(t *testing.T) {
 		}
 	}
 }
+
+// Section 7 is the one place the page asks the reader to *run* what they built,
+// and on Windows that is where the shell starts to matter. Measured 2026-10-08
+// with bash.exe as the direct parent: `mutant gen` and `mutant release`
+// complete, while running the .mu and running the standalone binary both halt
+// with type=MSYS/Cygwin or legacy WSL at confidence 90. That halt is correct --
+// an emulated shell is one of the environments the detector exists to notice
+// (owner decision 2026-10-07) -- but the section's fences are all ```bash, so a
+// Windows reader following them lands on a security stop 350 lines after the
+// subsection that explains it. One line pointing back is the whole fix
+// (M26-DOC1-016).
+//
+// Conditional on the section still running something: if `mutant release` and
+// the standalone invocation go away, so does the obligation.
+func TestTutorialShipSectionNamesItsShell(t *testing.T) {
+	const doc = "docs/TUTORIAL_30_MIN.md"
+	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+
+	start := strings.Index(text, "## 7.")
+	if start < 0 {
+		return
+	}
+	end := strings.Index(text[start:], "\n## ")
+	if end < 0 {
+		t.Fatalf("%s section 7 never ends, so it cannot be isolated", doc)
+	}
+	ship := text[start : start+end]
+
+	// Does this section actually run a program? A password-file invocation of a
+	// built artifact is the shape that halts.
+	if !strings.Contains(ship, "./triage.exe") && !strings.Contains(ship, "mutant triage.mu") {
+		return
+	}
+
+	if !strings.Contains(ship, "```bash") {
+		return
+	}
+
+	for _, want := range []string{"PowerShell", "Git Bash"} {
+		if !strings.Contains(ship, want) {
+			t.Errorf("%s section 7 shows bash fences for commands that run a built artifact, but never mentions %q. On Windows those commands halt when the parent is Git Bash, and a reader who followed the page this far has no reason to connect that to section 1.", doc, want)
+		}
+	}
+}

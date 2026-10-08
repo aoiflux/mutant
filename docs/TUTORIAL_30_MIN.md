@@ -494,6 +494,13 @@ its line numbers stripped, so there is nothing in one to step through. See
 You have been using `--dev` and a public key. Two commands turn the same source
 into something you can actually hand over.
 
+> **On Windows, run this section from PowerShell or `cmd`.** Compiling is fine
+> anywhere, but the two commands here that *run* a program — the `.mu` and the
+> standalone binary — halt when their parent is Git Bash, which is one of the
+> things the detector exists to notice
+> ([section 1](#if-it-says-sandbox-detected-execution-halted) has the detail).
+> `--compat` makes the halt a warning if you would rather stay where you are.
+
 **An encrypted artifact.** This is the `.mu` from step 1, made properly:
 
 ```bash
