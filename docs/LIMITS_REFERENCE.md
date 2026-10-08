@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-65 limits in 7 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 120 limits that are not named yet; `policy/limit_budget.go` lists each one.
+66 limits in 7 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 120 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -45,6 +45,7 @@ and are not listed.
 | `maxJSONDepth` | 10,000 | depth | -- | maxJSONDepth bounds how deeply arrays and objects may nest in one document. It is the bound encoding/json's own decoder applied while these builtins used it, kept the same now that they read a document token by token, so nothing that parsed before is refused for its depth. | `builtin/json.go` |
 | `maxPcapPacketBytes` | 128 MiB | bytes | -- | maxPcapPacketBytes is the ceiling on one pcap record, for the single case where the file's own size is no guide to it: pcapgo decompresses a gzipped capture transparently, and a compressed file's length bounds nothing inside it. | `builtin/net.go` |
 | `maxPcapPackets` | 1,000,000 | count | -- | maxPcapPackets is how many records net_capture_raw returns before it stops and marks the result truncated. Each record becomes a hash in a VM variable, so the cost is per packet rather than per byte, and a capture of a busy link holds far more packets than anyone reads at once. Past the cap the result says so, which is the difference between a short answer and a wrong one. | `builtin/net.go` |
+| `maxPcapStreamBytes` | 1,530,000,000 bytes | bytes | -- | maxPcapStreamBytes is the most a compressed capture may expand to while one of the three pcap builtins reads it. | `builtin/net.go` |
 | `maxRedactionLine` | 4,096 | count | -- | maxRedactionLine bounds the walk back through a record's reclassifications. Each step is a reclassification an examiner recorded, so a line longer than this is not one anybody recorded by hand, and the walk refuses it rather than following it. | `builtin/redaction_version.go` |
 | `maxRoleBundleViews` | 256 | count | -- | maxRoleBundleViews bounds one bundle's view list. A bundle cannot usefully hold more views than a case would ever declare, and a longer list is one with repeats in it, which are refused on their own account anyway. | `builtin/recipient_role.go` |
 | `maxSearchContext` | 4 KiB | bytes | -- | maxSearchContext bounds the context at a page. A context is for recognising a hit; the passage around one is record_read's to return. | `builtin/record_search.go` |

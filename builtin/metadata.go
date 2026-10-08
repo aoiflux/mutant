@@ -2314,7 +2314,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns: pairRet("the records found; a STRING for a single-value record type", ParamString, ParamArray)},
 	BuiltinNameNetPcapAnalyze: {
 		signature: "net_pcap_analyze(path)",
-		summary:   "Analyzes PCAP captures and returns flow/session signals.",
+		summary:   "Analyzes PCAP captures and returns flow/session signals. Returns {file, link_type, packet_count, truncated, bytes_total, ipv4_packets, ipv6_packets, tcp_packets, udp_packets, icmp_packets, other_packets, first_ts, last_ts, duration_ms, flows:[{src, dst, sport, dport, proto, packets, bytes}]}. truncated is true when the capture held more records than the record cap, or a compressed capture expanded past the stream cap; then every count and every flow row covers only the records read. Returns (result, err).",
 		returns:   pairRet("the flow and session signals found in the capture", ParamHash), params: []builtinParamDoc{param("path", "Path to the capture file.", ParamString)}},
 	BuiltinNameNetCaptureRaw: {
 		signature: "net_capture_raw(pcap_path)",
@@ -2328,7 +2328,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("one hash per reconstructed flow", ParamArray).ofElem(ParamHash).withFields("bytes", "dport", "dst", "packets", "proto", "sport", "src")},
 	BuiltinNameNetOsFingerprint: {
 		signature: "net_os_fingerprint(pcap_path)",
-		summary:   "Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges.",
+		summary:   "Passively fingerprints OS families from TCP SYN/SYN-ACK packets in an offline pcap (p0f-style heuristic over TTL, DF, window, and TCP options). Identifies an OS family, not a definitive OS; runs offline with no privileges. Returns {file, link_type, syn_packets, truncated, hosts:[{ip, ip_version, packet_type, os_guess, confidence, observed_ttl, initial_ttl, hops, window, df, mss, window_scale, sack_permitted, timestamps, tcp_options, signature}]}. truncated is true when the capture held more records than the record cap, or a compressed capture expanded past the stream cap; then only the hosts seen in the records read are listed. Returns (result, err).",
 		params: []builtinParamDoc{
 			param("pcap_path", "Path to a pcap file to analyze.", ParamString),
 		},

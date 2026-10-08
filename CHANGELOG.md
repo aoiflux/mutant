@@ -2204,6 +2204,28 @@ exhaustive lists.
   zero value; and `reg_list_values` fails rather than silently omitting a value
   that vanished while it was listing. (M26-NET-004)
 
+- **A small `.pcap.gz` was an unbounded read in `net_pcap_analyze` and `net_os_fingerprint`.**
+  Both looped over every record in a capture and accumulated a map entry per flow and per
+  fingerprint with no cap at all, and pcapgo recognises the gzip magic and wraps the file in a
+  decompressor, so the size of a compressed capture bounded nothing inside it. A 31 KiB file of
+  two million sixteen-byte record headers read for 2.3 seconds, and 200,000 records each carrying
+  a distinct flow left 224 MiB of live heap behind — 541 bytes per record, linear in a count the
+  file does not disclose, so a larger file is an out-of-memory rather than a slow read. Evidence
+  files are untrusted by definition. `net_capture_raw`, which already stopped at a record cap and
+  marked the result `truncated`, was the contrast rather than a third case. Two bounds now
+  compose, and both are reported the way `net_capture_raw` already reported its one: the record
+  cap it had is now shared by all three readers, and a new named limit bounds how far a
+  *compressed* capture may expand. The second bound is on the decompressed stream and not on the
+  file, because the file's smallness is the attack — gopacket opens the decompressor itself, so
+  Mutant now opens the gzip layer first and hands gopacket a stream that has already been counted.
+  A capture gzipped more than once is refused, because a second decompressor inside gopacket would
+  sit outside that count; such a file failed its header check before this change too. All three
+  builtins return `truncated: true` when they stopped at either bound, and then every count, every
+  flow row and every fingerprint covers only the records that were read. An uncompressed capture
+  is read exactly as before: there the file's own length is the bound, and a constant could only
+  refuse something real. (M26-NET-027, and M26-NET-034 for the result size a million flow rows
+  still reaches)
+
 ### Security
 
 - **A string literal in an open document can no longer send the language server

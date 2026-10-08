@@ -1,11 +1,14 @@
 package builtin
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -100,19 +103,162 @@ func capPcapSnaplen(reader *pcapgo.Reader, file *os.File) {
 // ReadAt is used rather than a seek because the reader already holds this file
 // and has consumed its header; ReadAt does not move the shared offset.
 func pcapUncompressedSize(file *os.File) (int64, bool) {
+	compressed, known := pcapIsGzip(file)
+	if !known || compressed {
+		return 0, false
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return 0, false
 	}
-	var magic [2]byte
-	if _, err := file.ReadAt(magic[:], 0); err != nil {
-		return 0, false
-	}
-	if magic[0] == 0x1f && magic[1] == 0x8b {
-		return 0, false
-	}
 	return info.Size(), true
 }
+
+// pcapIsGzip reports whether the capture is gzipped, and whether that could
+// be read at all.
+//
+// Two answers rather than one, because they lead to different places: a file
+// whose first two bytes cannot be read is not known to be uncompressed, and
+// reading "could not tell" as "not compressed" would bound a decompressor's
+// output by the length of the file it came out of.
+//
+// The test is the one pcapgo's own readHeader makes -- the two gzip magic
+// bytes -- and it is written once because two copies of a magic number drift.
+// ReadAt leaves the shared offset alone, as above.
+func pcapIsGzip(file *os.File) (bool, bool) {
+	var magic [2]byte
+	if _, err := file.ReadAt(magic[:], 0); err != nil {
+		return false, false
+	}
+	return magic[0] == 0x1f && magic[1] == 0x8b, true
+}
+
+// maxPcapStreamBytes is the most a compressed capture may expand to while one
+// of the three pcap builtins reads it.
+//
+// pcapgo opens the decompressor itself: readHeader peeks two bytes and, on the
+// gzip magic, replaces its own reader with a gzip.Reader. A bound handed to
+// pcapgo.NewReader therefore counts the bytes on disk, and those are the wrong
+// number -- a capture's smallness when compressed is the whole of the attack.
+// Measured here: a 31 KiB .pcap.gz of two million sixteen-byte record headers
+// read for 2.3 seconds, and 200,000 records carrying a distinct flow each left
+// 224 MiB of live heap behind. So the bound sits on the decompressed side of
+// the gzip layer, which is why pcapRecordStream opens that layer rather than
+// leaving it to pcapgo.
+//
+// The figure is derived and not chosen. A million records -- the record cap --
+// each a record header and a whole Ethernet frame, is the largest stream that
+// cap can honestly ask for, so no capture this bound stops short of its end is
+// one the record cap would have read whole. It lands within half a gibibyte of
+// maxDecompressedBytes, the ceiling builtin/archive.go puts on a single
+// decompression, which is this tree's existing figure for the most a
+// compressed stream may produce.
+//
+// Where the capture is NOT compressed, no bound of ours applies: the file's
+// own length bounds the stream, the operating system enforces it, and a
+// constant here could only refuse a capture the file cannot hold. That is
+// capPcapSnaplen's reasoning one level up -- the real figure wherever there is
+// one, a constant only where there is not.
+//
+//mutant:limit bytes
+const maxPcapStreamBytes = maxPcapPackets * (pcapRecordHeaderBytes + pcapEthernetFrameBytes)
+
+// pcapRecordHeaderBytes is a pcap record header: ts_sec, ts_usec, incl_len and
+// orig_len, four 32-bit fields ahead of every record in the file. A format
+// fact, not a limit.
+const pcapRecordHeaderBytes = 16
+
+// pcapEthernetFrameBytes is a whole Ethernet frame as a capture stores one:
+// the 14-byte header and the 1500-byte MTU, with no VLAN tag and no frame
+// check sequence. A format fact, not a limit; it is named because
+// maxPcapStreamBytes is derived from it rather than typed out.
+const pcapEthernetFrameBytes = 1514
+
+// errPcapStreamFull is what a read past the stream cap returns.
+//
+// It is returned unwrapped and the readers compare it with ==: this package's
+// macro-purity guard forbids errors.Is from an allowlisted builtin, and an
+// unwrapped sentinel is what that comparison needs anyway.
+var errPcapStreamFull = errors.New("the capture expands past the decompressed-stream cap")
+
+// errPcapNestedGzip refuses a capture that is gzipped more than once.
+//
+// Nothing readable is lost by it. pcapgo unwraps exactly one layer, so a
+// doubly gzipped capture fails its header check today with "Unknown magic";
+// accepting one here would put a second decompressor BEYOND the cap below,
+// defeating the bound pcapRecordStream exists to impose with the same trick
+// one layer in.
+var errPcapNestedGzip = errors.New("the capture is gzipped more than once, and the " +
+	"decompressor inside the cap would itself be read through another one outside it; " +
+	"gunzip it once and read the result")
+
+// pcapCappedReader bounds the bytes drawn through it, and says so when it
+// stops rather than looking like the end of the file.
+//
+// io.LimitedReader is the wrong tool here, and the reason is this row itself:
+// it returns EOF at its bound, and EOF is how a capture ends, so a read cut
+// off at the cap would be indistinguishable from one that finished -- a silent
+// drop handed back as a whole answer. Reaching the bound is an error the three
+// readers recognise, and what they report for it is truncated.
+type pcapCappedReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *pcapCappedReader) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, errPcapStreamFull
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	return n, err
+}
+
+// pcapRecordStream is the stream a pcapgo.Reader should read a capture from.
+//
+// An uncompressed capture is handed to pcapgo exactly as it was before this
+// existed. A gzipped one is decompressed here instead, with the cap on the
+// decompressed side of it, and pcapgo is then given a stream that no longer
+// begins with the gzip magic -- so it attaches no decompressor of its own, and
+// every byte it reads has been counted.
+func pcapRecordStream(file *os.File) (io.Reader, error) {
+	compressed, known := pcapIsGzip(file)
+	if !known || !compressed {
+		return file, nil
+	}
+	decompressed, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	stream := bufio.NewReader(&pcapCappedReader{r: decompressed, remaining: pcapStreamBytesAllowed()})
+	magic, err := stream.Peek(2)
+	if err != nil {
+		return nil, err
+	}
+	if magic[0] == 0x1f && magic[1] == 0x8b {
+		return nil, errPcapNestedGzip
+	}
+	return stream, nil
+}
+
+// pcapRecordsAllowed and pcapStreamBytesAllowed are the two caps, indirected
+// so that a test can lower them, as auditNow indirects the clock.
+//
+// The indirection is what makes the bounds testable rather than merely
+// asserted, and both halves of this row need it. A million records is about a
+// second of reading per builtin, and the test that holds the record cap
+// measures the difference between two reads five times over, which is twenty
+// reads; the stream cap is 1.4 GiB and could not be reached in a test at all.
+// Lowering a cap lets a test prove that the loop stops and that the flag is
+// set, which is the property. A test that checked the wording of a refusal
+// would prove neither.
+var (
+	pcapRecordsAllowed     = func() int64 { return maxPcapPackets }
+	pcapStreamBytesAllowed = func() int64 { return maxPcapStreamBytes }
+)
 
 type netFlowSummary struct {
 	src     string
@@ -504,7 +650,9 @@ func NetDNSQuery(args ...object.Object) object.Object {
 // NetCaptureRaw reads raw packets from an offline pcap file and returns a
 // per-packet listing. (Live capture needs cgo/privileged raw sockets, which are
 // off the table; this is the honest offline counterpart — net_pcap_analyze gives
-// the flow summary, this gives the packets.) Capped at 1,000,000 packets.
+// the flow summary, this gives the packets.) Capped at 1,000,000 packets, and
+// a compressed capture at maxPcapStreamBytes of decompressed stream; past
+// either, the result says truncated.
 func NetCaptureRaw(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
@@ -520,12 +668,17 @@ func NetCaptureRaw(args ...object.Object) object.Object {
 	}
 	defer file.Close()
 
-	reader, err := pcapgo.NewReader(file)
+	stream, err := pcapRecordStream(file)
+	if err != nil {
+		return resultAndError(nil, newError("net_capture_raw: %s", err.Error()))
+	}
+	reader, err := pcapgo.NewReader(stream)
 	if err != nil {
 		return resultAndError(nil, newError("net_capture_raw: %s", err.Error()))
 	}
 	capPcapSnaplen(reader, file)
 	linkType := reader.LinkType()
+	recordsAllowed := pcapRecordsAllowed()
 	packets := make([]object.Object, 0)
 	truncated := false
 	index := int64(0)
@@ -534,10 +687,19 @@ func NetCaptureRaw(args ...object.Object) object.Object {
 		if readErr == io.EOF {
 			break
 		}
+		// The stream cap is a short answer and not a failure, so it ends the
+		// read with truncated set rather than throwing away the packets already
+		// in hand. Compared with == and not errors.Is: the cap returns the
+		// sentinel unwrapped, and this package's macro-purity guard forbids
+		// errors.Is from an allowlisted builtin.
+		if readErr == errPcapStreamFull {
+			truncated = true
+			break
+		}
 		if readErr != nil {
 			return resultAndError(nil, newError("net_capture_raw: %s", readErr.Error()))
 		}
-		if len(packets) >= maxPcapPackets {
+		if int64(len(packets)) >= recordsAllowed {
 			truncated = true
 			break
 		}
@@ -600,6 +762,14 @@ func pcapPacketFields(packet gopacket.Packet) (src, dst, proto string, sport, dp
 	return
 }
 
+// NetPCAPAnalyze summarises an offline capture: the per-protocol counts, the
+// time span, and one row per flow.
+//
+// It reads at most maxPcapPackets records, and at most maxPcapStreamBytes out
+// of a compressed capture, because the file holds one map entry's worth of
+// cost per record and a gzipped capture's size on disk bounds neither. A read
+// that stopped at either bound returns truncated, and then every count here
+// and every flow row covers only the records that were read.
 func NetPCAPAnalyze(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
@@ -616,7 +786,11 @@ func NetPCAPAnalyze(args ...object.Object) object.Object {
 	}
 	defer file.Close()
 
-	reader, err := pcapgo.NewReader(file)
+	stream, err := pcapRecordStream(file)
+	if err != nil {
+		return resultAndError(nil, newError("net_pcap_analyze: %s", err.Error()))
+	}
+	reader, err := pcapgo.NewReader(stream)
 	if err != nil {
 		return resultAndError(nil, newError("net_pcap_analyze: %s", err.Error()))
 	}
@@ -637,13 +811,30 @@ func NetPCAPAnalyze(args ...object.Object) object.Object {
 	firstTs := time.Time{}
 	lastTs := time.Time{}
 
+	recordsAllowed := pcapRecordsAllowed()
+	truncated := false
+
 	for {
 		data, ci, readErr := reader.ReadPacketData()
 		if readErr == io.EOF {
 			break
 		}
+		// A capped read is a partial summary and not a failure, so it ends the
+		// loop with truncated set. == and not errors.Is, as in net_capture_raw.
+		if readErr == errPcapStreamFull {
+			truncated = true
+			break
+		}
 		if readErr != nil {
 			return resultAndError(nil, newError("net_pcap_analyze: %s", readErr.Error()))
+		}
+		// One map entry per flow and one hash per entry, so the length of this
+		// loop is what the flow map costs: the record cap is the map cap. It is
+		// checked before the record is accounted for, so packet_count never
+		// reports more records than were read.
+		if packetCount >= recordsAllowed {
+			truncated = true
+			break
 		}
 
 		packetCount++
@@ -757,6 +948,7 @@ func NetPCAPAnalyze(args ...object.Object) object.Object {
 		"file":          stringObj(pathObj.Value),
 		"link_type":     stringObj(linkType.String()),
 		"packet_count":  intObj(packetCount),
+		"truncated":     boolObj(truncated),
 		"bytes_total":   intObj(bytesTotal),
 		"ipv4_packets":  intObj(ipv4Count),
 		"ipv6_packets":  intObj(ipv6Count),
@@ -888,6 +1080,12 @@ func (fp *osFingerprint) signature() string {
 // IP TTL, the DF bit, the TCP window, and the TCP option layout. This is a
 // heuristic (like p0f) — it identifies an OS *family*, not a definitive OS — and
 // runs entirely offline in pure Go, so it needs no privileges or capture backend.
+//
+// It reads at most maxPcapPackets records, and at most maxPcapStreamBytes out
+// of a compressed capture: every record costs a decoded packet whether it
+// carries a SYN or not, and one fingerprint is kept per host and packet type.
+// A read that stopped at either bound returns truncated, and then the hosts
+// listed are only those seen in the records that were read.
 func NetOSFingerprint(args ...object.Object) object.Object {
 	if len(args) != 1 {
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
@@ -903,7 +1101,11 @@ func NetOSFingerprint(args ...object.Object) object.Object {
 	}
 	defer file.Close()
 
-	reader, err := pcapgo.NewReader(file)
+	stream, err := pcapRecordStream(file)
+	if err != nil {
+		return resultAndError(nil, newError("net_os_fingerprint: %s", err.Error()))
+	}
+	reader, err := pcapgo.NewReader(stream)
 	if err != nil {
 		return resultAndError(nil, newError("net_os_fingerprint: %s", err.Error()))
 	}
@@ -913,15 +1115,32 @@ func NetOSFingerprint(args ...object.Object) object.Object {
 	prints := map[string]*osFingerprint{}
 	keys := make([]string, 0)
 	synCount := int64(0)
+	records := int64(0)
+	recordsAllowed := pcapRecordsAllowed()
+	truncated := false
 
 	for {
 		data, _, readErr := reader.ReadPacketData()
 		if readErr == io.EOF {
 			break
 		}
+		// As in the two readers above: the cap ends the read with truncated
+		// set, and the sentinel is compared with ==.
+		if readErr == errPcapStreamFull {
+			truncated = true
+			break
+		}
 		if readErr != nil {
 			return resultAndError(nil, newError("net_os_fingerprint: %s", readErr.Error()))
 		}
+		// Counted per record and not per SYN. A record that carries no SYN is
+		// skipped a few lines below, but it has already cost a decoded packet,
+		// and the record is the thing a file can hold an unbounded number of.
+		if records >= recordsAllowed {
+			truncated = true
+			break
+		}
+		records++
 
 		packet := gopacket.NewPacket(data, linkType, gopacket.NoCopy)
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
@@ -1015,6 +1234,7 @@ func NetOSFingerprint(args ...object.Object) object.Object {
 		"file":        stringObj(pathObj.Value),
 		"link_type":   stringObj(linkType.String()),
 		"syn_packets": intObj(synCount),
+		"truncated":   boolObj(truncated),
 		"hosts":       &object.Array{Elements: hosts},
 	}), nil)
 }
