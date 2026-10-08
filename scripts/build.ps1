@@ -4,7 +4,11 @@ Param(
     [string]$FinalName = "mutant",
     [switch]$HostOnly,
     [switch]$WasmRepl,
-    [string]$WasmOutDir = "$OutputDir/wasm-repl"
+    [string]$WasmOutDir = "$OutputDir/wasm-repl",
+    # How the Go toolchain is spelled on this machine. WHICH version a release
+    # may be built with is go.mod's business, and it is checked below rather
+    # than trusted. Pass -Go go1.26.6 to use a golang.org/dl shim.
+    [string]$Go = "go"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +19,20 @@ if ($PSBoundParameters.ContainsKey("WasmRepl")) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+
+# A release is built with the toolchain go.mod names, and this script refuses
+# any other. Not pedantry about patch numbers: go1.27.0 turns the jsonv2
+# experiment on by default, so encoding/json compiles from its v2_*.go sources
+# and the v1 files are not built at all, while every gate of the 2.6.0 review
+# ran on the v1 engine. Owner decision 2026-10-08. release_gate.ps1 already
+# refuses a mismatch; without the same check HERE a release could be gated on
+# one engine and shipped from the other, which is how v2.5.0 came to be built
+# with a newer Go than its own tag pinned.
+$goModVersion = (Select-String -Path (Join-Path $repoRoot "go.mod") -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value
+$goVersion = (& $Go env GOVERSION).Trim()
+if ($goVersion -ne "go$goModVersion") {
+    throw "go.mod pins go $goModVersion but '$Go' is $goVersion; install it with ``go install golang.org/dl/go$goModVersion@latest`` then ``go$goModVersion download``, and pass -Go go$goModVersion"
+}
 $targets = @(
     @{ GoOS = "windows"; GoArch = "amd64"; ExeSuffix = ".exe" },
     @{ GoOS = "windows"; GoArch = "arm64"; ExeSuffix = ".exe" },
@@ -141,9 +159,9 @@ New-Item -ItemType Directory -Path (Join-Path $repoRoot $OutputDir) -Force | Out
 $exeSuffix = if ($IsWindows) { ".exe" } else { "" }
 $bootstrapPath = Join-Path $repoRoot (Join-Path $OutputDir ("mutant-bootstrap" + $exeSuffix))
 
-$hostInfo = & go env GOHOSTOS GOHOSTARCH
+$hostInfo = & $Go env GOHOSTOS GOHOSTARCH
 if ($LASTEXITCODE -ne 0 -or -not $hostInfo -or $hostInfo.Count -lt 2) {
-    throw "Failed to detect Go host target via 'go env GOHOSTOS GOHOSTARCH'"
+    throw "Failed to detect Go host target via '$Go env GOHOSTOS GOHOSTARCH'"
 }
 $goHostOS = $hostInfo[0].Trim()
 $goHostArch = $hostInfo[1].Trim()
@@ -159,7 +177,7 @@ Push-Location $repoRoot
 try {
     Start-Step "Compile Go bootstrap binary"
     Invoke-Checked -What "Go bootstrap build" -Command {
-        go build @goBuildArgs -o $bootstrapPath .
+        & $Go build @goBuildArgs -o $bootstrapPath .
     }
     Write-Host "    Bootstrap binary: $bootstrapPath" -ForegroundColor DarkGray
 
@@ -191,7 +209,7 @@ try {
 
             Write-Host "    Go => $targetLabel" -ForegroundColor DarkGray
             Invoke-Checked -What "Go final build for $targetLabel" -Command {
-                go build @goBuildArgs -o $finalPath .
+                & $Go build @goBuildArgs -o $finalPath .
             }
             $binaryNames += $targetName
             Write-Host "      binary: $finalPath" -ForegroundColor DarkGray
@@ -209,7 +227,7 @@ try {
         $wasmOutPath = Join-Path $repoRoot $WasmOutDir
         New-Item -ItemType Directory -Path $wasmOutPath -Force | Out-Null
 
-        $goRoot = (& go env GOROOT).Trim()
+        $goRoot = (& $Go env GOROOT).Trim()
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($goRoot)) {
             throw "Failed to resolve GOROOT for wasm artifact setup"
         }
@@ -226,7 +244,7 @@ try {
 
             $wasmPath = Join-Path $wasmOutPath "mutant_repl.wasm"
             Invoke-Checked -What "WASM browser REPL build" -Command {
-                go build @goBuildArgs -o $wasmPath ./cmd/replwasm
+                & $Go build @goBuildArgs -o $wasmPath ./cmd/replwasm
             }
             Write-Host "    wasm: $wasmPath" -ForegroundColor DarkGray
             Write-Host "    wasm_exec.js: $(Join-Path $wasmOutPath "wasm_exec.js")" -ForegroundColor DarkGray
