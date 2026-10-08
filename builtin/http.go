@@ -277,10 +277,25 @@ func httpResponseOrError(resp *http.Response, err error) object.Object {
 		return httpErrorResult(err)
 	}
 
+	// io.ReadAll stops at the first error, so rawBody holds whatever arrived
+	// before the stream broke. Those bytes are kept, and the reason travels
+	// with them in the error field: readErr used to be read once here and never
+	// looked at again while the error field below was a hard-coded "", so a
+	// response cut off mid-body arrived as a successful response with an empty
+	// body -- real status, real headers, no error anywhere (M26-NET-002).
+	//
+	// httpResponseOrError2 decides whether to return a Go-level error by reading
+	// that field, so setting it is what makes http_get, http_post and
+	// http_request all report this.
+	//
+	// The status line and the headers did arrive and are not in doubt, so they
+	// are reported as they always were. That is also what lets a caller tell a
+	// truncated response, which carries a real status, from a connection that
+	// never produced one, which httpErrorResult reports with status 0.
 	rawBody, readErr := io.ReadAll(resp.Body)
-	bodyStr := ""
-	if readErr == nil {
-		bodyStr = string(rawBody)
+	errText := ""
+	if readErr != nil {
+		errText = "reading body: " + readErr.Error()
 	}
 
 	// Build headers Hash
@@ -291,9 +306,9 @@ func httpResponseOrError(resp *http.Response, err error) object.Object {
 
 	return makeHashObject(map[string]object.Object{
 		"status":  intObj(int64(resp.StatusCode)),
-		"body":    stringObj(bodyStr),
+		"body":    stringObj(string(rawBody)),
 		"headers": makeHashObject(headerPairs),
-		"error":   stringObj(""),
+		"error":   stringObj(errText),
 	})
 }
 

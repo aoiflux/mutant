@@ -77,8 +77,12 @@ func sqliteQueryBuiltin(name string, cell sqlCellConverter, args ...object.Objec
 		if !ok {
 			return resultAndError(nil, newError("argument 3 to `%s` must be ARRAY, got %s", name, args[2].Type()))
 		}
-		for _, el := range arr.Elements {
-			params = append(params, objToSQLParam(el))
+		for i, el := range arr.Elements {
+			param, err := objToSQLParam(el)
+			if err != nil {
+				return resultAndError(nil, newError("%s: parameter %d: %s", name, i+1, err.Error()))
+			}
+			params = append(params, param)
 		}
 	}
 
@@ -236,6 +240,16 @@ func queryDBWith(db *sql.Conn, cell sqlCellConverter, query string, params ...an
 	if err != nil {
 		return nil, nil, false, err
 	}
+	// A row is a hash keyed by column name, so two columns of one name --
+	// SELECT * over a join, say -- kept only the second's value, while the
+	// columns list named both.
+	seen := make(map[string]bool, len(columns))
+	for _, c := range columns {
+		if seen[c] {
+			return nil, nil, false, fmt.Errorf("the result has two columns named %q, and a row holds one value per name; name one with AS", c)
+		}
+		seen[c] = true
+	}
 
 	out := make([]map[string]object.Object, 0)
 	truncated := false
@@ -324,27 +338,41 @@ func sqlValueToObject(v any) object.Object {
 			return stringObj(string(x))
 		}
 		return stringObj(hex.EncodeToString(x))
+	// TEXT in a column declared DATE, DATETIME or TIMESTAMP reaches here already
+	// parsed by the driver, which offers no way to keep the text. It is
+	// rendered with its fraction and the offset it was written with -- and as
+	// UTC when it was written with none, which is how SQLite's own date
+	// functions read it. It used to be moved to UTC and cut to the second, so
+	// '03:04:05.678+05:30' came back as '21:34:05Z' (M26-DAT-024).
+	// CAST(col AS TEXT) returns the text as stored.
 	case time.Time:
-		return stringObj(x.UTC().Format(time.RFC3339))
+		return stringObj(x.Format(time.RFC3339Nano))
 	default:
 		return stringObj(fmt.Sprintf("%v", x))
 	}
 }
 
-func objToSQLParam(o object.Object) any {
+// objToSQLParam turns a Mutant value into the value SQLite binds. A buffer
+// binds as a BLOB, which is what it is: bound as its hex text it could never
+// equal a BLOB, so a lookup by a key or a hash answered "not present"
+// (M26-DAT-023). A value with no SQLite type -- an array, a hash, a function --
+// is refused by name rather than bound as the text it happens to print as.
+func objToSQLParam(o object.Object) (any, error) {
 	switch v := o.(type) {
 	case *object.Integer:
-		return v.Value
+		return v.Value, nil
 	case *object.Float:
-		return v.Value
+		return v.Value, nil
 	case *object.String:
-		return v.Value
+		return v.Value, nil
 	case *object.Boolean:
-		return v.Value
+		return v.Value, nil
 	case *object.Null:
-		return nil
+		return nil, nil
+	case *object.Bytes:
+		return v.Value, nil
 	default:
-		return o.Inspect()
+		return nil, fmt.Errorf("a %s has no SQLite type to bind as", o.Type())
 	}
 }
 

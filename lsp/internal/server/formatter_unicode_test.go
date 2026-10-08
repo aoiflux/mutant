@@ -21,7 +21,10 @@ func TestFormattingKeepsANonASCIINameIntact(t *testing.T) {
 		{"an accented name", "let café = \"open\";\nputln(café);\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatSource(tt.src)
+			got, _, ok := FormatSource(tt.src)
+			if !ok {
+				t.Fatalf("the formatter refused %q, which parses", tt.src)
+			}
 
 			if !utf8.ValidString(got) {
 				t.Fatalf("formatting %q produced bytes that are not valid UTF-8: %q", tt.src, got)
@@ -49,8 +52,16 @@ func TestFormattingANonASCIIProgramIsIdempotent(t *testing.T) {
 		"// a comment with ü and 🙂\nlet x = 1;\n",
 		"let s = \"héllo\";\n",
 	} {
-		once := FormatSource(src)
-		twice := FormatSource(once)
+		once, _, ok := FormatSource(src)
+		if !ok {
+			t.Errorf("the formatter refused %q, which parses", src)
+			continue
+		}
+		twice, _, ok := FormatSource(once)
+		if !ok {
+			t.Errorf("format(%q) = %q, which the formatter then refused", src, once)
+			continue
+		}
 		if once != twice {
 			t.Errorf("formatting %q is not idempotent:\n first: %q\nsecond: %q", src, once, twice)
 		}

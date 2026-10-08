@@ -174,14 +174,21 @@ Response shape is the same as mutantReplComplete.
 
 ### 3.3 Truthiness
 
-Falsey values:
+Falsy values:
 
-- null
-- false
-- integer 0
-- empty or whitespace-only string
+- `null`, including a call that produced no value
+- `false`
+- integer `0`
+- float `0.0`
+- the empty string
+- an empty buffer
 
-All other values are truthy.
+All other values are truthy, including `[]`, `{}`, a function and an error value.
+A whitespace-only string is truthy: it is not empty.
+
+This is `object.IsTruthy`, which is the only implementation of the rule -- the REPL,
+the VM and the tree-walking evaluator all read it -- and `!x` is its negation and
+nothing else. See the truthiness section of the language reference.
 
 ### 3.4 Numeric behavior
 

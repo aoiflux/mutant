@@ -36,17 +36,24 @@ func evalPrefixExpression(operator string, right object.Object) object.Object {
 	}
 }
 
+// evalBangOperatorExpression is the tree-walker's `!`, and it answers exactly what
+// the VM's execBangOperation answers, because both ask object.IsTruthy.
+//
+// It used to switch on right.Inspect() against TRUE, FALSE and NULL's renderings,
+// and a rendering is not an identity. object.Null renders as the EMPTY STRING, so
+// the NULL arm caught `""` as well -- the right answer, by accident, and the reason
+// this engine looked correct on the one value the VM got most visibly wrong. The
+// FALSE arm caught the string "false", which is a non-empty string and therefore
+// truthy, so `!"false"` was true here and false in the VM. 0 and 0.0 matched
+// nothing and fell through to false, as in the VM.
+//
+// evalInfixExpression in this file already refuses to compare renderings -- for
+// buffers, errors and enum values -- and says why. `!` was left on Inspect.
+//
+// A nil operand reached right.Inspect() and panicked; object.IsTruthy answers false
+// for it, and applyFunction no longer produces one. See M26-VM-007, M26-EVL-020.
 func evalBangOperatorExpression(right object.Object) object.Object {
-	switch right.Inspect() {
-	case TRUE.Inspect():
-		return FALSE
-	case FALSE.Inspect():
-		return TRUE
-	case NULL.Inspect():
-		return TRUE
-	default:
-		return FALSE
-	}
+	return nativeBoolToBoolObject(!object.IsTruthy(right))
 }
 
 func evalMinusPrefixOperatorExpression(right object.Object) object.Object {
@@ -204,7 +211,7 @@ func evalMatchExpression(node *ast.MatchExpression, env *object.Environment) obj
 			if isError(matched) {
 				return matched
 			}
-			if isTruthy(matched) {
+			if object.IsTruthy(matched) {
 				return evalMatchArmBody(arm, env)
 			}
 		}
@@ -272,7 +279,7 @@ func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Ob
 	if isError(condition) {
 		return condition
 	}
-	if isTruthy(condition) {
+	if object.IsTruthy(condition) {
 		return evalBranchValue(node.Consequence, env)
 	} else if node.Alternative != nil {
 		return evalBranchValue(node.Alternative, env)
@@ -296,23 +303,21 @@ func evalBranchValue(branch *ast.BlockStatement, env *object.Environment) object
 }
 
 func evalArrayIndexExpression(array, index object.Object) object.Object {
-	arrayObject := array.(*object.Array)
-	idx := index.(*object.Integer).Value
-	max := int64(len(arrayObject.Elements) - 1)
-	if idx < 0 || idx > max {
+	elements := array.(*object.Array).Elements
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(elements))
+	if !ok {
 		return NULL
 	}
-	return arrayObject.Elements[idx]
+	return elements[at]
 }
 
 func evalMultiValueIndexExpression(multiValue, index object.Object) object.Object {
 	multi := multiValue.(*object.MultiValue)
-	idx := index.(*object.Integer).Value
-	max := int64(len(multi.Values) - 1)
-	if idx < 0 || idx > max {
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(multi.Values))
+	if !ok {
 		return NULL
 	}
-	return multi.Values[idx]
+	return multi.Values[at]
 }
 
 func evalHashIndexExpression(hash, index object.Object) object.Object {
@@ -336,6 +341,8 @@ func evalIndexExpression(left, index object.Object) object.Object {
 		return evalMultiValueIndexExpression(left, index)
 	case left.Type() == object.BYTES_OBJ && index.Type() == object.INTEGER_OBJ:
 		return evalBytesIndexExpression(left, index)
+	case left.Type() == object.STRING_OBJ && index.Type() == object.INTEGER_OBJ:
+		return evalStringIndexExpression(left, index)
 	case left.Type() == object.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
 	case left.Type() == object.ERROR_OBJ && index.Type() == object.STRING_OBJ:
@@ -359,23 +366,27 @@ func evalErrorFieldIndexExpression(errObj, index object.Object) object.Object {
 
 // evalBytesIndexExpression yields the byte at i as an INTEGER 0-255, matching
 // the VM's execBytesIndex.
-//
-// The evaluator has never indexed strings -- the VM does, and that divergence
-// predates this type. Implementing bytes indexing in both engines is what stops
-// the new type from inheriting it.
 func evalBytesIndexExpression(buf, index object.Object) object.Object {
 	data := buf.(*object.Bytes).Value
-	i := index.(*object.Integer).Value
-	max := int64(len(data) - 1)
-
-	if i > max {
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(data))
+	if !ok {
 		return NULL
 	}
-	if i < 0 {
-		if max+i+1 < 0 {
-			return NULL
-		}
-		return &object.Integer{Value: int64(data[max+i+1])}
+	return &object.Integer{Value: int64(data[at])}
+}
+
+// evalStringIndexExpression yields the rune at i as a one-rune string, matching
+// the VM's execStringIndex.
+//
+// This engine did not index strings at all until now: `s[0]` was "index operator
+// not supported: STRING" here and a value in the VM, so one of the two was wrong
+// about a program either way. It is not dead code -- this is the engine that
+// computes unquote(...) during macro expansion -- and a divergence this wide is
+// worth more than the one line it costs to close.
+func evalStringIndexExpression(str, index object.Object) object.Object {
+	char, ok := object.RuneAt(str.(*object.String).Value, index.(*object.Integer).Value)
+	if !ok {
+		return NULL
 	}
-	return &object.Integer{Value: int64(data[i])}
+	return &object.String{Value: char}
 }

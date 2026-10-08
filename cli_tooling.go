@@ -42,7 +42,25 @@ func handleFmtCommand(args []string) int {
 			exitCode = 1
 			continue
 		}
-		formatted := api.Format(string(src))
+		formatted, parseErrors := api.Format(string(src))
+		if len(parseErrors) > 0 {
+			// A file that does not parse is left exactly as it is, in every
+			// mode, and the parse errors are reported in `mutant lint`'s
+			// shape. `fmt` used to write the formatter's whitespace-only
+			// fallback over such a file and print `formatted:` -- which,
+			// having no tree to read, had quietly shortened every trailing
+			// run of spaces inside its triple-quoted strings.
+			for _, d := range parseErrors {
+				source := ""
+				if d.Source != "" {
+					source = " [" + d.Source + "]"
+				}
+				fmt.Fprintf(os.Stderr, "%s:%d:%d: %s: %s%s\n", file, d.Line, d.Column, d.Severity, d.Message, source)
+			}
+			fmt.Fprintf(os.Stderr, "mutant fmt: %s does not parse; left unchanged\n", file)
+			exitCode = 1
+			continue
+		}
 
 		switch {
 		case *toStdout:

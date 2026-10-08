@@ -117,7 +117,12 @@ let leaf, err = tls_sign_cert(ca_cert, ca_key, leaf_opts);
 | `http_conn_read_response` | `(handle, timeoutMs)` | parsed response off a live socket |
 
 The `http_conn_read_*` builtins read exactly one message with correct
-`Content-Length` / chunked framing (bodies are capped at 32 MiB). A head
+`Content-Length` / chunked framing. The request line and header block together
+are capped at 1 MiB and the body at 32 MiB, and a message past either cap is
+refused rather than truncated -- a result is always a whole message. To inspect
+one whose body may be larger, take the head with `http_conn_read_request_head`
+or `http_conn_read_response_head` and stream the body with `net_conn_read`:
+reading only the head leaves the body on the connection and unbounded. A head
 carrying more than 100 header fields is refused rather than trimmed, by every
 builtin on this page that returns a `headers` hash and by `http_get`,
 `http_post` and `http_request`: the cost of a field is not its length, so a

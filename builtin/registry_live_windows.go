@@ -98,7 +98,16 @@ func (b *liveRegistryBackend) enumValues(path string) ([]regEntry, error) {
 	sort.Strings(names)
 	entries := make([]regEntry, 0, len(names))
 	for _, name := range names {
-		entries = append(entries, readLiveRegistryValue(k, name))
+		// A name the OS has just listed can still fail to read: on a live system
+		// a value can be deleted or retyped between the enumeration and the
+		// read. That fails the call rather than dropping the value, because a
+		// list presented as complete while silently short is M26-NET-004 one
+		// level up.
+		entry, err := readLiveRegistryValue(k, name)
+		if err != nil {
+			return nil, fmt.Errorf("reading value %q: %w", name, err)
+		}
+		entries = append(entries, entry)
 	}
 	return entries, nil
 }
@@ -109,49 +118,90 @@ func (b *liveRegistryBackend) getValue(path, name string) (regEntry, error) {
 		return regEntry{}, err
 	}
 	defer k.Close()
-	return readLiveRegistryValue(k, name), nil
+	entry, err := readLiveRegistryValue(k, name)
+	if err == registry.ErrNotExist {
+		return regEntry{}, errRegValueNotFound(name)
+	}
+	if err != nil {
+		return regEntry{}, err
+	}
+	return entry, nil
 }
 
-func readLiveRegistryValue(k registry.Key, name string) regEntry {
+// readLiveRegistryValue reads one value, or says why it could not.
+//
+// It used to return a bare regEntry and map every GetValue error -- including
+// ERROR_FILE_NOT_FOUND for a value that is simply not there -- to an entry of
+// type REG_NONE with empty data. getValue then handed that back with a nil
+// error, so the live backend never said "not found" while the JSON and hive
+// backends did, and absence was indistinguishable from a real present REG_NONE
+// value, which does exist (M26-NET-004).
+//
+// The typed getters' errors were dropped too, with `s, _, _ :=`. Each getter is
+// called only for a type it accepts -- GetStringValue takes SZ and EXPAND_SZ,
+// GetIntegerValue DWORD and QWORD -- so an error from one of them is not a type
+// mistake: it is the value being deleted or retyped between the call that read
+// its type and the call that reads its data. That is a real failure on a live
+// system and it now travels.
+//
+// A nil buffer is what makes the first call cheap: RegQueryValueEx with no
+// output buffer reports the type and the size it would need. ErrShortBuffer is
+// still tolerated, as before, rather than relied on not to happen.
+func readLiveRegistryValue(k registry.Key, name string) (regEntry, error) {
 	displayName := name
 	if displayName == "" {
 		displayName = "(default)"
 	}
 	_, valType, err := k.GetValue(name, nil)
 	if err != nil && err != registry.ErrShortBuffer {
-		return regEntry{name: displayName, typ: "REG_NONE", data: stringObj("")}
+		return regEntry{}, err
 	}
 	switch valType {
 	case registry.SZ, registry.EXPAND_SZ:
-		s, _, _ := k.GetStringValue(name)
+		s, _, err := k.GetStringValue(name)
+		if err != nil {
+			return regEntry{}, err
+		}
 		typ := "REG_SZ"
 		if valType == registry.EXPAND_SZ {
 			typ = "REG_EXPAND_SZ"
 		}
-		return regEntry{name: displayName, typ: typ, data: stringObj(s)}
+		return regEntry{name: displayName, typ: typ, data: stringObj(s)}, nil
 	case registry.DWORD:
-		n, _, _ := k.GetIntegerValue(name)
-		return regEntry{name: displayName, typ: "REG_DWORD", data: intObj(int64(n))}
+		n, _, err := k.GetIntegerValue(name)
+		if err != nil {
+			return regEntry{}, err
+		}
+		return regEntry{name: displayName, typ: "REG_DWORD", data: intObj(int64(n))}, nil
 	case registry.QWORD:
-		n, _, _ := k.GetIntegerValue(name)
-		return regEntry{name: displayName, typ: "REG_QWORD", data: intObj(int64(n))}
+		n, _, err := k.GetIntegerValue(name)
+		if err != nil {
+			return regEntry{}, err
+		}
+		return regEntry{name: displayName, typ: "REG_QWORD", data: intObj(int64(n))}, nil
 	case registry.MULTI_SZ:
-		ss, _, _ := k.GetStringsValue(name)
+		ss, _, err := k.GetStringsValue(name)
+		if err != nil {
+			return regEntry{}, err
+		}
 		elems := make([]object.Object, len(ss))
 		for i, s := range ss {
 			elems[i] = stringObj(s)
 		}
-		return regEntry{name: displayName, typ: "REG_MULTI_SZ", data: &object.Array{Elements: elems}}
+		return regEntry{name: displayName, typ: "REG_MULTI_SZ", data: &object.Array{Elements: elems}}, nil
 	case registry.BINARY:
 		// GetBinaryValue allocates a fresh buffer per call, so raw is owned already
 		// and needs no clone the way the regf backend's window into the hive does.
-		buf, _, _ := k.GetBinaryValue(name)
-		return regEntry{name: displayName, typ: "REG_BINARY", data: stringObj(hex.EncodeToString(buf)), raw: buf}
+		buf, _, err := k.GetBinaryValue(name)
+		if err != nil {
+			return regEntry{}, err
+		}
+		return regEntry{name: displayName, typ: "REG_BINARY", data: stringObj(hex.EncodeToString(buf)), raw: buf}, nil
 	default:
 		// An unrecognised type reports no data on a live key, so there are no bytes
 		// to attach either. The regf backend hex-encodes the same types instead of
 		// dropping them; that difference predates this and is left alone here.
-		return regEntry{name: displayName, typ: fmt.Sprintf("REG_TYPE(%d)", valType), data: stringObj("")}
+		return regEntry{name: displayName, typ: fmt.Sprintf("REG_TYPE(%d)", valType), data: stringObj("")}, nil
 	}
 }
 

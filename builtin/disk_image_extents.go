@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -1176,7 +1177,15 @@ func (realVHDIBackend) Discover(dir string) (vhdiDiscoverScan, error) {
 		scan.Nodes = append(scan.Nodes, rendered)
 	}
 
-	for identity, paths := range byIdentity {
+	// In identity order, not map order: the same directory has to produce the
+	// same warnings in the same order on every call (M26-FS1-016).
+	identities := make([]string, 0, len(byIdentity))
+	for identity := range byIdentity {
+		identities = append(identities, identity)
+	}
+	sort.Strings(identities)
+	for _, identity := range identities {
+		paths := byIdentity[identity]
 		if len(paths) < 2 {
 			continue
 		}

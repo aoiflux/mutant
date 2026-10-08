@@ -5,11 +5,20 @@ import (
 	"testing"
 
 	"mutant/lsp/internal/analyzer"
+
+	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
+// format is formatSnapshotText for a source that is expected to parse, which
+// is every case in this file but one. A refusal fails the test rather than
+// returning "", so a test can never read the refusal as "formats to nothing".
 func format(t *testing.T, src string) string {
 	t.Helper()
-	return formatSnapshotText(analyzer.New().Analyze(src))
+	formatted, parseErrors, ok := formatSnapshotText(analyzer.New().Analyze(src))
+	if !ok {
+		t.Fatalf("the formatter refused %q: %v", src, parseErrors)
+	}
+	return formatted
 }
 
 func TestFormatterUsesFourSpaceIndent(t *testing.T) {
@@ -232,21 +241,41 @@ func TestFormatterIsIdempotent(t *testing.T) {
 
 	for _, src := range corpus {
 		once := format(t, src)
-		twice := formatSnapshotText(analyzer.New().Analyze(once))
+		twice := format(t, once)
 		if once != twice {
 			t.Errorf("not idempotent for %q:\n first pass: %q\nsecond pass: %q", src, once, twice)
 		}
 	}
 }
 
-func TestFormatterFallsBackOnParseErrors(t *testing.T) {
-	// `let = 5` cannot produce a usable tree, so the formatter must not
-	// attempt to print one; it only normalises whitespace.
+// TestFormatterRefusesSourceWithParseErrors is M26-TOOL-014's floor, at the
+// level where the decision is made.
+//
+// This test used to be TestFormatterFallsBackOnParseErrors and asserted the
+// defect: that `let = 5;   ` came back as `let = 5;`, trailing whitespace
+// stripped. Stripping trailing whitespace with no tree to read is precisely
+// what shortened the inside of a triple-quoted string, so the fallback is
+// gone and the formatter refuses.
+func TestFormatterRefusesSourceWithParseErrors(t *testing.T) {
 	src := "let = 5;   \nlet ok = 1;   \n"
-	want := "let = 5;\nlet ok = 1;\n"
 
-	if got := format(t, src); got != want {
-		t.Errorf("formatted = %q, want %q", got, want)
+	formatted, parseErrors, ok := formatSnapshotText(analyzer.New().Analyze(src))
+	if ok {
+		t.Fatalf("the formatter accepted source that does not parse, giving %q", formatted)
+	}
+	if formatted != "" {
+		t.Errorf("a refusal returned text: %q", formatted)
+	}
+	if len(parseErrors) == 0 {
+		t.Fatal("a refusal must say why; got no parse errors")
+	}
+	for _, d := range parseErrors {
+		if d.Severity == nil || *d.Severity != lsp.DiagnosticSeverityError {
+			t.Errorf("parse diagnostic severity = %v, want error", d.Severity)
+		}
+		if d.Source == nil || *d.Source != "mutant-parser" {
+			t.Errorf("parse diagnostic source = %v, want mutant-parser", d.Source)
+		}
 	}
 }
 
@@ -324,7 +353,11 @@ func TestFormatterBracketsWhatATreeWithoutTheSideTableNeeds(t *testing.T) {
 		t.Fatalf("fixture did not parse: %v", snapshot.ParseErrors)
 	}
 	snapshot.Program.Parenthesized = nil
-	if got := formatSnapshotText(snapshot); got != want {
+	got, _, ok := formatSnapshotText(snapshot)
+	if !ok {
+		t.Fatal("the fixture parses, so the formatter must not refuse it")
+	}
+	if got != want {
 		t.Errorf("formatted without the side table =\n%s\nwant\n%s", got, want)
 	}
 }
@@ -360,7 +393,12 @@ func TestFormatterWritesTheBracketsAConditionNeeds(t *testing.T) {
 		if after := canonicalRendering(reparsed.Program.String()); after != before {
 			t.Errorf("format(%q) changed the tree\n%s", tt.src, firstDifference(before, after))
 		}
-		if again := formatSnapshotText(reparsed); again != got {
+		again, _, ok := formatSnapshotText(reparsed)
+		if !ok {
+			t.Errorf("format(%q) = %q, which the formatter then refused", tt.src, got)
+			continue
+		}
+		if again != got {
 			t.Errorf("formatting %q twice gave %q, then %q", tt.src, got, again)
 		}
 	}
@@ -378,5 +416,18 @@ func TestFormatterNormalizesTabsAndTrailingWhitespace(t *testing.T) {
 		if strings.TrimRight(line, " \t") != line {
 			t.Errorf("line %q has trailing whitespace", line)
 		}
+	}
+}
+
+// TestFormatterKeepsWhitespaceInsideStringsOfAFileThatParses is the control
+// for M26-TOOL-014: the same banner, in a file with nothing wrong with it,
+// keeps its three trailing spaces. The defect was never in the printer -- it
+// was in what used to happen when the printer could not run at all.
+func TestFormatterKeepsWhitespaceInsideStringsOfAFileThatParses(t *testing.T) {
+	src := "let banner = \"\"\"\nrow one   \nrow two\n\"\"\";\n"
+
+	got := format(t, src)
+	if !strings.Contains(got, "row one   ") {
+		t.Errorf("the formatter edited the inside of a string literal:\n%q", got)
 	}
 }

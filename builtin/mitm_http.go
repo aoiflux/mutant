@@ -22,7 +22,45 @@ import (
 	"mutant/object"
 )
 
-const maxHTTPBodyBytes = 32 << 20 // 32 MiB cap so a hostile stream can't OOM us.
+// maxHTTPBodyBytes bounds the body http_conn_read_request,
+// http_conn_read_response, http_parse_request and http_parse_response hand back
+// as one string, and a body past it is refused rather than cut. The peer at the
+// other end of an intercepted connection decides how much it sends and is not
+// trusted to be reasonable, and the body arrives as a VM variable, which is
+// re-encrypted on every store. Refusing is what makes the answer honest: a
+// clipped body returned as a whole one is a wrong result a script has no way to
+// detect, which is what this cap used to produce (M26-NET-031). A message whose
+// body may be larger is read with http_conn_read_request_head or
+// http_conn_read_response_head plus net_conn_read, which leave the body on the
+// connection and stream it in pieces.
+//
+//mutant:limit bytes
+const maxHTTPBodyBytes = 32 << 20
+
+// maxHTTPHeaderBytes bounds the request line and header block of one message.
+// The body was capped and the head was not, so a peer could send a single
+// header field of any length and have it read in full: an 8 MiB field grew the
+// heap by 12 MiB and a 32 MiB field by 69 MiB, and both were accepted. A head
+// is metadata about a body, and no real one is large.
+//
+// The value is net/http's own DefaultMaxHeaderBytes, so a message these
+// builtins accept is one Go's HTTP server would accept too -- nginx and Apache
+// both stop well below it. It is enforced on the socket beneath the buffered
+// reader and released as soon as the head is parsed, because the two _head
+// builtins deliberately leave the body on the connection for net_conn_read to
+// stream and that read must not inherit a head's budget.
+//
+//mutant:limit bytes
+const maxHTTPHeaderBytes = 1 << 20
+
+// httpHeadReadSlack is what the socket is allowed beyond maxHTTPHeaderBytes
+// while a head is being read. The parser draws through a bufio.Reader, which
+// fills a whole buffer at a time, so the last fill can legitimately carry the
+// start of a body past the end of the head. The figure is one bufio buffer,
+// which is what net/http's own server adds to MaxHeaderBytes for this reason.
+//
+//mutant:limit bytes
+const httpHeadReadSlack = 4096
 
 // HTTPParseRequest parses a raw HTTP request into a structured hash.
 // http_parse_request(raw STRING) -> HASH {method, url, path, host, proto, query, headers, body}
@@ -67,8 +105,14 @@ func HTTPConnReadRequest(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
+	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
 	req, err := http.ReadRequest(mc.buffered())
+	headTooLarge := mc.readLimitReached()
+	mc.clearReadLimit()
 	if err != nil {
+		if headTooLarge {
+			return resultAndError(nil, newError("http_conn_read_request: request head exceeds %d bytes", maxHTTPHeaderBytes))
+		}
 		return resultAndError(nil, newError("http_conn_read_request: %s", err.Error()))
 	}
 	return resultAndError(requestToHash(BuiltinNameHttpConnReadRequest, req))
@@ -82,8 +126,14 @@ func HTTPConnReadResponse(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
+	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
 	resp, err := http.ReadResponse(mc.buffered(), nil)
+	headTooLarge := mc.readLimitReached()
+	mc.clearReadLimit()
 	if err != nil {
+		if headTooLarge {
+			return resultAndError(nil, newError("http_conn_read_response: response head exceeds %d bytes", maxHTTPHeaderBytes))
+		}
 		return resultAndError(nil, newError("http_conn_read_response: %s", err.Error()))
 	}
 	return resultAndError(responseToHash(BuiltinNameHttpConnReadResponse, resp))
@@ -102,8 +152,14 @@ func HTTPConnReadRequestHead(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
+	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
 	req, err := http.ReadRequest(mc.buffered())
+	headTooLarge := mc.readLimitReached()
+	mc.clearReadLimit()
 	if err != nil {
+		if headTooLarge {
+			return resultAndError(nil, newError("http_conn_read_request_head: request head exceeds %d bytes", maxHTTPHeaderBytes))
+		}
 		return resultAndError(nil, newError("http_conn_read_request_head: %s", err.Error()))
 	}
 	if fieldErr := checkHTTPHeaderFields(req.Header); fieldErr != nil {
@@ -144,8 +200,14 @@ func HTTPConnReadResponseHead(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
+	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
 	resp, err := http.ReadResponse(mc.buffered(), nil)
+	headTooLarge := mc.readLimitReached()
+	mc.clearReadLimit()
 	if err != nil {
+		if headTooLarge {
+			return resultAndError(nil, newError("http_conn_read_response_head: response head exceeds %d bytes", maxHTTPHeaderBytes))
+		}
 		return resultAndError(nil, newError("http_conn_read_response_head: %s", err.Error()))
 	}
 	if fieldErr := checkHTTPHeaderFields(resp.Header); fieldErr != nil {
@@ -340,10 +402,20 @@ func requestToHash(opName string, req *http.Request) (object.Object, *object.Err
 		return nil, newError("%s: %s", opName, fieldErr.Error())
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxHTTPBodyBytes))
+	// The cap plus one is what separates a body that fits from one that does
+	// not. io.LimitReader returns EOF at its bound and io.ReadAll turns EOF
+	// into nil, so reading at exactly maxHTTPBodyBytes gave back the first
+	// 32 MiB of a larger body with no error and no flag, indistinguishable
+	// from the whole of a smaller one (M26-NET-031). Asking for one more byte
+	// makes the overflow observable, and then it is refused: see the cap's own
+	// comment for why a refusal and not a flag.
+	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxHTTPBodyBytes+1))
 	_ = req.Body.Close()
 	if err != nil {
 		return nil, newError("%s: reading body: %s", opName, err.Error())
+	}
+	if len(bodyBytes) > maxHTTPBodyBytes {
+		return nil, newError("%s: body exceeds %d bytes", opName, maxHTTPBodyBytes)
 	}
 
 	host := req.Host
@@ -376,10 +448,14 @@ func responseToHash(opName string, resp *http.Response) (object.Object, *object.
 		return nil, newError("%s: %s", opName, fieldErr.Error())
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBodyBytes))
+	// The cap plus one, for the reason given in requestToHash.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBodyBytes+1))
 	_ = resp.Body.Close()
 	if err != nil {
 		return nil, newError("%s: reading body: %s", opName, err.Error())
+	}
+	if len(bodyBytes) > maxHTTPBodyBytes {
+		return nil, newError("%s: body exceeds %d bytes", opName, maxHTTPBodyBytes)
 	}
 
 	return makeHashObject(map[string]object.Object{

@@ -55,6 +55,52 @@ func EncryptByteCode(byteCode *compiler.ByteCode, password string) *compiler.Byt
 // xorPayload encrypts a value's bytes, treating an empty payload as its own
 // ciphertext rather than as an error.
 //
+// sealKey is what a stored value's payload is sealed with: the (seed, password)
+// pair every value in a run shares, and -- when the caller has already derived
+// it -- the key itself.
+//
+// The key and the nonce depend on nothing but the seed and the password, and a
+// run has one of each: the VM seals and opens with its own inslen and its own
+// password from the first instruction to the last. Deriving them per call was
+// the cost of a container load rather than the cipher, two SHA-256 hashes per
+// eight bytes of payload -- building an array of 800 elements in a loop made
+// 2,890,011 derivations for 22 MiB of payload (M26-VM-001). The VM already
+// holds the stream it derived for its instructions, under exactly that pair, so
+// it hands that one in and the derivation happens once per run instead.
+//
+// The stream is optional, and it is skipped rather than trusted when the value
+// disagrees with it: a stored value records the seed it was sealed under, and
+// one sealed under a different seed has to be opened with a key derived for
+// that seed. The REPL is where this is not hypothetical -- it compiles a new
+// program per line, so inslen changes while the globals carried across lines
+// keep the seed of the line that stored them.
+type sealKey struct {
+	length   int
+	password string
+	stream   *security.XORStream
+}
+
+// seed identifies the keystream, and is not an offset into it: every object
+// payload is sealed from the start of its own stream.
+func (k sealKey) seed() int64 {
+	return int64(k.length)
+}
+
+// xor seals or opens a payload under this key's own seed.
+func (k sealKey) xor(data []byte) ([]byte, error) {
+	return k.xorAtSeed(data, k.seed())
+}
+
+// xorAtSeed is xor for a value that records a seed of its own. A derived stream
+// answers for its own seed and for nothing else; anything else derives, as it
+// always did.
+func (k sealKey) xorAtSeed(data []byte, seed int64) ([]byte, error) {
+	if k.stream != nil && seed == k.seed() {
+		return k.stream.XORAt(data, 0)
+	}
+	return security.SecureXOR(data, seed, k.password)
+}
+
 // security.SecureXOR rejects empty input. That is a reasonable guard where a
 // caller passing nothing is a mistake, and the wrong answer here: XOR over zero
 // bytes is zero bytes, so there is nothing to protect and nothing to get wrong.
@@ -67,14 +113,33 @@ func EncryptByteCode(byteCode *compiler.ByteCode, password string) *compiler.Byt
 //
 // The NULL arm has always short-circuited for the same reason; strings, byte
 // buffers and Lua payloads simply never got the same treatment.
-func xorPayload(data []byte, length int, password string) ([]byte, error) {
+//
+// The opening side keeps the error rather than sharing this arm: there a
+// payload's length is the only thing that says how much was stored, so an empty
+// one for a type that is always eight bytes is a corrupt value, not an empty
+// one.
+func (k sealKey) xorPayload(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
 	}
-	return security.SecureXOR(data, int64(length), password)
+	return k.xor(data)
 }
 
+// EncryptObject seals a value for storage, deriving the key it needs.
 func EncryptObject(obj object.Object, length int, password string) (object.Object, error) {
+	return encryptObject(obj, sealKey{length: length, password: password})
+}
+
+// EncryptObjectWithStream is EncryptObject for a caller that already holds the
+// derived stream for this (length, password) -- the VM, which derives one per
+// run for its instructions and seals its values under the same pair. The
+// password is still required, because a value may record a seed of its own;
+// see sealKey.
+func EncryptObjectWithStream(obj object.Object, length int, password string, stream *security.XORStream) (object.Object, error) {
+	return encryptObject(obj, sealKey{length: length, password: password, stream: stream})
+}
+
+func encryptObject(obj object.Object, key sealKey) (object.Object, error) {
 	if obj == nil {
 		return nil, errors.New("nil obj")
 	}
@@ -90,7 +155,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		val := obj.(*object.Integer).Value
 		bite := make([]byte, 8)
 		binary.LittleEndian.PutUint64(bite, uint64(val))
-		xored, err := security.SecureXOR(bite, int64(length), password)
+		xored, err := key.xor(bite)
 		if err != nil {
 			return nil, err
 		}
@@ -98,12 +163,12 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType: object.INTEGER_OBJ,
 			Value:   xored,
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	case object.STRING_OBJ:
 		val := obj.(*object.String).Value
-		xored, err := xorPayload([]byte(val), length, password)
+		xored, err := key.xorPayload([]byte(val))
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +176,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType: object.STRING_OBJ,
 			Value:   xored,
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	// A byte buffer is the value type most likely to hold something worth
@@ -121,7 +186,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 	// unencrypted with nothing said.
 	case object.BYTES_OBJ:
 		val := obj.(*object.Bytes).Value
-		xored, err := xorPayload(val, length, password)
+		xored, err := key.xorPayload(val)
 		if err != nil {
 			return nil, err
 		}
@@ -129,14 +194,14 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType:    object.BYTES_OBJ,
 			Value:      xored,
-			Seed:       int64(length),
+			Seed:       key.seed(),
 			Classified: obj.(*object.Bytes).Classified,
 		}
 
 	case object.BOOLEAN_OBJ:
 		val := obj.(*object.Boolean).Value
 		str := strconv.FormatBool(val)
-		xored, err := security.SecureXOR([]byte(str), int64(length), password)
+		xored, err := key.xor([]byte(str))
 		if err != nil {
 			return nil, err
 		}
@@ -144,14 +209,14 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType: object.BOOLEAN_OBJ,
 			Value:   xored,
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	case object.FLOAT_OBJ:
 		val := obj.(*object.Float).Value
 		bite := make([]byte, 8)
 		binary.LittleEndian.PutUint64(bite, math.Float64bits(val))
-		xored, err := security.SecureXOR(bite, int64(length), password)
+		xored, err := key.xor(bite)
 		if err != nil {
 			return nil, err
 		}
@@ -159,21 +224,21 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType: object.FLOAT_OBJ,
 			Value:   xored,
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	case object.NULL_OBJ:
 		encObj = &object.Encrypted{
 			EncType: object.NULL_OBJ,
 			Value:   []byte{},
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	case object.ARRAY_OBJ:
 		arrayObj := obj.(*object.Array)
 		elements := make([]object.Object, len(arrayObj.Elements))
 		for i, element := range arrayObj.Elements {
-			encElement, encErr := EncryptObject(element, length, password)
+			encElement, encErr := encryptObject(element, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -185,11 +250,11 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		hashObj := obj.(*object.Hash)
 		pairs := make(map[object.HashKey]object.HashPair, len(hashObj.Pairs))
 		for hashKey, pair := range hashObj.Pairs {
-			encKey, encErr := EncryptObject(pair.Key, length, password)
+			encKey, encErr := encryptObject(pair.Key, key)
 			if encErr != nil {
 				return nil, encErr
 			}
-			encValue, encErr := EncryptObject(pair.Value, length, password)
+			encValue, encErr := encryptObject(pair.Value, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -201,7 +266,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		structObj := obj.(*object.Struct)
 		fields := make(map[string]object.Object, len(structObj.Fields))
 		for name, value := range structObj.Fields {
-			encValue, encErr := EncryptObject(value, length, password)
+			encValue, encErr := encryptObject(value, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -221,7 +286,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		enumObj := obj.(*object.EnumValue)
 		var encValue object.Object
 		if enumObj.Value != nil {
-			encInner, encErr := EncryptObject(enumObj.Value, length, password)
+			encInner, encErr := encryptObject(enumObj.Value, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -233,7 +298,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		closureObj := obj.(*object.Closure)
 		free := make([]object.Object, len(closureObj.Free))
 		for i, freeObj := range closureObj.Free {
-			encFree, encErr := EncryptObject(freeObj, length, password)
+			encFree, encErr := encryptObject(freeObj, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -243,7 +308,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 
 	case object.LUA_PATCH_OBJ:
 		patchObj := obj.(*object.LuaPatch)
-		xored, err := xorPayload(patchObj.EncryptedPayload, length, password)
+		xored, err := key.xorPayload(patchObj.EncryptedPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -262,7 +327,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		multiObj := obj.(*object.MultiValue)
 		values := make([]object.Object, len(multiObj.Values))
 		for i, value := range multiObj.Values {
-			encValue, encErr := EncryptObject(value, length, password)
+			encValue, encErr := encryptObject(value, key)
 			if encErr != nil {
 				return nil, encErr
 			}
@@ -283,7 +348,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		if encErr != nil {
 			return nil, encErr
 		}
-		xored, xorErr := xorPayload(encoded, length, password)
+		xored, xorErr := key.xorPayload(encoded)
 		if xorErr != nil {
 			return nil, xorErr
 		}
@@ -291,7 +356,7 @@ func EncryptObject(obj object.Object, length int, password string) (object.Objec
 		encObj = &object.Encrypted{
 			EncType: object.ERROR_OBJ,
 			Value:   xored,
-			Seed:    int64(length),
+			Seed:    key.seed(),
 		}
 
 	// A cell is a handle, not a value, and encrypting it would be actively
@@ -376,7 +441,18 @@ func decodeError(encoded []byte) (*object.Error, error) {
 	return &errObj, nil
 }
 
+// DecryptObject opens a stored value, deriving the key it needs.
 func DecryptObject(obj object.Object, length int, password string) (object.Object, error) {
+	return decryptObject(obj, sealKey{length: length, password: password})
+}
+
+// DecryptObjectWithStream is DecryptObject for a caller that already holds the
+// derived stream; see EncryptObjectWithStream and sealKey.
+func DecryptObjectWithStream(obj object.Object, length int, password string, stream *security.XORStream) (object.Object, error) {
+	return decryptObject(obj, sealKey{length: length, password: password, stream: stream})
+}
+
+func decryptObject(obj object.Object, key sealKey) (object.Object, error) {
 	if obj == nil {
 		return nil, errors.New("nil obj")
 	}
@@ -404,7 +480,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 			}
 		}
 
-		seed := int64(length)
+		seed := key.seed()
 		if encrypted.Seed != 0 {
 			seed = encrypted.Seed
 		}
@@ -412,7 +488,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		biteVal := encrypted.Value
 		bite := make([]byte, len(biteVal))
 		copy(bite, biteVal)
-		xored, err := security.SecureXOR(bite, seed, password)
+		xored, err := key.xorAtSeed(bite, seed)
 		if err != nil {
 			return nil, err
 		}
@@ -459,7 +535,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		arrayObj := decObj.(*object.Array)
 		elements := make([]object.Object, len(arrayObj.Elements))
 		for i, element := range arrayObj.Elements {
-			decElement, decErr := DecryptObject(element, length, password)
+			decElement, decErr := decryptObject(element, key)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -471,11 +547,11 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		hashObj := decObj.(*object.Hash)
 		pairs := make(map[object.HashKey]object.HashPair, len(hashObj.Pairs))
 		for hashKey, pair := range hashObj.Pairs {
-			decKey, decErr := DecryptObject(pair.Key, length, password)
+			decKey, decErr := decryptObject(pair.Key, key)
 			if decErr != nil {
 				return nil, decErr
 			}
-			decValue, decErr := DecryptObject(pair.Value, length, password)
+			decValue, decErr := decryptObject(pair.Value, key)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -487,7 +563,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		structObj := decObj.(*object.Struct)
 		fields := make(map[string]object.Object, len(structObj.Fields))
 		for name, value := range structObj.Fields {
-			decValue, decErr := DecryptObject(value, length, password)
+			decValue, decErr := decryptObject(value, key)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -503,7 +579,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		enumObj := decObj.(*object.EnumValue)
 		var decValue object.Object
 		if enumObj.Value != nil {
-			inner, decErr := DecryptObject(enumObj.Value, length, password)
+			inner, decErr := decryptObject(enumObj.Value, key)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -513,7 +589,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 
 	case object.LUA_PATCH_OBJ:
 		patchObj := decObj.(*object.LuaPatch)
-		xored, err := xorPayload(patchObj.EncryptedPayload, length, password)
+		xored, err := key.xorPayload(patchObj.EncryptedPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -527,7 +603,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		closureObj := decObj.(*object.Closure)
 		free := make([]object.Object, len(closureObj.Free))
 		for i, freeObj := range closureObj.Free {
-			decFree, decErr := DecryptObject(freeObj, length, password)
+			decFree, decErr := decryptObject(freeObj, key)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -539,7 +615,7 @@ func DecryptObject(obj object.Object, length int, password string) (object.Objec
 		multiObj := decObj.(*object.MultiValue)
 		values := make([]object.Object, len(multiObj.Values))
 		for i, value := range multiObj.Values {
-			decValue, decErr := DecryptObject(value, length, password)
+			decValue, decErr := decryptObject(value, key)
 			if decErr != nil {
 				return nil, decErr
 			}

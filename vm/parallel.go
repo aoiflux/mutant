@@ -51,45 +51,20 @@ func (vm *VM) snapshotGlobals() []object.Object {
 }
 
 // newWorkerVM builds a sibling VM over the same compiled program. It mirrors
-// serve.go's per-connection VM: same bytecode, same password, its own globals.
-func (vm *VM) newWorkerVM() *VM {
-	return vm.newWorkerVMWithGlobals(vm.snapshotGlobals())
-}
-
-// detachCaptures gives a worker its own copy of a closure's captured cells.
+// serve.go's per-connection VM: same bytecode, same password, its own globals --
+// and, because a global can hold a closure and a closure holds its cells by
+// pointer, its own cells for everything those globals reach. detach.go says why
+// that is not optional.
 //
-// A captured variable is one storage location shared by the enclosing frame and
-// every closure over it -- that sharing is the whole point of boxing, and it is
-// what lets `each(xs, fn(x) { acc = acc + x; })` accumulate. Across goroutines it
-// is a data race: `cell.Value = ...` on a worker is an unsynchronised write to
-// an interface the parent may be reading, and `go test -race` says so.
-//
-// So a worker gets fresh cells holding the same values, which makes captured
-// variables follow the rule the parallel builtins already document for globals:
-// its own VM, its own stack, its own bindings, and writes that stay local. The
-// way a result comes back is the return value.
-//
-// One level deep, exactly like snapshotGlobals: the worker gets its own binding,
-// not a deep copy of what the binding points at, so a captured array is still
-// the same array in both. Deeper would also have to answer what to do about a
-// closure that captures itself, which is an ordinary thing to write.
-func detachCaptures(cl *object.Closure) *object.Closure {
-	var detached []object.Object
-	for i, captured := range cl.Free {
-		cell, ok := captured.(*object.Cell)
-		if !ok {
-			continue
-		}
-		if detached == nil {
-			detached = make([]object.Object, len(cl.Free))
-			copy(detached, cl.Free)
-		}
-		detached[i] = &object.Cell{Value: cell.Value}
+// holding comes from globalsHoldingCells, computed once for the whole call. For
+// a program with no closure in a global it is empty and this costs exactly what
+// it always did.
+func (vm *VM) newWorkerVM(boundary *workerBoundary, holding []int) *VM {
+	globals := vm.snapshotGlobals()
+	for _, index := range holding {
+		boundary.detachAt(globals, index)
 	}
-	if detached == nil {
-		return cl
-	}
-	return &object.Closure{Fn: cl.Fn, Free: detached}
+	return vm.newWorkerVMWithGlobals(globals)
 }
 
 // newWorkerVMWithGlobals is the expensive half. prepareForExecution walks every
@@ -174,6 +149,11 @@ func (vm *VM) runParallel(op string, arr *object.Array, cl *object.Closure, requ
 	results := make([]object.Object, len(elements))
 	workerCount := resolveWorkerCount(requested, len(elements))
 
+	// Which globals a worker will have to detach, decided once here rather than
+	// once per worker. This goroutine is about to block until every worker has
+	// finished, so nothing can change under the answer.
+	holding := vm.globalsHoldingCells()
+
 	var (
 		next     int
 		nextMu   sync.Mutex
@@ -220,15 +200,19 @@ func (vm *VM) runParallel(op string, arr *object.Array, cl *object.Closure, requ
 				}
 			}()
 
-			worker := vm.newWorkerVM()
+			// One boundary for everything this worker could write: the globals
+			// it starts from, the cells its callback captured, and each element
+			// it is handed. They share one memo on purpose -- a cell the worker
+			// can reach two ways is one cell inside it, as it is in the caller.
+			boundary := newWorkerBoundary()
+
+			worker := vm.newWorkerVM(boundary, holding)
 			// Deliberately no CleanupRuntimeSensitiveData on the worker: its
 			// stack sweep would zero the shared constants siblings are still
 			// reading. The worker's own stack and globals are garbage-collected
 			// when this goroutine returns.
 
-			// Its own captured variables too, for the same reason it gets its own
-			// globals: workers here share nothing they can write.
-			workerClosure := detachCaptures(cl)
+			workerClosure := boundary.closure(cl)
 
 			for {
 				if failed() {
@@ -239,7 +223,7 @@ func (vm *VM) runParallel(op string, arr *object.Array, cl *object.Closure, requ
 					return
 				}
 
-				result, err := worker.callElement(workerClosure, elements[index], index)
+				result, err := worker.callElement(workerClosure, boundary.value(elements[index]), index)
 				if err != nil {
 					recordErr(err)
 					return

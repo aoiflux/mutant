@@ -22,6 +22,98 @@ import (
 	"mutant/object"
 )
 
+// maxBannerBytes is the most a service's greeting may be. A banner is one line
+// naming a product and a version -- "SSH-2.0-OpenSSH_9.6", "220 smtp.example
+// ESMTP ready" -- and what a peer sends past four kibibytes of it is not a
+// banner any more. The read is bounded because the peer decides when to stop
+// talking: uncapped, a service that answers a connection with an endless stream
+// would be recorded in full, into a VM variable that is re-encrypted on every
+// store. A greeting that reaches the cap is refused rather than clipped,
+// because the first four kibibytes of a longer stream reported as a whole
+// banner is a wrong answer and nothing in the result could say so.
+//
+//mutant:limit bytes
+const maxBannerBytes = 4096
+
+// maxPcapPacketBytes is the ceiling on one pcap record, for the single case
+// where the file's own size is no guide to it: pcapgo decompresses a gzipped
+// capture transparently, and a compressed file's length bounds nothing inside
+// it.
+//
+// The value is the largest single record Wireshark itself will read --
+// WTAP_MAX_PACKET_SIZE_USBPCAP -- so a record these builtins refuse is one
+// Wireshark would refuse too. It is deliberately far above any link MTU,
+// because real captures exceed one: USBPcap writes megabyte bulk transfers and
+// EBHSCR records run to 32 MiB, and both read correctly here today. A record's
+// index, timestamp and length come straight out of its sixteen-byte header and
+// need no decoder, so "gopacket cannot decode that link type" is not a reason
+// to refuse the file -- a cap at some Ethernet-shaped figure would have thrown
+// away captures that work.
+//
+//mutant:limit bytes
+const maxPcapPacketBytes = 128 << 20
+
+// maxPcapPackets is how many records net_capture_raw returns before it stops
+// and marks the result truncated. Each record becomes a hash in a VM variable,
+// so the cost is per packet rather than per byte, and a capture of a busy link
+// holds far more packets than anyone reads at once. Past the cap the result
+// says so, which is the difference between a short answer and a wrong one.
+//
+//mutant:limit count
+const maxPcapPackets = 1_000_000
+
+// capPcapSnaplen bounds what one record of a capture may be trusted to ask for.
+//
+// pcapgo reads the snapshot length out of the file header and then refuses any
+// record longer than it, so until now the file stated its own bound: forty
+// bytes declaring a snaplen of 0xffffffff drew a 16 MiB allocation out of a
+// record header with nothing at all behind it.
+//
+// The bound that matters is the file's own length, because a record's data has
+// to BE in the file. No honest capture holds a record longer than itself, so
+// this bound can refuse nothing real -- which a figure chosen from the shape of
+// a network cannot promise. Where the length says nothing, which is a gzipped
+// capture, maxPcapPacketBytes applies instead.
+//
+// It only ever lowers, and that matters as much as the bound does. A capture
+// written at tcpdump's -s 1500 keeps its 1500, so a record whose incl_len has
+// been corrupted upward still fails pcapgo's own check and the examiner is told
+// the file is damaged. Raising a snaplen to a cap would instead accept the
+// corrupt length, read the following record headers as that packet's payload,
+// and carry on from a misaligned offset -- turning a reported error into a
+// flow summary that is quietly wrong.
+func capPcapSnaplen(reader *pcapgo.Reader, file *os.File) {
+	bound := uint32(maxPcapPacketBytes)
+	if size, ok := pcapUncompressedSize(file); ok && size < int64(bound) {
+		bound = uint32(size)
+	}
+	if reader.Snaplen() > bound {
+		reader.SetSnaplen(bound)
+	}
+}
+
+// pcapUncompressedSize reports the file's length when that length bounds a
+// record, which is when the capture is not compressed. pcapgo recognises gzip
+// by its two magic bytes and wraps the reader in a decompressor, and the length
+// of a compressed file is no bound on what comes out of it.
+//
+// ReadAt is used rather than a seek because the reader already holds this file
+// and has consumed its header; ReadAt does not move the shared offset.
+func pcapUncompressedSize(file *os.File) (int64, bool) {
+	info, err := file.Stat()
+	if err != nil {
+		return 0, false
+	}
+	var magic [2]byte
+	if _, err := file.ReadAt(magic[:], 0); err != nil {
+		return 0, false
+	}
+	if magic[0] == 0x1f && magic[1] == 0x8b {
+		return 0, false
+	}
+	return info.Size(), true
+}
+
 type netFlowSummary struct {
 	src     string
 	dst     string
@@ -215,8 +307,31 @@ func NetBanner(args ...object.Object) object.Object {
 	defer conn.Close()
 
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	banner, readErr := io.ReadAll(io.LimitReader(conn, 4096))
-	if readErr != nil {
+
+	// One byte past the cap is read so that reaching it can be told apart from
+	// the peer stopping on its own. io.LimitReader returns EOF at its bound and
+	// io.ReadAll turns EOF into nil, so a read bounded at exactly
+	// maxBannerBytes handed back the prefix of a longer stream with no error at
+	// all -- indistinguishable from a complete greeting of that length
+	// (M26-NET-026).
+	banner, readErr := io.ReadAll(io.LimitReader(conn, maxBannerBytes+1))
+	if len(banner) > maxBannerBytes {
+		return resultAndError(makeHashObject(map[string]object.Object{
+			"ok":     boolObj(false),
+			"banner": stringObj(""),
+			"error":  stringObj(fmt.Sprintf("the greeting exceeds %d bytes", maxBannerBytes)),
+		}), nil)
+	}
+
+	// A read deadline is how a banner normally ends, not a failure. SSH, SMTP
+	// and FTP each write their greeting and then wait for the client, so the
+	// socket stays open and io.ReadAll reports the deadline instead of an EOF
+	// -- with the greeting already in hand, because ReadAll returns what it
+	// read alongside the error. Reporting that as ok:false with an empty
+	// banner threw the answer away for exactly the services this builtin
+	// exists to identify. What was read decides: any bytes are a banner, and
+	// a read that ended with none is still a failure.
+	if readErr != nil && len(banner) == 0 {
 		return resultAndError(makeHashObject(map[string]object.Object{
 			"ok":     boolObj(false),
 			"banner": stringObj(""),
@@ -409,9 +524,8 @@ func NetCaptureRaw(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("net_capture_raw: %s", err.Error()))
 	}
+	capPcapSnaplen(reader, file)
 	linkType := reader.LinkType()
-
-	const maxPackets = 1_000_000
 	packets := make([]object.Object, 0)
 	truncated := false
 	index := int64(0)
@@ -423,7 +537,7 @@ func NetCaptureRaw(args ...object.Object) object.Object {
 		if readErr != nil {
 			return resultAndError(nil, newError("net_capture_raw: %s", readErr.Error()))
 		}
-		if len(packets) >= maxPackets {
+		if len(packets) >= maxPcapPackets {
 			truncated = true
 			break
 		}
@@ -506,6 +620,7 @@ func NetPCAPAnalyze(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("net_pcap_analyze: %s", err.Error()))
 	}
+	capPcapSnaplen(reader, file)
 
 	linkType := reader.LinkType()
 	flows := map[string]*netFlowSummary{}
@@ -792,6 +907,7 @@ func NetOSFingerprint(args ...object.Object) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("net_os_fingerprint: %s", err.Error()))
 	}
+	capPcapSnaplen(reader, file)
 	linkType := reader.LinkType()
 
 	prints := map[string]*osFingerprint{}

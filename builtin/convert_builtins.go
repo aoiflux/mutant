@@ -14,7 +14,15 @@ func ToInt(args ...object.Object) object.Object {
 	case *object.Integer:
 		return resultAndError(intObj(v.Value), nil)
 	case *object.Float:
-		return resultAndError(intObj(int64(v.Value)), nil)
+		// to_int already returns through resultAndError, so the error channel
+		// for this was there all along and unused: int64() on NaN, an infinity
+		// or 1e19 is undefined in Go and gives MinInt64 here, which to_int
+		// handed back as the answer with no error beside it (M26-BLT-004).
+		n, ok := int64FromFloat(v.Value)
+		if !ok {
+			return resultAndError(nil, newError("to_int: %v has no value as a 64-bit integer", v.Value))
+		}
+		return resultAndError(intObj(n), nil)
 	case *object.Boolean:
 		if v.Value {
 			return resultAndError(intObj(1), nil)

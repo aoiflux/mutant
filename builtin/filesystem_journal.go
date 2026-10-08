@@ -95,7 +95,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 
@@ -541,9 +540,11 @@ func ExtRecoverJournalledFile(args ...object.Object) object.Object {
 			"%s: the journalled version located no bytes, and an empty file under "+
 				"a recovered file's name reads as a file that was empty", op))
 	}
+	if err := recoveryLocatedNothing(recovery); err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 
-	written, digest, errObj := fsWriteEvidenceFile(op, destination,
-		io.NewSectionReader(recovery.Content, 0, recovery.Length))
+	written, digest, errObj := fsWriteEvidenceFile(op, destination, recoveryContent(recovery))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -681,10 +682,13 @@ const ntfsLogScope = "$LogFile is read page by page and every record that " +
 	"where a dump survives, target_attribute_name and target_record resolve it " +
 	"to the stream and the MFT record the operation touched, and where the log " +
 	"has been written round past the last dump the table comes back empty and " +
-	"every record's target stays unresolved. A page whose update-sequence " +
-	"fixups fail is dropped whole, along with the partial record carried into " +
-	"it, with no counter and no error -- and a fixup failure is a torn write, " +
-	"so the pages most worth seeing are the ones that vanish without trace."
+	"every record's target stays unresolved. libntfs drops a page whose " +
+	"update-sequence fixups fail whole, along with the partial record carried " +
+	"into it, and a fixup failure is a torn write; the pages are walked again " +
+	"here by libntfs's own rules, so each such page is counted and the result is " +
+	"incomplete, as it is when $LogFile cannot be read to its end. A record met " +
+	"twice is a copy and is reported once, and a walk holding copies does not " +
+	"judge wrapped."
 
 func (s *realNTFSSession) ScanLogRecords() (fsJournalScan, error) {
 	scan := newJournalScan("ntfs", fsJournalLogFile, fsJournalOrderPhysical)
@@ -698,7 +702,14 @@ func (s *realNTFSSession) ScanLogRecords() (fsJournalScan, error) {
 		return scan, nil
 	}
 
+	seen := make(map[uint64]bool)
+	copies := 0
 	walkErr := s.volume.EachLogRecord(func(record *libntfs.LogRecord) error {
+		if seen[record.LSN] {
+			copies++
+			return nil
+		}
+		seen[record.LSN] = true
 		scan.add(ntfsLogRecordHash(record, table))
 		position := journalPosition(record.LSN)
 		scan.position(position)
@@ -709,12 +720,60 @@ func (s *realNTFSSession) ScanLogRecords() (fsJournalScan, error) {
 		return fsJournalScan{}, walkErr
 	}
 
-	scan.noteWrap("the LSNs go backwards partway through the page order, so the " +
-		"log has been written round: entries after that point are older than the " +
-		"ones before it and this array is not a timeline. Sort by lsn, or read " +
-		"ntfs_log_transactions, which is ordered by it.")
+	if !ntfsLogCopies(&scan, copies) {
+		scan.noteWrap("the LSNs go backwards partway through the page order, so the " +
+			"log has been written round: entries after that point are older than the " +
+			"ones before it and this array is not a timeline. Sort by lsn, or read " +
+			"ntfs_log_transactions, which is ordered by it.")
+	}
+	s.ntfsLogPagesPassedOver(&scan)
 
 	return scan, nil
+}
+
+// fsJournalWarnLogCopies says the walk met records more than once.
+const fsJournalWarnLogCopies = "log_page_copies"
+
+// ntfsLogCopies reports the records the walk met more than once, if any, and
+// withdraws the wrap verdict when there were. An LSN names one record, so a
+// repeat is a copy and was counted twice (M26-FS2-024). Whatever put the copy
+// there -- libntfs walks every page of $LogFile, and LFS is described as
+// keeping copies of recently written pages ahead of its circular area -- a
+// higher LSN read before a lower one is then no evidence that the log was
+// written round, and wrapped is not judged rather than judged wrongly.
+func ntfsLogCopies(scan *fsJournalScan, copies int) bool {
+	if copies == 0 {
+		return false
+	}
+	scan.Wrapped = false
+	scan.WrapChecked = false
+	scan.warn(fsJournalWarnLogCopies, "", fmt.Sprintf("%d records appear more than once "+
+		"in the order the pages were walked; an LSN names one record, so each is "+
+		"reported once. A walk holding copies of log pages cannot tell a log written "+
+		"round from copies read ahead of the pages they copy, so wrapped is not judged.",
+		copies))
+	return true
+}
+
+// ntfsDistinctLogRecords puts records in LSN order and drops the repeats,
+// keeping the first met, and says how many it dropped. libntfs's
+// GroupLogTransactions closes a transaction at its commit or forget record in
+// the order it is handed records, and the walk hands them over in page order:
+// after a wrap, a transaction whose records fell on both sides of the seam had
+// its end met before its beginning, and became two -- a clipped tail and a
+// head that never closed (M26-FS2-023).
+func ntfsDistinctLogRecords(records []*libntfs.LogRecord) ([]*libntfs.LogRecord, int) {
+	sort.SliceStable(records, func(i, j int) bool { return records[i].LSN < records[j].LSN })
+	distinct := make([]*libntfs.LogRecord, 0, len(records))
+	copies := 0
+	for _, record := range records {
+		if len(distinct) > 0 && record.LSN == distinct[len(distinct)-1].LSN {
+			copies++
+			continue
+		}
+		distinct = append(distinct, record)
+	}
+	return distinct, copies
 }
 
 func (s *realNTFSSession) ScanLogTransactions() (fsJournalScan, error) {
@@ -730,8 +789,8 @@ func (s *realNTFSSession) ScanLogTransactions() (fsJournalScan, error) {
 	}
 
 	// The grouping needs every record at once, so the wrap is observed here on
-	// the physical order the walk produces, before the sort that grouping
-	// applies hides it.
+	// the physical order the walk produces, before the records are put in LSN
+	// order for the grouping.
 	var records []*libntfs.LogRecord
 	walkErr := s.volume.EachLogRecord(func(record *libntfs.LogRecord) error {
 		records = append(records, record)
@@ -744,17 +803,99 @@ func (s *realNTFSSession) ScanLogTransactions() (fsJournalScan, error) {
 		return fsJournalScan{}, walkErr
 	}
 
-	scan.noteWrap("the LSNs go backwards partway through the page order, so the " +
-		"log has been written round. The transactions themselves are ordered by " +
-		"LSN and reading them in order is sound; what the seam costs is the " +
-		"transactions whose records fell on both sides of it, which are reported " +
-		"as whatever part of them survived.")
+	records, copies := ntfsDistinctLogRecords(records)
+	if !ntfsLogCopies(&scan, copies) {
+		scan.noteWrap("the LSNs go backwards partway through the page order, so the " +
+			"log has been written round. The records are grouped in LSN order, so a " +
+			"transaction whose records fell on both sides of the seam is still one " +
+			"transaction; what the wrap costs is the transactions whose beginnings it " +
+			"overwrote, which report start_present false.")
+	}
 
 	for _, transaction := range libntfs.GroupLogTransactions(records) {
 		scan.add(ntfsLogTransactionHash(transaction))
 	}
+	s.ntfsLogPagesPassedOver(&scan)
 
 	return scan, nil
+}
+
+// fsJournalWarnTornLogPages says record pages failed their update-sequence
+// check, and were left out with every record on them.
+const fsJournalWarnTornLogPages = "log_pages_torn"
+
+// ntfsMaxLogPageSize is libntfs's bound on a page size the restart area may
+// declare; past it, or one that is not a multiple of eight, libntfs walks in
+// DefaultLogPageSize pages, and so does the audit, so that both cut $LogFile
+// at the same places.
+//
+//mutant:format libntfs v0.3.3 logfile.go maxLogPageSize and logPageSizeOrDefault
+const ntfsMaxLogPageSize = 1 << 20
+
+// ntfsLogPagesPassedOver walks $LogFile's pages the way libntfs's record walk
+// does and reports what that walk passes over without a word: a record page
+// whose update-sequence check fails -- a torn write, or a page edited without
+// its fixups -- is dropped whole with the record that ran into it, and the
+// walk ends at the first read that returns nothing. The scans said complete
+// over both; ntfs_log_records' own documentation said such pages "vanish
+// without trace", and they did.
+func (s *realNTFSSession) ntfsLogPagesPassedOver(scan *fsJournalScan) {
+	logFile, err := s.volume.OpenLogFile()
+	if err != nil {
+		scan.incomplete("$LogFile's pages could not be checked for what the walk passed over: " + err.Error())
+		return
+	}
+	pageSize := libntfs.DefaultLogPageSize
+	if restart, restartErr := s.volume.LogRestartArea(); restartErr == nil && restart != nil {
+		if size := restart.LogPageSize; size != 0 && size <= ntfsMaxLogPageSize && size%8 == 0 {
+			pageSize = int(size)
+		}
+	}
+
+	size := logFile.Size()
+	page := make([]byte, pageSize)
+	var torn int64
+	for offset := int64(0); offset+int64(pageSize) <= size; offset += int64(pageSize) {
+		if n, _ := logFile.ReadAt(page, offset); n < pageSize {
+			scan.incomplete(fmt.Sprintf("$LogFile could not be read from byte %d of its %d, "+
+				"and the walk stopped there: the records past it are not here", offset, size))
+			break
+		}
+		if ntfsLogPageDropped(page) {
+			torn++
+		}
+	}
+	if torn > 0 {
+		detail := fmt.Sprintf("%d record pages fail their update-sequence check -- a torn "+
+			"write, or a page altered without its fixups -- and libntfs leaves each out "+
+			"whole, with the record that ran into it, so the records on them are not here", torn)
+		scan.warn(fsJournalWarnTornLogPages, "$LogFile", detail)
+		scan.incomplete(detail)
+	}
+}
+
+// ntfsLogPageDropped reports whether libntfs's record walk drops a page that
+// carries the RCRD signature: its update sequence does not hold, by the rule
+// libntfs applies (mft.go, applyUpdateSequence) -- every 512-byte stride the
+// array covers ends in the update sequence number -- or the records would
+// begin past the page's end.
+func ntfsLogPageDropped(page []byte) bool {
+	if len(page) < 0x28 || libntfs.ReadUint32LE(page, 0) != libntfs.LogRecordPageMagic {
+		return false
+	}
+	offset, count := int(libntfs.ReadUint16LE(page, 4)), int(libntfs.ReadUint16LE(page, 6))
+	if count > 0 {
+		if offset+count*2 > len(page) {
+			return true
+		}
+		usn := libntfs.ReadUint16LE(page, offset)
+		for i := 1; i < count && i*libntfs.UpdateSequenceStride <= len(page); i++ {
+			if libntfs.ReadUint16LE(page, i*libntfs.UpdateSequenceStride-2) != usn {
+				return true
+			}
+		}
+	}
+	return libntfs.AlignUp(max(offset+count*2, 0x28), 8) >= len(page)
 }
 
 const ntfsLogTransactionScope = "The $LogFile records are grouped into the " +
@@ -926,11 +1067,16 @@ func ntfsLogTransactionHash(transaction libntfs.LogTransaction) object.Object {
 	// A record that names no previous record of its own is the first record of
 	// its transaction. Where the earliest surviving record names one that is
 	// no longer in the log, the transaction began before the window this scan
-	// can see and first_lsn is not its beginning.
-	startPresent := false
-	if len(transaction.Records) > 0 && transaction.Records[0] != nil {
-		startPresent = transaction.Records[0].ClientPreviousLSN == 0
+	// can see and first_lsn is not its beginning. Earliest is lowest LSN: the
+	// records were once read from the first in page order, which after a wrap
+	// is not the first written (M26-FS2-023).
+	var earliest *libntfs.LogRecord
+	for _, record := range transaction.Records {
+		if record != nil && (earliest == nil || record.LSN < earliest.LSN) {
+			earliest = record
+		}
 	}
+	startPresent := earliest != nil && earliest.ClientPreviousLSN == 0
 
 	return makeHashObject(map[string]object.Object{
 		"transaction_id": intObj(int64(transaction.ID)),
@@ -968,6 +1114,7 @@ const extJournalScope = "The JBD2 journal is walked from its first block to " +
 	"handle."
 
 func (s *realEXTSession) ScanJournal() (fsJournalScan, error) {
+	before := len(s.fs.Warnings())
 	scan := newJournalScan("ext", fsJournalJBD2, fsJournalOrderPhysical)
 	scan.TimestampsAvailable = true
 	scan.WarningsAvailable = true
@@ -994,7 +1141,7 @@ func (s *realEXTSession) ScanJournal() (fsJournalScan, error) {
 		}
 	}
 
-	s.collectEXTWarnings(&scan)
+	s.collectEXTWarnings(&scan, before)
 	noteEXTWrap(&scan)
 
 	if revokes > 0 {
@@ -1062,21 +1209,46 @@ func (s *realEXTSession) describeJournal(scan *fsJournalScan) bool {
 	return scan.Present
 }
 
-// collectEXTWarnings drains libext's warnings channel into the scan.
-func (s *realEXTSession) collectEXTWarnings(scan *fsJournalScan) {
-	warnings := s.fs.Warnings()
+// collectEXTWarnings moves the warnings libext recorded during this scan into
+// it. The list belongs to the volume, so a scan's own are the ones after
+// before -- the journal once reported every warning the handle had ever
+// raised -- and a full list is reported under its own code, not the
+// superblock's it once borrowed (M26-FS2-008).
+func (s *realEXTSession) collectEXTWarnings(scan *fsJournalScan, before int) {
+	warnings, saturated := s.extWarningsSince(before)
 	for _, warning := range warnings {
 		scan.warn(warning.Code.String(), warning.Feature, warning.Detail)
 	}
-	if len(warnings) >= extWarningCap {
-		scan.warn(fsJournalWarnSuperblock, "",
-			"libext's warnings channel is full at its cap of 256 for the life of "+
-				"this handle, so anything it would have reported after this point is lost")
+	if saturated {
+		scan.warn(fsWarnWarningsSaturated, "", extWarningsSaturatedDetail)
+		scan.incomplete(extWarningsSaturatedDetail)
 	}
 }
 
 // extWarningCap is libext's own bound on how many warnings it accumulates.
 const extWarningCap = 256
+
+// fsWarnWarningsSaturated says a library's warning store was full, so a
+// call's own warnings may not be in it.
+const fsWarnWarningsSaturated = "warnings_saturated"
+
+const extWarningsSaturatedDetail = "libext keeps 256 warnings for the whole life of a " +
+	"handle and drops every one after, and this handle has all 256: whatever this call " +
+	"would have warned about may not be among them, so finding none proves nothing; " +
+	"close the handle and open the image again for a list that can record this call's"
+
+// extWarningsSince is what libext recorded after the list held before
+// warnings, and whether the list is full. libext keeps extWarningCap warnings
+// for a volume's whole life and drops the rest, so a delta taken around a call
+// is empty for ever once the list fills: a scan that hit the same damage as the
+// one before reported complete with no warnings (M26-FS2-008).
+func (s *realEXTSession) extWarningsSince(before int) ([]libext.Warning, bool) {
+	warnings := s.fs.Warnings()
+	if before > len(warnings) {
+		before = len(warnings)
+	}
+	return warnings[before:], len(warnings) >= extWarningCap
+}
 
 // noteEXTWrap raises the two warnings a wrapped JBD2 journal earns: the
 // ordering one every wrapped journal earns, and the commit one that is
@@ -1215,6 +1387,7 @@ const extBlockCopiesScope = "Every journalled copy of the named filesystem " +
 	"likely to be a block that was never read as a block that was zeroed."
 
 func (s *realEXTSession) JournalBlockCopies(fsBlock int64) (fsJournalScan, error) {
+	before := len(s.fs.Warnings())
 	scan := newJournalScan("ext", fsJournalJBD2, fsJournalOrderPhysical)
 	scan.TimestampsAvailable = false
 	scan.WarningsAvailable = true
@@ -1245,7 +1418,7 @@ func (s *realEXTSession) JournalBlockCopies(fsBlock int64) (fsJournalScan, error
 		scan.add(extBlockCopyHash(index, content))
 	}
 
-	s.collectEXTWarnings(&scan)
+	s.collectEXTWarnings(&scan, before)
 	noteEXTWrap(&scan)
 
 	return scan, nil
@@ -1303,6 +1476,10 @@ const extInodeVersionsScope = "Prior on-disk states of the named inode are " +
 	"timestamp somewhere in 1970."
 
 func (s *realEXTSession) JournalInodeVersions(inode int64) (fsJournalScan, error) {
+	if err := s.extInodeOnVolume(inode); err != nil {
+		return fsJournalScan{}, err
+	}
+	before := len(s.fs.Warnings())
 	scan := newJournalScan("ext", fsJournalJBD2, fsJournalOrderPhysical)
 	scan.TimestampsAvailable = true
 	scan.WarningsAvailable = true
@@ -1327,7 +1504,7 @@ func (s *realEXTSession) JournalInodeVersions(inode int64) (fsJournalScan, error
 		scan.add(extInodeVersionHash(index, version, runs, state))
 	}
 
-	s.collectEXTWarnings(&scan)
+	s.collectEXTWarnings(&scan, before)
 	noteEXTWrap(&scan)
 
 	return scan, nil
@@ -1426,8 +1603,22 @@ func extInodeVersionHash(index int, inode libext.Inode, runs []fsDeletedRun, sta
 	})
 }
 
+// extInodeOnVolume refuses an inode number the volume does not have. libext
+// takes a uint32 and the builtins take any positive integer, so inode
+// 4294967308 narrowed to 12 and its versions and recovered bytes were inode
+// 12's, reported under the number asked for (M26-FS2-007).
+func (s *realEXTSession) extInodeOnVolume(inode int64) error {
+	if count := int64(s.fs.Superblock().InodesCount); inode < 1 || inode > count {
+		return fmt.Errorf("inode %d is not on this volume, whose inodes are numbered 1 to %d", inode, count)
+	}
+	return nil
+}
+
 // RecoverJournalledFile rebuilds one journalled version of an inode.
 func (s *realEXTSession) RecoverJournalledFile(inodeNum, version int64) (fsRecovery, error) {
+	if err := s.extInodeOnVolume(inodeNum); err != nil {
+		return fsRecovery{}, err
+	}
 	versions, err := s.fs.JournalInodeVersionsContext(context.Background(), uint32(inodeNum))
 	if err != nil {
 		return fsRecovery{}, err

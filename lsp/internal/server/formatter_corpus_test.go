@@ -57,12 +57,12 @@ func TestFormatterIsIdempotentAcrossExamples(t *testing.T) {
 
 		snapshot := analyzer.New().Analyze(string(data))
 		if len(snapshot.ParseErrors) > 0 {
-			// Unparseable examples take the whitespace-normalisation path,
-			// which this test is not about.
+			// The formatter refuses an example that does not parse, which
+			// this test is not about.
 			continue
 		}
 
-		once := formatSnapshotText(snapshot)
+		once := mustFormat(t, path, snapshot)
 
 		reparsed := analyzer.New().Analyze(once)
 		if len(reparsed.ParseErrors) > 0 {
@@ -70,7 +70,7 @@ func TestFormatterIsIdempotentAcrossExamples(t *testing.T) {
 			continue
 		}
 
-		if twice := formatSnapshotText(reparsed); once != twice {
+		if twice := mustFormat(t, path, reparsed); once != twice {
 			t.Errorf("%s: formatting is not idempotent", path)
 		}
 	}
@@ -94,7 +94,7 @@ func TestFormatterPreservesEveryCommentAcrossExamples(t *testing.T) {
 		}
 
 		before := commentBodies(src)
-		after := commentBodies(formatSnapshotText(snapshot))
+		after := commentBodies(mustFormat(t, path, snapshot))
 
 		if len(before) != len(after) {
 			t.Errorf("%s: %d comments before formatting, %d after", path, len(before), len(after))
@@ -139,7 +139,7 @@ func TestFormatterPreservesProgramStructureAcrossExamples(t *testing.T) {
 			continue
 		}
 
-		formatted := formatSnapshotText(snapshot)
+		formatted := mustFormat(t, path, snapshot)
 		reparsed := analyzer.New().Analyze(formatted)
 		if len(reparsed.ParseErrors) > 0 || reparsed.Program == nil {
 			t.Errorf("%s: formatted output no longer parses: %v", path, reparsed.ParseErrors)
@@ -354,7 +354,7 @@ func TestFormatterAddsNoBracketsAcrossExamples(t *testing.T) {
 		}
 		compared++
 		before := openingBrackets(string(data))
-		if after := openingBrackets(formatSnapshotText(snapshot)); after > before {
+		if after := openingBrackets(mustFormat(t, path, snapshot)); after > before {
 			t.Errorf("%s: formatting added brackets: %d before, %d after", path, before, after)
 		}
 	}
@@ -391,4 +391,17 @@ func commentBodies(src string) []string {
 		out = append(out, strings.TrimSpace(comment.Text))
 	}
 	return out
+}
+
+// mustFormat is formatSnapshotText for a snapshot the caller has already
+// checked parses, which is every use in this file. A refusal there would mean
+// the formatter declined a tree it has no reason to decline, so it is a
+// failure and not a skip.
+func mustFormat(t *testing.T, path string, snapshot *analyzer.Snapshot) string {
+	t.Helper()
+	formatted, parseErrors, ok := formatSnapshotText(snapshot)
+	if !ok {
+		t.Fatalf("%s: the formatter refused a snapshot with no parse errors: %v", path, parseErrors)
+	}
+	return formatted
 }

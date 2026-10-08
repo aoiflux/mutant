@@ -103,6 +103,8 @@ const (
 	fsAttrWarnResourceForkAttr  = "resource_fork_attribute"
 	fsAttrWarnValueUnrendered   = "value_longer_than_render_cap"
 	fsAttrWarnValueUnlocated    = "value_not_located"
+	fsAttrWarnValueFragmented   = "value_fragmented"
+	fsAttrWarnValueUnreadable   = "value_unreadable"
 	fsAttrWarnDirectoryStream   = "directory_carries_stream"
 	fsAttrWarnStreamUnreadable  = "stream_unreadable"
 	fsAttrWarnNoDefaultStream   = "no_unnamed_stream"
@@ -190,7 +192,12 @@ type fsXattrEntry struct {
 	Storage   string
 	Size      int64
 	Value     []byte
-	Offset    int64 // -1 when the value has no place on the image
+	Offset    int64 // -1 when the value has no single place on the image
+
+	// Ranges is every range a fork-backed value occupies, in the order they
+	// make up the value. Offset alone locates it only when they follow one
+	// another on the image.
+	Ranges []fsForkRange
 }
 
 type fsXattrScan struct {
@@ -274,13 +281,23 @@ func (s fsXattrScan) toHash(handle string) *object.Hash {
 	for _, a := range s.Attributes {
 		valueHex, truncated := attrValueHex(a.Value)
 		text, isText := attrValueText(a.Value)
+		ranges := make([]object.Object, 0, len(a.Ranges))
+		for _, r := range a.Ranges {
+			ranges = append(ranges, makeHashObject(map[string]object.Object{
+				"fork_offset": intObj(r.ForkOffset),
+				"offset":      intObj(r.Offset),
+				"length":      intObj(r.Length),
+				"slack":       intObj(r.Slack),
+			}))
+		}
 		attributes = append(attributes, makeHashObject(map[string]object.Object{
 			"name":            stringObj(a.Name),
 			"namespace":       stringObj(a.Namespace),
 			"storage":         stringObj(a.Storage),
 			"size":            intObj(a.Size),
 			"offset":          intObj(a.Offset),
-			"located":         boolObj(a.Offset >= 0),
+			"ranges":          &object.Array{Elements: ranges},
+			"located":         boolObj(a.Offset >= 0 || len(a.Ranges) > 0),
 			"value_hex":       stringObj(valueHex),
 			"value_truncated": boolObj(truncated || int64(len(a.Value)) < a.Size),
 			"value_text":      stringObj(text),
@@ -1154,13 +1171,13 @@ const extXattrScope = "the extended attributes of one live inode, read from both
 	"The attributes of a deleted inode are not reachable: this addresses a live file by path."
 
 func (s *realEXTSession) Xattrs(filePath string) (fsXattrScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
 
 	scan := newXattrScan("ext", cleanPath, fsAttrNodeInode)
 	scan.Scope = extXattrScope
 	scan.Supported = s.fs.Capabilities().ExtendedAttributes
 
-	file, err := s.fs.OpenPath(cleanPath)
+	file, err := s.openPath(cleanPath)
 	if err != nil {
 		return fsXattrScan{}, err
 	}
@@ -1232,12 +1249,13 @@ func (s *realEXTSession) Xattrs(filePath string) (fsXattrScan, error) {
 				"from it are reported without a place on the image")
 	}
 
-	warnings := s.fs.Warnings()
-	if before > len(warnings) {
-		before = len(warnings)
-	}
-	for _, warning := range warnings[before:] {
+	warnings, saturated := s.extWarningsSince(before)
+	for _, warning := range warnings {
 		scan.warn(warning.Code.String(), warning.Feature, warning.Detail)
+	}
+	if saturated {
+		scan.warn(fsWarnWarningsSaturated, "", extWarningsSaturatedDetail)
+		scan.incomplete(extWarningsSaturatedDetail)
 	}
 
 	return scan, nil
@@ -1256,7 +1274,7 @@ const xfsXattrScope = "the extended attributes of one live inode, short-form or 
 	"flagged with anything else is one libxfs refuses to name rather than guess at."
 
 func (s *realXFSSession) Xattrs(filePath string) (fsXattrScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
 
 	scan := newXattrScan("xfs", cleanPath, fsAttrNodeInode)
 	scan.Scope = xfsXattrScope
@@ -1321,15 +1339,19 @@ const hfsXattrScope = "the extended attributes of one live catalog node, inline 
 	"B-tree key order. The system attributes com.apple.decmpfs and com.apple.ResourceFork are " +
 	"returned like any other and flagged rather than filtered -- libhfs calls filtering them a " +
 	"policy decision for the caller, and the presence of decmpfs is precisely why that file's " +
-	"data fork reads as empty. A fork-backed value carries its position on the image, so a value " +
-	"too large to render is still reachable with raw_read_at_bytes; an inline value lives in the " +
+	"data fork reads as empty. A fork-backed value carries every range it occupies on the image, " +
+	"and a single offset only when those ranges follow one another, so a value too large to " +
+	"render is still reachable with raw_read_at_bytes, range by range; an inline value lives in the " +
 	"B-tree record itself and has no allocation-block address, which is reported as -1 rather " +
 	"than as zero. Classic HFS has no attributes B-tree at all, and an HFS+ volume that has never " +
 	"had an attribute written to it may have an empty one; supported distinguishes the first from " +
 	"a node that simply carries none."
 
 func (s *realHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
+	if err := hfsPathAddressable(cleanPath); err != nil {
+		return fsXattrScan{}, err
+	}
 
 	scan := newXattrScan("hfs", cleanPath, fsAttrNodeCNID)
 	scan.Scope = hfsXattrScope
@@ -1353,7 +1375,7 @@ func (s *realHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
 	}
 	scan.StoragesChecked = []string{fsAttrStorageInline, fsAttrStorageFork}
 
-	before := len(s.volume.Anomalies())
+	mark := s.hfsAnomalyMark()
 
 	attributes, err := s.volume.ListXAttrs(record.CNID)
 	if err != nil {
@@ -1370,13 +1392,32 @@ func (s *realHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
 		}
 		if attr.Storage == libhfs.XAttrFork {
 			entry.Storage = fsAttrStorageFork
-			if ranges, rangeErr := s.volume.XAttrRanges(record.CNID, attr.Name); rangeErr == nil && len(ranges) > 0 {
-				entry.Offset = ranges[0].DiskOffset
+			// Every range, not the first: the value's offset alone, read for its
+			// size, ran from its first extent into whatever followed it when the
+			// fork was fragmented, and nothing said so (M26-FS2-022).
+			ranges, rangeErr := s.volume.XAttrRanges(record.CNID, attr.Name)
+			if rangeErr == nil {
+				for _, r := range ranges {
+					entry.Ranges = append(entry.Ranges, fsForkRange{
+						ForkOffset: r.ForkOffset,
+						Offset:     r.DiskOffset,
+						Length:     r.Length,
+						Slack:      r.Slack,
+					})
+				}
 			}
-			if entry.Offset < 0 {
+			switch {
+			case len(entry.Ranges) == 0:
 				scan.warn(fsAttrWarnValueUnlocated, attr.Name,
 					"this attribute's value is fork-backed and its extents did not resolve to a "+
 						"position on the image")
+			case fsRangesContiguous(entry.Ranges):
+				entry.Offset = entry.Ranges[0].Offset
+			default:
+				scan.warn(fsAttrWarnValueFragmented, attr.Name,
+					fmt.Sprintf("this value is fork-backed and lies in %d ranges that do not "+
+						"follow one another on the image, so it has no single offset; ranges lists "+
+						"each in the order they make up the value", len(entry.Ranges)))
 			}
 		}
 
@@ -1385,13 +1426,16 @@ func (s *realHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
 		// it through here would put an unbounded allocation behind a builtin
 		// whose subject is metadata.
 		if attr.Size <= fsAttrMaxValueBytes {
-			if value, readErr := s.volume.ReadXAttr(record.CNID, attr.Name); readErr == nil {
-				entry.Value = value
+			value, readErr := s.volume.ReadXAttr(record.CNID, attr.Name)
+			if readErr != nil {
+				scan.warn(fsAttrWarnValueUnreadable, attr.Name, readErr.Error())
+				scan.incomplete("an attribute's value could not be read; see warning_codes")
 			}
+			entry.Value = value
 		} else {
 			scan.warn(fsAttrWarnValueUnrendered, attr.Name,
 				fmt.Sprintf("this value is %d bytes, past the %d byte render cap; its length and "+
-					"position are reported and the bytes stay readable from the image",
+					"ranges are reported and the bytes stay readable from the image, range by range",
 					attr.Size, fsAttrMaxValueBytes))
 		}
 
@@ -1399,15 +1443,23 @@ func (s *realHFSSession) Xattrs(filePath string) (fsXattrScan, error) {
 		scan.flagWellKnown(attr.Name)
 	}
 
-	anomalies := s.volume.Anomalies()
-	if before > len(anomalies) {
-		before = len(anomalies)
-	}
-	for _, anomaly := range anomalies[before:] {
-		scan.warn(anomaly.Op, fmt.Sprintf("%d", anomaly.Offset), anomaly.Detail)
+	if s.hfsAnomaliesSince(mark, scan.warn) {
+		scan.incomplete("libhfs met damage reading this node's attributes; see warning_codes")
 	}
 
 	return scan, nil
+}
+
+// fsRangesContiguous reports whether each range starts where the space the one
+// before it occupies ends, so that one offset and the total locate them all.
+func fsRangesContiguous(ranges []fsForkRange) bool {
+	for i := 1; i < len(ranges); i++ {
+		previous := ranges[i-1]
+		if ranges[i].Offset != previous.Offset+previous.Length+previous.Slack {
+			return false
+		}
+	}
+	return true
 }
 
 const hfsResourceForkScope = "one live file's resource fork: its size, and the image ranges holding " +
@@ -1419,7 +1471,10 @@ const hfsResourceForkScope = "one live file's resource fork: its size, and the i
 	"because an attribute record carries no block total to trim against. Folders have no fork."
 
 func (s *realHFSSession) ResourceFork(filePath string) (fsForkScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
+	if err := hfsPathAddressable(cleanPath); err != nil {
+		return fsForkScan{}, err
+	}
 
 	scan := fsForkScan{
 		Filesystem:        "hfs",

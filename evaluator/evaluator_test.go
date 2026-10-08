@@ -446,7 +446,14 @@ func TestArrayIndexExpressions(t *testing.T) {
 		{"let myArray = [1, 2, 3]; myArray[0] + myArray[1] + myArray[2];", 6},
 		{"let myArray = [1, 2, 3]; let i = myArray[0]; myArray[i]", 2},
 		{"[1, 2, 3][3]", nil},
-		{"[1, 2, 3][-1]", nil},
+		// A negative index counts from the end. This row read `nil` until 2.6.0,
+		// which pinned a divergence rather than a rule: the same expression is 3
+		// when the program is compiled, and was null only when it was interpreted
+		// (M26-VM-008). Both engines read object.IndexOf now.
+		{"[1, 2, 3][-1]", 3},
+		{"[1, 2, 3][-3]", 1},
+		{"[1, 2, 3][-4]", nil},
+		{"[][-1]", nil},
 	}
 
 	for _, tt := range tests {

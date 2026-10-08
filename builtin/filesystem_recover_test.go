@@ -81,8 +81,9 @@ func TestAGapNoRunClaimsIsNotCountedAsLocated(t *testing.T) {
 func TestARunReaderNeverReadsAtAnOffsetThatMeansNowhere(t *testing.T) {
 	image := bytes.NewReader(bytes.Repeat([]byte{0xFF}, 4096))
 	reader := &fsRunReader{
-		image: image,
-		size:  16,
+		image:  image,
+		size:   16,
+		extent: 4096,
 		runs: []fsDeletedRun{
 			{FileOffset: 0, Offset: -1, Length: 8},
 			{FileOffset: 8, Offset: 100, Length: 8},

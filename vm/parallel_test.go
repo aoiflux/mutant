@@ -162,7 +162,12 @@ func TestPMapCallbackEnvironment(t *testing.T) {
 //
 // The assertion is the observable half of that. The race itself is what `go test
 // -race` catches, and this test is the program that makes it catch it: before
-// detachCaptures it reported four races on this shape.
+// the captures were detached at all it reported four races on this shape.
+//
+// This test covers the direct capture, which is the one shape that was ever
+// isolated. Every other route to the same cell -- through a captured function, a
+// global, a container, an element, spawn's argument -- is M26-VM-004 and lives in
+// parallel_detach_test.go.
 func TestParallelWorkersDoNotShareCapturedVariables(t *testing.T) {
 	cases := []struct {
 		name  string

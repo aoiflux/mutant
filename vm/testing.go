@@ -406,7 +406,7 @@ func (vm *VM) hoAssert(args []object.Object) (object.Object, error) {
 	if errObj != nil {
 		return errObj, nil
 	}
-	if isTruthy(args[0]) {
+	if object.IsTruthy(args[0]) {
 		return global.True, nil
 	}
 	return vm.recordFailure(note, "assert: %s is not true", renderTestValue(args[0])), nil

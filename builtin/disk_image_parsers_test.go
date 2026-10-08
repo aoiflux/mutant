@@ -1195,8 +1195,10 @@ func TestRealEWFDiscoverTranslatesAHoleIntoAReport(t *testing.T) {
 	if set.Contiguous {
 		t.Fatalf("Discover reported a holed set as contiguous")
 	}
-	if len(set.Paths) != 0 {
-		t.Fatalf("Discover returned paths %v for an unresolved set", set.Paths)
+	// The present segments are named, because they are what a partial open
+	// decodes; leaving them out opened the one file given (M26-FS1-010).
+	if len(set.Paths) != 2 || filepath.Base(set.Paths[0]) != "image.E01" || filepath.Base(set.Paths[1]) != "image.E03" {
+		t.Fatalf("Discover returned paths %v, want image.E01 and image.E03 (%s)", set.Paths, set.PathsError)
 	}
 	if len(set.MissingNumbers) != 1 || set.MissingNumbers[0] != 2 {
 		t.Fatalf("MissingNumbers = %v, want [2]", set.MissingNumbers)
@@ -1398,6 +1400,7 @@ func TestEWFOpenPartialProceedsPastAHoleAndSaysSo(t *testing.T) {
 		session: &fakeEWFSession{},
 		discoverSet: &ewfSegmentSet{
 			Paths:          []string{"image.E01", "image.E03"},
+			PresentNumbers: []int64{1, 3},
 			Contiguous:     false,
 			PresentCount:   2,
 			MissingNumbers: []int64{2},
@@ -1414,6 +1417,9 @@ func TestEWFOpenPartialProceedsPastAHoleAndSaysSo(t *testing.T) {
 	if !mustHashBoolValue(t, hash, "partial") {
 		t.Fatalf("expected partial = true")
 	}
+	// Segment 3 follows the hole, so it is named and not decoded (M26-FS1-010).
+	assertStringArray(t, hash, "segments", []string{"image.E01"})
+	assertStringArray(t, hash, "undecoded_segments", []string{"image.E03"})
 	missing := mustHashArrayValue(t, hash, "missing_segments")
 	if len(missing) != 1 {
 		t.Fatalf("missing_segments = %d entries, want 1", len(missing))
@@ -1448,8 +1454,14 @@ func TestEWFOpenPartialPassesAllowIncompleteToTheLibrary(t *testing.T) {
 // missing key, so it cannot be written to depend on which builtin opened the
 // image.
 func TestEWFOpenReportsNotPartialForAWholeSet(t *testing.T) {
+	// A whole set reads, to the reader, as one that starts at segment 1 and
+	// ends with a done section, every declared chunk decoded; partial reads
+	// the reader as well as the numbering (M26-FS1-009).
 	installFakeEWFBackend(t, fakeEWFBackend{
-		session:    &fakeEWFSession{},
+		session: &fakeEWFSession{meta: ewfMetadata{
+			SegmentNumber: 1, HasDoneSection: true,
+			HasMedia: true, NumberOfChunks: 4, ObservedChunkCount: 4,
+		}},
 		discovered: []string{"image.E01", "image.E02"},
 	})
 

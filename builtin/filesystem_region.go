@@ -30,6 +30,7 @@ package builtin
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"mutant/object"
@@ -144,6 +145,12 @@ func fsRegionFromPartition(name string, h *object.Hash) (fsRegion, *object.Error
 		return fsRegion{}, newError(
 			"%s: the partition hash has no INTEGER length_byte", name)
 	}
+	if start == -1 || length == -1 {
+		return fsRegion{}, newError(
+			"%s: the partition's place in the image does not fit a byte offset -- its LBAs times the "+
+				"block size overflow (start_byte %d, length_byte %d) -- so the table entry names no "+
+				"bytes that can be opened", name, start, length)
+	}
 	if length == 0 {
 		return fsRegion{}, newError(
 			"%s: partition at byte %d has a length of zero, so there is no volume to open; "+
@@ -168,6 +175,14 @@ func validateFSRegion(name string, region fsRegion) *object.Error {
 	}
 	if region.Length < 0 {
 		return newError("%s: length must be >= 0, got %d", name, region.Length)
+	}
+	// Offset+Length wrapped to a negative end, which every later "runs past
+	// the image" check then passed, and the section reader it was handed
+	// saturated to unbounded: the open reported bounded:true with a length of
+	// 2^63-1 while reads ran on (M26-FS1-014).
+	if region.Length > math.MaxInt64-region.Offset {
+		return newError("%s: a volume of %d bytes at offset %d would end past the largest offset an image "+
+			"can have", name, region.Length, region.Offset)
 	}
 	return nil
 }

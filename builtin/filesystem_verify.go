@@ -36,8 +36,12 @@ package builtin
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"math"
+	"math/bits"
 	"strings"
 
 	libext "github.com/aoiflux/libext"
@@ -45,6 +49,7 @@ import (
 	libhfs "github.com/aoiflux/libhfs"
 	libntfs "github.com/aoiflux/libntfs"
 	libxfat "github.com/aoiflux/libxfat"
+	libxfs "github.com/aoiflux/libxfs"
 
 	"mutant/object"
 )
@@ -65,6 +70,14 @@ type fsVerifyCheck struct {
 	Passed   bool
 	Examined int64
 	Detail   string
+
+	// Structural marks a check that is not one of the format's integrity
+	// mechanisms -- a plausibility test, a flag the filesystem keeps about
+	// itself, whether a structure could be reached at all. What it finds
+	// wrong is wrong, so it can fail a volume; it cannot verify one, because
+	// passing it says nothing was found implausible, not that the bytes are
+	// the ones written. Rendered as kind "structural" beside "integrity".
+	Structural bool
 }
 
 // fsVerifyFinding is one thing a check objected to. Severity is the library's
@@ -113,14 +126,15 @@ func (r *fsVerifyResult) addFinding(finding fsVerifyFinding) {
 
 // verified reports whether this volume can be called verified.
 //
-// True only when at least one check actually ran and every check that ran
-// passed. A format that carries no checksums therefore reports false with
-// checks_run zero -- which is not the same as failing, and the two are told
-// apart by checks_run rather than by this bit. It is
+// True only when at least one integrity check actually ran and every check
+// that ran -- integrity or structural -- passed. A format that carries no
+// checksums therefore reports false with integrity_checks_run zero, however
+// many structural checks held -- which is not the same as failing, and the
+// two are told apart by integrity_checks_run rather than by this bit. It is
 // libewf.VerifyResult.OK()'s rule, that an image storing no digests is not
 // verified, applied to filesystems.
 func (r fsVerifyResult) verified() bool {
-	run := 0
+	integrity := 0
 	for _, check := range r.Checks {
 		if !check.Checked {
 			continue
@@ -128,14 +142,19 @@ func (r fsVerifyResult) verified() bool {
 		if !check.Passed {
 			return false
 		}
-		run++
+		if !check.Structural {
+			integrity++
+		}
 	}
-	return run > 0
+	return integrity > 0
 }
 
-// tally counts the checks by outcome.
-func (r fsVerifyResult) tally() (run, passed, failed, unavailable int64) {
+// tally counts the checks by outcome, and the integrity checks that ran.
+func (r fsVerifyResult) tally() (run, passed, failed, unavailable, integrityRun int64) {
 	for _, check := range r.Checks {
+		if check.Checked && !check.Structural {
+			integrityRun++
+		}
 		switch {
 		case !check.Checked:
 			unavailable++
@@ -147,15 +166,20 @@ func (r fsVerifyResult) tally() (run, passed, failed, unavailable int64) {
 			failed++
 		}
 	}
-	return run, passed, failed, unavailable
+	return run, passed, failed, unavailable, integrityRun
 }
 
 // toHash renders the result in the family's one return shape.
 func (r fsVerifyResult) toHash(handle string) *object.Hash {
 	checks := make([]object.Object, 0, len(r.Checks))
 	for _, check := range r.Checks {
+		kind := "integrity"
+		if check.Structural {
+			kind = "structural"
+		}
 		checks = append(checks, makeHashObject(map[string]object.Object{
 			"name":     stringObj(check.Name),
+			"kind":     stringObj(kind),
 			"checked":  boolObj(check.Checked),
 			"passed":   boolObj(check.Passed),
 			"examined": intObj(check.Examined),
@@ -173,22 +197,23 @@ func (r fsVerifyResult) toHash(handle string) *object.Hash {
 		}))
 	}
 
-	run, passed, failed, unavailable := r.tally()
+	run, passed, failed, unavailable, integrityRun := r.tally()
 
 	return makeHashObject(map[string]object.Object{
-		"handle":             stringObj(handle),
-		"filesystem":         stringObj(r.Filesystem),
-		"verified":           boolObj(r.verified()),
-		"checks":             &object.Array{Elements: checks},
-		"checks_run":         intObj(run),
-		"checks_passed":      intObj(passed),
-		"checks_failed":      intObj(failed),
-		"checks_unavailable": intObj(unavailable),
-		"findings":           &object.Array{Elements: findings},
-		"finding_count":      intObj(r.FindingCount),
-		"findings_truncated": boolObj(r.FindingCount > int64(len(r.Findings))),
-		"scope":              stringObj(r.Scope),
-		"status":             stringObj("ok"),
+		"handle":               stringObj(handle),
+		"filesystem":           stringObj(r.Filesystem),
+		"verified":             boolObj(r.verified()),
+		"checks":               &object.Array{Elements: checks},
+		"integrity_checks_run": intObj(integrityRun),
+		"checks_run":           intObj(run),
+		"checks_passed":        intObj(passed),
+		"checks_failed":        intObj(failed),
+		"checks_unavailable":   intObj(unavailable),
+		"findings":             &object.Array{Elements: findings},
+		"finding_count":        intObj(r.FindingCount),
+		"findings_truncated":   boolObj(r.FindingCount > int64(len(r.Findings))),
+		"scope":                stringObj(r.Scope),
+		"status":               stringObj("ok"),
 	})
 }
 
@@ -299,26 +324,30 @@ func runVerify(session fsVerifier, handleArg object.Object, op string) object.Ob
 func (s *realEXTSession) Verify() (fsVerifyResult, error) {
 	result := fsVerifyResult{
 		Filesystem: "ext",
-		Scope: "The plausibility check reads the superblock only. The metadata " +
-			"checksum result covers the structures parsed on this handle so " +
-			"far -- the superblock and the group descriptors are read when the " +
-			"volume is opened, so those are always covered; inodes and " +
-			"directory blocks are covered only once something has read them. " +
-			"Verify again after a walk to widen it.",
+		Scope: "The plausibility check reads the superblock only. On a volume " +
+			"made with metadata checksums the checksum check reads every " +
+			"allocated inode, so it costs O(inodes in use) rather than a seek. " +
+			"It compares the checksums libext can compare -- the superblock, " +
+			"the group descriptors, the allocation bitmaps and the inodes -- " +
+			"and no other: extent tree blocks, directory blocks, extended " +
+			"attribute blocks and the journal carry CRCs nothing here reads, " +
+			"and no file content is checked, because ext stores no checksum " +
+			"over data.",
 	}
 
 	reports := s.fs.ValidateSuperblockIntegrity()
 	result.Checks = append(result.Checks, fsVerifyCheck{
-		Name:     "superblock_plausibility",
-		Checked:  true,
-		Passed:   len(reports) == 0,
-		Examined: 1,
+		Name:       "superblock_plausibility",
+		Structural: true,
+		Checked:    true,
+		Passed:     len(reports) == 0,
+		Examined:   1,
 		Detail: "Range and consistency checks on the superblock's geometry: " +
 			"block and inode sizes, inodes per group, first data block, " +
-			"reserved percentage. This is not a checksum -- libext's " +
-			"per-structure CRC verifiers are unexported -- so a pass means " +
-			"nothing implausible was found, not that the superblock is " +
-			"unmodified.",
+			"reserved percentage. This is not a checksum -- on a volume that " +
+			"has one, the superblock's CRC is the metadata checksum check's -- " +
+			"so a pass means nothing implausible was found, not that the " +
+			"superblock is unmodified.",
 	})
 	for _, report := range reports {
 		result.addFinding(fsVerifyFinding{
@@ -339,29 +368,7 @@ func (s *realEXTSession) Verify() (fsVerifyResult, error) {
 				"detectable by checksum at all.",
 		})
 	} else {
-		mismatches := int64(0)
-		for _, warning := range s.fs.Warnings() {
-			if warning.Code != libext.WarnChecksumMismatch {
-				continue
-			}
-			mismatches++
-			result.addFinding(fsVerifyFinding{
-				Severity: "critical",
-				Location: warning.Feature,
-				Issue:    "metadata checksum mismatch",
-				Detail:   warning.Detail,
-			})
-		}
-		result.Checks = append(result.Checks, fsVerifyCheck{
-			Name:     "metadata_checksums",
-			Checked:  true,
-			Passed:   mismatches == 0,
-			Examined: mismatches,
-			Detail: "CRC32c comparisons libext made while parsing this handle. " +
-				"examined counts the mismatches found, not the structures " +
-				"checked: the library records a warning per failure and keeps " +
-				"no total of what it compared.",
-		})
+		s.verifyMetadataChecksums(&result)
 	}
 
 	for _, warning := range s.fs.Warnings() {
@@ -375,8 +382,218 @@ func (s *realEXTSession) Verify() (fsVerifyResult, error) {
 			Detail:   warning.Detail,
 		})
 	}
+	if _, saturated := s.extWarningsSince(0); saturated {
+		result.addFinding(fsVerifyFinding{
+			Severity: "warning",
+			Location: "libext warnings",
+			Issue:    fsWarnWarningsSaturated,
+			Detail:   extWarningsSaturatedDetail,
+		})
+	}
 
 	return result, nil
+}
+
+// extCSumSeedFeature is INCOMPAT_CSUM_SEED (e2fsprogs' ext2_fs.h): the seed
+// every metadata checksum starts from is stored in the superblock rather than
+// derived from the volume's UUID.
+const extCSumSeedFeature = 0x2000
+
+// extZeroInodeBytes is how much of an inode e2fsck looks at before it accepts
+// one with a bad checksum as never written: the 128-byte base inode
+// (e2fsprogs lib/ext2fs/csum.c, ext2fs_inode_csum_verify).
+const extZeroInodeBytes = 128
+
+const extChecksumsDetail = "CRC32c comparisons on a volume made with metadata " +
+	"checksums: the superblock, every group descriptor, the block and inode " +
+	"bitmaps of every group that has them initialised, and every inode the " +
+	"inode bitmaps say is allocated. examined counts the structures compared. " +
+	"An inode whose first 128 bytes are zero is accepted without a checksum, " +
+	"as e2fsck accepts it. Unallocated inodes are not compared -- past a " +
+	"group's last used inode the table may never have been written -- and " +
+	"nor is anything libext cannot compare: extent tree blocks, directory " +
+	"blocks, extended attribute blocks and the journal."
+
+// verifyMetadataChecksums compares every checksum libext can compare on a
+// volume made with metadata checksums, and adds the checks that say so.
+//
+// A handle reports, as warnings, only the superblock and group descriptor
+// comparisons it makes at open. It compares an inode's checksum on every read
+// too, and throws the answer away unless the handle was opened to refuse a
+// mismatch, so this check once passed a volume with an edited inode -- and
+// told the examiner that verifying again after a walk would widen it, which
+// no walk ever did. The comparisons are made on a second handle opened to
+// refuse mismatches instead: that it opens at all says the superblock and every
+// descriptor matched, whatever the warning list has room for, and every
+// allocated inode is read through it.
+func (s *realEXTSession) verifyMetadataChecksums(result *fsVerifyResult) {
+	sb := s.fs.Superblock()
+	if sb.FeatureIncompat&extCSumSeedFeature != 0 && sb.ChecksumSeed == 0 {
+		result.Checks = append(result.Checks, fsVerifyCheck{
+			Name: "metadata_checksums",
+			Detail: extChecksumsDetail + " Nothing was compared: the volume " +
+				"says its checksum seed is stored in the superblock and the " +
+				"stored seed is zero, which the kernel uses as it is and libext " +
+				"replaces with one derived from the UUID, so every comparison " +
+				"would be against a checksum the kernel never computed.",
+		})
+		return
+	}
+
+	var compared, mismatched, read, unreadable int64
+	mismatch := func(location, detail string) {
+		mismatched++
+		result.addFinding(fsVerifyFinding{
+			Severity: "critical",
+			Location: location,
+			Issue:    "metadata checksum mismatch",
+			Detail:   detail,
+		})
+	}
+	unread := func(location string, err error) {
+		unreadable++
+		result.addFinding(fsVerifyFinding{
+			Severity: "critical",
+			Location: location,
+			Issue:    "checksummed metadata could not be read",
+			Detail:   err.Error(),
+		})
+	}
+
+	groups := s.fs.GroupDescriptors()
+	// The default handle compared the superblock and every descriptor when it
+	// opened; a mismatch among them is a warning on it, and keeps the strict
+	// handle below from opening at all.
+	compared += 1 + int64(len(groups))
+	read += 1 + int64(len(groups))
+	options := s.options
+	options.VerifyChecksums = true
+	var strict *libext.FS
+	if opened, strictErr := libext.OpenWithOptions(s.volume, options); strictErr == nil {
+		strict = opened
+		defer strict.Close()
+	} else {
+		recorded := false
+		for _, warning := range s.fs.Warnings() {
+			if warning.Code == libext.WarnChecksumMismatch {
+				recorded = true
+				mismatch("superblock or group descriptor", warning.Detail)
+			}
+		}
+		switch {
+		case !errors.Is(strictErr, libext.ErrChecksumMismatch):
+			unread("superblock and group descriptors", strictErr)
+		case !recorded:
+			mismatch("superblock or group descriptor", strictErr.Error())
+		}
+	}
+
+	for _, gd := range groups {
+		if !gd.BlockUninit() {
+			bitmap, err := s.fs.BlockBitmap(gd.Group)
+			if err == nil {
+				err = s.fs.VerifyBlockBitmapChecksum(gd.Group, bitmap)
+			}
+			extTallyChecksum(fmt.Sprintf("block bitmap of group %d", gd.Group), err,
+				&compared, &read, mismatch, unread)
+		}
+		if gd.InodeUninit() {
+			continue
+		}
+		bitmap, err := s.fs.InodeBitmap(gd.Group)
+		if err == nil {
+			err = s.fs.VerifyInodeBitmapChecksum(gd.Group, bitmap)
+		}
+		extTallyChecksum(fmt.Sprintf("inode bitmap of group %d", gd.Group), err,
+			&compared, &read, mismatch, unread)
+		if strict == nil || (err != nil && !errors.Is(err, libext.ErrChecksumMismatch)) {
+			continue
+		}
+		for index := uint64(0); index < uint64(sb.InodesPerGroup) && index/8 < uint64(len(bitmap)); index++ {
+			if bitmap[index/8]&(1<<(index%8)) == 0 {
+				continue
+			}
+			number := uint64(gd.Group)*uint64(sb.InodesPerGroup) + index + 1
+			if number > uint64(sb.InodesCount) {
+				break
+			}
+			_, err := strict.ReadInode(uint32(number))
+			if errors.Is(err, libext.ErrChecksumMismatch) {
+				zero, zeroErr := s.extInodeIsZero(gd, index, sb)
+				switch {
+				case zeroErr != nil:
+					err = zeroErr
+				case zero:
+					err = nil
+				}
+			}
+			extTallyChecksum(fmt.Sprintf("inode %d", number), err, &compared, &read, mismatch, unread)
+		}
+	}
+
+	check := fsVerifyCheck{
+		Name:     "metadata_checksums",
+		Checked:  true,
+		Passed:   mismatched == 0,
+		Examined: compared,
+		Detail:   extChecksumsDetail,
+	}
+	if strict == nil {
+		check.Detail += " No inode was compared: a handle that refuses a " +
+			"mismatch does not open on a volume whose superblock or a " +
+			"descriptor already fails, and the inodes are read through one."
+	}
+	result.Checks = append(result.Checks, check, fsVerifyCheck{
+		Name:       "metadata_readable",
+		Structural: true,
+		Checked:    true,
+		Passed:     unreadable == 0,
+		Examined:   read,
+		Detail: "Every structure the checksum check set out to compare, read " +
+			"from the image. One whose read failed fails this, and the findings " +
+			"name which: a volume missing part of its inode table must not " +
+			"verify on the part that is left. It says the checksum check covered " +
+			"what it set out to, not that anything is intact.",
+	})
+}
+
+// extTallyChecksum counts one comparison: err is nil for a match, wraps
+// libext.ErrChecksumMismatch for a mismatch, and is anything else for a
+// structure that could not be read, which was not compared.
+func extTallyChecksum(location string, err error, compared, read *int64,
+	mismatch func(string, string), unread func(string, error)) {
+	switch {
+	case err == nil:
+		*compared++
+		*read++
+	case errors.Is(err, libext.ErrChecksumMismatch):
+		*compared++
+		*read++
+		mismatch(location, err.Error())
+	default:
+		unread(location, err)
+	}
+}
+
+// extInodeIsZero reports whether the base of inode index in gd's table is
+// all zero bytes, read from the volume where libext reads it.
+func (s *realEXTSession) extInodeIsZero(gd libext.GroupDescriptor, index uint64, sb libext.Superblock) (bool, error) {
+	hi, table := bits.Mul64(gd.InodeTableBlock, uint64(sb.BlockSize))
+	within, inTable := bits.Mul64(index, uint64(sb.InodeSize))
+	offset, carry := bits.Add64(table, inTable, 0)
+	if hi != 0 || within != 0 || carry != 0 || offset > math.MaxInt64 {
+		return false, fmt.Errorf("inode %d of group %d lies beyond any byte an image can hold", index, gd.Group)
+	}
+	raw := make([]byte, min(extZeroInodeBytes, int(sb.InodeSize)))
+	if _, err := s.volume.ReadAt(raw, int64(offset)); err != nil {
+		return false, err
+	}
+	for _, b := range raw {
+		if b != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // extSeverityName spells a libext severity for a report. The constants are an
@@ -592,39 +809,67 @@ func (s *realNTFSSession) Verify() (fsVerifyResult, error) {
 			"nothing about file content: NTFS stores no checksum over data.",
 	}
 
-	count, err := s.volume.MFTEntryCount()
+	// The walk covers the records the image holds, however many the $MFT
+	// declares: its own run list is what declares them, and nothing bounds it.
+	plan, err := ntfsPlanMFT(s.volume, s.reader)
 	if err != nil {
-		return result, fmt.Errorf("reading the MFT entry count: %w", err)
+		return result, fmt.Errorf("planning the MFT walk: %w", err)
 	}
 
-	var examined, torn int64
-	for entryNum := uint64(0); entryNum < count; entryNum++ {
-		_, entryErr := s.volume.GetMFTEntry(entryNum)
-		switch {
-		case entryErr == nil:
-			examined++
-		case errors.Is(entryErr, libntfs.ErrVolumeClosed):
-			return result, entryErr
-		case errors.Is(entryErr, libntfs.ErrUpdateSequence):
-			// The record says FILE and its fixups do not hold. That is the
-			// one thing NTFS's update sequence array exists to catch: a write
-			// that did not complete, or a record edited without the fixups
-			// being recomputed.
-			examined++
-			torn++
-			result.addFinding(fsVerifyFinding{
-				Severity: "critical",
-				Location: fmt.Sprintf("MFT record %d", entryNum),
-				Issue:    "update sequence (fixup) validation failed",
-				Detail:   entryErr.Error(),
-			})
-		default:
-			// ErrInvalidMFTEntry covers a never-written record, a record the
-			// volume itself marked bad, and unparsable bytes. A volume-wide
-			// walk meets unallocated records constantly, so counting these as
-			// damage would report every healthy volume as corrupt. They are
-			// not examined either -- there was no record to check.
+	var examined, torn, read, unreadable int64
+	for _, span := range plan.Walk {
+		for entryNum := span.First; entryNum < span.First+span.Count; entryNum++ {
+			_, entryErr := s.volume.GetMFTEntry(entryNum)
+			switch {
+			case entryErr == nil:
+				examined++
+				read++
+			case errors.Is(entryErr, libntfs.ErrVolumeClosed):
+				return result, entryErr
+			case errors.Is(entryErr, libntfs.ErrUpdateSequence):
+				// The record says FILE and its fixups do not hold. That is the
+				// one thing NTFS's update sequence array exists to catch: a write
+				// that did not complete, or a record edited without the fixups
+				// being recomputed.
+				examined++
+				read++
+				torn++
+				result.addFinding(fsVerifyFinding{
+					Severity: "critical",
+					Location: fmt.Sprintf("MFT record %d", entryNum),
+					Issue:    "update sequence (fixup) validation failed",
+					Detail:   entryErr.Error(),
+				})
+			case errors.Is(entryErr, libntfs.ErrInvalidMFTEntry):
+				// A never-written record, a record the volume itself marked
+				// bad, or a header that is not a record's. A volume-wide walk
+				// meets unallocated records constantly, so counting these as
+				// damage would report every healthy volume as corrupt. They are
+				// not examined either -- there was no record to check -- but
+				// their bytes were read.
+				read++
+			default:
+				// Anything else -- the read failed, or a FILE record's
+				// attributes would not parse -- is a record this walk could not
+				// check, and saying nothing about it would let a volume missing
+				// half its MFT verify on the half that is left.
+				unreadable++
+				result.addFinding(fsVerifyFinding{
+					Severity: "critical",
+					Location: fmt.Sprintf("MFT record %d", entryNum),
+					Issue:    "record could not be read",
+					Detail:   entryErr.Error(),
+				})
+			}
 		}
+	}
+	if gap := plan.describe(); gap != "" {
+		result.addFinding(fsVerifyFinding{
+			Severity: "critical",
+			Location: "$MFT",
+			Issue:    "records the MFT declares were not read",
+			Detail:   gap,
+		})
 	}
 
 	result.Checks = append(result.Checks, fsVerifyCheck{
@@ -638,11 +883,23 @@ func (s *realNTFSSession) Verify() (fsVerifyResult, error) {
 			"are skipped rather than failed, and are not counted in examined. " +
 			"This is the only integrity check NTFS defines; the format has no " +
 			"volume checksum and libntfs exposes no other verifier.",
+	}, fsVerifyCheck{
+		Name:       "mft_readable",
+		Structural: true,
+		Checked:    true,
+		Passed:     unreadable == 0 && plan.unread() == 0 && plan.LayoutKnown,
+		Examined:   read,
+		Detail: "Every record the $MFT's run list declares, read from the image. A " +
+			"record whose read failed, whose attributes would not parse, that lies " +
+			"outside the image or that no run places fails this, and the findings " +
+			"name which. examined counts the records whose bytes came back. It " +
+			"says the update sequence check covered the whole MFT, not that " +
+			"anything in it is intact.",
 	})
 
-	if examined == 0 && count > 0 {
+	if examined == 0 && plan.Declared > 0 {
 		result.Scope += fmt.Sprintf(" No record in the %d-entry MFT parsed as a "+
-			"FILE record, so nothing was checked.", count)
+			"FILE record, so nothing was checked.", plan.Declared)
 	}
 
 	return result, nil
@@ -679,7 +936,19 @@ func (s *realHFSSession) Verify() (fsVerifyResult, error) {
 	}{
 		{"catalog", s.volume.CatalogBTreeHeader},
 		{"extents overflow", s.volume.ExtentsBTreeHeader},
-		{"attributes", s.volume.AttributesBTreeHeader},
+	}
+	// Classic HFS has no attributes tree at all, and HFS+ has one only when
+	// the volume header names it; asking a volume without one for its header
+	// failed a freshly formatted volume as critically corrupt. The header's
+	// own word decides, and a tree it does not name is absent, not broken.
+	if s.volume.Capabilities().ExtendedAttributes {
+		trees = append(trees, struct {
+			name string
+			read func() (libhfs.BTreeHeaderRecord, error)
+		}{"attributes", s.volume.AttributesBTreeHeader})
+	} else {
+		result.Scope += " The volume header names no attributes b-tree, so there " +
+			"is none to read: it is absent by format, not unreadable."
 	}
 	for _, tree := range trees {
 		header, err := tree.read()
@@ -711,10 +980,11 @@ func (s *realHFSSession) Verify() (fsVerifyResult, error) {
 	}
 
 	result.Checks = append(result.Checks, fsVerifyCheck{
-		Name:     "btree_headers",
-		Checked:  true,
-		Passed:   failed == 0,
-		Examined: readable + failed,
+		Name:       "btree_headers",
+		Structural: true,
+		Checked:    true,
+		Passed:     failed == 0,
+		Examined:   readable + failed,
 		Detail: "Reads the header node of each b-tree the volume header names. " +
 			"A header that will not parse means the tree beneath it is not " +
 			"reachable, which is the closest thing HFS+ offers to a " +
@@ -733,10 +1003,11 @@ func (s *realHFSSession) Verify() (fsVerifyResult, error) {
 
 	if total := int64(s.volume.AnomalyCount()); total > 0 {
 		result.Checks = append(result.Checks, fsVerifyCheck{
-			Name:     "parser_anomalies",
-			Checked:  true,
-			Passed:   false,
-			Examined: total,
+			Name:       "parser_anomalies",
+			Structural: true,
+			Checked:    true,
+			Passed:     false,
+			Examined:   total,
 			Detail: "Structural inconsistencies libhfs met while parsing on " +
 				"this handle and carried on past. A catalog whose records " +
 				"largely fail to decode is a finding in its own right. The " +
@@ -745,10 +1016,11 @@ func (s *realHFSSession) Verify() (fsVerifyResult, error) {
 		})
 	} else {
 		result.Checks = append(result.Checks, fsVerifyCheck{
-			Name:     "parser_anomalies",
-			Checked:  true,
-			Passed:   true,
-			Examined: 0,
+			Name:       "parser_anomalies",
+			Structural: true,
+			Checked:    true,
+			Passed:     true,
+			Examined:   0,
 			Detail: "libhfs recorded no structural inconsistency while parsing " +
 				"on this handle. Anomalies are noticed only in what was " +
 				"actually read, so this is a statement about the reads made " +
@@ -774,7 +1046,14 @@ func (s *realXFSSession) Verify() (fsVerifyResult, error) {
 		return result, fmt.Errorf("building the volume integrity report: %w", err)
 	}
 
-	if !report.SuperblockCRCChecked {
+	crcChecked, crcValid, crcErr := s.xfsSuperblockCRC()
+	switch {
+	case crcErr != nil:
+		result.Checks = append(result.Checks, fsVerifyCheck{
+			Name:   "superblock_crc",
+			Detail: "The superblock's sector could not be read to compare its CRC32c: " + crcErr.Error(),
+		})
+	case !crcChecked:
 		result.Checks = append(result.Checks, fsVerifyCheck{
 			Name:    "superblock_crc",
 			Checked: false,
@@ -783,16 +1062,18 @@ func (s *realXFSSession) Verify() (fsVerifyResult, error) {
 				"whatever the state of the volume, so it is reported as " +
 				"unchecked instead.",
 		})
-	} else {
+	default:
 		result.Checks = append(result.Checks, fsVerifyCheck{
 			Name:     "superblock_crc",
 			Checked:  true,
-			Passed:   report.SuperblockCRCValid,
+			Passed:   crcValid,
 			Examined: 1,
 			Detail: "The v5 superblock's stored CRC32c against the checksum " +
-				"computed over it as read.",
+				"computed over its sector as read, compared here: libxfs's own " +
+				"comparison reads the stored value in the wrong byte order and " +
+				"fails every v5 superblock.",
 		})
-		if !report.SuperblockCRCValid {
+		if !crcValid {
 			result.addFinding(fsVerifyFinding{
 				Severity: "critical",
 				Location: "superblock",
@@ -805,10 +1086,11 @@ func (s *realXFSSession) Verify() (fsVerifyResult, error) {
 
 	needsRepair := s.volume.Superblock().NeedsRepair()
 	result.Checks = append(result.Checks, fsVerifyCheck{
-		Name:     "clean_state",
-		Checked:  true,
-		Passed:   !needsRepair,
-		Examined: 1,
+		Name:       "clean_state",
+		Structural: true,
+		Checked:    true,
+		Passed:     !needsRepair,
+		Examined:   1,
 		Detail: "Whether the filesystem carries the needs-repair incompat " +
 			"feature bit. It is a flag the filesystem set about itself, not a " +
 			"check of the bytes, so a pass means it never recorded being left " +
@@ -826,6 +1108,9 @@ func (s *realXFSSession) Verify() (fsVerifyResult, error) {
 	}
 
 	for _, anomaly := range report.Anomalies {
+		if s.xfsAnomalyDisproved(anomaly, crcErr == nil && crcChecked && crcValid) {
+			continue
+		}
 		result.addFinding(fsVerifyFinding{
 			Severity: xfsSeverityName(anomaly.Severity),
 			Location: anomalyLocation(anomaly.Path, anomaly.Inode),
@@ -835,6 +1120,68 @@ func (s *realXFSSession) Verify() (fsVerifyResult, error) {
 	}
 
 	return result, nil
+}
+
+// The checksum fields XFS's v5 metadata carries (xfs_format.h): sb_crc at
+// XFS_SB_CRC_OFF, di_crc at XFS_DINODE_CRC_OFF.
+const (
+	xfsSuperblockCRCOffset = 224
+	xfsInodeCRCOffset      = 100
+)
+
+// xfsSuperblockCRC compares the v5 superblock's stored CRC32c with one
+// computed over its sector the way the kernel computes it (xfs_sb.c: the
+// superblock buffer is one sector, checksummed with sb_crc zeroed). libxfs
+// v0.4.1 reads the stored value big-endian where XFS stores it little-endian
+// -- its log record check beside it does not -- so it reports a mismatch on
+// every v5 superblock, and a healthy, freshly made volume failed xfs_verify
+// with a critical finding.
+func (s *realXFSSession) xfsSuperblockCRC() (checked, valid bool, err error) {
+	sb := s.volume.Superblock()
+	if sb.FormatVersion != 5 {
+		return false, false, nil
+	}
+	sector := make([]byte, sb.SectorSize)
+	if len(sector) < xfsSuperblockCRCOffset+4 {
+		return true, false, fmt.Errorf("the superblock gives a sector of %d bytes, "+
+			"too short to hold its own checksum", len(sector))
+	}
+	if _, err := s.img.ReadAt(sector, s.volume.BaseOffset()); err != nil {
+		return true, false, err
+	}
+	return true, xfsCRCHolds(sector, xfsSuperblockCRCOffset), nil
+}
+
+// xfsCRCHolds reports whether data's CRC32c, computed with the four bytes at at
+// zeroed, is the little-endian value stored there. XFS seeds crc32c with ~0
+// and stores the complement, which is the standard CRC-32C hash/crc32 gives.
+func xfsCRCHolds(data []byte, at int) bool {
+	if at < 0 || at+4 > len(data) {
+		return false
+	}
+	stored := binary.LittleEndian.Uint32(data[at:])
+	working := append([]byte(nil), data...)
+	clear(working[at : at+4])
+	return crc32.Checksum(working, crc32.MakeTable(crc32.Castagnoli)) == stored
+}
+
+// xfsAnomalyDisproved reports whether a libxfs anomaly is one of its two
+// byte-order false alarms, disproved by the comparison made here: the
+// superblock's, or a v3 inode's, whose check libxfs makes the same way and
+// so flags every inode on every v5 volume. One the comparison here does not
+// disprove -- a real mismatch, or an inode that would not reopen -- stands.
+func (s *realXFSSession) xfsAnomalyDisproved(anomaly libxfs.ReportAnomaly, superblockValid bool) bool {
+	switch anomaly.Code {
+	case "VERIFY_SUPERBLOCK_CRC_MISMATCH":
+		return superblockValid
+	case "VERIFY_INODE_CRC_MISMATCH":
+		if anomaly.Inode == 0 {
+			return false
+		}
+		inode, err := s.volume.OpenInode(anomaly.Inode)
+		return err == nil && inode.FormatVersion == 3 && xfsCRCHolds(inode.Raw, xfsInodeCRCOffset)
+	}
+	return false
 }
 
 // xfsSeverityName normalises libxfs's severity strings onto the same three

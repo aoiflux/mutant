@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"encoding/hex"
+	"fmt"
 	"io"
 
 	"mutant/object"
@@ -56,6 +57,33 @@ func locatedSize(r io.ReaderAt, recorded int64) int64 {
 	return located
 }
 
+// fsExactReader holds a file's reader to the length it was opened for.
+//
+// libfat, libxfat and libntfs hand back what they could read and io.EOF when
+// the image -- or the partition it was bounded to -- ends inside a file whose
+// bytes the volume located, and libntfs and libhfs do the same when a file's
+// own map of its bytes runs out before its size does. io.EOF is the one error
+// that io.Copy and a windowed read take for success, so without this an
+// extraction wrote a prefix under the file's name with truncated false and a
+// hash was the hash of a prefix. Here a read that stops short inside the
+// length is an error naming where it stopped; one that stops at the end is
+// the ordinary end of the file.
+type fsExactReader struct {
+	r      io.ReaderAt
+	length int64
+}
+
+func (e fsExactReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := e.r.ReadAt(p, off)
+	if n < len(p) && (err == nil || err == io.EOF) {
+		if stopped := off + int64(n); stopped < e.length {
+			return n, fmt.Errorf("byte %d of the file's %d located bytes could not be read: "+
+				"the image ends before the file does, or the volume's own map of the file does", stopped, e.length)
+		}
+	}
+	return n, err
+}
+
 // fsStreamChunkBytes is how much a stream moves at a time. Large enough that a
 // multi-gigabyte file is not copied thirty-two kilobytes at a time, small
 // enough that the peak allocation has nothing to do with the size of the
@@ -91,9 +119,10 @@ func fsStreamOpen(op string, args []object.Object, resolve fsReaderResolver) (st
 	return path, reader, nil
 }
 
-// fsStreamSection bounds a reader at the bytes that were actually located.
+// fsStreamSection bounds a reader at the bytes that were actually located, and
+// makes a read that cannot reach them an error rather than an early end.
 func fsStreamSection(reader fsFileReader) *io.SectionReader {
-	return io.NewSectionReader(reader.ReaderAt, 0, reader.Located)
+	return io.NewSectionReader(fsExactReader{r: reader.ReaderAt, length: reader.Located}, 0, reader.Located)
 }
 
 // fsExtractFile streams a file out of an image and onto the local disk without
@@ -152,7 +181,7 @@ func fsHashFile(op string, args []object.Object, resolve fsReaderResolver) objec
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	digest, errObj := fsHashAlgorithm(op, algorithm)
+	digest, algorithm, errObj := fsHashAlgorithm(op, algorithm)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -237,8 +266,11 @@ func fsReadWindow(op string, reader fsFileReader, offset, length int64) object.O
 		length = available
 	}
 
+	// length was cut to what is located, so the read reaches the end of the
+	// window or fails: a short buffer here is the finding the comment above
+	// says must not be hidden, whichever library stopped short.
 	buffer := make([]byte, length)
-	read, err := reader.ReaderAt.ReadAt(buffer, offset)
+	read, err := fsExactReader{r: reader.ReaderAt, length: offset + length}.ReadAt(buffer, offset)
 	if err != nil && err != io.EOF {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
 	}

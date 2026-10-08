@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,99 @@ func unsafeArchivePath(name string) bool {
 	return cleaned == ".." || strings.HasPrefix(cleaned, "../")
 }
 
+// unsafeLinkTarget reports whether a symbolic link at name, pointing at target,
+// resolves outside the extraction root: an absolute target, or a relative one
+// that climbs past the root from the link's own directory.
+//
+// A relative target is read from where the link sits, as every extractor reads
+// it. Judged from the archive root instead, usr/lib/libfoo.so -> ../lib64/x --
+// an ordinary link in any root filesystem -- was flagged (M26-DAT-007).
+func unsafeLinkTarget(name, target string) bool {
+	if target == "" {
+		return false
+	}
+	normalized := strings.ReplaceAll(target, `\`, "/")
+	if strings.HasPrefix(normalized, "/") || (len(normalized) >= 2 && normalized[1] == ':') {
+		return true
+	}
+	dir := path.Dir(strings.ReplaceAll(name, `\`, "/"))
+	return unsafeArchivePath(path.Join(dir, normalized))
+}
+
+// maxZipLinkTargetBytes bounds how much of a zip symlink entry's body is read
+// to learn where the link points. It is PATH_MAX on Linux, the longest target
+// a link can be created with there.
+//
+//mutant:limit bytes
+const maxZipLinkTargetBytes = 4096
+
+// unsafeZipEntry reports whether extracting one zip entry would write outside
+// the root: through its own name, or -- for a symbolic link, whose target is
+// its body -- through where it points. Only the name used to be checked, which
+// is the half the comment above unsafeTarMember says gets forgotten
+// (M26-DAT-007). A link whose target cannot be read, or runs past
+// maxZipLinkTargetBytes, is counted as unsafe: nothing then vouches for where
+// it points.
+func unsafeZipEntry(entry *zip.File) bool {
+	if unsafeArchivePath(entry.Name) {
+		return true
+	}
+	if entry.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	rc, err := entry.Open()
+	if err != nil {
+		return true
+	}
+	defer rc.Close()
+	target, err := io.ReadAll(io.LimitReader(rc, maxZipLinkTargetBytes+1))
+	if err != nil || len(target) > maxZipLinkTargetBytes {
+		return true
+	}
+	return unsafeLinkTarget(entry.Name, string(target))
+}
+
+// archiveMemberIndex resolves the member a script names -- by its position in
+// the listing, or by name -- among names, which is the listing in order.
+//
+// A name picks out a member only when exactly one carries it. Two members may
+// share a name -- a tar appended to with `tar -r` holds every version of a
+// file it was given -- and a read used to return the first silently, which for
+// an appended tar is the stale one. Such a name is refused, and the member is
+// read by position instead. A name matches exactly first; one written with
+// backslashes matches its slash spelling only when that, too, is unique.
+func archiveMemberIndex(op, archive string, names []string, arg object.Object) (int, *object.Error) {
+	switch v := arg.(type) {
+	case *object.Integer:
+		if v.Value < 0 || v.Value >= int64(len(names)) {
+			return 0, newError("%s: member %d is out of range: %s holds %d, numbered from 0 in the order its listing gives", op, v.Value, archive, len(names))
+		}
+		return int(v.Value), nil
+	case *object.String:
+		for _, match := range []func(string) bool{
+			func(n string) bool { return n == v.Value },
+			func(n string) bool { return strings.ReplaceAll(n, `\`, "/") == strings.ReplaceAll(v.Value, `\`, "/") },
+		} {
+			found := -1
+			for i, n := range names {
+				if !match(n) {
+					continue
+				}
+				if found >= 0 {
+					return 0, newError("%s: more than one entry in %s is named %q (members %d and %d at least); read one by its position in the listing", op, archive, v.Value, found, i)
+				}
+				found = i
+			}
+			if found >= 0 {
+				return found, nil
+			}
+		}
+		return 0, newError("%s: no entry named %q in %s", op, v.Value, archive)
+	default:
+		return 0, newError("argument 2 to `%s` must be a STRING name or an INTEGER position, got %s", op, arg.Type())
+	}
+}
+
 // registerZipDecompressors teaches a zip reader the methods archive/zip does
 // not carry. Store (0) and deflate (8) are built in; these two turn up in real
 // collections because the tools that produce them offer better ratios than
@@ -158,7 +252,7 @@ func registerZipDecompressors(r *zip.Reader) {
 		return io.NopCloser(bzip2.NewReader(in))
 	})
 	r.RegisterDecompressor(methodZstd, func(in io.Reader) io.ReadCloser {
-		dec, err := zstd.NewReader(in)
+		dec, err := zstd.NewReader(in, zstd.WithDecoderConcurrency(1))
 		if err != nil {
 			// The signature has nowhere to put an error, so hand back a reader
 			// that reports it on the first Read rather than a nil that panics.
@@ -211,6 +305,19 @@ func archiveUnix(t time.Time) int64 {
 type zipHandleState struct {
 	Path   string
 	Reader *zip.ReadCloser
+	// Unsafe holds unsafeZipEntry for each entry, in Reader.File's order.
+	// It is worked out once at open, since a symlink's verdict means reading
+	// its body.
+	Unsafe []bool
+}
+
+// zipEntryNames lists an archive's entry names in Reader.File's order.
+func zipEntryNames(reader *zip.ReadCloser) []string {
+	names := make([]string, len(reader.File))
+	for i, entry := range reader.File {
+		names[i] = entry.Name
+	}
+	return names
 }
 
 var zipStore = struct {
@@ -243,9 +350,10 @@ func ZipOpen(args ...object.Object) object.Object {
 	registerZipDecompressors(&reader.Reader)
 
 	unsafeCount := 0
+	unsafe := make([]bool, len(reader.File))
 	var totalUncompressed int64
-	for _, entry := range reader.File {
-		if unsafeArchivePath(entry.Name) {
+	for i, entry := range reader.File {
+		if unsafe[i] = unsafeZipEntry(entry); unsafe[i] {
 			unsafeCount++
 		}
 		totalUncompressed += int64(entry.UncompressedSize64)
@@ -255,7 +363,7 @@ func ZipOpen(args ...object.Object) object.Object {
 	handle := fmt.Sprintf("zip-handle-%d", handleID)
 
 	zipStore.Lock()
-	zipStore.handles[handle] = zipHandleState{Path: archivePath, Reader: reader}
+	zipStore.handles[handle] = zipHandleState{Path: archivePath, Reader: reader, Unsafe: unsafe}
 	zipStore.Unlock()
 
 	custodyRecordOpen(BuiltinNameZipOpen, handle, archivePath)
@@ -283,7 +391,7 @@ func ZipEntries(args ...object.Object) object.Object {
 	}
 
 	entries := make([]object.Object, 0, len(state.Reader.File))
-	for _, entry := range state.Reader.File {
+	for i, entry := range state.Reader.File {
 		entries = append(entries, makeHashObject(map[string]object.Object{
 			"name":            stringObj(entry.Name),
 			"size":            intObj(int64(entry.UncompressedSize64)),
@@ -295,7 +403,7 @@ func ZipEntries(args ...object.Object) object.Object {
 			"modified":        intObj(archiveUnix(entry.Modified)),
 			"comment":         stringObj(entry.Comment),
 			"encrypted":       boolObj(entry.Flags&0x1 != 0),
-			"unsafe_path":     boolObj(unsafeArchivePath(entry.Name)),
+			"unsafe_path":     boolObj(state.Unsafe[i]),
 		}))
 	}
 
@@ -325,15 +433,12 @@ func zipRead(args []object.Object, opName string, binary bool) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	name, errObj := requireStringArg(opName, args[1], 2)
+	index, errObj := archiveMemberIndex(opName, state.Path, zipEntryNames(state.Reader), args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-
-	entry := findZipEntry(state.Reader, name)
-	if entry == nil {
-		return resultAndError(nil, newError("%s: no entry named %q in %s", opName, name, state.Path))
-	}
+	entry := state.Reader.File[index]
+	name := entry.Name
 	if entry.FileInfo().IsDir() {
 		return resultAndError(nil, newError("%s: %q is a directory", opName, name))
 	}
@@ -402,25 +507,6 @@ func ZipClose(args ...object.Object) object.Object {
 	}), nil)
 }
 
-// findZipEntry looks an entry up by exact name, then by the same name with
-// separators normalised. A zip written on Windows may store backslashes even
-// though the format says otherwise, and a caller passing a name straight back
-// from zip_entries should not have to know which it got.
-func findZipEntry(reader *zip.ReadCloser, name string) *zip.File {
-	for _, entry := range reader.File {
-		if entry.Name == name {
-			return entry
-		}
-	}
-	wanted := strings.ReplaceAll(name, "\\", "/")
-	for _, entry := range reader.File {
-		if strings.ReplaceAll(entry.Name, "\\", "/") == wanted {
-			return entry
-		}
-	}
-	return nil
-}
-
 func resolveZipHandle(arg object.Object, op string) (zipHandleState, *object.Error) {
 	handleObj, ok := arg.(*object.String)
 	if !ok {
@@ -481,25 +567,31 @@ const maxArchiveEntries = 1 << 20
 type archiveCompression struct {
 	name  string
 	magic []byte
-	wrap  func(io.Reader) (io.Reader, error)
+	// wrap returns a decompressor that must be closed: a zstd decoder left
+	// open kept reading the archive from its own goroutines, and raced the
+	// next read's seek on the same file (M26-DAT-005).
+	wrap func(io.Reader) (io.ReadCloser, error)
 }
 
 var archiveCompressions = []archiveCompression{
 	{
 		name:  "gzip",
 		magic: []byte{0x1f, 0x8b},
-		wrap:  func(r io.Reader) (io.Reader, error) { return gzip.NewReader(r) },
+		wrap:  func(r io.Reader) (io.ReadCloser, error) { return gzip.NewReader(r) },
 	},
 	{
 		name:  "bzip2",
 		magic: []byte("BZh"),
-		wrap:  func(r io.Reader) (io.Reader, error) { return bzip2.NewReader(r), nil },
+		wrap:  func(r io.Reader) (io.ReadCloser, error) { return io.NopCloser(bzip2.NewReader(r)), nil },
 	},
 	{
 		name:  "zstd",
 		magic: []byte{0x28, 0xb5, 0x2f, 0xfd},
-		wrap: func(r io.Reader) (io.Reader, error) {
-			dec, err := zstd.NewReader(r)
+		wrap: func(r io.Reader) (io.ReadCloser, error) {
+			// One decoder, decoding as it is read: a walk is sequential, and a
+			// decoder that reads ahead on its own goroutines is reading a file
+			// the next walk will seek.
+			dec, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
 			if err != nil {
 				return nil, err
 			}
@@ -511,17 +603,57 @@ var archiveCompressions = []archiveCompression{
 		// unreadable tar. Decoding it would mean a new dependency.
 		name:  "xz",
 		magic: []byte{0xfd, '7', 'z', 'X', 'Z', 0x00},
-		wrap: func(io.Reader) (io.Reader, error) {
+		wrap: func(io.Reader) (io.ReadCloser, error) {
 			return nil, errors.New("xz-compressed archives are not supported; decompress with `xz -d` first")
 		},
 	},
 }
 
+// The header block a plain tar begins with, as POSIX lays it out: 512 bytes,
+// with the header's checksum in the eight bytes at 148, summed with those eight
+// read as spaces.
+//
+//mutant:format POSIX.1-1988 ustar header block (IEEE Std 1003.1, pax "ustar Interchange Format")
+const (
+	tarBlockSize      = 512
+	tarChecksumOffset = 148
+	tarChecksumLength = 8
+)
+
+// tarHeaderBlock reports whether block is a tar header whose checksum adds up,
+// the test archive/tar itself applies. It accepts the signed sum too, which
+// some old tar writers produced.
+func tarHeaderBlock(block []byte) bool {
+	if len(block) < tarBlockSize {
+		return false
+	}
+	field := strings.Trim(string(block[tarChecksumOffset:tarChecksumOffset+tarChecksumLength]), " \x00")
+	want, err := strconv.ParseInt(field, 8, 64)
+	if err != nil {
+		return false
+	}
+	var unsigned, signed int64
+	for i, c := range block[:tarBlockSize] {
+		if i >= tarChecksumOffset && i < tarChecksumOffset+tarChecksumLength {
+			c = ' '
+		}
+		unsigned += int64(c)
+		signed += int64(int8(c))
+	}
+	return want == unsigned || want == signed
+}
+
 // detectArchiveCompression sniffs the head of a file and returns the matching
 // compression, or nil for an uncompressed stream. The file is left positioned
 // at the start either way.
+//
+// A plain tar begins with its first member's name, so a member called
+// "BZhistory.txt" carries bzip2's magic; it was refused as broken bzip2
+// (M26-DAT-008). A first block that is a valid tar header is therefore
+// recognised first. A compressed stream's first 512 bytes do not add up to
+// the checksum they hold short of a file built to be read both ways.
 func detectArchiveCompression(f *os.File) (*archiveCompression, error) {
-	head := make([]byte, 8)
+	head := make([]byte, tarBlockSize)
 	n, err := io.ReadFull(f, head)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return nil, err
@@ -529,6 +661,9 @@ func detectArchiveCompression(f *os.File) (*archiveCompression, error) {
 	head = head[:n]
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, err
+	}
+	if tarHeaderBlock(head) {
+		return nil, nil
 	}
 	for i := range archiveCompressions {
 		if bytes.HasPrefix(head, archiveCompressions[i].magic) {
@@ -542,10 +677,34 @@ type tarHandleState struct {
 	Path        string
 	Compression string
 	Size        int64
-	File        *os.File
-	Mu          *sync.Mutex
-	Headers     []*tar.Header
+	// WalkLimit bounds the decompressed stream every walk of this archive
+	// reads: the one tar_open makes, and every read after it. A read walks the
+	// same stream the open walked in full, so it can never need more.
+	WalkLimit int64
+	File      *os.File
+	Mu        *sync.Mutex
+	Entries   []tarMember
 }
+
+// tarMember is what the walk keeps of one member: the fields tar_entries lists
+// and nothing else. A *tar.Header also holds every PAX record the member
+// carried, and keeping the headers themselves held 40 MiB for a 44 KB archive
+// (M26-DAT-010).
+type tarMember struct {
+	Name, Linkname, Uname, Gname    string
+	Size, Mode                      int64
+	Uid, Gid                        int
+	Typeflag                        byte
+	ModTime, AccessTime, ChangeTime time.Time
+}
+
+// maxArchiveListingBytes bounds the text a tar listing holds: every member's
+// name, link target, user and group, added up. A collection of a million
+// members averaging 128 bytes of it fits; a 44 KB archive of PAX records
+// naming members a megabyte long does not.
+//
+//mutant:limit bytes
+const maxArchiveListingBytes = 128 << 20
 
 var tarStore = struct {
 	sync.RWMutex
@@ -555,35 +714,41 @@ var tarStore = struct {
 	handles: map[string]tarHandleState{},
 }
 
+// tarStreamReader is a capped decompressed stream that closes its decompressor.
+type tarStreamReader struct {
+	*cappedReader
+	io.Closer
+}
+
 // tarStream positions the archive at its start and returns a reader over the
-// decompressed tar, capped so a stream engineered never to end cannot be walked
-// forever.
+// decompressed tar, capped at the handle's walk limit so a stream engineered
+// never to end cannot be walked forever. The caller closes it.
 //
-// The cap here is a ratio and not the absolute one a read uses, and the
-// difference is deliberate. Walking discards what it decompresses, so memory is
-// not the risk -- time is, and time is bounded by output relative to the input
-// the analyst already chose to open. An absolute ceiling would instead reject
-// the ordinary case of a 500 MB collection expanding to several gigabytes.
-func tarStream(state tarHandleState) (io.Reader, error) {
+// The cap is a ratio by default, and not the absolute one a read uses, and the
+// difference is deliberate. Walking discards what it decompresses, so memory
+// is not the risk -- time is, and time is bounded by output relative to the
+// input the analyst already chose to open. An absolute ceiling would instead
+// reject the ordinary case of a 500 MB collection expanding to several
+// gigabytes; and tar_open's max_bytes replaces the ratio for an archive that
+// compresses past it.
+func tarStream(state tarHandleState) (io.ReadCloser, error) {
 	if _, err := state.File.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-
-	var stream io.Reader = state.File
-	if state.Compression != "none" {
-		for i := range archiveCompressions {
-			if archiveCompressions[i].name != state.Compression {
-				continue
-			}
-			wrapped, err := archiveCompressions[i].wrap(state.File)
-			if err != nil {
-				return nil, err
-			}
-			stream = newCappedReader(wrapped, state.Size*maxDecompressionRatio)
-			break
-		}
+	if state.Compression == "none" {
+		return io.NopCloser(state.File), nil
 	}
-	return stream, nil
+	for i := range archiveCompressions {
+		if archiveCompressions[i].name != state.Compression {
+			continue
+		}
+		wrapped, err := archiveCompressions[i].wrap(state.File)
+		if err != nil {
+			return nil, err
+		}
+		return tarStreamReader{cappedReader: newCappedReader(wrapped, state.WalkLimit), Closer: wrapped}, nil
+	}
+	return nil, fmt.Errorf("unknown compression %q", state.Compression)
 }
 
 // TarOpen opens a tar archive -- plain, or wrapped in gzip, bzip2 or zstd --
@@ -591,18 +756,34 @@ func tarStream(state tarHandleState) (io.Reader, error) {
 //
 // The whole archive is walked once here to record what it contains, because tar
 // has no central directory: the only way to know an archive's members is to read
-// past every one of them. Bodies are skipped rather than held, so the cost is
-// time rather than memory. The file stays open until tar_close, which both makes
-// reads cheap and pins the evidence: an archive cannot be swapped underneath a
-// running analysis.
+// past every one of them. Bodies are skipped rather than held; what is held is
+// the listing, bounded by maxArchiveListingBytes. The file stays open until
+// tar_close, which both makes reads cheap and pins the evidence: an archive
+// cannot be swapped underneath a running analysis.
+//
+// The walk of a compressed archive is capped at 1000 times the archive's size
+// unless max_bytes names another cap. The cap was fixed, so a collection that
+// compresses past it -- a sparse image, a repetitive log -- could not be opened
+// at all (M26-DAT-006).
 func TarOpen(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) < 1 || len(args) > 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 
 	archivePath, errObj := requireStringArg(BuiltinNameTarOpen, args[0], 1)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
+	}
+	var explicitLimit int64
+	if len(args) == 2 {
+		limit, errObj := requireIntArg(BuiltinNameTarOpen, args[1], 2)
+		if errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		if limit <= 0 {
+			return resultAndError(nil, newError("argument 2 to `tar_open` must be a positive byte limit, got %d", limit))
+		}
+		explicitLimit = limit
 	}
 
 	file, err := os.Open(archivePath)
@@ -626,28 +807,33 @@ func TarOpen(args ...object.Object) object.Object {
 		name = compression.name
 	}
 
+	walkLimit := info.Size() * maxDecompressionRatio
+	if explicitLimit > 0 {
+		walkLimit = explicitLimit
+	}
 	state := tarHandleState{
 		Path:        archivePath,
 		Compression: name,
 		Size:        info.Size(),
+		WalkLimit:   walkLimit,
 		File:        file,
 		Mu:          &sync.Mutex{},
 	}
 
-	headers, err := scanTarHeaders(state)
+	entries, err := scanTarEntries(state)
 	if err != nil {
 		file.Close()
 		return resultAndError(nil, newError("tar_open: %s", err.Error()))
 	}
-	state.Headers = headers
+	state.Entries = entries
 
 	unsafeCount := 0
 	var total int64
-	for _, header := range headers {
-		if unsafeTarHeader(header) {
+	for _, entry := range entries {
+		if unsafeTarMember(entry) {
 			unsafeCount++
 		}
-		total += header.Size
+		total += entry.Size
 	}
 
 	handleID := atomic.AddInt64(&tarStore.nextID, 1)
@@ -663,21 +849,23 @@ func TarOpen(args ...object.Object) object.Object {
 		"handle":             stringObj(handle),
 		"path":               stringObj(archivePath),
 		"compression":        stringObj(name),
-		"entry_count":        intObj(int64(len(headers))),
+		"entry_count":        intObj(int64(len(entries))),
 		"total_uncompressed": intObj(total),
 		"unsafe_path_count":  intObj(int64(unsafeCount)),
 		"status":             stringObj("ok"),
 	}), nil)
 }
 
-func scanTarHeaders(state tarHandleState) ([]*tar.Header, error) {
+func scanTarEntries(state tarHandleState) ([]tarMember, error) {
 	stream, err := tarStream(state)
 	if err != nil {
 		return nil, err
 	}
+	defer stream.Close()
 
 	reader := tar.NewReader(stream)
-	headers := make([]*tar.Header, 0, 64)
+	entries := make([]tarMember, 0, 64)
+	var listing int64
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -686,19 +874,38 @@ func scanTarHeaders(state tarHandleState) ([]*tar.Header, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(headers) >= maxArchiveEntries {
+		if len(entries) >= maxArchiveEntries {
 			return nil, fmt.Errorf("archive declares more than %d entries", maxArchiveEntries)
 		}
-		headers = append(headers, header)
+		listing += int64(len(header.Name) + len(header.Linkname) + len(header.Uname) + len(header.Gname))
+		if listing > maxArchiveListingBytes {
+			return nil, fmt.Errorf("the archive's member names, link targets and owners run past %d bytes", maxArchiveListingBytes)
+		}
+		entries = append(entries, tarMember{
+			Name: header.Name, Linkname: header.Linkname, Uname: header.Uname, Gname: header.Gname,
+			Size: header.Size, Mode: header.Mode, Uid: header.Uid, Gid: header.Gid, Typeflag: header.Typeflag,
+			ModTime: header.ModTime, AccessTime: header.AccessTime, ChangeTime: header.ChangeTime,
+		})
 	}
-	return headers, nil
+	return entries, nil
 }
 
-// unsafeTarHeader reports a member that would escape its destination on
-// extraction -- through its own name, or through the target of a link, which is
-// the half of the problem that gets forgotten.
-func unsafeTarHeader(header *tar.Header) bool {
-	return unsafeArchivePath(header.Name) || unsafeArchivePath(header.Linkname)
+// unsafeTarMember reports a member that would escape its destination on
+// extraction -- through its own name, or through where a link points, which is
+// the half of the problem that gets forgotten. A symbolic link's target is read
+// from the link's own directory; a hard link's names another member, so it is
+// read from the archive root.
+func unsafeTarMember(entry tarMember) bool {
+	if unsafeArchivePath(entry.Name) {
+		return true
+	}
+	switch entry.Typeflag {
+	case tar.TypeSymlink:
+		return unsafeLinkTarget(entry.Name, entry.Linkname)
+	case tar.TypeLink:
+		return unsafeArchivePath(entry.Linkname)
+	}
+	return false
 }
 
 // tarEntryType names a tar type flag the way a reader would describe it.
@@ -736,23 +943,23 @@ func TarEntries(args ...object.Object) object.Object {
 		return resultAndError(nil, errObj)
 	}
 
-	entries := make([]object.Object, 0, len(state.Headers))
-	for _, header := range state.Headers {
+	entries := make([]object.Object, 0, len(state.Entries))
+	for _, entry := range state.Entries {
 		entries = append(entries, makeHashObject(map[string]object.Object{
-			"name":        stringObj(header.Name),
-			"size":        intObj(header.Size),
-			"type":        stringObj(tarEntryType(header.Typeflag)),
-			"linkname":    stringObj(header.Linkname),
-			"mode":        intObj(header.Mode),
-			"uid":         intObj(int64(header.Uid)),
-			"gid":         intObj(int64(header.Gid)),
-			"uname":       stringObj(header.Uname),
-			"gname":       stringObj(header.Gname),
-			"modified":    intObj(archiveUnix(header.ModTime)),
-			"accessed":    intObj(archiveUnix(header.AccessTime)),
-			"changed":     intObj(archiveUnix(header.ChangeTime)),
-			"is_dir":      boolObj(header.Typeflag == tar.TypeDir),
-			"unsafe_path": boolObj(unsafeTarHeader(header)),
+			"name":        stringObj(entry.Name),
+			"size":        intObj(entry.Size),
+			"type":        stringObj(tarEntryType(entry.Typeflag)),
+			"linkname":    stringObj(entry.Linkname),
+			"mode":        intObj(entry.Mode),
+			"uid":         intObj(int64(entry.Uid)),
+			"gid":         intObj(int64(entry.Gid)),
+			"uname":       stringObj(entry.Uname),
+			"gname":       stringObj(entry.Gname),
+			"modified":    intObj(archiveUnix(entry.ModTime)),
+			"accessed":    intObj(archiveUnix(entry.AccessTime)),
+			"changed":     intObj(archiveUnix(entry.ChangeTime)),
+			"is_dir":      boolObj(entry.Typeflag == tar.TypeDir),
+			"unsafe_path": boolObj(unsafeTarMember(entry)),
 		}))
 	}
 
@@ -762,17 +969,52 @@ func TarEntries(args ...object.Object) object.Object {
 // TarRead reads one member as text, and TarReadBytes reads it as a buffer.
 //
 // Tar has no index, so a read walks the archive from the start until it reaches
-// the named member. On a plain .tar that walk is a seek per member and costs
-// almost nothing; on a compressed one it means decompressing and discarding
-// everything before it. Reading many members out of a large .tar.gz is
-// therefore quadratic, and a program that wants most of an archive is better
-// off decompressing it once to a plain .tar first.
+// the member. On a plain .tar that walk is a seek per member and costs almost
+// nothing; on a compressed one it means decompressing and discarding everything
+// before it. Reading many members out of a large .tar.gz is therefore
+// quadratic, and a program that wants most of an archive is better off
+// decompressing it once to a plain .tar first.
 func TarRead(args ...object.Object) object.Object {
 	return tarRead(args, BuiltinNameTarRead, false)
 }
 
 func TarReadBytes(args ...object.Object) object.Object {
 	return tarRead(args, BuiltinNameTarReadBytes, true)
+}
+
+// tarContentIndex returns the member whose body holds index's content.
+//
+// A regular file holds its own. A hard link has no body: it is the content of
+// the member it names, the latest of that name written before it, which is
+// what extracting the archive puts there. It used to read as an empty buffer
+// with no error (M26-DAT-009). Anything else holds no content and is refused
+// by what it is -- a symbolic link names the member to read instead.
+func tarContentIndex(op string, entries []tarMember, index int) (int, *object.Error) {
+	for {
+		entry := entries[index]
+		switch entry.Typeflag {
+		case tar.TypeReg, tar.TypeCont, tar.TypeGNUSparse:
+			return index, nil
+		case tar.TypeDir:
+			return 0, newError("%s: %q is a directory", op, entry.Name)
+		case tar.TypeSymlink:
+			return 0, newError("%s: %q is a symbolic link to %q, which holds no content of its own; read the member it names", op, entry.Name, entry.Linkname)
+		case tar.TypeLink:
+			target := -1
+			for j := index - 1; j >= 0; j-- {
+				if entries[j].Name == entry.Linkname {
+					target = j
+					break
+				}
+			}
+			if target < 0 {
+				return 0, newError("%s: %q is a hard link to %q, which no member before it holds", op, entry.Name, entry.Linkname)
+			}
+			index = target
+		default:
+			return 0, newError("%s: %q is a %s, which holds no content", op, entry.Name, tarEntryType(entry.Typeflag))
+		}
+	}
 }
 
 func tarRead(args []object.Object, opName string, binary bool) object.Object {
@@ -784,10 +1026,19 @@ func tarRead(args []object.Object, opName string, binary bool) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	name, errObj := requireStringArg(opName, args[1], 2)
+	names := make([]string, len(state.Entries))
+	for i, entry := range state.Entries {
+		names[i] = entry.Name
+	}
+	index, errObj := archiveMemberIndex(opName, state.Path, names, args[1])
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	content, errObj := tarContentIndex(opName, state.Entries, index)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	name := state.Entries[index].Name
 
 	// A tar member is stored uncompressed inside the stream, so there is no
 	// per-member compressed size to derive a limit from; the whole archive's
@@ -797,6 +1048,10 @@ func tarRead(args []object.Object, opName string, binary bool) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
+	if size := state.Entries[content].Size; size > limit {
+		return resultAndError(nil, newError("%s: %q declares %d bytes, past the %d-byte limit "+
+			"(pass an explicit max_bytes to raise it)", opName, name, size, limit))
+	}
 
 	state.Mu.Lock()
 	defer state.Mu.Unlock()
@@ -805,28 +1060,24 @@ func tarRead(args []object.Object, opName string, binary bool) object.Object {
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 	}
+	defer stream.Close()
 
 	reader := tar.NewReader(stream)
-	wanted := strings.ReplaceAll(name, "\\", "/")
-	for {
+	for i := 0; ; i++ {
 		header, err := reader.Next()
 		if err == io.EOF {
-			return resultAndError(nil, newError("%s: no entry named %q in %s", opName, name, state.Path))
+			return resultAndError(nil, newError("%s: %s ends before member %d, which tar_open listed", opName, state.Path, content))
 		}
 		if err != nil {
 			return resultAndError(nil, newError("%s: %s", opName, err.Error()))
 		}
-		if header.Name != name && strings.ReplaceAll(header.Name, "\\", "/") != wanted {
+		if i < content {
 			continue
 		}
-		if header.Typeflag == tar.TypeDir {
-			return resultAndError(nil, newError("%s: %q is a directory", opName, name))
+		if header.Name != state.Entries[content].Name {
+			return resultAndError(nil, newError("%s: member %d of %s is %q now, not the %q tar_open listed; the archive changed under the handle",
+				opName, content, state.Path, header.Name, state.Entries[content].Name))
 		}
-		if header.Size > limit {
-			return resultAndError(nil, newError("%s: %q declares %d bytes, past the %d-byte limit "+
-				"(pass an explicit max_bytes to raise it)", opName, name, header.Size, limit))
-		}
-
 		data, err := readLimited(reader, limit)
 		if err != nil {
 			return resultAndError(nil, newError("%s: %s: %s", opName, name, err.Error()))

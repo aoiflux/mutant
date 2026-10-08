@@ -78,13 +78,17 @@ func (vm *VM) hoSpawn(args []object.Object) (object.Object, error) {
 	// program costs enough to be visible -- and paying it here would make spawn
 	// block its caller for as long as the setup takes, which is exactly what an
 	// accept loop cannot afford.
-	globals := vm.snapshotGlobals()
-
-	// And its own captured variables, on this goroutine for the same reason: the
-	// caller carries straight on, and a task writing a cell the caller still
-	// holds is a data race rather than a shared accumulator. A spawned task
-	// answers with its return value.
-	task := detachCaptures(cl)
+	//
+	// The cells go with it, on this goroutine for the same reason and with more
+	// force: a task writing a cell the caller still holds is a data race rather
+	// than a shared accumulator, and detaching on the task's goroutine would
+	// race the caller's next write. A spawned task answers with its return
+	// value. The boundary covers the globals, the task's own captures and the
+	// argument together, so a cell reachable two ways is one cell in the task.
+	boundary := newWorkerBoundary()
+	globals := boundary.slice(vm.snapshotGlobals())
+	task := boundary.closure(cl)
+	callArgs = boundary.slice(callArgs)
 
 	go func() {
 		var (

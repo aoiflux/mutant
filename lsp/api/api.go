@@ -11,6 +11,7 @@ import (
 
 	"mutant/lexer"
 	"mutant/lsp/internal/analyzer"
+	localprotocol "mutant/lsp/internal/protocol"
 	"mutant/lsp/internal/server"
 	"mutant/parser"
 	"mutant/sema"
@@ -18,10 +19,32 @@ import (
 	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
-// Format returns the canonical formatting of Mutant source. It is idempotent and
-// degrades to whitespace normalization on a hard parse error.
-func Format(src string) string {
-	return server.FormatSource(src)
+// Format returns the canonical formatting of Mutant source, or the parse errors
+// that stop it. It is idempotent.
+//
+// A source that does not parse comes back unchanged, with a non-empty
+// diagnostic slice -- never an empty one, so a caller can treat `len(errs) > 0`
+// as the single question "may I write this?". Mutant formatting is strict in
+// the gofmt tradition, and that tradition includes refusing a file rather than
+// guessing at it: with no tree the only edit left is shuffling whitespace, and
+// whitespace inside a triple-quoted string is data.
+func Format(src string) (string, []Diagnostic) {
+	formatted, parseErrors, ok := server.FormatSource(src)
+	if ok {
+		return formatted, nil
+	}
+
+	refusals := convertDiagnostics(localprotocol.NewMapper(src), parseErrors)
+	if len(refusals) == 0 {
+		refusals = []Diagnostic{{
+			Line:     1,
+			Column:   1,
+			Severity: SeverityError,
+			Message:  "the source could not be analyzed",
+			Source:   "mutant-format",
+		}}
+	}
+	return src, refusals
 }
 
 // Severity is the importance of a diagnostic.
@@ -123,7 +146,22 @@ func fileURI(path string) string {
 }
 
 func diagnosticsOf(snapshot *analyzer.Snapshot) []Diagnostic {
-	raw := analyzer.Diagnostics(snapshot, analyzer.DefaultLintConfig())
+	return convertDiagnostics(snapshot.Mapper(),
+		analyzer.Diagnostics(snapshot, analyzer.DefaultLintConfig()))
+}
+
+// convertDiagnostics turns the language server's wire diagnostics into the
+// CLI-facing shape: 1-based line and column, severity and source as words.
+//
+// mapper is what turns a diagnostic's UTF-16 character offset back into the byte
+// column this package reports, and it is a parameter because the two callers
+// come by one differently: a lint holds an analyzer snapshot, which owns a
+// Mapper already, and a format refusal holds only the source that would not
+// parse. Deriving the column here instead would put a second site on the
+// arithmetic M26-LSP-027 moved into Mapper, and a nil Mapper answers in byte
+// columns rather than panicking, so a caller that somehow has none is wrong only
+// in the way this package was wrong before that row.
+func convertDiagnostics(mapper *localprotocol.Mapper, raw []lsp.Diagnostic) []Diagnostic {
 	out := make([]Diagnostic, 0, len(raw))
 	for _, d := range raw {
 		// Back to a byte column. A diagnostic's character is a UTF-16 offset,
@@ -132,7 +170,7 @@ func diagnosticsOf(snapshot *analyzer.Snapshot) []Diagnostic {
 		// the parser's own messages print and what the sweep goldens are
 		// written in. On an ASCII line the two are the same number, so nothing
 		// a golden pins moves.
-		line, column := snapshot.TokenPosition(d.Range.Start)
+		line, column := mapper.TokenPosition(d.Range.Start)
 		out = append(out, Diagnostic{
 			Line:     line,
 			Column:   column,

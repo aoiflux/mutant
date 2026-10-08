@@ -57,11 +57,50 @@ func TimeParse(args ...object.Object) object.Object {
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	t, err := time.Parse(layout, value)
+	// Against UTC rather than against the host. time.Parse resolves a zone
+	// abbreviation -- the MST layout verb -- only when it belongs to
+	// time.Local, so the same text gave two different instants on two
+	// examiners' machines (M26-BLT-003). A layout with no zone element is
+	// unaffected, because time.Parse already defaults such a layout to UTC,
+	// and so is a numeric offset, which carries its own.
+	t, err := time.ParseInLocation(layout, value, time.UTC)
 	if err != nil {
 		return resultAndError(nil, newError("time_parse: %s", err.Error()))
 	}
+	if name, fabricated := timeParseFabricatedZone(t); fabricated {
+		return resultAndError(nil, newError(
+			"time_parse: %q is a zone abbreviation this cannot resolve, and Go reads an "+
+				"unresolvable one as +0000 without an error -- so the instant would come back "+
+				"shifted by that zone's real offset and look valid. An abbreviation is ambiguous "+
+				"in any case: IST is +0530, +0100 and +0200 to three different places, so there is "+
+				"no table to resolve it by. State the offset instead -- a layout like "+
+				"\"2006-01-02 15:04 -0700\", or RFC3339 -- or keep the abbreviation beside its "+
+				"offset, as in \"2006-01-02 15:04 MST-0700\"", name))
+	}
 	return resultAndError(intObj(t.Unix()), nil)
+}
+
+// timeParseFabricatedZone names the zone of a parsed time when Go invented that
+// zone rather than resolving it, which is the case time_parse refuses.
+//
+// time.ParseInLocation resolves a zone abbreviation only when the abbreviation
+// belongs to the location it is given. For any other abbreviation it keeps the
+// name, uses offset 0 and returns no error, so the result is a timestamp that
+// is wrong by that zone's real offset and says nothing about it.
+//
+// A zone that genuinely means +0000 is told apart by its name: UTC and GMT are
+// the only such abbreviations Go accepts. It rejects "UT" and a bare "Z"
+// outright against this layout verb, so neither reaches here. The three shapes
+// that must keep working all arrive named or offset: a non-zero numeric offset
+// has no zone name and a real offset, a "+0000" numeric offset is named "UTC"
+// by Go, and a layout with no zone element takes the location's own name, which
+// is UTC here. So all three are resolved rather than fabricated, and pass.
+func timeParseFabricatedZone(t time.Time) (string, bool) {
+	name, offset := t.Zone()
+	if offset != 0 || name == "" || name == "UTC" || name == "GMT" {
+		return name, false
+	}
+	return name, true
 }
 
 func TimeDiff(args ...object.Object) object.Object {

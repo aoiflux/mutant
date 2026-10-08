@@ -1053,8 +1053,8 @@ func TestXFATBuiltinArgumentAndHandleErrors(t *testing.T) {
 
 func TestXFATFindEntryByNameHelper(t *testing.T) {
 	entries := []libxfat.Entry{}
-	if _, found := xfatFindEntryByName(entries, "file.txt"); found {
-		t.Fatalf("expected not found on empty entries")
+	if _, err := xfatFindEntryByName(entries, "file.txt"); !errors.Is(err, errXFATNoSuchName) {
+		t.Fatalf("expected no such name on empty entries, got %v", err)
 	}
 }
 

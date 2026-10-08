@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-53 limits in 5 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 125 limits that are not named yet; `policy/limit_budget.go` lists each one.
+65 limits in 7 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 120 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -26,21 +26,31 @@ and are not listed.
 | --- | --- | --- | --- | --- | --- |
 | `defaultSearchContext` | 32 bytes | bytes | -- | defaultSearchContext is how much plaintext a hit hands back on each side of the match unless the search asks otherwise: about a line, which is enough to recognise what was found. | `builtin/record_search.go` |
 | `defaultSearchHits` | 100 | count | -- | defaultSearchHits is how many hits a search hands back unless it asks for more or fewer. Every match is counted whatever this is. | `builtin/record_search.go` |
+| `httpHeadReadSlack` | 4 KiB | bytes | -- | httpHeadReadSlack is what the socket is allowed beyond maxHTTPHeaderBytes while a head is being read. The parser draws through a bufio.Reader, which fills a whole buffer at a time, so the last fill can legitimately carry the start of a body past the end of the head. The figure is one bufio buffer, which is what net/http's own server adds to MaxHeaderBytes for this reason. | `builtin/mitm_http.go` |
 | `httpIdleConnTimeout` | 1m30s | duration | -- | httpIdleConnTimeout is how long a connection kept for reuse waits for the next request before it is closed. | `builtin/http.go` |
 | `httpMaxIdleConns` | 100 | count | -- | httpMaxIdleConns is how many connections, across every host, are kept for reuse. | `builtin/http.go` |
 | `httpRequestTimeout` | 30s | duration | -- | httpRequestTimeout bounds one request an http_* builtin or lua_run_http makes, from dialling to the last byte of the body. | `builtin/http.go` |
 | `httpTLSHandshakeTimeout` | 10s | duration | -- | httpTLSHandshakeTimeout bounds the TLS handshake of one connection. | `builtin/http.go` |
+| `luaRepeatResultMax` | 8 MiB | bytes | -- | luaRepeatResultMax bounds how large a string string.rep may build inside the sandbox. | `builtin/lua.go` |
+| `luaScriptTimeout` | 5s | duration | -- | luaScriptTimeout bounds one lua_run_string / lua_run_file / lua_run_http call, from the first instruction of the chunk to its last. | `builtin/lua.go` |
+| `maxArchiveListingBytes` | 128 MiB | bytes | -- | maxArchiveListingBytes bounds the text a tar listing holds: every member's name, link target, user and group, added up. A collection of a million members averaging 128 bytes of it fits; a 44 KB archive of PAX records naming members a megabyte long does not. | `builtin/archive.go` |
+| `maxBannerBytes` | 4 KiB | bytes | -- | maxBannerBytes is the most a service's greeting may be. A banner is one line naming a product and a version -- "SSH-2.0-OpenSSH_9.6", "220 smtp.example ESMTP ready" -- and what a peer sends past four kibibytes of it is not a banner any more. The read is bounded because the peer decides when to stop talking: uncapped, a service that answers a connection with an endless stream would be recorded in full, into a VM variable that is re-encrypted on every store. A greeting that reaches the cap is refused rather than clipped, because the first four kibibytes of a longer stream reported as a whole banner is a wrong answer and nothing in the result could say so. | `builtin/net.go` |
 | `maxBuiltinResultBytes` | 32 MiB | bytes | -- | maxBuiltinResultBytes bounds a result whose size the script picks outright: a repeat count, a pad width, a number of random bytes. Uncapped, one mistyped count does not fail -- it leaves the process alive holding tens of gibibytes of the host's commit charge, printing nothing and surviving every ordinary kill, so the case it was opened for is never released. | `builtin/result_limit.go` |
 | `maxCaseReason` | 4 KiB | bytes | -- | maxCaseReason bounds a reason or a name written into a case record. It is written into a signed commit that is never compacted away, so it is a sentence and not a document. | `builtin/case_lifecycle.go` |
 | `maxDecimalIntegerBytes` | 4 KiB | bytes | -- | maxDecimalIntegerBytes bounds the integers rendered as decimal text. Turning a number into decimal costs more than linear time in its length -- a 512 KiB DER INTEGER took 550 ms, and four times that length twelve times as long (M26-DAT-029) -- and no integer a real document carries comes near it: a certificate serial is at most 20 bytes, an RSA-8192 modulus 1 KiB. A longer one is rendered in hexadecimal, which costs linear time and is as exact. | `builtin/format_native.go` |
 | `maxEmailMultipartDepth` | 16 | depth | -- | maxEmailMultipartDepth bounds how deeply multipart parts may nest inside one another. Mail as it is written nests three or four deep -- a multipart/mixed holding a multipart/related holding a multipart/alternative -- and every level is walked with its own boundary, so a message nested deeper than this is one built to make the walk recurse, and is refused rather than followed. | `builtin/email_forensics.go` |
+| `maxHTTPBodyBytes` | 32 MiB | bytes | -- | maxHTTPBodyBytes bounds the body http_conn_read_request, http_conn_read_response, http_parse_request and http_parse_response hand back as one string, and a body past it is refused rather than cut. The peer at the other end of an intercepted connection decides how much it sends and is not trusted to be reasonable, and the body arrives as a VM variable, which is re-encrypted on every store. Refusing is what makes the answer honest: a clipped body returned as a whole one is a wrong result a script has no way to detect, which is what this cap used to produce (M26-NET-031). A message whose body may be larger is read with http_conn_read_request_head or http_conn_read_response_head plus net_conn_read, which leave the body on the connection and stream it in pieces. | `builtin/mitm_http.go` |
+| `maxHTTPHeaderBytes` | 1 MiB | bytes | -- | maxHTTPHeaderBytes bounds the request line and header block of one message. The body was capped and the head was not, so a peer could send a single header field of any length and have it read in full: an 8 MiB field grew the heap by 12 MiB and a 32 MiB field by 69 MiB, and both were accepted. A head is metadata about a body, and no real one is large. | `builtin/mitm_http.go` |
 | `maxHTTPHeaderFields` | 100 | count | -- | maxHTTPHeaderFields bounds how many header fields one HTTP message head may carry. The cost of a field is not its length: each one becomes an entry in an http.Header and then a pair in the hash a builtin hands back, which is held as a VM variable and re-encrypted on every store, so a field spelled in five bytes costs far more than five bytes and a bound counted in bytes does not see it. Measured with a 1 MiB head bound in place, 87,964 one-line fields fitted in 1,044,485 bytes on the wire and grew the heap by 33,246,576 -- 31.8 times what arrived (M26-NET-028). 100 is Apache httpd's LimitRequestFields default and Tomcat's maxHeaderCount default; net/http has no field count of its own to inherit, only byte bounds. | `builtin/http_header_fields.go` |
 | `maxJSONDepth` | 10,000 | depth | -- | maxJSONDepth bounds how deeply arrays and objects may nest in one document. It is the bound encoding/json's own decoder applied while these builtins used it, kept the same now that they read a document token by token, so nothing that parsed before is refused for its depth. | `builtin/json.go` |
+| `maxPcapPacketBytes` | 128 MiB | bytes | -- | maxPcapPacketBytes is the ceiling on one pcap record, for the single case where the file's own size is no guide to it: pcapgo decompresses a gzipped capture transparently, and a compressed file's length bounds nothing inside it. | `builtin/net.go` |
+| `maxPcapPackets` | 1,000,000 | count | -- | maxPcapPackets is how many records net_capture_raw returns before it stops and marks the result truncated. Each record becomes a hash in a VM variable, so the cost is per packet rather than per byte, and a capture of a busy link holds far more packets than anyone reads at once. Past the cap the result says so, which is the difference between a short answer and a wrong one. | `builtin/net.go` |
 | `maxRedactionLine` | 4,096 | count | -- | maxRedactionLine bounds the walk back through a record's reclassifications. Each step is a reclassification an examiner recorded, so a line longer than this is not one anybody recorded by hand, and the walk refuses it rather than following it. | `builtin/redaction_version.go` |
 | `maxRoleBundleViews` | 256 | count | -- | maxRoleBundleViews bounds one bundle's view list. A bundle cannot usefully hold more views than a case would ever declare, and a longer list is one with repeats in it, which are refused on their own account anyway. | `builtin/recipient_role.go` |
 | `maxSearchContext` | 4 KiB | bytes | -- | maxSearchContext bounds the context at a page. A context is for recognising a hit; the passage around one is record_read's to return. | `builtin/record_search.go` |
 | `maxSearchHits` | 1,000 | count | -- | maxSearchHits bounds the hits one search hands back. It bounds the plaintext a result holds -- up to a context on each side of every hit -- and not the count, which covers every match in what was searched. | `builtin/record_search.go` |
 | `maxSearchPattern` | 4 KiB | bytes | -- | maxSearchPattern bounds the literal a search looks for. The matcher keeps a table as long as the pattern and every hit's context holds it, so an unbounded pattern is an unbounded allocation per hit; a page is room for any search term. | `builtin/record_search.go` |
+| `maxZipLinkTargetBytes` | 4 KiB | bytes | -- | maxZipLinkTargetBytes bounds how much of a zip symlink entry's body is read to learn where the link points. It is PATH_MAX on Linux, the longest target a link can be created with there. | `builtin/archive.go` |
 
 ## `graphstore`
 
@@ -56,6 +66,12 @@ and are not listed.
 | Limit | Value | Unit | Flag | Why | File |
 | --- | --- | --- | --- | --- | --- |
 | `maxFollowedNames` | 8 | depth | -- | maxFollowedNames bounds how many names, slices and entries a rule follows from an argument back to where its value was made -- classifiedPlaintext to a read, filteredLedgerHandle to ledger_under_view. A chain longer than this is not worth the risk of following a binding somewhere it does not reach, and a rule that stops early stays quiet, which is the direction it errs in. | `lsp/internal/analyzer/security_lint.go` |
+
+## `lsp/internal/server`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `documentLinkStatBudget` | 1,024 | count | -- | documentLinkStatBudget bounds how many distinct literals one documentLink request asks the filesystem about. | `lsp/internal/server/link_path.go` |
 
 ## `runner`
 
@@ -97,6 +113,12 @@ and are not listed.
 | `rdtscDriftSleep` | 1ms | duration | -- | rdtscDriftSleep is one of the drift probe's naps: the shortest sleep worth asking the scheduler for. | `security/antitamper_detectors.go` |
 | `remoteScanMediumScore` | 40 | score | -- | remoteScanMediumScore is where the "medium" risk band starts; below it a verdict is "low". It labels a verdict and decides nothing. | `security/processscan_config.go` |
 | `weakSignalTriggerThreshold` | 2 | count | -- | weakSignalTriggerThreshold is how many of the weak checks must fire together before they count as a debugger. There are two -- the OutputDebugString timing and a debugger's DLL in the process -- and either alone is common on a developer's machine. | `security/antidebug_windows.go` (windows) |
+
+## `vm`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `maxCallDepth` | 10,000 | depth | -- | maxCallDepth is how many calls may be on the stack at once. The next one past it is refused with an error naming the number, which is a diagnostic the author can act on; what happened before was not. | `vm/vm.go` |
 
 ## The tools around Mutant
 

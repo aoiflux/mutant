@@ -67,6 +67,29 @@ func canonicalPath(p string) string {
 	return sema.CanonicalKey(abs)
 }
 
+// anOpenDocumentIsTheFile reports whether any open document is the file at
+// path, whatever URI spelling the client used to open it.
+//
+// It walks the open set rather than consulting an index kept beside it. The set
+// holds the files an examiner has open -- tens at the most -- while a scan
+// visits every .mut under the roots, so the walk is the cheaper thing to get
+// wrong and the index is the more expensive thing to let drift. A canonical
+// path is derived here, from the one URI the client gave, every time it is
+// needed; there is no second copy of it to fall out of step.
+func (s *Server) anOpenDocumentIsTheFile(path string) bool {
+	key := canonicalPath(path)
+	for _, uri := range s.documents.URIs() {
+		open, ok := uriToPath(uri)
+		if !ok {
+			continue
+		}
+		if canonicalPath(open) == key {
+			return true
+		}
+	}
+	return false
+}
+
 // skipScanDir reports whether a directory should be pruned from the crawl.
 func skipScanDir(name string) bool {
 	switch name {
@@ -126,7 +149,16 @@ func (s *Server) indexFileFromDisk(path string) bool {
 		return false
 	}
 	uri := pathToURI(path)
-	if _, open := s.documents.Snapshot(uri); open {
+	// Whether an editor holds this file is a question about the file, not about
+	// the spelling of its URI. This asked s.documents for pathToURI(path),
+	// which is file:///C:/..., while VS Code opens documents as
+	// file:///c%3A/... -- so on Windows the check missed every open document.
+	// The scan then indexed the file a second time under the other spelling,
+	// and called sema.PutFile, which is keyed by canonical path, with the copy
+	// from disk: the editor's unsaved declarations were replaced by what had
+	// been saved, and the importing file was told they did not exist
+	// (M26-LSP-005).
+	if s.anOpenDocumentIsTheFile(path) {
 		return false // an editor copy is authoritative
 	}
 	data, err := os.ReadFile(path)

@@ -483,6 +483,14 @@ Two things are still not assignable, because neither is storage: a builtin's
 name, and the name a function literal was bound to (`f = 1` inside `f`). Both
 are refused at compile time.
 
+A call may be 10,000 deep. The next one is refused with `this call would be 10001
+deep, over the limit of 10000 nested calls`, which is almost always a recursion
+without a stopping case; `map`, `filter`, `each`, `reduce`, `sort_by`,
+`with_resource` and `test` count their callbacks against the same ceiling, because
+a callback that recurses nests the engine itself. Ten thousand is far past any
+depth a script needs -- the deepest shape here is a walk over nested evidence, and
+those are tens deep, not thousands.
+
 ### Higher-order collection functions
 
 Closures compose with the functional collection builtins `map`, `filter`, `reduce`, `each`, and `sort_by`:
@@ -521,13 +529,23 @@ The third argument caps how many run at once. Omit it and the worker count
 follows the machine's CPU count, capped by the array length.
 
 **What the callback may rely on.** Each worker runs on its own VM with a
-*snapshot* of globals and its own copy of the callback's captured variables,
-taken when the call starts. So a callback can read both, but an assignment to
-either stays local to that worker and is lost when it finishes -- unlike the
-sequential `each`, where a captured accumulator does reach the caller. Write
-callbacks that return their result rather than accumulating; when workers
-genuinely need to share state, put it in a `cache_*` or `db_*` store, which is
-what `net_serve` handlers already do.
+*snapshot* of globals and its own copy of every variable it can reach, taken when
+the call starts. So a callback can read both, but an assignment to either stays
+local to that worker and is lost when it finishes -- unlike the sequential
+`each`, where a captured accumulator does reach the caller. Write callbacks that
+return their result rather than accumulating; when workers genuinely need to
+share state, put it in a `cache_*` or `db_*` store, which is what `net_serve`
+handlers already do.
+
+**Reachable is the operative word**, and it is wider than "captured". A function
+the callback calls keeps its own variables, and those are detached too, however
+the callback got to it: captured directly, captured inside an array or a hash,
+held in a global, or handed in as an element. So `let tick = make_counter();`
+followed by a `pmap` whose callback calls `tick()` leaves the caller's counter
+exactly where it was, and each worker counts on its own. What stays shared is
+what the program itself shares: two functions over one variable are still two
+functions over one variable inside a worker, so a worker's own writes are visible
+to all of its own code.
 
 An error raised inside a callback stops the whole call and surfaces, the same as
 in `map`.
@@ -557,7 +575,10 @@ answers without waiting. Whatever stopped a task -- an error, a division by zero
 Collecting a task releases its handle, so wait for it once.
 
 **A spawned task follows the same rules as a `pmap` worker**: its own VM, its own
-stack, and a *snapshot* of globals and captured variables taken at the spawn. It
+stack, and a *snapshot* of globals and of every variable it can reach, taken at
+the spawn -- the argument of `spawn(fn, arg)` included, so passing a function in
+hands the task its own copy of that function's variables rather than the
+caller's. It
 can read both; its own writes to either stay local. The way back is the return
 value, or a channel.
 
@@ -612,6 +633,34 @@ give its receive a timeout.
 
 At most 1024 tasks run at once. Past that `spawn` reports an error rather than
 blocking, so an accept loop can shed load instead of deadlocking.
+
+### Truthiness
+
+`if`, `while`, `for`, `match`, `&&`, `||`, `filter` and `!` all ask one question of a
+value, and one function answers it for every engine. These values are falsy:
+
+| Falsy | Note |
+| ----- | ---- |
+| `false` | |
+| `null` | including a call that produced no value |
+| `0` | the integer |
+| `0.0` | the float |
+| `""` | the empty string. A whitespace-only string is **not** empty |
+| an empty buffer | the test is `len(b) == 0`, never the contents |
+
+Everything else is truthy, including `[]`, `{}`, a function and an error value. Note
+the last one: a `(value, err)` pair whose `err` is an error value is truthy, which is
+what makes `if (err)` work and what makes `if (err)` fire for a *successful* call
+impossible.
+
+`!x` is the negation of this and nothing else. Three things follow, and all three are
+tested rather than asserted: `!x` is always a boolean, exactly one of `x` and `!x` is
+truthy, and `!!x` has the same truthiness as `x`.
+
+```mutant
+let hits = 0;
+if (!hits) { putln("no hits"); }      // fires: 0 is falsy, so !0 is true
+```
 
 ### Logical operators
 
@@ -2704,7 +2753,9 @@ analyzer the language server uses, so editor and command-line results agree:
 - `mutant fmt [--check] [--stdout] <file-or-dir>...` — rewrite source in the
   canonical style in place. `--check` lists files that are not already formatted
   and exits non-zero (for CI) without writing; `--stdout` prints the formatted
-  result instead of editing. Formatting is idempotent.
+  result instead of editing. Formatting is idempotent. A file that does not parse
+  is never rewritten: in every mode its parse errors are printed and the exit
+  code is non-zero, as `gofmt` does.
 - `mutant lint [--strict] <file-or-dir>...` — print diagnostics as
   `file:line:col: severity: message [source]`; exits non-zero on any error, or on
   any warning with `--strict`.

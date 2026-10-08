@@ -255,13 +255,17 @@ func TestEveryAlgorithmTheLanguageAcceptsIsTheAlgorithmItComputes(t *testing.T) 
 	cases := []struct {
 		algorithm string
 		want      string
+		reported  string
 	}{
-		{"md5", hex.EncodeToString(md5Sum[:])},
-		{"sha1", hex.EncodeToString(sha1Sum[:])},
-		{"sha256", sha256Hex(content)},
+		{"md5", hex.EncodeToString(md5Sum[:]), "md5"},
+		{"sha1", hex.EncodeToString(sha1Sum[:]), "sha1"},
+		{"sha256", sha256Hex(content), "sha256"},
 		// case_open's custody policy treats an unstated algorithm as sha256,
-		// and one table serves both.
-		{"", sha256Hex(content)},
+		// and one table serves both. The digest is reported under the name of
+		// the algorithm that made it, not under what was typed (M26-FS1-017).
+		{"", sha256Hex(content), "sha256"},
+		{"SHA256", sha256Hex(content), "sha256"},
+		{"Md5", hex.EncodeToString(md5Sum[:]), "md5"},
 	}
 
 	for _, tc := range cases {
@@ -278,8 +282,8 @@ func TestEveryAlgorithmTheLanguageAcceptsIsTheAlgorithmItComputes(t *testing.T) 
 			if got := mustHashStringValue(t, result, "digest"); got != tc.want {
 				t.Fatalf("digest for %q is %s, want %s", tc.algorithm, got, tc.want)
 			}
-			if got := mustHashStringValue(t, result, "algorithm"); got != tc.algorithm {
-				t.Fatalf("reported algorithm %q, want %q", got, tc.algorithm)
+			if got := mustHashStringValue(t, result, "algorithm"); got != tc.reported {
+				t.Fatalf("hashing with %q reported algorithm %q, want %q", tc.algorithm, got, tc.reported)
 			}
 		})
 	}

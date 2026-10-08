@@ -20,6 +20,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"strings"
@@ -56,16 +57,55 @@ func setWriteDeadline(conn net.Conn, timeoutMs int64) {
 // (http_conn_read_request/response) draw from the same buffered stream and
 // never lose bytes to over-reads.
 type managedConn struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	isTLS  bool
+	conn net.Conn
+	// limited sits between the socket and reader so a caller can bound one
+	// framed read without the bufio.Reader, or the connection, knowing about
+	// it. N is the live budget, and it is MaxInt64 unless a read is bounded.
+	limited *io.LimitedReader
+	reader  *bufio.Reader
+	isTLS   bool
 }
 
 func (mc *managedConn) buffered() *bufio.Reader {
 	if mc.reader == nil {
-		mc.reader = bufio.NewReader(mc.conn)
+		mc.limited = &io.LimitedReader{R: mc.conn, N: math.MaxInt64}
+		mc.reader = bufio.NewReader(mc.limited)
 	}
 	return mc.reader
+}
+
+// setReadLimit bounds how many more bytes may be drawn from the socket. It is
+// for a read whose length the peer decides and the format never states -- an
+// HTTP head, which ends at a blank line that may never arrive. The bound sits
+// under the bufio.Reader rather than around it so that bytes already buffered
+// stay available to the next read.
+func (mc *managedConn) setReadLimit(n int64) {
+	mc.buffered()
+	mc.limited.N = n
+}
+
+// clearReadLimit restores the unbounded budget. Every setReadLimit is paired
+// with one of these before its function returns, because the connection
+// outlives the read: http_conn_read_request_head leaves a body on it for
+// net_conn_read to stream, and that read must not inherit a head's budget.
+func (mc *managedConn) clearReadLimit() {
+	mc.buffered()
+	mc.limited.N = math.MaxInt64
+}
+
+// readLimitReached reports whether the budget ran out. io.LimitedReader signals
+// exhaustion as io.EOF, which a parser reports as a truncated message, so a
+// caller asks here to tell "the peer sent too much" from "the peer stopped".
+//
+// None of the three take a lock, deliberately. Two goroutines reading one
+// handle -- which net_serve's own comment contemplates, a handler passing its
+// connection to a net_spawn worker -- are already racing on the bufio.Reader
+// underneath, which is not safe for concurrent use, so a lock here would hide
+// a sharing bug rather than fix one. The cost is that such a program can see a
+// bounded read's budget from the other goroutine; the fix for that is not to
+// share the handle.
+func (mc *managedConn) readLimitReached() bool {
+	return mc.limited != nil && mc.limited.N <= 0
 }
 
 // managedListener keeps the raw *net.TCPListener alongside the (possibly
@@ -648,6 +688,9 @@ func performHandshake(opName string, raw net.Conn, tlsConn *tls.Conn, options ob
 
 func upgradeManagedConn(mc *managedConn, tlsConn *tls.Conn) {
 	mc.conn = tlsConn
+	// Both go together: limited wraps the connection being replaced, and
+	// buffered() rebuilds the pair over the new one on the next read.
+	mc.limited = nil
 	mc.reader = nil
 	mc.isTLS = true
 }

@@ -472,7 +472,10 @@ rendering per program, no options. It keeps the brackets you wrote and adds
 none: `a + b * c` stays as it is, and so does `(a * b) + c`. Be aware before you
 run it on existing code: it joins multi-line expressions back onto one line,
 which most of the bundled examples do not do. Use `--stdout` to see what it
-would do before letting it rewrite anything:
+would do before letting it rewrite anything.
+
+It will not touch a file it cannot parse: like `gofmt`, it prints the parse
+errors, leaves the bytes alone and exits non-zero.
 
 ```bash
 $ mutant fmt --stdout triage.mut

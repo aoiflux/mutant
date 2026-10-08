@@ -53,6 +53,9 @@ var EvidenceReadOnlyFiles = []string{
 	// fsFileReader is how a file inside one is read out
 	"builtin/filesystem_region.go",
 	"builtin/filesystem_stream.go",
+	// and where an NTFS MFT walk gets its bound: the record numbers the image
+	// holds, rather than the count record 0 declares about itself
+	"builtin/filesystem_ntfs_mft.go",
 	// what a mounted filesystem is asked for, family by family
 	"builtin/filesystem_capabilities.go",
 	"builtin/filesystem_deleted.go",

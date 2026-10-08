@@ -72,6 +72,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 	"path"
 	"sort"
 	"strings"
@@ -268,6 +269,58 @@ func (s *fsDeletedScan) add(entry fsDeletedEntry) bool {
 // warn records something the scan could not do.
 func (s *fsDeletedScan) warn(code, location, detail string) {
 	s.Warnings = append(s.Warnings, fsDeletedWarning{Code: code, Location: location, Detail: detail})
+}
+
+// fsSightings keeps one row per on-disk record. A walk that descends deleted
+// directories and also sweeps unreferenced clusters finds a deleted
+// directory's child twice -- under the directory's path and again among the
+// orphans -- and both sightings name the same record; libfat and libxfat both
+// document it. Two rows made entry_count count one record twice, and nothing
+// said so (M26-FS2-015). seen maps an entry's offset to its row, or to -1 when
+// the first sighting fell past the entry cap.
+type fsSightings struct {
+	seen map[int64]int
+}
+
+// place says what to do with a sighting: add it as a new row (index -1), skip
+// it (a repeat of a row past the cap), or merge it into row index.
+func (s *fsSightings) place(entry fsDeletedEntry) (index int, skip bool) {
+	if entry.EntryOffset < 0 {
+		return -1, false
+	}
+	if s.seen == nil {
+		s.seen = map[int64]int{}
+	}
+	at, ok := s.seen[entry.EntryOffset]
+	if !ok {
+		return -1, false
+	}
+	return at, at < 0
+}
+
+// note records where the row for entry ended up: its index, or -1 past the cap.
+func (s *fsSightings) note(entry fsDeletedEntry, index int) {
+	if entry.EntryOffset >= 0 {
+		if s.seen == nil {
+			s.seen = map[int64]int{}
+		}
+		s.seen[entry.EntryOffset] = index
+	}
+}
+
+// fsMergeSighting folds a second sighting of one record into the row already
+// kept. The directory sighting is kept, because its path is the one the
+// volume's own structure gives; the other's path becomes a reason on it. It
+// returns the row to keep and whether that row is the new sighting.
+func fsMergeSighting(kept, again fsDeletedEntry) (fsDeletedEntry, bool) {
+	winner, other, swapped := kept, again, false
+	if kept.Source != fsDeletedSourceDirectory && again.Source == fsDeletedSourceDirectory {
+		winner, other, swapped = again, kept, true
+	}
+	winner.Reasons = append(append([]string{}, winner.Reasons...), fmt.Sprintf(
+		"the same record, at entry_offset %d, was also found by the %s source as %s: it is one record, "+
+			"listed once", other.EntryOffset, other.Source, other.Path))
+	return winner, swapped
 }
 
 // incomplete marks the scan as having a known gap, keeping the first reason.
@@ -544,32 +597,40 @@ func (s *realNTFSSession) ScanDeleted() (fsDeletedScan, error) {
 		Scope:             ntfsDeletedScope,
 	}
 
-	count, err := s.volume.MFTEntryCount()
+	// The $MFT's run list declares how many records there are, and nothing
+	// bounds it: preallocating or looping by that number let a 64 KiB image
+	// ask for a terabyte. The plan walks the records the image holds.
+	plan, err := ntfsPlanMFT(s.volume, s.reader)
 	if err != nil {
 		return fsDeletedScan{}, err
+	}
+	if gap := plan.describe(); gap != "" {
+		scan.incomplete(gap)
 	}
 
 	// Every row is collected, not only the deleted ones: a deleted file's
 	// parent directory is usually still in use, and its record is what turns a
 	// name into a path.
-	rows := make([]mftRow, 0, count)
+	rows := make([]mftRow, 0, plan.Walkable)
 	content := make(map[uint64]fsDeletedContent)
 
-	for entryNum := uint64(0); entryNum < count; entryNum++ {
-		scan.Examined++
+	for _, span := range plan.Walk {
+		for entryNum := span.First; entryNum < span.First+span.Count; entryNum++ {
+			scan.Examined++
 
-		entry, err := s.volume.GetMFTEntry(entryNum)
-		if err != nil {
-			if errors.Is(err, libntfs.ErrVolumeClosed) {
-				return fsDeletedScan{}, err
+			entry, err := s.volume.GetMFTEntry(entryNum)
+			if err != nil {
+				if errors.Is(err, libntfs.ErrVolumeClosed) {
+					return fsDeletedScan{}, err
+				}
+				scan.Unreadable++
+				continue
 			}
-			scan.Unreadable++
-			continue
-		}
 
-		rows = append(rows, mftRowFromEntry(entry, entryNum))
-		if !entry.IsInUse() {
-			content[entryNum] = s.deletedContent(entry)
+			rows = append(rows, mftRowFromEntry(entry, entryNum))
+			if !entry.IsInUse() {
+				content[entryNum] = s.deletedContent(entry)
+			}
 		}
 	}
 
@@ -680,14 +741,21 @@ const extDeletedScope = "Three sources are consulted and all three run: the " +
 	"still open; and directory slack, which keeps the name the inode never " +
 	"held. Block groups whose inode tables were never initialised are not " +
 	"scanned, because what is in them predates the filesystem and is not a " +
-	"deleted file. Two limits worth stating. ext4 zeroes the extent tree on " +
-	"unlink, so content_state is usually none: the file is fully described and " +
-	"cannot be located. And libext's confidence of partial means either that a " +
-	"block has been reallocated or that the bitmap could not be read -- it " +
-	"does not distinguish them, so reallocated true on an ext entry may mean " +
-	"nobody could check. Entries on the legacy orphan chain carry no deletion " +
-	"time by design, because ext stores the next-orphan pointer in the same " +
-	"field; an empty deleted_at there is not an absence of evidence."
+	"deleted file. ext4 zeroes the extent tree on unlink, so content_state is " +
+	"usually none: the file is fully described and cannot be located. Where a " +
+	"map survives, reallocated is answered here rather than taken from " +
+	"libext's confidence, whose partial means either a block in use or a " +
+	"bitmap that could not be read: an inode the bitmap still marks in use -- " +
+	"unlinked while open -- owns every block its map names, so it is not " +
+	"reallocated; otherwise every block is asked about, and allocation_checked " +
+	"is false when any question went unanswered. confidence is still " +
+	"libext's grade. examined counts the inode-table slots read: in every " +
+	"group whose table is initialised, those from the first non-reserved inode " +
+	"to the last the group has used; a slot past the end of the image is not " +
+	"read, and makes the scan incomplete. Entries on the legacy orphan chain " +
+	"carry no deletion time by design, because ext stores the next-orphan " +
+	"pointer in the same field; an empty deleted_at there is not an absence " +
+	"of evidence."
 
 func (s *realEXTSession) ScanDeleted() (fsDeletedScan, error) {
 	scan := fsDeletedScan{
@@ -717,20 +785,98 @@ func (s *realEXTSession) ScanDeleted() (fsDeletedScan, error) {
 		return fsDeletedScan{}, err
 	}
 
-	for _, warning := range s.fs.Warnings()[min(before, len(s.fs.Warnings())):] {
+	read, pastImage := s.extTableSlots(extDeletedSlotBounds)
+	scan.Examined = read
+	if pastImage > 0 {
+		scan.incomplete(fmt.Sprintf("%d inode-table slots lie past the end of the image "+
+			"and were not read: libext passes over a slot it cannot read without a "+
+			"warning, so a deleted inode among them is not here", pastImage))
+	}
+
+	warnings, saturated := s.extWarningsSince(before)
+	for _, warning := range warnings {
 		scan.warn(warning.Code.String(), warning.Feature, warning.Detail)
+	}
+	if saturated {
+		scan.warn(fsWarnWarningsSaturated, "", extWarningsSaturatedDetail)
+		scan.incomplete(extWarningsSaturatedDetail)
 	}
 	if len(scan.Warnings) > 0 {
 		scan.incomplete("the scan recorded warnings; see warning_codes")
 	}
 
 	for _, deleted := range entries {
-		scan.Examined++
 		scan.add(s.extDeletedEntry(deleted))
 	}
 
 	s.recovery.remember(scan.Entries)
 	return scan, nil
+}
+
+// extTableSlots is how many inode-table slots a walk reads, and how many more
+// it would have read had the image not ended first; bounds gives the slots
+// [first, end) of one group's table the walk covers. libext keeps no count of
+// what its walks looked at, so ext_deleted's examined was the number of rows
+// returned (M26-FS2-018); and both walks pass over a slot they cannot read
+// without a word, so an inode in a table the image cut short was missing from
+// a result that said it was complete.
+func (s *realEXTSession) extTableSlots(bounds func(libext.GroupDescriptor, libext.Superblock) (first, end uint64)) (read, pastImage int64) {
+	sb := s.fs.Superblock()
+	for _, gd := range s.fs.GroupDescriptors() {
+		first, end := bounds(gd, sb)
+		if first >= end {
+			continue
+		}
+		fit := extSlotsInImage(gd.InodeTableBlock, sb, s.options.ImageSize)
+		inImage := uint64(0)
+		if fit > first {
+			inImage = min(end, fit) - first
+		}
+		read += int64(inImage)
+		pastImage += int64(end - first - inImage)
+	}
+	return read, pastImage
+}
+
+// extDeletedSlotBounds is the slots of a group libext's deleted scan reads
+// (deleted.go, scanGroup): none in a group whose table was never initialised,
+// otherwise the first slot to the last the group has used (bg_itable_unused),
+// less the reserved inodes below s_first_ino and anything past s_inodes_count.
+func extDeletedSlotBounds(gd libext.GroupDescriptor, sb libext.Superblock) (first, end uint64) {
+	perGroup := uint64(sb.InodesPerGroup)
+	if gd.InodeUninit() || uint64(gd.ItableUnused) >= perGroup {
+		return 0, 0
+	}
+	base := uint64(gd.Group) * perGroup
+	if reserved := uint64(sb.FirstInode); reserved > base+1 {
+		first = reserved - 1 - base
+	}
+	return first, min(perGroup-uint64(gd.ItableUnused), extInodesFrom(base, sb))
+}
+
+// extReportSlotBounds is the slots of a group libext's deep report reads
+// (report.go): every inode from 1 to s_inodes_count, initialised or not.
+func extReportSlotBounds(gd libext.GroupDescriptor, sb libext.Superblock) (first, end uint64) {
+	base := uint64(gd.Group) * uint64(sb.InodesPerGroup)
+	return 0, min(uint64(sb.InodesPerGroup), extInodesFrom(base, sb))
+}
+
+// extInodesFrom is how many inodes the volume has after the first base.
+func extInodesFrom(base uint64, sb libext.Superblock) uint64 {
+	if count := uint64(sb.InodesCount); count > base {
+		return count - base
+	}
+	return 0
+}
+
+// extSlotsInImage is how many slots of an inode table starting at block table
+// end inside an image of imageSize bytes.
+func extSlotsInImage(table uint64, sb libext.Superblock, imageSize uint64) uint64 {
+	hi, start := bits.Mul64(table, uint64(sb.BlockSize))
+	if hi != 0 || sb.InodeSize == 0 || start >= imageSize {
+		return 0
+	}
+	return (imageSize - start) / uint64(sb.InodeSize)
 }
 
 func (s *realEXTSession) extDeletedEntry(deleted libext.DeletedEntry) fsDeletedEntry {
@@ -786,12 +932,9 @@ func (s *realEXTSession) extDeletedEntry(deleted libext.DeletedEntry) fsDeletedE
 	}
 	entry.LocatedBytes = sumRuns(entry.Runs)
 
-	// judgeRecovery tested every physical block against the block bitmap, so
-	// the cross-reference genuinely ran. What it cannot tell apart is a block
-	// handed to another file from a bitmap it could not read; both grade
-	// partial, and the scope says so.
-	entry.AllocationChecked = true
-	entry.Reallocated = deleted.Recoverable == libext.RecoveryPartial
+	allocation := s.extBlockAllocation(deleted.Inode, deleted.Extents)
+	entry.AllocationChecked = allocation.Checked
+	entry.Reallocated = allocation.Reallocated
 
 	return entry
 }
@@ -813,7 +956,9 @@ const fatDeletedScope = "One walk reports three populations: records still in " 
 	"reports exactly that. Deletion also overwrites the first character of the " +
 	"short name; where it could not be brute-forced back out of the name " +
 	"checksum the library substitutes '_', and those entries report " +
-	"name_source reconstructed."
+	"name_source reconstructed. A record found both in a deleted directory " +
+	"and by the sweep is one record, listed once under the directory's path " +
+	"with the other sighting in its reasons."
 
 func (s *realFATSession) ScanDeleted() (fsDeletedScan, error) {
 	scan := fsDeletedScan{
@@ -834,14 +979,29 @@ func (s *realFATSession) ScanDeleted() (fsDeletedScan, error) {
 	}
 
 	var natives []libfat.DirEntry
+	var sightings fsSightings
 	err := s.volume.WalkWithOptions(context.Background(), opts,
 		func(path string, parentFirstCluster uint32, dirEntry libfat.DirEntry) error {
 			scan.Examined++
 			if !dirEntry.Deleted && !dirEntry.Orphaned {
 				return nil
 			}
-			if scan.add(s.fatDeletedEntry(dirEntry)) {
+			entry := s.fatDeletedEntry(dirEntry)
+			if index, skip := sightings.place(entry); skip {
+				return nil
+			} else if index >= 0 {
+				merged, swapped := fsMergeSighting(scan.Entries[index], entry)
+				scan.Entries[index] = merged
+				if swapped {
+					natives[index] = dirEntry
+				}
+				return nil
+			}
+			if scan.add(entry) {
 				natives = append(natives, dirEntry)
+				sightings.note(entry, len(scan.Entries)-1)
+			} else {
+				sightings.note(entry, -1)
 			}
 			return nil
 		})
@@ -973,7 +1133,11 @@ const xfatDeletedScope = "One walk reports records marked deleted in a " +
 	"the chain was freed. A carved entry whose name did not survive is given a " +
 	"placeholder derived from its cluster number and reports name_source " +
 	"synthetic; it is not a filename and must not be written into a report as " +
-	"one."
+	"one. A record found both in a deleted directory and by the carve is one " +
+	"record, listed once under the directory's path with the other sighting " +
+	"in its reasons. allocation_checked is the bitmap asked about the first " +
+	"cluster: in use settles a run of any length, free settles one cluster, " +
+	"and a longer run whose first cluster is free is reported unchecked."
 
 func (s *realXFATSession) ScanDeleted() (fsDeletedScan, error) {
 	scan := fsDeletedScan{
@@ -994,15 +1158,37 @@ func (s *realXFATSession) ScanDeleted() (fsDeletedScan, error) {
 	}
 
 	var natives []libxfat.Entry
+	var sightings fsSightings
 	err := s.fs.WalkWithOptions(context.Background(), opts,
 		func(path string, parentFirstCluster uint32, xfatEntry libxfat.Entry) error {
+			// The carve's own root is a directory libxfat invents to hold
+			// what it finds, not a record on the volume; its path starts with
+			// the carved prefix like everything under it, and it was reported
+			// as a carved deleted entry of cluster 0.
+			if path == libxfat.RecoveredPath {
+				return nil
+			}
 			scan.Examined++
 			carved := strings.HasPrefix(path, libxfat.RecoveredPath)
 			if !xfatEntry.IsDeleted() && !carved {
 				return nil
 			}
-			if scan.add(s.xfatDeletedEntry(path, xfatEntry, carved)) {
+			entry := s.xfatDeletedEntry(path, xfatEntry, carved)
+			if index, skip := sightings.place(entry); skip {
+				return nil
+			} else if index >= 0 {
+				merged, swapped := fsMergeSighting(scan.Entries[index], entry)
+				scan.Entries[index] = merged
+				if swapped {
+					natives[index] = xfatEntry
+				}
+				return nil
+			}
+			if scan.add(entry) {
 				natives = append(natives, xfatEntry)
+				sightings.note(entry, len(scan.Entries)-1)
+			} else {
+				sightings.note(entry, -1)
 			}
 			return nil
 		})
@@ -1071,15 +1257,32 @@ func (s *realXFATSession) xfatDeletedEntry(path string, xfatEntry libxfat.Entry,
 	}
 	entry.LocatedBytes = sumRuns(entry.Runs)
 
-	// libxfat is the only library of the six that documents the difference
-	// between "the first cluster has been taken by something else" and "the
-	// bitmap could not be read", and it leaves the flag false in the second
-	// case. AllocationPossible is what says the record's cluster fields mean
-	// anything at all.
-	entry.AllocationChecked = xfatEntry.AllocationPossible()
-	entry.Reallocated = result.FirstClusterReallocated
+	// libxfat sets its reallocated flag from the entry's first cluster and
+	// leaves it false when the bitmap cannot be read, so the flag alone cannot
+	// say whether anything was checked -- and AllocationPossible, which this
+	// once read as that, says only that the record's cluster fields mean
+	// something (M26-FS2-017). The scan asks the bitmap about the first
+	// cluster itself. In use, the run was reused, whatever its length; free,
+	// that settles a one-cluster run only, and a longer one -- a stream the
+	// volume declared contiguous -- has not been cross-referenced as a whole,
+	// so it is not reported checked. xfat_recover_file asks about every cluster.
+	runs := xfatClusterRuns(result.Ranges)
+	if len(runs) > 0 && runs[0].Count > 0 {
+		allocation := fsCheckClusterRuns([]fsClusterRun{{First: runs[0].First, Count: 1}}, fsClusters32(s.fs.IsClusterAllocated))
+		entry.Reallocated = allocation.Reallocated
+		entry.AllocationChecked = allocation.Checked && (allocation.Reallocated || fsClusterCount(runs) == 1)
+	}
 
 	return entry
+}
+
+// fsClusterCount is how many clusters the runs cover.
+func fsClusterCount(runs []fsClusterRun) uint64 {
+	var total uint64
+	for _, run := range runs {
+		total += run.Count
+	}
+	return total
 }
 
 // --- HFS+ -------------------------------------------------------------------
@@ -1093,7 +1296,10 @@ const hfsDeletedScope = "All three recovery sources run: the free space inside "
 	"excluded: a B-tree insert shifts records within a node and leaves the " +
 	"previous bytes behind it, so a live file's record routinely appears in " +
 	"slack, and reporting one as a deletion would tell an examiner a file was " +
-	"removed when it never was. Two limits. The extent list on a recovered " +
+	"removed when it never was. allocation_checked is true only when the " +
+	"allocation file answered for every block of a recovered record's " +
+	"extents; a block past the volume, or an allocation file that will not " +
+	"read, leaves it false. Two limits. The extent list on a recovered " +
 	"record is the eight inline descriptors only -- the extents overflow " +
 	"B-tree is not consulted for a deleted record -- so a fragmented file " +
 	"reports located_bytes short of size, and the difference is map that was " +
@@ -1116,7 +1322,7 @@ func (s *realHFSSession) ScanDeleted() (fsDeletedScan, error) {
 		Scope:             hfsDeletedScope,
 	}
 
-	before := len(s.volume.Anomalies())
+	mark := s.hfsAnomalyMark()
 
 	// A non-nil RecoveryOptions replaces the defaults rather than adding to
 	// them, so every source has to be named even though two of the three are
@@ -1140,19 +1346,67 @@ func (s *realHFSSession) ScanDeleted() (fsDeletedScan, error) {
 		return fsDeletedScan{}, err
 	}
 
-	anomalies := s.volume.Anomalies()
-	if before > len(anomalies) {
-		before = len(anomalies)
-	}
-	for _, anomaly := range anomalies[before:] {
-		scan.warn(anomaly.Op, fmt.Sprintf("%d", anomaly.Offset), anomaly.Detail)
-	}
-	if len(scan.Warnings) > 0 {
+	if s.hfsAnomaliesSince(mark, scan.warn) {
 		scan.incomplete("the scan recorded anomalies; see warning_codes")
 	}
 
 	s.recovery.remember(scan.Entries, natives)
 	return scan, nil
+}
+
+// hfsAnomalyMark is where a call's anomalies begin: how long libhfs's list
+// was, and how many it had counted, repeats included.
+type hfsAnomalyMark struct{ listed, counted int }
+
+func (s *realHFSSession) hfsAnomalyMark() hfsAnomalyMark {
+	return hfsAnomalyMark{listed: len(s.volume.Anomalies()), counted: s.volume.AnomalyCount()}
+}
+
+// fsWarnAnomaliesRepeated says a library met damage during the call that its
+// list holds from an earlier one, and so does not list again.
+const fsWarnAnomaliesRepeated = "anomalies_repeated"
+
+// hfsAnomaliesSince passes the anomalies libhfs raised after mark to warn, and
+// reports whether there were any. libhfs lists one anomaly per operation and
+// detail for the life of the volume -- the details are fixed strings -- and
+// lists no new one past its tracking limit, so a slice of the list taken
+// around a call held only what no earlier call had met: a second file with the
+// same damage, or the same file asked about twice, reported none
+// (M26-FS2-021). The count includes every repeat, so damage the list does not
+// show again is still seen, and said.
+func (s *realHFSSession) hfsAnomaliesSince(mark hfsAnomalyMark, warn func(code, location, detail string)) bool {
+	anomalies := s.volume.Anomalies()
+	listed := min(mark.listed, len(anomalies))
+	for _, anomaly := range anomalies[listed:] {
+		warn(anomaly.Op, fmt.Sprintf("%d", anomaly.Offset), anomaly.Detail)
+	}
+	counted := s.volume.AnomalyCount() - mark.counted
+	if repeated := counted - (len(anomalies) - listed); repeated > 0 {
+		warn(fsWarnAnomaliesRepeated, "", fmt.Sprintf("libhfs met damage %d more times "+
+			"during this call than it listed: it lists each kind of anomaly once for the "+
+			"life of the volume, so these repeat kinds an earlier call on this handle "+
+			"met, and which kinds is not known", repeated))
+	}
+	return counted > 0
+}
+
+// hfsBlockAllocation asks the allocation file about every block of a
+// recovered record's inline extents, in the order libhfs compacts them.
+// libhfs grades this itself, but its answer, Overwritten, is false both when
+// every block is free and when the check stopped -- a block past the volume,
+// an allocation file that would not read -- and allocation_checked was set
+// true regardless (M26-FS2-016).
+func (s *realHFSSession) hfsBlockAllocation(extents []libhfs.ExtentDescriptor) fsRunAllocation {
+	runs := make([]fsClusterRun, 0, len(extents))
+	for _, extent := range extents {
+		if extent.StartBlock == 0 && extent.BlockCount == 0 {
+			break
+		}
+		if extent.BlockCount > 0 {
+			runs = append(runs, fsClusterRun{First: uint64(extent.StartBlock), Count: uint64(extent.BlockCount)})
+		}
+	}
+	return fsCheckClusterRuns(runs, fsClusters32(s.volume.BlockAllocated))
 }
 
 func (s *realHFSSession) hfsDeletedEntry(record libhfs.DeletedRecord) fsDeletedEntry {
@@ -1166,16 +1420,14 @@ func (s *realHFSSession) hfsDeletedEntry(record libhfs.DeletedRecord) fsDeletedE
 		ParentID:    int64(record.Record.ParentCNID),
 		Source:      fsDeletedSourceCode(record.Source.String()),
 		Confidence:  record.Confidence.String(),
-		// The blocks the record points at were tested against the allocation
-		// file; Overwritten is that test's answer and it is the field the
-		// library calls the most important one here.
-		AllocationChecked: true,
-		Reallocated:       record.Overwritten,
-		EntryOffset:       -1,
-		CreatedAt:         formatTime(record.Record.Times.Created),
-		ModifiedAt:        formatTime(record.Record.Times.ContentModified),
-		AccessedAt:        formatTime(record.Record.Times.Accessed),
+		EntryOffset: -1,
+		CreatedAt:   formatTime(record.Record.Times.Created),
+		ModifiedAt:  formatTime(record.Record.Times.ContentModified),
+		AccessedAt:  formatTime(record.Record.Times.Accessed),
 	}
+	allocation := s.hfsBlockAllocation(record.Record.DataFork.Extents[:])
+	entry.AllocationChecked = allocation.Checked
+	entry.Reallocated = allocation.Reallocated
 	if record.Record.Name == "" {
 		entry.NameSource = fsDeletedNameNone
 	}
@@ -1336,13 +1588,15 @@ func (s *realXFSSession) UnlinkedInodes() (fsDeletedScan, error) {
 	for _, anomaly := range anomalies {
 		scan.warn(anomaly.Code, anomaly.Path, anomaly.Message)
 	}
-	if len(scan.Warnings) > 0 {
-		scan.incomplete("the scan recorded anomalies; see warning_codes")
-	}
 
 	for _, unlinked := range inodes {
 		scan.Examined++
 		scan.add(s.xfsUnlinkedEntry(ctx, &scan, unlinked))
+	}
+	// After the entries, which warn about an inode that would not read: judged
+	// before them, the scan said complete beside unreadable > 0 (M26-FS2-013).
+	if len(scan.Warnings) > 0 {
+		scan.incomplete("the scan recorded anomalies or an inode it could not read; see warning_codes")
 	}
 
 	// The two XFS scans share one cache, so xfs_recover_file works off
@@ -1351,6 +1605,17 @@ func (s *realXFSSession) UnlinkedInodes() (fsDeletedScan, error) {
 	// other by its content_state rather than by remembering which ran.
 	s.recovery.remember(scan.Entries)
 	return scan, nil
+}
+
+// xfsTime renders an XFS inode time, which libxfs gives as nanoseconds since
+// the epoch. Zero is no time rather than the first instant of 1970: a v4 inode
+// has no creation time and stores zero, and libxfs's accessors map zero to no
+// time for the creation stamp alone, so the others read as 1970 (M26-FS2-014).
+func xfsTime(ns int64) string {
+	if ns == 0 {
+		return ""
+	}
+	return formatTime(time.Unix(0, ns).UTC())
 }
 
 func (s *realXFSSession) xfsUnlinkedEntry(ctx context.Context, scan *fsDeletedScan,
@@ -1375,9 +1640,9 @@ func (s *realXFSSession) xfsUnlinkedEntry(ctx context.Context, scan *fsDeletedSc
 
 	entry.Size = int64(inode.Size)
 	entry.IsDirectory = inode.IsDirectory()
-	entry.ModifiedAt = formatTime(time.Unix(0, inode.ModificationTimeNS).UTC())
-	entry.AccessedAt = formatTime(time.Unix(0, inode.AccessTimeNS).UTC())
-	entry.CreatedAt = formatTime(time.Unix(0, inode.CreationTimeNS).UTC())
+	entry.ModifiedAt = xfsTime(inode.ModificationTimeNS)
+	entry.AccessedAt = xfsTime(inode.AccessTimeNS)
+	entry.CreatedAt = xfsTime(inode.CreationTimeNS)
 
 	runs, err := s.volume.DataRuns(ctx, unlinked.InodeNumber)
 	if err != nil {

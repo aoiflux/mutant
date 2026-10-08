@@ -356,6 +356,29 @@ func applyFunction(fn object.Object, args []object.Object) object.Object {
 		// inside it, so a `let` of a parameter's name is the redeclaration the
 		// compiler refuses rather than a silent shadow.
 		evaluated := evalBlockBody(fun.Body, extendedEnv)
+		// A body that produces no value produces a Go nil, not NULL, and the
+		// builtin arm below already guards exactly this case with `if result ==
+		// nil`. This arm did not, so the nil went to the program. evalBlockBody
+		// returns nil for an empty body, and for a body whose last statement is
+		// a `let` -- eval's LetStatement arm sets the name, breaks out of the
+		// switch and falls through to `return nil`, and evalBlockBody hands back
+		// the last statement's result. That second shape is how a function that
+		// works by side effect is written, so it needs no unusual input to
+		// reach. Whatever touched the value next dereferenced it:
+		// builtin.TypeOf, evalInfixExpression, evalBangOperatorExpression. There
+		// is no recover above this, and this engine is what computes
+		// unquote(...) during macro expansion, so the result was `mutant
+		// prog.mut` ending in a Go stack trace at compile time. The VM answers
+		// NULL for every one of those shapes (M26-EVL-020).
+		//
+		// The guard sits here, ahead of the loop-control backstop below, so that
+		// nothing inspects the nil at all. loopControlEscaped returns nil for a
+		// nil today, so either order behaves the same -- but the row is that a
+		// nil leaves this arm, and the fix for it should not rest on a detail of
+		// another function.
+		if evaluated == nil {
+			return NULL
+		}
 		if escaped := loopControlEscaped(evaluated); escaped != nil {
 			return escaped
 		}
@@ -505,7 +528,7 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 	if isError(left) {
 		return left
 	}
-	leftTruthy := isTruthy(left)
+	leftTruthy := object.IsTruthy(left)
 
 	if node.Operator == "&&" {
 		if !leftTruthy {
@@ -521,31 +544,10 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 	if isError(right) {
 		return right
 	}
-	if isTruthy(right) {
+	if object.IsTruthy(right) {
 		return TRUE
 	}
 	return FALSE
-}
-
-func isTruthy(obj object.Object) bool {
-	// Conventional truthiness (dev-sec-platform-upgrades): false, null, empty
-	// string, 0 and 0.0 are falsy; everything else is truthy.
-	switch o := obj.(type) {
-	case *object.Boolean:
-		return o.Value
-	case *object.Null:
-		return false
-	case *object.String:
-		return len(o.Value) != 0
-	case *object.Bytes:
-		return len(o.Value) != 0
-	case *object.Integer:
-		return o.Value != 0
-	case *object.Float:
-		return o.Value != 0
-	default:
-		return true
-	}
 }
 
 func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Object {
@@ -630,7 +632,7 @@ func evalWhileStatement(node *ast.WhileStatement, env *object.Environment) objec
 		if isError(condition) {
 			return condition
 		}
-		if !isTruthy(condition) {
+		if !object.IsTruthy(condition) {
 			break
 		}
 
@@ -670,7 +672,7 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 			if isError(condition) {
 				return condition
 			}
-			if !isTruthy(condition) {
+			if !object.IsTruthy(condition) {
 				break
 			}
 		}

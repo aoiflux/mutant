@@ -1058,7 +1058,7 @@ func custodyResolvePath(path string) string {
 // custodyHashFile streams a digest over a file. Streaming rather than
 // os.ReadFile because the subject is routinely a disk image.
 func custodyHashFile(path, algo string) (string, error) {
-	hasher, errObj := fsHashAlgorithm(BuiltinNameCaseOpen, algo)
+	hasher, _, errObj := fsHashAlgorithm(BuiltinNameCaseOpen, algo)
 	if errObj != nil {
 		return "", fmt.Errorf("%s", errObj.Message)
 	}

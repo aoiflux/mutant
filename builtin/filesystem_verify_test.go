@@ -54,12 +54,44 @@ func TestVerifiedNeedsACheckToHaveRun(t *testing.T) {
 			false,
 		},
 		{
-			// An unavailable check must not drag down a real pass, or a v4
-			// XFS volume whose other checks all held could never be verified.
+			// An unavailable check must not drag down a real pass, or an ext
+			// volume whose metadata checksums held could never be verified
+			// beside a check its features do not carry.
 			"one ran and passed beside one that could not run",
 			[]fsVerifyCheck{
 				{Name: "a", Checked: true, Passed: true},
 				{Name: "b", Checked: false},
+			},
+			true,
+		},
+		{
+			// M26-FS1-004: HFS+, a v4 XFS volume and ext without
+			// metadata_csum have only structural checks. Passing them says
+			// nothing implausible was found, which is not verification.
+			"only structural checks ran, and passed",
+			[]fsVerifyCheck{
+				{Name: "metadata_checksums", Checked: false},
+				{Name: "btree_headers", Checked: true, Passed: true, Structural: true},
+				{Name: "parser_anomalies", Checked: true, Passed: true, Structural: true},
+			},
+			false,
+		},
+		{
+			// A structural check cannot verify, but what it finds wrong is
+			// wrong: an MFT the image holds half of fails beside a clean
+			// update-sequence check.
+			"a structural failure beside an integrity pass",
+			[]fsVerifyCheck{
+				{Name: "mft_update_sequence", Checked: true, Passed: true},
+				{Name: "mft_readable", Checked: true, Passed: false, Structural: true},
+			},
+			false,
+		},
+		{
+			"an integrity pass beside a structural pass",
+			[]fsVerifyCheck{
+				{Name: "superblock_crc", Checked: true, Passed: true},
+				{Name: "clean_state", Checked: true, Passed: true, Structural: true},
 			},
 			true,
 		},
@@ -82,19 +114,22 @@ func TestVerifiedNeedsACheckToHaveRun(t *testing.T) {
 }
 
 // checks_run is what tells "nothing to check" apart from "checked and failed",
-// since verified() reports false for both.
+// since verified() reports false for both; integrity_checks_run is what tells
+// "nothing to verify with" apart from both, since a structural check counts in
+// checks_run and can never verify a volume.
 func TestTallySeparatesUnavailableFromFailed(t *testing.T) {
 	result := fsVerifyResult{Checks: []fsVerifyCheck{
 		{Name: "a", Checked: true, Passed: true},
 		{Name: "b", Checked: true, Passed: false},
 		{Name: "c", Checked: false},
 		{Name: "d", Checked: false},
+		{Name: "e", Checked: true, Passed: true, Structural: true},
 	}}
 
-	run, passed, failed, unavailable := result.tally()
-	if run != 2 || passed != 1 || failed != 1 || unavailable != 2 {
-		t.Fatalf("tally() = run %d, passed %d, failed %d, unavailable %d; want 2, 1, 1, 2",
-			run, passed, failed, unavailable)
+	run, passed, failed, unavailable, integrityRun := result.tally()
+	if run != 3 || passed != 2 || failed != 1 || unavailable != 2 || integrityRun != 2 {
+		t.Fatalf("tally() = run %d, passed %d, failed %d, unavailable %d, integrity %d; want 3, 2, 1, 2, 2",
+			run, passed, failed, unavailable, integrityRun)
 	}
 }
 
@@ -605,10 +640,10 @@ func TestRealFATVerifyIsNotVerifiedWithASingleFAT(t *testing.T) {
 		t.Fatal("a single-FAT volume was reported as verified; it has nothing to verify")
 	}
 
-	run, passed, failed, unavailable := result.tally()
-	if run != 0 || passed != 0 || failed != 0 || unavailable != 1 {
-		t.Fatalf("tally = run %d, passed %d, failed %d, unavailable %d; want 0, 0, 0, 1",
-			run, passed, failed, unavailable)
+	run, passed, failed, unavailable, integrityRun := result.tally()
+	if run != 0 || passed != 0 || failed != 0 || unavailable != 1 || integrityRun != 0 {
+		t.Fatalf("tally = run %d, passed %d, failed %d, unavailable %d, integrity %d; want 0, 0, 0, 1, 0",
+			run, passed, failed, unavailable, integrityRun)
 	}
 	if result.FindingCount != 0 {
 		t.Fatalf("having one FAT is not a finding, but produced %d", result.FindingCount)

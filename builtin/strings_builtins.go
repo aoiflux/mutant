@@ -172,15 +172,26 @@ func StrSubstr(args ...object.Object) object.Object {
 		return newError("arguments to `str_substr` must be non-negative")
 	}
 	// rune-aware, with clamping so out-of-range requests return what exists.
+	//
+	// The length is clamped before it is added, which is the whole fix. Adding
+	// first and clamping the sum is what this did, and `start + length`
+	// overflows for a large length -- asking for the rest of the string by
+	// passing a number bigger than it is the natural idiom -- so the sum came
+	// out negative, a negative sum is not greater than len(runes) and the clamp
+	// did not fire, and the slice panicked. It needed start >= 1 to go wrong,
+	// which is why a clamp that reads as correct is not (M26-BLT-006).
+	//
+	// Neither arithmetic here can overflow: start is clamped into
+	// [0, len(runes)] first, so int64(len(runes))-start is in the same range,
+	// and length is already known to be non-negative and no larger than it.
 	runes := []rune(s)
 	if start > int64(len(runes)) {
 		start = int64(len(runes))
 	}
-	end := start + length
-	if end > int64(len(runes)) {
-		end = int64(len(runes))
+	if length > int64(len(runes))-start {
+		length = int64(len(runes)) - start
 	}
-	return stringObj(string(runes[start:end]))
+	return stringObj(string(runes[start : start+length]))
 }
 
 func StrCharAt(args ...object.Object) object.Object {

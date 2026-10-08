@@ -61,7 +61,10 @@ package builtin
 // where a library reports a run it could not place -- libxfs's unresolvable
 // fsblock, a sparse NTFS fragment on a stream that is not sparse -- and the
 // file has to be that long for the offsets after it to land correctly, so the
-// gap is written and named rather than skipped.
+// gap is written and named rather than skipped. It also takes the part of a
+// run that lies past the end of the image: the volume placed those bytes, and
+// an image that ends first -- a truncated acquisition, or a crafted offset --
+// cannot say what they held.
 //
 // # The contiguity hypothesis
 //
@@ -83,6 +86,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
 
@@ -130,6 +134,12 @@ type fsRecovery struct {
 	LocatedBytes   int64
 	SparseBytes    int64
 	UnlocatedBytes int64
+
+	// PastImageBytes is the part of UnlocatedBytes that a run placed past the
+	// end of the image, which ImageEnd names. It has a caveat of its own
+	// because "the library could not place these" would not be true of it.
+	PastImageBytes int64
+	ImageEnd       int64
 
 	// Caveats are what this recovery does not establish, in the order they
 	// were found. The family adds the ones only it knows about; the shared
@@ -265,11 +275,46 @@ func (c *hfsRecoveryCache) native(index int64) (libhfs.DeletedRecord, bool) {
 // and are counted apart from each other by recoveryFromRuns, which is where
 // the distinction is preserved. A run whose offset is negative is never read
 // from, because -1 is this family's "nowhere" and seeking to it would either
-// fail or, worse on a signed API, succeed somewhere else.
+// fail or, worse on a signed API, succeed somewhere else. Nor is the part of a
+// run past extent, the end of the image: that is zeros as well, counted
+// unlocated, and any other read that comes back short is an error rather than
+// zeros nobody counted.
 type fsRunReader struct {
-	image io.ReaderAt
-	runs  []fsDeletedRun
-	size  int64
+	image  io.ReaderAt
+	runs   []fsDeletedRun
+	size   int64
+	extent int64
+}
+
+// fsImageExtent is how many bytes of the image the reader a session holds can
+// produce: the file's size, or the end of the partition openVolumeRegion
+// bounded it to. Those are the two readers it returns, and tests build
+// sessions on a bytes.Reader; anything else is a reader nothing here opens.
+func fsImageExtent(image io.ReaderAt) (int64, error) {
+	switch r := image.(type) {
+	case interface{ Size() int64 }:
+		return r.Size(), nil
+	case *os.File:
+		info, err := r.Stat()
+		if err != nil {
+			return 0, err
+		}
+		return info.Size(), nil
+	}
+	return 0, fmt.Errorf("the length of the image behind a %T is not known", image)
+}
+
+// fsRunInImage is how many of the n bytes a run holds from skip bytes into it
+// onwards the image can produce. Written so that no sum can overflow: the
+// offsets come from the volume's own metadata.
+func fsRunInImage(run fsDeletedRun, skip, n, extent int64) int64 {
+	if run.Offset >= extent || skip >= extent-run.Offset {
+		return 0
+	}
+	if available := extent - run.Offset - skip; available < n {
+		return available
+	}
+	return n
 }
 
 func (r *fsRunReader) ReadAt(p []byte, off int64) (int, error) {
@@ -304,8 +349,16 @@ func (r *fsRunReader) ReadAt(p []byte, off int64) (int, error) {
 		if lo >= hi {
 			continue
 		}
+		hi = lo + fsRunInImage(run, lo-run.FileOffset, hi-lo, r.extent)
+		if lo >= hi {
+			continue
+		}
 		at := run.Offset + (lo - run.FileOffset)
-		if _, err := r.image.ReadAt(p[lo-off:hi-off], at); err != nil && err != io.EOF {
+		n, err := r.image.ReadAt(p[lo-off:hi-off], at)
+		if int64(n) < hi-lo || (err != nil && err != io.EOF) {
+			if err == nil || err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			return 0, fmt.Errorf("reading %d bytes at image offset %d: %w", hi-lo, at, err)
 		}
 	}
@@ -323,6 +376,11 @@ func (r *fsRunReader) ReadAt(p []byte, off int64) (int, error) {
 // than content, and a file longer than its own entry says it is would be a
 // recovery nobody could explain.
 func recoveryFromRuns(image io.ReaderAt, entry fsDeletedEntry, runs []fsDeletedRun) (fsRecovery, error) {
+	extent, err := fsImageExtent(image)
+	if err != nil {
+		return fsRecovery{}, err
+	}
+
 	var covered int64
 	for _, run := range runs {
 		if run.Length <= 0 {
@@ -344,12 +402,13 @@ func recoveryFromRuns(image io.ReaderAt, entry fsDeletedEntry, runs []fsDeletedR
 
 	recovery := fsRecovery{
 		Entry:             entry,
-		Content:           &fsRunReader{image: image, runs: runs, size: length},
+		Content:           &fsRunReader{image: image, runs: runs, size: length, extent: extent},
 		Length:            length,
 		Runs:              runs,
 		ContentState:      entry.ContentState,
 		Reallocated:       entry.Reallocated,
 		AllocationChecked: entry.AllocationChecked,
+		ImageEnd:          extent,
 	}
 
 	for _, run := range runs {
@@ -366,7 +425,9 @@ func recoveryFromRuns(image io.ReaderAt, entry fsDeletedEntry, runs []fsDeletedR
 		case run.Offset < 0:
 			recovery.UnlocatedBytes += hi - lo
 		default:
-			recovery.LocatedBytes += hi - lo
+			inImage := fsRunInImage(run, lo-run.FileOffset, hi-lo, extent)
+			recovery.LocatedBytes += inImage
+			recovery.PastImageBytes += hi - lo - inImage
 		}
 	}
 
@@ -396,6 +457,30 @@ func recoveryFromReader(entry fsDeletedEntry, reader io.ReaderAt, length int64) 
 		AllocationChecked: entry.AllocationChecked,
 		LocatedBytes:      length,
 	}
+}
+
+// recoveryContent is what a recovery writes: its content, held to its length.
+// Two of the six families read through their library's own reader, and a
+// reader that stops short says io.EOF, which a copy takes for the end; held
+// to the length, stopping short fails the write and removes the prefix.
+func recoveryContent(recovery fsRecovery) io.Reader {
+	return io.NewSectionReader(fsExactReader{r: recovery.Content, length: recovery.Length}, 0, recovery.Length)
+}
+
+// recoveryLocatedNothing refuses a recovery none of whose bytes the image
+// produced. Zeros stand in for what could not be located so that the bytes
+// after a gap land at their own offsets; with nothing located and no recorded
+// hole there is nothing for them to stand beside, and the output would be a
+// file of zeros under a deleted file's name -- which reads as a file that
+// held zeros.
+func recoveryLocatedNothing(recovery fsRecovery) error {
+	if recovery.LocatedBytes > 0 || recovery.SparseBytes > 0 {
+		return nil
+	}
+	return fmt.Errorf("none of the %d bytes the layout covers could be read from the image: "+
+		"%d lie past its end at byte %d and %d were never placed, so the output would be "+
+		"nothing but zeros", recovery.Length, recovery.PastImageBytes, recovery.ImageEnd,
+		recovery.UnlocatedBytes-recovery.PastImageBytes)
 }
 
 // --- the shared builtin -----------------------------------------------------
@@ -439,9 +524,11 @@ func fsRecoverFile(op string, args []object.Object, assumeContiguous bool,
 			"%s: the recovery located no bytes, and an empty file under a deleted "+
 				"file's name reads as a file that was empty", op))
 	}
+	if err := recoveryLocatedNothing(recovery); err != nil {
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
 
-	written, digest, errObj := fsWriteEvidenceFile(op, destination,
-		io.NewSectionReader(recovery.Content, 0, recovery.Length))
+	written, digest, errObj := fsWriteEvidenceFile(op, destination, recoveryContent(recovery))
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -550,11 +637,18 @@ func recoveryCaveats(recovery fsRecovery, written int64) []string {
 			"the allocation map, so reallocated false here means nobody looked, "+
 			"not that the blocks are still free")
 	}
-	if recovery.UnlocatedBytes > 0 {
+	if unplaced := recovery.UnlocatedBytes - recovery.PastImageBytes; unplaced > 0 {
 		caveats = append(caveats, fmt.Sprintf("%d bytes of the output are zeros "+
 			"standing in for ranges the library could not place; they are not "+
 			"evidence that the file held zeros there",
-			recovery.UnlocatedBytes))
+			unplaced))
+	}
+	if recovery.PastImageBytes > 0 {
+		caveats = append(caveats, fmt.Sprintf("%d bytes of the output are zeros "+
+			"standing in for ranges the volume placed past the end of the image, "+
+			"which ends at byte %d; they are counted with unlocated_bytes, and "+
+			"they are not evidence that the file held zeros there",
+			recovery.PastImageBytes, recovery.ImageEnd))
 	}
 	if recovery.SparseBytes > 0 {
 		caveats = append(caveats, fmt.Sprintf("%d bytes are a hole the filesystem "+
@@ -792,6 +886,81 @@ func (s *realNTFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fs
 	return recoveryFromRuns(s.reader, entry, runs)
 }
 
+// --- the allocation map -----------------------------------------------------
+
+// fsClusterRun is a run of clusters a library placed: the first and how many.
+// ext numbers its blocks in 64 bits, so the run does too; FAT and exFAT ask
+// through fsClusters32.
+type fsClusterRun struct {
+	First uint64
+	Count uint64
+}
+
+// fsRunAllocation is what the allocation map said about a run's clusters.
+type fsRunAllocation struct {
+	// Checked is true when every query the answer rests on was answered.
+	Checked bool
+	// Reallocated is true when a cluster of the run is in use now, and
+	// FirstAllocated names the first one found.
+	Reallocated    bool
+	FirstAllocated uint64
+}
+
+// fsCheckClusterRuns asks the allocation map about each cluster of the runs in
+// turn and stops at the first in use: one is enough to say the run was given
+// to something else. Free all the way through is an answer only when every
+// cluster was asked about.
+//
+// Both libraries set their reallocated flag from the entry's first cluster
+// alone, and the runs it was reported for are often longer -- every cluster an
+// assumed run synthesises, every cluster an exFAT stream declared contiguous.
+// Reporting that one answer for the whole run claimed the run had been
+// cross-referenced and found free when only its first cluster had (M26-FS2-004,
+// M26-FS2-017).
+func fsCheckClusterRuns(runs []fsClusterRun, isAllocated func(uint64) (bool, error)) fsRunAllocation {
+	asked := 0
+	for _, run := range runs {
+		for i := uint64(0); i < run.Count; i++ {
+			cluster := run.First + i
+			if cluster < run.First {
+				return fsRunAllocation{} // the run's numbers wrapped
+			}
+			allocated, err := isAllocated(cluster)
+			if err != nil {
+				return fsRunAllocation{}
+			}
+			asked++
+			if allocated {
+				return fsRunAllocation{Checked: true, Reallocated: true, FirstAllocated: cluster}
+			}
+		}
+	}
+	return fsRunAllocation{Checked: asked > 0}
+}
+
+// fsClusters32 asks a library that numbers clusters in 32 bits. A cluster past
+// that is not one the volume can have, so it is an unanswered question rather
+// than a free cluster.
+func fsClusters32(isAllocated func(uint32) (bool, error)) func(uint64) (bool, error) {
+	return func(cluster uint64) (bool, error) {
+		if cluster > math.MaxUint32 {
+			return false, fmt.Errorf("cluster %d is past the 32-bit cluster numbers the volume uses", cluster)
+		}
+		return isAllocated(uint32(cluster))
+	}
+}
+
+// fsReallocatedCaveat names the cluster that showed the run was reused, which
+// the generic reallocated caveat cannot.
+func fsReallocatedCaveat(allocation fsRunAllocation, unit string) []string {
+	if !allocation.Reallocated {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s %d of the run is in use by a live file now: what was read "+
+		"from it, and possibly from the %ss after it, is most likely that file's content",
+		unit, allocation.FirstAllocated, unit)}
+}
+
 // --- FAT --------------------------------------------------------------------
 
 func (s *realFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsRecovery, error) {
@@ -844,7 +1013,32 @@ func (s *realFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 	recovery.AllocationChecked = checked
 	recovery.ContentState = fatRecoveredState(result.ChainWalked, result.Assumed)
 	recovery.Caveats = fatRecoveryCaveats(result.ChainBroken, result.LoopDetected)
+	// An assumed run reaches clusters the entry never named, and libfat's
+	// reallocated flag is its first cluster's alone; every cluster of the run
+	// is asked about instead.
+	if result.Assumed {
+		allocation := fsCheckClusterRuns(fatClusterRuns(result.Ranges), fsClusters32(s.volume.IsClusterAllocated))
+		recovery.AllocationChecked = allocation.Checked
+		recovery.Reallocated = allocation.Reallocated
+		recovery.Caveats = append(recovery.Caveats, fsReallocatedCaveat(allocation, "cluster")...)
+	}
 	return recovery, nil
+}
+
+func fatClusterRuns(ranges []libfat.Range) []fsClusterRun {
+	runs := make([]fsClusterRun, 0, len(ranges))
+	for _, r := range ranges {
+		runs = append(runs, fsClusterRun{First: uint64(r.StartCluster), Count: uint64(r.ClusterCount)})
+	}
+	return runs
+}
+
+func xfatClusterRuns(ranges []libxfat.Range) []fsClusterRun {
+	runs := make([]fsClusterRun, 0, len(ranges))
+	for _, r := range ranges {
+		runs = append(runs, fsClusterRun{First: uint64(r.StartCluster), Count: uint64(r.ClusterCount)})
+	}
+	return runs
 }
 
 // fatRecoveredState names the provenance of the layout that was actually used,
@@ -919,8 +1113,13 @@ func (s *realXFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fs
 		return fsRecovery{}, err
 	}
 	recovery.Assumed = result.Assumed
-	recovery.Reallocated = result.FirstClusterReallocated
-	recovery.AllocationChecked = native.AllocationPossible()
+	// AllocationPossible says the record's cluster fields mean something, not
+	// that anything was checked; libxfat leaves its reallocated flag false
+	// when the bitmap cannot be read, and sets it from the first cluster alone.
+	// Every cluster of the run is asked about instead.
+	allocation := fsCheckClusterRuns(xfatClusterRuns(result.Ranges), fsClusters32(s.fs.IsClusterAllocated))
+	recovery.Reallocated = allocation.Reallocated
+	recovery.AllocationChecked = allocation.Checked
 	switch {
 	case result.NoFatChain:
 		recovery.ContentState = fsDeletedContentDeclared
@@ -928,6 +1127,7 @@ func (s *realXFATSession) RecoverDeleted(index int64, assumeContiguous bool) (fs
 		recovery.ContentState = fatRecoveredState(result.ChainWalked, result.Assumed)
 	}
 	recovery.Caveats = fatRecoveryCaveats(result.ChainBroken, result.LoopDetected)
+	recovery.Caveats = append(recovery.Caveats, fsReallocatedCaveat(allocation, "cluster")...)
 
 	if result.AllocationContradiction {
 		recovery.Caveats = append(recovery.Caveats, "the stream extension left "+
@@ -1009,15 +1209,44 @@ func (s *realEXTSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 				"that it never wrote, whose contents are whatever the allocator "+
 				"left there", unwritten))
 	}
-	// libext grades partial for a block that has been reallocated and for a
-	// bitmap it could not read, and does not distinguish them.
-	if entry.Confidence == libext.RecoveryPartial.String() {
-		recovery.Caveats = append(recovery.Caveats, "libext graded this entry "+
-			"partial, which means either that a block has been reallocated or "+
-			"that the block bitmap could not be read; the library does not "+
-			"distinguish the two")
+	// Asked again rather than taken from the scan, so the block in use can be
+	// named. libext's grade of partial, which this once passed on, does not say
+	// which of its two meanings applies (M26-FS2-006).
+	extents, err := s.fs.ExtentsWithOptions(uint32(entry.RecordID), libext.ExtentOptions{OmitSparse: true})
+	allocation := fsRunAllocation{}
+	if err == nil {
+		allocation = s.extBlockAllocation(uint32(entry.RecordID), extents)
 	}
+	recovery.AllocationChecked = allocation.Checked
+	recovery.Reallocated = allocation.Reallocated
+	recovery.Caveats = append(recovery.Caveats, fsReallocatedCaveat(allocation, "block")...)
 	return recovery, nil
+}
+
+// extBlockAllocation says whether a deleted inode's blocks have been given to
+// something else, and whether every question that rests on was answered.
+// libext grades an entry partial both when a block of its map is allocated and
+// when the bitmap could not be read, and an inode the bitmap still marks in use
+// -- one on the orphan list, unlinked while open -- was never released, so
+// every block its map names is allocated, to it: such an inode was reported
+// reallocated, its own bytes "most likely another file's" (M26-FS2-006). So the
+// inode bitmap is asked first, and then every block; one in use is enough.
+func (s *realEXTSession) extBlockAllocation(inode uint32, extents []libext.Extent) fsRunAllocation {
+	inUse, err := s.fs.InodeAllocated(inode)
+	switch {
+	case err != nil:
+		return fsRunAllocation{}
+	case inUse:
+		return fsRunAllocation{Checked: true}
+	}
+	runs := make([]fsClusterRun, 0, len(extents))
+	for _, extent := range extents {
+		if extent.Sparse() || extent.Inline() {
+			continue
+		}
+		runs = append(runs, fsClusterRun{First: extent.PhysicalBlock, Count: extent.Blocks})
+	}
+	return fsCheckClusterRuns(runs, s.fs.BlockAllocated)
 }
 
 // --- HFS+ -------------------------------------------------------------------
@@ -1055,6 +1284,10 @@ func (s *realHFSSession) RecoverDeleted(index int64, assumeContiguous bool) (fsR
 	}
 
 	recovery := recoveryFromReader(entry, file, file.Size())
+	allocation := s.hfsBlockAllocation(native.Record.DataFork.Extents[:])
+	recovery.AllocationChecked = allocation.Checked
+	recovery.Reallocated = allocation.Reallocated
+	recovery.Caveats = append(recovery.Caveats, fsReallocatedCaveat(allocation, "block")...)
 	// The eight extents in the catalog record are all OpenDeleted uses; a file
 	// that overflowed into the extents B-tree is recovered only as far as they
 	// reach, and the recorded size is what says so.

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -72,7 +73,11 @@ func ProcessTree(args ...object.Object) object.Object {
 		if !ok {
 			return resultAndError(nil, newError("argument 1 to `process_tree` must be INTEGER, got %s", args[0].Type()))
 		}
-		rootPID = int(pidObj.Value)
+		validated, errObj := sfValidatePID(BuiltinNameProcessTree, pidObj.Value)
+		if errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+		rootPID = validated
 	}
 
 	procs, err := sfListProcesses()
@@ -80,6 +85,46 @@ func ProcessTree(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("process_tree: %s", err.Error()))
 	}
 
+	return resultAndError(makeHashObject(map[string]object.Object{
+		"root_pid":    intObj(int64(rootPID)),
+		"descendants": &object.Array{Elements: sfDescendants(procs, rootPID)},
+	}), nil)
+}
+
+// sfDescendants is the breadth-first walk from rootPID down, with each pid
+// emitted at most once.
+//
+// It takes the process slice rather than reading the live process table so that
+// the walk can be tested against a table no host has to be holding at the time.
+// That matters here, because the two inputs that broke it are a self-parented
+// pid and a ppid cycle, and neither can be arranged on a real machine on
+// demand.
+//
+// The seen set is the fix for M26-NET-003. Without it, a process that is its own
+// parent appeared in byParent[its own pid], so dequeuing it appended it again,
+// and the queue and the output both grew until the process died -- 2 MiB to over
+// 1 GiB in under five seconds. On Windows pid 0, the System Idle Process,
+// reports ppid 0, and process_list returns it first, so a script that called
+// process_tree for each pid in process_list met it on the first one. A ppid
+// cycle from pid reuse did the same thing from an ordinary pid. Nothing
+// panicked, so the recover() around a builtin never saw any of it.
+//
+// A pid is marked when it is ENQUEUED rather than when it is emitted, so each
+// pid enters the queue at most once. Marking at emit time would terminate just
+// as surely -- a pid could then sit in the queue once per parent that claims
+// it, which is still bounded by len(procs), because every parent link is
+// consumed at most once -- so the stronger invariant is not what makes this
+// correct. It is kept because it is the one a reader can check at a glance.
+//
+// rootPID starts out marked, and that is what stops a process being reported as
+// its own descendant: the one symptom of the old walk that was not simply "it
+// never came back".
+//
+// No count cap is added on top of this. The seen set makes termination a
+// property of the walk rather than something a limit rescues, and a cap would be
+// one more named limit for Stage F to carry, guarding a case that can no longer
+// arise.
+func sfDescendants(procs []sfProcess, rootPID int) []object.Object {
 	byParent := map[int][]sfProcess{}
 	for _, p := range procs {
 		byParent[p.ppid] = append(byParent[p.ppid], p)
@@ -90,7 +135,20 @@ func ProcessTree(args ...object.Object) object.Object {
 	}
 
 	desc := make([]object.Object, 0)
-	queue := append([]sfProcess{}, byParent[rootPID]...)
+	seen := map[int]bool{rootPID: true}
+	queue := make([]sfProcess, 0, len(procs))
+
+	enqueue := func(children []sfProcess) {
+		for _, c := range children {
+			if seen[c.pid] {
+				continue
+			}
+			seen[c.pid] = true
+			queue = append(queue, c)
+		}
+	}
+
+	enqueue(byParent[rootPID])
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
@@ -99,13 +157,10 @@ func ProcessTree(args ...object.Object) object.Object {
 			"ppid": intObj(int64(cur.ppid)),
 			"name": stringObj(cur.name),
 		}))
-		queue = append(queue, byParent[cur.pid]...)
+		enqueue(byParent[cur.pid])
 	}
 
-	return resultAndError(makeHashObject(map[string]object.Object{
-		"root_pid":    intObj(int64(rootPID)),
-		"descendants": &object.Array{Elements: desc},
-	}), nil)
+	return desc
 }
 
 func ProcessOpenFiles(args ...object.Object) object.Object {
@@ -243,9 +298,13 @@ func ProcessMemoryScan(args ...object.Object) object.Object {
 	if patternObj.Value == "" {
 		return resultAndError(nil, newError("process_memory_scan: pattern must be non-empty"))
 	}
+	pid, errObj := sfValidatePID(BuiltinNameProcessMemoryScan, pidObj.Value)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	// Cross-process scanning needs elevated privileges and per-OS handle work;
 	// for now only the self process is supported (honest error otherwise).
-	if int(pidObj.Value) != os.Getpid() {
+	if pid != os.Getpid() {
 		return resultAndError(nil, newError("process_memory_scan currently supports the self process only (pid %d, self is %d)", pidObj.Value, os.Getpid()))
 	}
 
@@ -313,8 +372,6 @@ func ProcessKill(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `process_kill` must be INTEGER, got %s", args[0].Type()))
 	}
-	pid := int(pidObj.Value)
-
 	sig := syscall.SIGKILL
 	if len(args) == 2 {
 		sigObj, ok := args[1].(*object.Integer)
@@ -322,6 +379,14 @@ func ProcessKill(args ...object.Object) object.Object {
 			return resultAndError(nil, newError("argument 2 to `process_kill` must be INTEGER, got %s", args[1].Type()))
 		}
 		sig = syscall.Signal(sigObj.Value)
+	}
+
+	// Validated here rather than where the pid is read, so that a bad second
+	// argument is still reported as the second argument: process_kill(0, "nine")
+	// should say what is wrong with "nine".
+	pid, errObj := sfValidateKillPID(BuiltinNameProcessKill, pidObj.Value)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	if pid == os.Getpid() {
@@ -363,7 +428,57 @@ func sfParsePIDArg(opName string, args []object.Object) (int, *object.Error) {
 	if !ok {
 		return 0, newError("argument 1 to `%s` must be INTEGER, got %s", opName, args[0].Type())
 	}
-	return int(pidObj.Value), nil
+	return sfValidatePID(opName, pidObj.Value)
+}
+
+// sfValidatePID narrows a pid argument to the range the backends under this
+// file can actually represent, and is the only place a pid enters them.
+//
+// A script's integer is 64 bits and a pid is not. gopsutil's process.NewProcess
+// takes an int32 on every platform, and os.FindProcess on Windows takes a
+// DWORD, so a value past math.MaxInt32 was never a pid this package could ask
+// about -- it was a pid that got truncated into a different, live process.
+// process_hash(2^32 + pid) answered about one process while labelling the
+// answer with another, and process_kill(getpid() + 2^32) compared unequal to
+// os.Getpid(), walked past the refuse-self guard, and then killed the run with
+// the low 32 bits.
+//
+// Zero is accepted, and that is deliberate. On Windows process_list() returns
+// the System Idle Process as pid 0 -- first, because the list is sorted
+// ascending -- and syslog_parse writes 0 for any line with no procid, so a
+// script that loops over what Mutant handed it reaches 0 without ever naming
+// it. Those builtins answer for 0 today and go on doing so; what one of them
+// answers WRONGLY for 0 on Windows is M26-NET-019, which is a refusal owed at
+// that one site and not a range to narrow here. Negative values are refused
+// because no platform has one.
+//
+// The one builtin that sends a signal rather than asking a question needs a
+// floor of 1, and asks for it separately: see sfValidateKillPID.
+func sfValidatePID(opName string, pid int64) (int, *object.Error) {
+	if pid < 0 || pid > math.MaxInt32 {
+		return 0, newError("argument 1 to `%s` must be a pid between 0 and %d, got %d", opName, int64(math.MaxInt32), pid)
+	}
+	return int(pid), nil
+}
+
+// sfValidateKillPID is sfValidatePID with the floor raised to 1, for
+// process_kill. 0 and negative values are not pids to kill(2): it reads them as
+// process GROUPS, so a signal sent to "pid" 0 goes to every process in the
+// caller's group -- which includes the shell the examiner is sitting in -- and
+// a negative one addresses the group by id. On Windows 0 is the idle process.
+//
+// This narrows a number, and a number is not the only way to name this process.
+// A thread id from process_threads is in range and is not equal to os.Getpid(),
+// and on Linux a signal sent to a non-leader tid is delivered to the whole
+// thread group, so process_kill(process_threads()["tids"][0]) still ends the
+// run. The refuse-self guard does not hold against that and nothing here makes
+// it hold: M26-NET-029 is that, filed separately, because it needs no
+// truncation and is a different fix.
+func sfValidateKillPID(opName string, pid int64) (int, *object.Error) {
+	if pid < 1 {
+		return 0, newError("argument 1 to `%s` must be a pid of 1 or more, got %d", opName, pid)
+	}
+	return sfValidatePID(opName, pid)
 }
 
 func sfExecutableForPID(pid int) (string, error) {

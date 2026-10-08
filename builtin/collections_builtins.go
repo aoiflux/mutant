@@ -63,7 +63,12 @@ func Sort(args ...object.Object) object.Object {
 	}
 	switch {
 	case allNumeric:
-		sort.SliceStable(out, func(i, j int) bool { return numericValue(out[i]) < numericValue(out[j]) })
+		// numericLess compares exactly. numericValue, which this called, read
+		// every element as a float64, so a run of FILETIMEs a microsecond
+		// apart all compared equal and sort.SliceStable left them in the order
+		// they arrived -- a timeline that reports itself as sorted and is not
+		// (M26-BLT-004).
+		sort.SliceStable(out, func(i, j int) bool { return numericLess(out[i], out[j]) })
 	case allString:
 		sort.SliceStable(out, func(i, j int) bool {
 			return out[i].(*object.String).Value < out[j].(*object.String).Value
@@ -72,17 +77,6 @@ func Sort(args ...object.Object) object.Object {
 		return newError("sort: array must be all numbers or all strings")
 	}
 	return &object.Array{Elements: out}
-}
-
-func numericValue(o object.Object) float64 {
-	switch v := o.(type) {
-	case *object.Integer:
-		return float64(v.Value)
-	case *object.Float:
-		return v.Value
-	default:
-		return 0
-	}
 }
 
 func ReverseArray(args ...object.Object) object.Object {

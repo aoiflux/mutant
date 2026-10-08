@@ -1710,7 +1710,525 @@ exhaustive lists.
   accumulates a `Received` field per hop -- and `email_parse` and its four
   siblings are unchanged.
 
+- **A recursion with no stopping case ran until the host gave out, and through
+  `map` it killed the process outright.** Nothing bounded how deeply calls could
+  nest. The constant that looked like the bound, `global.MaxFrames`, sat one line
+  below a comment saying the VM grows these slices dynamically, and it was read as
+  a limit by two comments elsewhere in the VM that describe reporting a runaway
+  recursion as an error. Measured: `let f = fn(n) { return f(n + 1); }; f(0);`
+  reached 73,298 frames in eight seconds and returned nothing at all, and the same
+  recursion written through `map` reached 82,366 while also growing the Go stack,
+  because `map`, `filter`, `each`, `reduce`, `sort_by`, `with_resource` and `test`
+  call their callback by re-entering the engine. Past the Go stack's own default
+  that form ends in `fatal error: stack overflow`, which no `recover` contains, so
+  the process dies with the run's cleanup unrun -- no `CleanupSensitiveData`, no
+  `WaitForTasks`. A call may now be 10,000 deep and the next one is refused with
+  `this call would be 10001 deep, over the limit of 10000 nested calls`. The
+  ceiling is on frames and not on calls, so a program that calls a function sixty
+  thousand times in a loop is unaffected, and it is checked in the one place a
+  frame is entered, so the plain path and the callback path are bounded by the same
+  number. 10,000 nested callback re-entries were measured to fit in 32 MiB of Go
+  stack against a 1 GiB default, which is why one ceiling is enough for both.
+  `global.MaxFrames` is gone rather than renamed: the frame capacity is
+  `vm.initialFrameCapacity` now, in the package that grows it, next to the limit.
+  (M26-VM-006, and in part M26-VM-021)
+- **An ext volume inside a disk image could not be opened.** `ext_open` at a partition offset
+  refused every ext volume as a corrupt superblock. libext reads relative to the reader it is
+  given and adds its base offset only to the offsets it reports, so handed the image from byte
+  zero it looked for the superblock in whatever preceded the partition. It is handed a reader
+  that starts at the volume now, and the offsets it reports stay image-absolute (M26-FS1-001).
+
+- **An NTFS file's size came from the copy NTFS keeps least current.** `mft_parse`,
+  `fs_deleted` and `ntfs_deleted` took a record's size from its `$FILE_NAME` attribute, which
+  NTFS updates lazily and which is routinely stale or zero, and `ntfs_recover_file` cut a
+  recovery to that figure -- or, when it was zero, padded it out to the whole of its clusters,
+  with no caveat either way. The size is now the default `$DATA` stream's wherever the record
+  holds the start of that stream, and `$FILE_NAME`'s only where it does not (M26-FS2-002).
+
+- **A partition's byte range could wrap round to another partition's.** Every partition table's
+  `start_byte` and `length_byte` were LBAs times the block size in unchecked arithmetic, so a crafted
+  entry reported a negative length or the start of a different partition, and `fat_open` on it opened
+  that partition. The fields now come from checked arithmetic and read -1 when they do not fit, and
+  opening such an entry is refused (M26-FS1-002). A region whose offset plus length passes the largest
+  offset an image can hold is refused too, where it was opened "bounded" with a reader that ran on
+  without end (M26-FS1-014).
+
+- **`ewf_open_partial` misplaced the segments after a hole.** libewf concatenates the chunk tables of
+  the segments it is handed, so with a segment missing every chunk after the gap decoded at the wrong
+  offset: a set of segments 1 and 3 read segment 3's data where segment 2's belongs. A set with a hole
+  now decodes segments 1 up to the first gap, lists the rest in a new `undecoded_segments` field, and
+  is refused outright when segment 1 is missing; an explicit list must be 1..k by each file's own header
+  (M26-FS1-010). `partial` is true whenever the image is not whole -- a hole, a last segment with no
+  done section, a first segment that is not number 1, or fewer chunks than the volume declares -- where
+  it said false for a list with a hole (M26-FS1-009). A list of one path is opened as given, never
+  expanded by discovery (M26-FS1-018).
+
+- **`vhdi_discover` gave its duplicate-identity warnings in a different order on every run.** They
+  came out in map order; they are sorted by identity now (M26-FS1-016).
+
+- **A read that came up short was a whole file.** libfat, libxfat and libntfs end a read with
+  `io.EOF` where the image ends inside a file, and libntfs and libhfs where a file's own map runs out,
+  and the `*_extract_file`, `*_hash_file` and `*_read_file_at` builtins took that for the end of the
+  file: a prefix was extracted, hashed and reported as the file. A read that stops short of the bytes
+  the volume located is an error now, and an extraction that fails removes what it wrote
+  (M26-FS1-003). A deleted file's recovery reads nothing past the end of the image, counts the bytes
+  its runs place there apart from the ones it could not place, and refuses an output that would be
+  nothing but stand-in zeros (M26-FS2-005). `fs_hash` and the `*_hash_file` builtins report the
+  algorithm they computed under its canonical name (M26-FS1-017).
+
+- **The NTFS walks trusted a count the image does not hold.** `ntfs_verify`, `ntfs_report` and
+  `ntfs_deleted` walked every record the `$MFT` declares about itself, unbounded by the image, so a
+  crafted 128 KiB image could run the process out of memory; and `ntfs_verify` took a record it could
+  not read for an unallocated one, so a truncated MFT verified. The walks now follow record 0's own run
+  list, checked against the boot sector, and cover only the records the image holds; the rest are
+  named, a record that will not read is a finding and fails the new structural check `mft_readable`,
+  and `ntfs_deleted` says it is incomplete (M26-FS1-005, M26-FS1-006, M26-FS2-003). `ntfs_report`
+  refuses an image that does not hold its whole MFT, because libntfs's report walk cannot be bounded
+  from outside.
+
+- **`verified` could rest on no check at all, and on checks that never compared anything.** Every
+  `*_verify` check now has a `kind`, `integrity` or `structural`, and `verified` needs an integrity
+  check to have run, so ext2, HFS+ and XFS v4 -- formats with nothing to compare -- are no longer
+  verified (M26-FS1-004). `hfs_verify` no longer fails a volume for an attributes B-tree its format
+  does not have (M26-FS1-011). `ext_verify` never compared an inode's checksum -- libext compares one on
+  every read and keeps the answer only on a handle opened to refuse a mismatch -- so an ext4 volume
+  with an edited inode verified, and the summary said verifying again after a walk would widen the
+  check; it compares the superblock, the group descriptors, the allocation bitmaps and every allocated
+  inode now (M26-FS2-027). libxfs v0.4.1 reads the stored superblock and inode CRCs in the wrong byte
+  order, so `xfs_verify` failed every healthy v5 volume with a critical finding and `xfs_report`
+  carried a mismatch anomaly for every inode; the comparisons are made here now, and a real mismatch is
+  still reported (M26-FS2-030).
+
+- **A path named a different file.** Paths are no longer trimmed: `" a.txt"` and `"a.txt"` are two
+  names on every filesystem that allows both, and ext, XFS and HFS+ keep a backslash as the character it
+  is. HFS+ refuses a path ending in a space, since libhfs trims it. An exFAT name held by a live file
+  and a deleted one finds the live one, and two deleted files of one name are refused rather than one
+  chosen (M26-FS1-007, M26-FS1-008).
+
+- **Allocation was "checked" where nothing asked.** A deleted FAT file's assumed run, and every cluster
+  of an exFAT recovery, are asked about cluster by cluster, and the first in use is named
+  (M26-FS2-004, M26-FS2-017). An ext inode on the orphan list owns its blocks and is no longer reported
+  reallocated, and an ext or HFS+ entry whose allocation could not be read is no longer reported checked
+  (M26-FS2-006, M26-FS2-016). A FAT or exFAT record seen in a deleted directory and again by the sweep is
+  one row (M26-FS2-015), and libxfat's virtual `$OrphanFiles` root is not a deleted file (M26-FS2-026).
+
+- **Warnings were lost, and their loss was a clean result.** libext keeps 256 warnings per handle and
+  libhfs one of each kind; a scan after the list filled, or a second file with the same damage, said
+  complete with no warnings. Both now say so (M26-FS2-008, M26-FS2-021). The ext scans count the
+  inode-table slots they read, and a slot past the end of the image -- which libext passes over
+  without a word -- makes them incomplete (M26-FS2-018, M26-FS2-028). The `$LogFile` scans count the
+  record pages libntfs drops for a failed update sequence -- a torn write -- and say they are incomplete
+  (M26-FS2-029).
+
+- **Reports and scans put things in the wrong place.** `ext_report`'s fragments end exclusively, like
+  every other format's, and sit at their real offset in the file, so a run after a hole is placed after
+  the hole; a row whose block map could not be read says so and the report is incomplete
+  (M26-FS1-012, M26-FS1-013). `xfs_report` bounds its volume (M26-FS1-015). `xfs_unlinked` says it is
+  incomplete when an inode would not read, and an XFS time of zero is no time rather than 1970
+  (M26-FS2-013, M26-FS2-014). `xfs_slack` no longer counts a directory's live index blocks, 32 GiB into
+  it, as slack (M26-FS2-020). A fragmented HFS+ attribute value reports every range it occupies
+  (M26-FS2-022). `ntfs_log_transactions` groups records in LSN order, so a transaction across the wrap
+  is one transaction, and a record met twice is reported once (M26-FS2-023, part of M26-FS2-024).
+  `fs_carve` reports where a signature's file begins, not where the signature is, and `fs_walk`
+  measures depth from the root it was given (M26-FS2-010, M26-FS2-011). An inode number past the volume
+  is refused rather than read as another inode's (M26-FS2-007).
+
+- **`mutant fmt` rewrote a file it could not parse, and shortened the strings
+  inside it.** With no tree to read, the formatter fell back to stripping
+  trailing whitespace from every line, and that fallback cannot tell a line of
+  code from a line inside a triple-quoted string: a banner whose first row
+  ended in three spaces came back three bytes shorter. The CLI wrote that
+  result over the file and exited 0, `--check` exited 1 for the wrong reason --
+  it was reporting a whitespace diff it had invented against a file it could
+  not format -- and `--stdout` printed the invented text. A file that does not
+  parse is now left exactly as it is: `mutant fmt` prints its parse errors in
+  `mutant lint`'s shape and exits non-zero in all three modes, and the editor's
+  formatting, range-formatting and on-type-formatting requests answer with no
+  edits at all. There is deliberately no whitespace-only fallback, which is
+  what `gofmt`, `rustfmt` and `prettier` all do here: the diagnostics already
+  say what is wrong, and nothing can be formatted until it is fixed
+  (M26-TOOL-014).
+
+- **A sandboxed Lua script could run past its timeout without bound.** The
+  five-second cap was a `context` handed to gopher-lua, which consults it only
+  between VM instructions, so a single call into a Go library function never
+  looked at it. A backtracking pattern search is exactly that one call:
+  `string.find(string.rep("a", 400), ".-.-.-b")` ran for 43 seconds and noticed
+  its deadline only once it had finished, and the cost rises about fifteenfold
+  for every doubling of the subject. The chunk now runs on its own goroutine
+  and the calling builtin waits on the clock, so `lua_run_string`,
+  `lua_run_file` and `lua_run_http` always return within the cap and report the
+  script as abandoned. `string.rep` is bounded at 8 MiB in the same change,
+  because it is the one call a sandboxed script uses to manufacture a subject
+  large enough for the search to matter, and it refuses rather than truncating.
+  What the deadline bounds is the caller's wait, not the host's CPU: an
+  abandoned chunk's current library call still runs to its own end, and
+  `docs/RUNTIME_INTEGRATION.md` says so (M26-TOOL-010).
+
+- **An index one past the start of an array or a string took the interpreter
+  down, and the audit chain recorded it as tampering.** `xs[-1]` is the last
+  element, so `xs[-4]` of a three-element array reached element -1 of a Go slice:
+  the panic was recovered, reported as `vm_runtime_error: recovered panic:
+  runtime error: index out of range [-1]`, and counted as a VM integrity
+  failure -- which means "the program running is not the program that was
+  compiled". On the CLI an ordinary mistake in a script therefore left a tamper
+  entry in the one log that is meant to be worth trusting. Every ordered
+  container now answers null to an index that names nothing, from either
+  direction, and the audit chain does not move. The tree-walking evaluator had
+  the opposite fault on the same expression -- it answered null to *any* negative
+  index on an array -- so `xs[-1]` meant the last element when a program was
+  compiled and nothing when the same program was interpreted. Buffers were the
+  one container that was already right in both engines, and they are what the
+  shared rule is taken from. (M26-VM-008)
+
+- **A string index returned a character the string does not contain.** `s[i]`
+  indexed by byte and then converted that byte to a rune, which is not the byte
+  and not the character: in a string holding `h`, `e`-acute, `l`, `l`, `o`, `s[1]`
+  was U+00C3 and `s[2]` was U+00A9, neither of which is in it, and the string
+  appeared to have six characters where it has five. It is indexed by rune now,
+  which is what the for-in iterator, `str_char_at`, `str_substr` and
+  `str_reverse` have always done -- `object.NewIterator` states the rule and the
+  reason. A byte that begins no valid sequence reads as U+FFFD, as it already did
+  in those four; a program that means the bytes should hold a buffer, which is
+  what `BYTES` is for. `len(s)` still counts bytes. The evaluator did not index
+  strings at all before -- `s[0]` was "index operator not supported: STRING" --
+  and does now, in the same words and with the same answers. (M26-VM-009)
+
+- **`!x` was not the negation of truthiness, so `if (x)` and `if (!x)` could both
+  skip their branch.** `0`, `0.0`, `""` and an empty buffer are falsy -- that is
+  what `if`, `while`, `for`, `match`, `&&`, `||` and `filter` have always meant by
+  them -- but `!` consulted none of that. On a compiled program it compared the
+  operand against three singleton pointers and answered `false` to anything else;
+  in the tree-walking evaluator it compared rendered text. So `!0` was `false`,
+  which is the same answer as `!true`: `0` was falsy and `!0` was falsy too, and
+  `if (!count) { putln("no hits"); }` never fired for zero hits. `!!x` was not `x`.
+  There is one implementation of truthiness now, `object.IsTruthy`, and `!` is its
+  negation in both engines, so `!x` is always a boolean, exactly one of `x` and
+  `!x` is truthy, and `!!x` has `x`'s truthiness. Two of these were also
+  disagreements between the engines rather than only wrong: `!""` and
+  `!<empty buffer>` were true when a program was interpreted and false when it was
+  compiled, and `!"false"` was the other way round -- the evaluator was comparing
+  the string `"false"` against the rendering of `false`. The rule is now stated in
+  the language reference, which never stated it, and corrected in
+  `docs/WASM_REPL_REFERENCE.md`, which listed a whitespace-only string as falsy and
+  left out `0.0` and the empty buffer. (M26-VM-007)
+
+- **A function whose body produced no value crashed the compiler.** The
+  tree-walking evaluator returned a Go `nil` rather than `null` for a call to a
+  function whose body yields nothing -- an empty body, or, far more commonly, a body
+  whose last statement is a `let`, which is how a function that works by side effect
+  is written. The `nil` was handed to the program, and whatever touched it next
+  dereferenced it. Because that engine is what computes `unquote(...)` during macro
+  expansion, the result was `mutant prog.mut` ending with `panic: runtime error:
+  invalid memory address or nil pointer dereference` and a goroutine dump, at
+  compile time, from three different ordinary spellings: `type_of(f())`, `!f()` and
+  `f() == 1`. Where it did not crash it was wrong instead -- `if (f())` took the
+  true branch here and the false branch on the VM, and `while (f())` never
+  terminated here and ran zero times there. Such a call is `null` now, as it always
+  was on the VM, which is also what the builtin path in the same function had always
+  returned for the same case. (M26-EVL-020)
+
+
+- **A `pmap`, `peach` or `spawn` worker could write the caller's variables.** A
+  worker has always been given its own copy of the variables its callback
+  captured directly, and the language reference promises that "an assignment to
+  either stays local to that worker". That promise held for one route to a
+  variable and failed for six: a function the callback captured, a function held
+  in a global, a function inside a captured array, hash, struct, enum or
+  multi-value, a function handed in as a `pmap` element, and the argument of
+  `spawn(fn, arg)`. Along any of those, every worker and the caller wrote one
+  storage location with no synchronisation -- `go test -race` reported six races,
+  and the observable effect was lost updates: eight workers bumping a counter
+  fifty times each left the caller's counter reading 432, 503 and 422 on three
+  runs of the same program. A worker now gets its own copy of every variable it
+  can reach, found by following the same paths the storage seal already follows,
+  and a variable reached two ways is still one variable inside the worker, so a
+  program's own aliasing is untouched. A recursive function, whose storage holds
+  the function that holds the storage, terminates. The walk costs 34us per
+  worker where there is nothing to detach -- against 782us to build a worker and
+  244us to copy its globals -- and the globals are examined once per call rather
+  than once per worker, so a program with no function in a global pays nothing
+  (M26-VM-004).
+
+
+- **Every variable read cost time in proportion to the value's size.** Reading a
+  variable moved it from a slot, a global or a cell onto the stack, and the move
+  opened the value and sealed the result again with the same key -- two
+  ChaCha20 passes and two allocations over the whole payload to arrive back at
+  the bytes it started with. Sealing also derived its key per call, two SHA-256
+  hashes for every eight bytes: building an array of 800 elements in a loop made
+  2,890,011 derivations for 22 MiB of payload. A value that is only moving is
+  now moved, and the key is derived once per run -- the VM already derived it
+  for its instructions. A stored value still records the seed it was sealed
+  under, and one sealed under a different seed is still opened with a key
+  derived for it, which is what the REPL does on every line. Nothing in the VM
+  mutates a container in storage form, so the two slots a moved container is
+  now reachable from are safe: every write takes its target from the stack,
+  which rebuilds it. `examples/binary/static_bin_analysis.mut`, which reads a
+  3 MiB buffer out of a struct field in a loop, went from 40.8 s to 22.2 s
+  against the release sweep's 60 s limit (M26-VM-001).
+
+- **Reading a `.tar.zst` could return the wrong bytes.** Its zstd decoder was never closed, and
+  went on reading the archive from its own goroutines after a read returned, racing the next
+  read's seek: one or two reads in twenty failed or came back wrong, and dozens of goroutines
+  outlived `tar_close`. Every decompressor is closed when its walk ends now, and zstd decodes as
+  it is read (M26-DAT-005).
+
+- **`tar_open` could not open an archive that compresses past 1000:1, and nothing could make
+  it.** It takes an optional `max_bytes` now, which every later read through the handle keeps
+  (M26-DAT-006). A plain tar whose first member's name begins with a compression magic -- a file
+  called `BZhistory.txt` -- opens as the plain tar it is (M26-DAT-008). What a handle holds is
+  the listing, at most 128 MiB of names, link targets and owners, where it kept every header
+  whole (M26-DAT-010).
+
+- **`tar_read` returned a hard link as an empty buffer.** A hard link reads as the member it
+  names; a symbolic link, a directory or a device holds no content and is refused, saying which
+  (M26-DAT-009). A name two members share -- a tar appended to holds every version of a file --
+  is refused rather than read as the first, the stale one, in `tar_read` and `zip_read` alike,
+  and either reads a member by its position in the listing, which the second argument now
+  accepts (M26-DAT-039).
+
+- **`unsafe_path` judged a symbolic link from the wrong place.** A tar link's target is read from
+  the link's own directory, so `usr/lib/libfoo.so -> ../lib64/libfoo.so.1` is not flagged, and a
+  zip symlink entry's target is checked at all, where only its name was (M26-DAT-007).
+
+- **`sqlite_query` bound a buffer as its hex text,** so a lookup by a key or a hash never
+  matched; it binds as a BLOB, and a value with no SQLite type is refused rather than bound as the
+  text it prints as (M26-DAT-023, M26-DAT-040). A result with two columns of one name is refused,
+  where a row kept only the second (M26-DAT-040). TEXT in a DATE, DATETIME or TIMESTAMP column
+  keeps its fraction and its offset, where it was moved to UTC and cut to the second;
+  `CAST(col AS TEXT)` returns it as stored (M26-DAT-024).
+
+- **`time_parse` gave an instant that depended on the examiner's machine: a zone
+  abbreviation was read as UTC on a host that does not use it.** The value and
+  the layout went to Go's `time.Parse`, which resolves an abbreviation -- the
+  `MST` layout verb -- only when it belongs to the host's own zone, and
+  otherwise keeps the name, applies offset 0 and returns no error. So
+  `time_parse("2024-07-01 10:00 PDT", "2006-01-02 15:04 MST")` was 1719853200 on
+  a Los Angeles host and 1719828000 on a UTC or Kolkata one: seven hours apart,
+  both silent, and a timeline built from mail or log timestamps carried the
+  difference without saying so. Parsing is now done against UTC, so the host
+  cannot change the answer, and an abbreviation that cannot be resolved is
+  refused with the two ways to say what was meant. `UTC` and `GMT` still parse,
+  being the only abbreviations Go accepts that name +0000; a numeric offset, an
+  `RFC3339` value, a layout with no zone element, and an abbreviation written
+  beside its offset (`MST-0700`) are all unaffected. The one case this turns
+  from right into an error is an abbreviation that happens to match the host --
+  deliberately: a result that is correct only on one machine cannot be
+  reproduced on another, and a refusal that names the fix is worth more than an
+  answer that is right by accident. (M26-BLT-003)
+
+- **Integer arithmetic stays exact, and `nan` or an out-of-range float is refused
+  rather than turned into the most negative integer.** Nine builtins took their
+  operands through a helper that returned every INTEGER as a `float64`, so they
+  did integer work in a type that cannot hold an `int64`. Above 2^53 two
+  different integers share one float, and each site got that wrong its own way:
+  `sum` accumulated in the float and narrowed the total back, so adding 1 to an
+  NTFS file time returned the file time; `min` and `max` compared the rounded
+  copies and returned the wrong argument; `clamp` rebuilt its answer from the
+  float instead of returning the bound that won; `floor`, `ceil` and `round`
+  widened an integer only to narrow it again; `sort` ordered on the float; and
+  `to_int` narrowed with no range test, so `to_int(1e19)` and `to_int(nan)` both
+  returned `-9223372036854775808`. `abs` had no guard for the one integer whose
+  negation is itself, so `abs` of it was negative. None of it produced a
+  diagnostic, and a forensic timestamp is an `int64` of nanoseconds. Each builtin
+  still returns the kind its contract declares; what changed is that an INTEGER
+  argument is no longer rounded on the way through, and that a total leaving the
+  `int64` range is refused -- naming the element that did it -- rather than
+  wrapped. `avg` is unchanged: its contract declares FLOAT, and accumulating in
+  `int64` would refuse an average that is representable when its total is not.
+  (M26-BLT-004)
+- **Two builtins no longer panic on an argument a caller is entitled to pass,
+  and no longer record that panic as evidence of tampering.** `str_substr`
+  clamped the start against the string and only then added the length, so asking
+  for the rest of a string by passing a number larger than it wrapped the sum
+  negative, the clamp could not fire on a negative, and the slice panicked --
+  with a start of 0 the sum does not overflow, which is why the obvious case
+  worked. `rand_int` computed `hi - lo` as an `int64`, so a range wider than
+  `int64` wrapped non-positive and the draw panicked on its own argument. Both
+  now answer: `str_substr` returns the rest of the string, and `rand_int` draws
+  uniformly from a range of any width, keeping its previous draw for every range
+  that fits so no seeded run moves. This mattered beyond the crash. A builtin
+  panic is contained as a runtime error and recorded as an integrity failure in
+  the audit chain a case manifest seals, so a bad argument wrote a tamper record
+  into the evidence. `str_repeat` and `str_pad_left`/`str_pad_right` already
+  refused what they could not build; they are now held to it by tests.
+  (M26-BLT-006)
+- **Renaming a module member from its own declaration now edits every file that
+  imports it.** The rename handler looked at the workspace-wide uses only when
+  the result for the current file came back empty -- and with the cursor on a
+  declaration it never is, because the declaration itself is in it. So pressing
+  F2 on a definition, the place a rename is usually started, was the one place
+  that renamed nothing outside the file, while "find all references" from the
+  same cursor listed the importers correctly. Both now ask one function, so the
+  two can no longer disagree, and no span is edited twice. (M26-LSP-003)
+- **The background workspace scan no longer replaces an unsaved file's
+  declarations with the copy on disk.** The scan checked whether the editor had a
+  file open by building a URI for it and looking that string up. VS Code spells a
+  Windows document `file:///c%3A/...` and the server built `file:///C:/...`, so
+  on Windows the check matched nothing and the scan treated every open document
+  as closed. It then indexed the file a second time and pushed the saved text
+  into the shared workspace -- which is keyed by path, not by URI -- so a
+  function you had just written and not yet saved disappeared, and the file
+  importing it was told the module had no such member. The scan now compares
+  canonical paths, and a URI is kept exactly as the client spelled it. An import
+  of a file no editor has open still resolves, which is what the scan is for and
+  is covered by its own test. (M26-LSP-005)
+- **`net_banner` threw away the greeting of every service that waits for the
+  client.** SSH, SMTP and FTP each write their banner and then hold the
+  connection open for a command, so the read ends at `net_banner`'s own deadline
+  rather than at an EOF. `io.ReadAll` reports that as an error, and the error was
+  taken for the whole answer: `{ok: false, banner: "", error: "i/o timeout"}` for
+  a greeting that had already arrived in full. The three services most worth
+  fingerprinting were the three it could not fingerprint. What decides the answer
+  is now the bytes rather than the error -- a read deadline is how a banner ends,
+  not a failure, and `io.ReadAll` hands back what it read alongside the error --
+  so the greeting is reported with `ok: true`. A read that ends with no bytes at
+  all is still a failure, and a peer that closes cleanly having said nothing
+  still reports `ok: true` with an empty banner, exactly as before.
+  (M26-NET-001)
+
+- **A greeting past 4 KiB was clipped and reported as a whole banner.** The read
+  was bounded at exactly `maxBannerBytes`, and `io.LimitReader` returns EOF at
+  its bound while `io.ReadAll` turns EOF into nil, so a peer that sent a
+  megabyte came back as `{ok: true, banner: <the first 4096 bytes>, error: ""}`
+  -- the prefix of a longer stream presented as a complete greeting, with
+  nothing in the hash able to say otherwise. An examiner comparing or hashing
+  banners could not tell a 4 KiB banner from the first 4 KiB of something
+  larger. The read now takes one byte past the cap and refuses when it arrives,
+  which is the same fix as the body cap below and is there for the same reason.
+  The cap itself is unchanged, a greeting of exactly 4096 bytes still arrives
+  whole, and no real SSH, SMTP or FTP greeting comes near it. (M26-NET-026)
+
+- **A pid past 2^31 was truncated and killed a different, live process.** A
+  script's integer is 64 bits and a pid is not: gopsutil takes an `int32` and
+  Windows takes a `DWORD`. `process_kill(getpid() + 2^32)` compared unequal to
+  the current pid, walked past the guard that exists to refuse exactly that, and
+  then killed the run anyway with the low 32 bits. The test that pins it ends the
+  process running it and prints no failure message, because the binary is gone
+  before it can; that signature is the evidence. `process_hash` and the rest
+  answered about one process while labelling the answer with another. Every pid
+  argument is now narrowed where it is read, in one place, and a value outside
+  the range is refused by name. Zero is still accepted by the query builtins, and
+  that is deliberate: Windows reports the System Idle Process as pid 0 and
+  `process_list` returns it first, and `syslog_parse` writes 0 for any line with
+  no procid, so the ordinary loop over what Mutant handed back reaches
+  `process_threads(0)`, which answers today. `process_kill` alone refuses 0 and
+  negative values, because to `kill(2)` those name process groups and not
+  processes. (M26-NET-005)
+
+- **The request line and header block of an intercepted message were read
+  without a bound.** `maxHTTPBodyBytes` capped the body and nothing capped the
+  head, so a peer -- which on an intercepted connection is whatever is on the
+  wire -- could send one header field of any length and have it read in full: an
+  8 MiB field grew the heap by 12 MiB and a 32 MiB field by 69 MiB, and both were
+  accepted. The head is now bounded at 1 MiB, the figure net/http uses for its
+  own servers, with 4 KiB of slack for the single `bufio` fill that can
+  legitimately carry the start of a body past the end of the head -- which is
+  also what net/http's server allows, and for the same reason. The limit sits on
+  the reader beneath the `bufio.Reader` and is released once the head is parsed,
+  so `http_conn_read_request_head` followed by `net_conn_read` still streams a
+  body of any size; a 2 MiB body drawn through the 1 MiB head budget is a
+  regression test. (M26-NET-008)
+
+- **A pcap record header sized its own allocation.** gopacket takes the snapshot
+  length out of the file header and then accepts any record no longer than it, so
+  a forty-byte file declaring a snaplen of `0xffffffff` drew a 16 MiB allocation
+  out of each of `net_capture_raw`, `net_pcap_analyze` and `net_os_fingerprint`.
+  The reader's snaplen is now held to the file's own length, which no honest
+  capture can exceed, and the forty-byte file is refused before anything is
+  allocated for it. A constant would have been wrong: USBPcap declares 128 MiB
+  and writes records in the megabytes, and EBHSCR records run to 32 MiB, and both
+  read correctly today -- a record's index, timestamp and length come out of its
+  sixteen-byte header and need no decoder, so a link type gopacket cannot decode
+  costs the empty `src`, `dst` and `protocol` fields and nothing else. A gzipped
+  capture is the one case where the file's size bounds nothing, because gopacket
+  decompresses it transparently, and there a 128 MiB ceiling applies instead.
+  (M26-NET-009)
+
+- **A body past 32 MiB was cut and reported as a whole one.** The body was read
+  as `io.ReadAll(io.LimitReader(body, maxHTTPBodyBytes))`; `io.LimitReader`
+  returns EOF at its bound and `io.ReadAll` turns EOF into nil, so a 40 MiB body
+  came back as exactly 32 MiB with no error and no flag. An intercepted response
+  was recorded as complete with 8 MiB missing and nothing in the result could
+  tell a caller. `http_conn_read_request`, `http_conn_read_response`,
+  `http_parse_request` and `http_parse_response` now read one byte past the cap
+  and refuse when it arrives. This is a behaviour change: a script that read a
+  body larger than 32 MiB used to get the first 32 MiB and now gets an error.
+  Take the head with `http_conn_read_request_head` and stream the body with
+  `net_conn_read` to read one of any size. (M26-NET-031)
+
+- **A response cut off mid-body was reported as a successful empty one.**
+  `http_get`, `http_post` and `http_request` read the body with `io.ReadAll` and
+  then dropped the error: the body became `""`, the response hash's `error` field
+  was a hard-coded empty string, and the pair's error was nil. A server that
+  declared `Content-Length: 100` and sent 10 bytes before closing therefore came
+  back as `{status: 200, body: "", error: ""}` with no error anywhere, so a
+  dropped IOC feed or evidence download read as a document with nothing in it and
+  a script that treats an empty feed as "no indicators" got a false negative. The
+  bytes that did arrive are now returned, the reason travels with them in the
+  `error` field, and the pair's error is non-nil. The machinery for that was
+  already in place -- the field is what decides whether an error is returned, and
+  only the producer never filled it in. The status line and headers are reported
+  as before, which is what tells a truncated response, with its real status, from
+  a connection that never produced one, which still reports status 0.
+  (M26-NET-002)
+
+- **`process_tree` looped forever and grew until the process died, starting with
+  `process_tree(0)` on Windows.** The walk was breadth-first over a parent map
+  with no visited set, so a process that is its own parent put itself in its own
+  child list: every pass appended it again, and the queue and the result both
+  grew without bound. Windows reports pid 0, the System Idle Process, with parent
+  pid 0, and `process_list` returns it first -- so a triage script that called
+  `process_tree` for each pid it listed met this on the first one, at 2 MiB
+  growing past 1 GiB in under five seconds. A parent cycle caused by pid reuse
+  did the same from an ordinary pid. Nothing panicked, so the `recover()` around
+  a builtin could not help. Each pid is now reported at most once, the root is
+  never its own descendant, and the walk ends after at most one pass per distinct
+  pid whatever the parent links say. Ordinary trees are unchanged, children still
+  sorted by pid at each level. (M26-NET-003)
+
+- **The live registry reported a value that does not exist as a present, empty
+  `REG_NONE` value, with no error.** Every error from the underlying read,
+  `ERROR_FILE_NOT_FOUND` included, was mapped to an entry of type `REG_NONE` with
+  empty data and handed back as a success, so `reg_get_value` on a live source
+  answered "yes, an empty REG_NONE" for every name ever asked, while the JSON and
+  hive-file sources answered `value not found`. "Does this Run key hold value X?"
+  came back yes for any X. Because real `REG_NONE` values exist, absence was not
+  merely unreported but indistinguishable from a value that is there. All three
+  sources now give the same `value not found` error, from one function rather
+  than from three copies of a string, and a value that is present and empty is
+  still returned as itself. The type-specific reads no longer discard their
+  errors either, so a value deleted or retyped between the call that reads its
+  type and the call that reads its data is reported instead of coming back as a
+  zero value; and `reg_list_values` fails rather than silently omitting a value
+  that vanished while it was listing. (M26-NET-004)
+
 ### Security
+
+- **A string literal in an open document can no longer send the language server
+  to a network share, at a device, or outside the workspace.** The editor
+  underlines string literals that name an existing file, so that an examiner can
+  click through to an image or a report. Deciding whether a file exists means
+  asking the filesystem, and the handler asked about any literal that looked
+  like an absolute path — including a UNC path such as one naming a host that
+  does not answer. That lookup ran on the single goroutine the server reads
+  client messages on, so completion, hover, diagnostics and every other feature
+  stopped until the network gave up: measured at 42 seconds for one literal in
+  one document. A path reaching out of the workspace was offered as a live,
+  clickable link, and nothing refused a Windows device name. A document is just
+  text, and opening one is not consent to resolve what it says.
+  Links are now resolved only inside directories the operator chose — the
+  document's own folder and the workspace roots — and only through `os.Root`,
+  which refuses a `..` escape, a reserved device name such as `NUL` or
+  `CON.txt`, an alternate data stream, and a symbolic link whose target leaves
+  the root. Anything else is refused before the filesystem is asked at all, so
+  there is no lookup to wait for. Relative paths work exactly as before,
+  including `../evidence/usb.img` from a notes file inside a case folder, and a
+  single file opened with no folder still links files beside it. One request is
+  also now bounded: a literal is looked up once however many times it appears,
+  and one request makes at most 1024 lookups, so no single document decides how
+  long the rest of the editor waits. (M26-LSP-002)
 
 - **A field named twice in a sealed document was authenticated away.** `encoding/json` keeps the
   last of two identically-named fields and drops the first without a word, and four readers in this
@@ -2011,6 +2529,22 @@ exhaustive lists.
   `.vscode/tasks.json` in the workspace and is commonly committed with the case
   scripts, so the exposure is that file as well as the argument list for the
   life of the build. (M26-LSP-017, MVF-2026-0010)
+
+
+- **A crafted ledger property blob could end the process.** Reading a node's
+  or an edge's properties back pre-sized its map from the entry count the blob
+  declares, and a msgpack `map32` header is five bytes that can claim
+  4,294,967,295 entries. So a stored blob with no body at all made Go allocate
+  buckets for four billion properties -- about 96 bytes each, measured, so
+  something near 400 GB -- and the process died on a fatal runtime
+  out-of-memory, which no script can catch and which takes any unflushed work
+  with it. The decode did reach an error about the missing body; it reached it
+  after allocating. A declared count is now checked against the blob that
+  declares it before anything is sized from it: a blob of n bytes cannot hold
+  more than n/2 entries, which needs no new limit and rejects nothing the
+  encoder can write, since every entry it writes takes at least three bytes.
+  No released version is affected: the ledger family is new in 2.6.0.
+  (M26-CUS-030)
 
 ## [2.5.0] — 2026-09-17
 

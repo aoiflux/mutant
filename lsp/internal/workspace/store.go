@@ -39,6 +39,26 @@ func (s *Store) Snapshot(uri lsp.DocumentUri) (*Document, bool) {
 	return cloneDocument(doc), true
 }
 
+// URIs returns the URI of every open document, exactly as the client spelled
+// it. Order is not defined.
+//
+// It exists so that a caller holding a filesystem path can ask whether any open
+// document is that file, which a lookup by URI cannot answer: the same file has
+// more than one valid URI spelling, and clients differ on which they send. The
+// alternative was a second map here keyed by canonical path, which would have
+// put the same fact in two places and required this package to know how paths
+// are canonicalised -- a rule that belongs to the server.
+func (s *Store) URIs() []lsp.DocumentUri {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	uris := make([]lsp.DocumentUri, 0, len(s.docs))
+	for uri := range s.docs {
+		uris = append(uris, uri)
+	}
+	return uris
+}
+
 func (s *Store) Update(uri lsp.DocumentUri, version lsp.UInteger, changes []any) (*Document, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

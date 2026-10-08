@@ -977,13 +977,13 @@ const extSlackScope = "one inode's blocks. libext exposes no file-slack API: the
 	"artifact and has its own builtin, ext_dir_slack."
 
 func (s *realEXTSession) Slack(filePath string) (fsSlackScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
 
 	scan := newSlackScan("ext", cleanPath)
 	scan.Classes = []string{fsSlackClassFileSlack, fsSlackClassUnwritten}
 	scan.Scope = extSlackScope
 
-	file, err := s.fs.OpenPath(cleanPath)
+	file, err := s.openPath(cleanPath)
 	if err != nil {
 		return fsSlackScan{}, err
 	}
@@ -1060,7 +1060,10 @@ const hfsSlackScope = "the data fork of one file. libhfs reports slack on every 
 	"unwritten ranges."
 
 func (s *realHFSSession) Slack(filePath string) (fsSlackScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
+	if err := hfsPathAddressable(cleanPath); err != nil {
+		return fsSlackScan{}, err
+	}
 
 	scan := newSlackScan("hfs", cleanPath)
 	scan.Classes = []string{fsSlackClassFileSlack}
@@ -1123,10 +1126,19 @@ const xfsSlackScope = "one inode's data fork. libxfs offers no last-block-tail A
 	"unwritten extent carries a real location because the blocks are real, which is what makes " +
 	"them worth reading; a hole does not. DataRuns discards the anomalies its conversion " +
 	"raises, so a range whose block number did not resolve is detected here by the rule libxfs " +
-	"documents -- neither sparse nor located -- and reported at offset -1."
+	"documents -- neither sparse nor located -- and reported at offset -1. A directory keeps its " +
+	"leaf and free-index blocks at fixed places past its data section, 32 and 64 GiB into its " +
+	"address space; they are live directory metadata, so they count neither toward " +
+	"allocated_bytes nor as slack."
+
+// xfsDirLeafOffset is XFS_DIR2_LEAF_OFFSET (xfs_da_format.h): where a
+// directory's leaf blocks begin in its address space, XFS_DIR2_SPACE_SIZE =
+// 2^(32 + XFS_DIR2_DATA_ALIGN_LOG) bytes in. Its free-index blocks follow at
+// twice that. Below it is the data section, which di_size measures.
+const xfsDirLeafOffset = int64(1) << 35
 
 func (s *realXFSSession) Slack(filePath string) (fsSlackScan, error) {
-	cleanPath := normalizeFSPath(filePath)
+	cleanPath := normalizePOSIXFSPath(filePath)
 
 	scan := newSlackScan("xfs", cleanPath)
 	scan.Classes = []string{fsSlackClassFileSlack, fsSlackClassUnwritten}
@@ -1161,6 +1173,12 @@ func (s *realXFSSession) Slack(filePath string) (fsSlackScan, error) {
 			continue
 		}
 		fileOffset := int64(r.FileOffset)
+		// A directory's leaf and free-index blocks are past its data section
+		// by design. Counted, allocated_bytes became 32 GiB and the live leaf
+		// block was reported as file slack (M26-FS2-020).
+		if scan.IsDirectory && fileOffset >= xfsDirLeafOffset {
+			continue
+		}
 
 		offset := int64(-1)
 		switch {
@@ -1351,7 +1369,7 @@ const extDirSlackScope = "one directory, not its children. Every name here is a 
 	"and a name carrying a control byte is discarded and counted nowhere."
 
 func (s *realEXTSession) DirSlack(dirPath string) (fsDirSlackScan, error) {
-	cleanPath := normalizeFSPath(dirPath)
+	cleanPath := normalizePOSIXFSPath(dirPath)
 
 	scan := fsDirSlackScan{
 		Filesystem:        "ext",
@@ -1362,7 +1380,7 @@ func (s *realEXTSession) DirSlack(dirPath string) (fsDirSlackScan, error) {
 		Scope:             extDirSlackScope,
 	}
 
-	file, err := s.fs.OpenPath(cleanPath)
+	file, err := s.openPath(cleanPath)
 	if err != nil {
 		return fsDirSlackScan{}, err
 	}

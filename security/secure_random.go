@@ -102,6 +102,27 @@ func NewXORStream(seed int64, password string) *XORStream {
 	return &XORStream{key: key, nonce: nonce}
 }
 
+// Zero wipes the derived key and nonce.
+//
+// A stream is derived from a password, so it is key material and it keeps that
+// rule: nothing derived from a secret outlives the secret. The runtime calls
+// this where it zeroes the password itself, in
+// vm.CleanupRuntimeSensitiveData -- which until M26-VM-001 left the derived
+// instruction key in memory after the password it came from had gone, and now
+// has the values' key to answer for as well.
+//
+// The stream stays allocated rather than being dropped: the fetch loop reads
+// its field directly, so replacing it with nil would turn a use after teardown
+// into a nil dereference. A VM that has been cleaned up is finished, which is
+// the same thing the stack and globals wiped beside it already assume.
+func (s *XORStream) Zero() {
+	if s == nil {
+		return
+	}
+	SecureZero(s.key[:])
+	SecureZero(s.nonce[:])
+}
+
 // XOROneAt decrypts/encrypts a single byte at the given stream offset using the
 // cached key/nonce. Equivalent to SecureXOROneAt but without the per-call KDF.
 func (s *XORStream) XOROneAt(b byte, offset int64) (byte, error) {

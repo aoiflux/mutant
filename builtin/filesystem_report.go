@@ -66,6 +66,8 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/bits"
 	"sort"
 	"time"
 
@@ -637,6 +639,22 @@ func fsReportTimePtr(t *time.Time) string {
 // rest -- are skipped by the library, which is a boundary rather than a gap and
 // is named in the scope.
 func (s *realNTFSSession) Report() (fsReport, error) {
+	// libntfs builds the report by walking every record the $MFT's run list
+	// declares, and nothing bounds the declaration: a 64 KiB image claiming a
+	// billion records kept this call busy for hours, and a truncated one was
+	// reported complete with the records past its end silently absent. The
+	// walk cannot be limited from here, so a volume whose MFT the image does
+	// not hold whole gets no report rather than one that is wrong or endless.
+	plan, err := ntfsPlanMFT(s.volume, s.reader)
+	if err != nil {
+		return fsReport{}, err
+	}
+	if gap := plan.describe(); gap != "" {
+		return fsReport{}, fmt.Errorf("%s. libntfs builds this report by walking every declared record "+
+			"and that walk cannot be limited to the ones the image holds, so no report is built; "+
+			"ntfs_deleted and ntfs_verify walk only those, and say which they could not read", gap)
+	}
+
 	raw, err := s.volume.Report()
 	if err != nil {
 		return fsReport{}, err
@@ -766,6 +784,9 @@ func (s *realEXTSession) Report() (fsReport, error) {
 		name = s.img.Name()
 	}
 
+	// The warning list belongs to the volume, so the report's own are the ones
+	// raised during the walk.
+	before := len(s.fs.Warnings())
 	raw, err := s.fs.ReportWithOptionsContext(context.Background(), name, libext.ReportOptions{DeepScan: true})
 	if err != nil {
 		return fsReport{}, err
@@ -778,7 +799,7 @@ func (s *realEXTSession) Report() (fsReport, error) {
 		Generated:          fsReportTime(raw.Generated),
 		Name:               raw.Name,
 		StartOffset:        raw.StartOffset,
-		EndOffset:          raw.EndOffset,
+		EndOffset:          fsVolumeEnd(raw.StartOffset, s.fs.Superblock().BlocksCount, uint64(s.fs.Superblock().BlockSize)),
 		FragmentsAvailable: true,
 		Complete:           true,
 		WarningsAvailable:  true,
@@ -789,7 +810,11 @@ func (s *realEXTSession) Report() (fsReport, error) {
 		},
 		Scope: "every inode in the table, not only what the directory tree " +
 			"reaches, so an inode nothing names any more is listed with " +
-			"whatever path index could be built for it. dtime is carried as " +
+			"whatever path index could be built for it; a slot of the table " +
+			"past the end of the image is not read, and makes the report " +
+			"incomplete. start_offset and end_offset bound the filesystem as " +
+			"its superblock sizes it, and every end is exclusive, as on the " +
+			"other five formats. dtime is carried as " +
 			"deleted_at: ext is the only one of the six formats here that " +
 			"records when a file was deleted, and a deletion time is not one " +
 			"of the four times the others have. Fragments describe written " +
@@ -802,7 +827,7 @@ func (s *realEXTSession) Report() (fsReport, error) {
 	}
 	fsReportIdentity(&report, extCapabilitySet(s.fs.Capabilities()), fsIdentityInode)
 
-	var truncated, unlocated int64
+	var truncated, unlocated, failed int64
 	for _, entry := range raw.Files {
 		file := fsReportFile{
 			Filesystem:      "ext",
@@ -828,14 +853,16 @@ func (s *realEXTSession) Report() (fsReport, error) {
 			},
 		}
 
+		fragments, err := s.extReportFragments(entry.InodeNumber, entry.Size)
+		if err != nil {
+			// libext keeps such a row with no fragments and a warning, and the
+			// row read as a file with nothing to locate (M26-FS1-013).
+			file.Layout.Derived = fsLayoutUnavailable
+			file.Layout.Error = err.Error()
+			failed++
+		}
 		rowUnlocated := false
-		for _, fragment := range entry.Fragments {
-			// libext's report fragment carries no file offset of its own: the
-			// runs tile the file in order, so the offset is the bytes already
-			// covered. Reporting zero for every run would say every fragment
-			// begins the file.
-			run := fsLocatedFragment(fragment.StartOffset, fragment.EndOffset,
-				file.Layout.BytesCovered, 0, false, fragment.Unwritten)
+		for _, run := range fragments {
 			if !run.Located {
 				rowUnlocated = true
 			}
@@ -853,9 +880,83 @@ func (s *realEXTSession) Report() (fsReport, error) {
 		report.add(file)
 	}
 
-	fsReportFragmentWarnings(&report, truncated, unlocated, 0)
+	// libext passes over an inode it cannot read without a warning, so rows
+	// for a table the image cut short were simply absent.
+	if _, pastImage := s.extTableSlots(extReportSlotBounds); pastImage > 0 {
+		report.incomplete(fmt.Sprintf("%d inode-table slots lie past the end of the "+
+			"image and were not read, so an inode among them is not listed", pastImage))
+	}
+	warnings, saturated := s.extWarningsSince(before)
+	for _, warning := range warnings {
+		report.warn(warning.Code.String(), warning.Feature, warning.Detail)
+	}
+	if saturated {
+		report.warn(fsWarnWarningsSaturated, "", extWarningsSaturatedDetail)
+		report.incomplete(extWarningsSaturatedDetail)
+	}
+
+	fsReportFragmentWarnings(&report, truncated, unlocated, failed)
 	report.finish()
 	return report, nil
+}
+
+// extReportFragments rebuilds one row's runs from the inode's extents: the
+// ones libext derives its own report fragments from, under the same filter --
+// written, neither sparse nor inline, and none at all for an empty file.
+// libext's fragments end inclusively, so every length came out a byte short
+// beside the five other formats, whose ends are exclusive, and they carry no
+// file offset, so the running sum taken in its place put a run that follows a
+// hole at the wrong place in the file (M26-FS1-012). The extent's logical
+// block is where it sits in the file.
+func (s *realEXTSession) extReportFragments(inode uint32, size int64) ([]fsReportFragment, error) {
+	if size == 0 {
+		return nil, nil
+	}
+	extents, err := s.fs.ExtentsWithOptions(inode, libext.ExtentOptions{OmitSparse: true})
+	if err != nil {
+		return nil, err
+	}
+	blockSize := uint64(s.fs.Superblock().BlockSize)
+	fragments := make([]fsReportFragment, 0, len(extents))
+	for _, extent := range extents {
+		if extent.Sparse() || extent.Inline() || extent.Unwritten() {
+			continue
+		}
+		start, length, fileOffset, ok := extExtentBytes(extent, blockSize, s.options.BaseOffset)
+		if !ok {
+			return nil, fmt.Errorf("the extent at logical block %d places bytes past any "+
+				"offset an image can hold", extent.LogicalBlock)
+		}
+		fragments = append(fragments, fsLocatedFragment(start, start+length, fileOffset, length, false, false))
+	}
+	return fragments, nil
+}
+
+// extExtentBytes turns an extent's blocks into image-absolute bytes, and says
+// whether they fit: libext's own arithmetic is unchecked.
+func extExtentBytes(extent libext.Extent, blockSize uint64, base int64) (start, length, fileOffset int64, ok bool) {
+	startHi, startBytes := bits.Mul64(extent.PhysicalBlock, blockSize)
+	lengthHi, lengthBytes := bits.Mul64(extent.Blocks, blockSize)
+	logicalHi, logicalBytes := bits.Mul64(extent.LogicalBlock, blockSize)
+	end, carry := bits.Add64(startBytes, lengthBytes, 0)
+	if startHi|lengthHi|logicalHi|carry != 0 || base < 0 || end > uint64(math.MaxInt64-base) ||
+		logicalBytes > math.MaxInt64 {
+		return 0, 0, 0, false
+	}
+	return int64(startBytes) + base, int64(lengthBytes), int64(logicalBytes), true
+}
+
+// fsVolumeEnd is one byte past a filesystem: its start plus the size its
+// superblock gives it, the half-open span libntfs, libfat, libxfat and libhfs
+// report. libext's own is inclusive and runs to the end of the image when that
+// is longer than the filesystem, and libxfs's report carries none. -1 when the
+// size will not fit.
+func fsVolumeEnd(start int64, blocks, blockSize uint64) int64 {
+	hi, size := bits.Mul64(blocks, blockSize)
+	if hi != 0 || start < 0 || size > uint64(math.MaxInt64-start) {
+		return -1
+	}
+	return start + int64(size)
 }
 
 // --- fat --------------------------------------------------------------------
@@ -1325,12 +1426,25 @@ func (s *realXFSSession) Report() (fsReport, error) {
 		return fsReport{}, err
 	}
 
+	// libxfs's report carries no volume range, and the two fields read 0 and
+	// 0 on every volume, one opened part-way into a disk image included
+	// (M26-FS1-015).
+	start := s.volume.BaseOffset()
+	// libxfs's superblock and inode CRC comparisons read the stored value in
+	// the wrong byte order; the superblock's is made here instead, and an
+	// inode mismatch it reports is kept only when it survives the same
+	// comparison made here.
+	crcChecked, crcValid, crcErr := s.xfsSuperblockCRC()
+	crcChecked = crcChecked && crcErr == nil
+	crcValid = crcChecked && crcValid
 	report := fsReport{
 		Filesystem:         "xfs",
 		SchemaVersion:      int64(raw.SchemaVersion),
 		LibraryVersion:     raw.Provenance.LibraryVersion,
 		Generated:          fsReportTime(raw.GeneratedAt),
 		Name:               raw.Volume.VolumeLabel,
+		StartOffset:        start,
+		EndOffset:          fsVolumeEnd(start, raw.Volume.NumberOfBlocks, uint64(raw.Volume.BlockSize)),
 		FragmentsAvailable: true,
 		AnomaliesAvailable: true,
 		Complete:           true,
@@ -1348,8 +1462,8 @@ func (s *realXFSSession) Report() (fsReport, error) {
 			"volume_label":           stringObj(raw.Volume.VolumeLabel),
 			"volume_uuid":            stringObj(raw.Volume.VolumeUUID),
 			"metadata_uuid":          stringObj(raw.Volume.MetadataUUID),
-			"superblock_crc_checked": boolObj(raw.Volume.SuperblockCRCChecked),
-			"superblock_crc_valid":   boolObj(raw.Volume.SuperblockCRCValid),
+			"superblock_crc_checked": boolObj(crcChecked),
+			"superblock_crc_valid":   boolObj(crcValid),
 			"verification_mode":      stringObj(string(raw.Provenance.VerificationMode)),
 			"root_path":              stringObj(raw.RootPath),
 		},
@@ -1367,11 +1481,12 @@ func (s *realXFSSession) Report() (fsReport, error) {
 	}
 	fsReportIdentity(&report, xfsCapabilitySet(s.volume.Capabilities()), fsIdentityInode)
 
-	for _, anomaly := range raw.Volume.Anomalies {
-		report.addAnomaly(xfsReportAnomaly(anomaly))
-	}
-	for _, anomaly := range raw.Anomalies {
-		report.addAnomaly(xfsReportAnomaly(anomaly))
+	for _, anomalies := range [][]libxfs.ReportAnomaly{raw.Volume.Anomalies, raw.Anomalies} {
+		for _, anomaly := range anomalies {
+			if !s.xfsAnomalyDisproved(anomaly, crcValid) {
+				report.addAnomaly(xfsReportAnomaly(anomaly))
+			}
+		}
 	}
 
 	if raw.Completeness != nil {
@@ -1387,7 +1502,9 @@ func (s *realXFSSession) Report() (fsReport, error) {
 		report.Volume["superblock_counters_lazy"] = boolObj(completeness.SuperblockLazy)
 		report.Volume["inode_source"] = stringObj(string(completeness.Source))
 		for _, anomaly := range completeness.Anomalies {
-			report.addAnomaly(xfsReportAnomaly(anomaly))
+			if !s.xfsAnomalyDisproved(anomaly, crcValid) {
+				report.addAnomaly(xfsReportAnomaly(anomaly))
+			}
 		}
 		if completeness.OrphansTruncated {
 			report.warn(fsReportWarnOrphansTruncated, "volume",
@@ -1456,7 +1573,9 @@ func (s *realXFSSession) Report() (fsReport, error) {
 		}
 
 		for _, anomaly := range entry.Anomalies {
-			report.addAnomaly(xfsReportAnomaly(anomaly))
+			if !s.xfsAnomalyDisproved(anomaly, crcValid) {
+				report.addAnomaly(xfsReportAnomaly(anomaly))
+			}
 		}
 
 		report.add(file)

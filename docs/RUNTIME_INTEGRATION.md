@@ -10,7 +10,9 @@ Because embedded scripts may come from outside the program (a file on disk, or
 a URL that returns whatever its server chooses to return), every script runs
 inside a restricted Lua sandbox by default. The sandbox is the same for all
 three entry points: a fixed set of safe standard libraries, no filesystem or
-process access from Lua's own standard library, and a bounded execution time.
+process access from Lua's own standard library, a bounded execution time that
+the calling builtin enforces on the clock, and a bound on the size of string
+a script can build.
 Treat any script whose origin you do not fully control — especially one
 fetched over HTTP — as untrusted input, and rely on the sandbox (not on the
 script's good behavior) to contain it.
@@ -96,12 +98,27 @@ set of libraries opened on top:
   bypass the timeout below), filesystem mutation, and environment access.
   What remains on `os` is limited to the safe time/date helpers such as
   `os.time`, `os.date`, and `os.clock`.
-- **Execution timeout:** every chunk runs under a Go `context` with a fixed
-  **5-second** deadline, applied via `state.SetContext` before the `PCall`
-  that executes it. Lua's VM checks that deadline as it runs, so a
-  script that runs long (or loops forever) is aborted with a context-deadline
-  error surfaced as `result["ok"] = false`. This timeout is fixed by the
-  runtime; there is no argument on any `lua_*` builtin to change it.
+- **Execution timeout:** every chunk runs under a fixed **5-second** deadline,
+  and a `lua_*` builtin always returns within it. The chunk runs on its own
+  goroutine; the calling goroutine waits on the clock, so a script that runs
+  long, loops forever, or disappears into a backtracking pattern is abandoned
+  and the call comes back with `result["ok"] = false` and an error naming the
+  cap. This timeout is fixed by the runtime; there is no argument on any
+  `lua_*` builtin to change it.
+
+  What the deadline bounds is **the caller's wait, not the host's CPU.** The
+  same `context` is still handed to `state.SetContext`, and that is what makes
+  an abandoned chunk stop — but Lua's VM consults it only between
+  instructions, and a Lua pattern search runs entirely inside one Go function
+  call. Such a chunk keeps one core busy until that call returns, after the
+  builtin has already answered. This is why `string.rep` is bounded below: a
+  short script cannot build the large subject that makes the difference
+  between a pattern that returns late and one that effectively does not.
+- **`string.rep` is bounded** to **8 MiB** of result. It is the one call in the
+  sandbox that turns a few characters of script into an arbitrarily large
+  string. Over the limit it raises a Lua error, which the script can see and
+  which surfaces as `result["ok"] = false`; it never returns a shorter string
+  than it was asked for.
 
 There is one **intentional, non-sandboxed** capability exposed to every
 script regardless of entry point: a `mutant` table is injected as a Lua

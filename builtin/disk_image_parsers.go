@@ -1,25 +1,31 @@
 package builtin
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	libewf "github.com/aoiflux/libewf"
+	"github.com/aoiflux/libewf/types"
 	libvhdi "github.com/aoiflux/libvhdi"
 
 	"mutant/object"
 )
 
 // maxInMemoryReadBytes caps how much image content a single builtin call will
-// materialise as a mutant string. Shared by the *_read_at builtins and by
-// xfat_read_file, which has to stage its content through a temp file.
+// materialise as a mutant string. Shared by the image *_read_at builtins, the
+// filesystems' *_read_file_at windows, and xfat_read_file, which refuses an
+// entry larger than this rather than reading it whole.
 const maxInMemoryReadBytes = 32 * 1024 * 1024
 
 // ewfLetterPairSegment is the first segment number an EWF extension spells with
@@ -168,6 +174,11 @@ type ewfSegmentSet struct {
 	PresentCount   int
 	MissingNumbers []int64
 	MissingFiles   []string
+	// PathsError says why a set with a hole carries no Paths: its present
+	// segments could not be named consistently with libewf's own count.
+	PathsError string
+	// PresentNumbers is each of Paths' segment number, for a set with a hole.
+	PresentNumbers []int64
 }
 
 // ewfChecksumPolicy is what to do about a chunk table that fails its stored
@@ -503,7 +514,7 @@ func ewfOpen(op string, allowIncomplete bool, args ...object.Object) object.Obje
 		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 
-	segmentPaths, errObj := parseEWFSegmentPaths(args[0], op)
+	segmentPaths, listed, errObj := parseEWFSegmentPaths(args[0], op)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
@@ -525,12 +536,13 @@ func ewfOpen(op string, allowIncomplete bool, args ...object.Object) object.Obje
 	// and the segments returned here, describe the set actually decoded rather
 	// than the one path the caller happened to name.
 	//
-	// An explicit list of two or more paths is taken as given and not expanded:
-	// the caller named the files, and second-guessing that would make it
-	// impossible to open a set whose members were deliberately gathered from
-	// elsewhere.
+	// A list is taken as given and not expanded -- one path in a list as much
+	// as five (M26-FS1-018): the caller named the files, and second-guessing
+	// that would make it impossible to open a set whose members were
+	// deliberately gathered from elsewhere.
 	var discovered ewfSegmentSet
-	if len(segmentPaths) == 1 {
+	var undecoded []string
+	if !listed {
 		set, err := backend.Discover(segmentPaths[0])
 		if err != nil {
 			return resultAndError(nil, newError("%s: %s", op, err.Error()))
@@ -544,8 +556,25 @@ func ewfOpen(op string, allowIncomplete bool, args ...object.Object) object.Obje
 				"%s: segment set %s is incomplete: %d file(s) missing%s; ewf_segments reports which, ewf_open_partial proceeds anyway",
 				op, segmentPaths[0], len(set.MissingNumbers), formatMissingSegmentFiles(set.MissingFiles)))
 		}
-		if len(set.Paths) > 0 {
-			segmentPaths = set.Paths
+		if len(set.Paths) == 0 {
+			// Opening the one file named would decode a subset of what is
+			// present and call it the set.
+			return resultAndError(nil, newError(
+				"%s: segment set %s has a hole and its present segments could not be named: %s; "+
+					"pass the segment files as a list to open them as given",
+				op, segmentPaths[0], set.PathsError))
+		}
+		segmentPaths = set.Paths
+		if !set.Contiguous {
+			decodable, rest, errObj := ewfDecodablePrefix(op, set)
+			if errObj != nil {
+				return resultAndError(nil, errObj)
+			}
+			segmentPaths, undecoded = decodable, rest
+		}
+	} else if allowIncomplete {
+		if errObj := ewfListIsARun(op, segmentPaths); errObj != nil {
+			return resultAndError(nil, errObj)
 		}
 	}
 
@@ -553,6 +582,21 @@ func ewfOpen(op string, allowIncomplete bool, args ...object.Object) object.Obje
 	if err != nil {
 		return resultAndError(nil, newError("%s: %s", op, err.Error()))
 	}
+
+	// Discovery sees a hole in the numbering and nothing else. A set cut off
+	// after its last present segment, a list that leaves one out or starts
+	// past segment 1, and chunk tables that would not decode are all
+	// decodable under ewf_open_partial, and only the reader can tell -- so
+	// partial reads it as well (M26-FS1-009).
+	metadata, err := session.Metadata()
+	if err != nil {
+		_ = session.Close()
+		return resultAndError(nil, newError("%s: %s", op, err.Error()))
+	}
+	partial := len(discovered.MissingNumbers) > 0 || len(undecoded) > 0 ||
+		!metadata.HasDoneSection ||
+		metadata.SegmentNumber != 1 ||
+		(metadata.HasMedia && metadata.ObservedChunkCount < metadata.NumberOfChunks)
 
 	handleID := atomic.AddInt64(&ewfStore.nextID, 1)
 	handle := fmt.Sprintf("ewf-handle-%d", handleID)
@@ -579,10 +623,13 @@ func ewfOpen(op string, allowIncomplete bool, args ...object.Object) object.Obje
 		// partial and missing_segments are on every open, not only the partial
 		// one, so that a report template reads the same field either way and
 		// cannot omit the caveat by having been written against ewf_open.
-		"partial":          boolObj(len(discovered.MissingNumbers) > 0),
+		"partial":          boolObj(partial),
 		"missing_segments": &object.Array{Elements: missingNumbers},
-		"checksum_policy":  stringObj(ewfChecksumPolicyName(opts.ChecksumPolicy)),
-		"status":           stringObj("ok"),
+		// Present beside the set and not decoded: they follow a hole, and their
+		// chunks would land at the missing segment's offsets.
+		"undecoded_segments": stringArrayLiteral(undecoded),
+		"checksum_policy":    stringObj(ewfChecksumPolicyName(opts.ChecksumPolicy)),
+		"status":             stringObj("ok"),
 	}), nil)
 }
 
@@ -1088,7 +1135,7 @@ func (realEWFBackend) Discover(segmentPath string) (ewfSegmentSet, error) {
 	for _, number := range missing.Missing {
 		numbers = append(numbers, int64(number))
 	}
-	return ewfSegmentSet{
+	set := ewfSegmentSet{
 		Contiguous:     false,
 		PresentCount:   len(missing.Present),
 		MissingNumbers: numbers,
@@ -1096,8 +1143,242 @@ func (realEWFBackend) Discover(segmentPath string) (ewfSegmentSet, error) {
 		// numbers, so it is carried as libewf gives it rather than back-filled
 		// with names that would be wrong.
 		MissingFiles: missing.Expected,
-	}, nil
+	}
+	// The present segments are the ones a partial open decodes. Without them
+	// ewf_open_partial opened only the file it was named by -- E01 of a set
+	// holding 1 and 3 decoded E01 alone and called segment 2 the only gap,
+	// and named by E03 it read nothing at all (M26-FS1-010).
+	if paths, err := ewfPresentPaths(segmentPath, missing.Present); err == nil {
+		set.Paths = paths
+		for _, number := range missing.Present {
+			set.PresentNumbers = append(set.PresentNumbers, int64(number))
+		}
+	} else {
+		set.PathsError = err.Error()
+	}
+	return set, nil
 }
+
+// ewfDecodablePrefix splits a set with a hole into the segments that can be
+// decoded -- segment 1 and every one after it up to the first missing -- and
+// the present ones after that, which cannot.
+//
+// libewf places a chunk by its position in the concatenated chunk tables of the
+// segments it is given, not by a number of its own. A segment after a hole
+// therefore lands where the missing segment's chunks belong: a set holding
+// segments 1 and 3 decoded segment 3's first chunk at segment 2's offset, so a
+// read there returned bytes from the wrong part of the device. Up to the first
+// gap every chunk is where it was acquired, and past it a read reaches the end
+// of the device as the partial open documents.
+func ewfDecodablePrefix(op string, set ewfSegmentSet) ([]string, []string, *object.Error) {
+	if len(set.PresentNumbers) != len(set.Paths) {
+		return nil, nil, newError("%s: the set's present segments are not numbered", op)
+	}
+	run := 0
+	for run < len(set.PresentNumbers) && set.PresentNumbers[run] == int64(run+1) {
+		run++
+	}
+	if run == 0 {
+		return nil, nil, newError("%s: the set has no segment 1, which holds the volume section and the "+
+			"device's first chunks, so nothing in it can be placed on the device", op)
+	}
+	return set.Paths[:run], set.Paths[run:], nil
+}
+
+// ewfListIsARun refuses a list for a partial open unless its segments are 1
+// to k with none missing, read from each file's own header with libewf's
+// definitions of it. A list is opened as given, so a list with a hole is
+// refused rather than cut short -- the chunks after the hole would land at
+// the missing segment's offsets. A file whose header names no EWF segment is
+// left for libewf to refuse.
+func ewfListIsARun(op string, paths []string) *object.Error {
+	numbers := make([]uint32, 0, len(paths))
+	for _, p := range paths {
+		number, ok := ewfHeaderSegmentNumber(p)
+		if !ok {
+			return nil
+		}
+		numbers = append(numbers, number)
+	}
+	sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
+	for i, number := range numbers {
+		if number != uint32(i+1) {
+			return newError("%s: the files listed hold segments %v, and segment %d is not among them: "+
+				"libewf places a segment's chunks by the order it is given them, so every chunk after a "+
+				"missing segment would land at the wrong offset; list segments 1 to %d only", op, numbers, i+1, i)
+		}
+	}
+	return nil
+}
+
+// ewfHeaderSegmentNumber reads the segment number a file's EWF header records.
+func ewfHeaderSegmentNumber(path string) (uint32, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer func() { _ = f.Close() }()
+	header := make([]byte, binary.Size(types.FileHeaderV2{}))
+	n, _ := io.ReadFull(f, header)
+	header = header[:n]
+
+	var signature [8]uint8
+	if len(header) < len(signature) {
+		return 0, false
+	}
+	copy(signature[:], header)
+	switch signature {
+	case types.SignatureEVFv1, types.SignatureLVFv1:
+		var h types.FileHeaderV1
+		if binary.Read(bytes.NewReader(header), binary.LittleEndian, &h) != nil {
+			return 0, false
+		}
+		return uint32(h.SegmentNumberValue(binary.LittleEndian)), true
+	case types.SignatureEVFv2, types.SignatureLEFv2:
+		var h types.FileHeaderV2
+		if binary.Read(bytes.NewReader(header), binary.LittleEndian, &h) != nil {
+			return 0, false
+		}
+		return h.SegmentNumberValue(binary.LittleEndian), true
+	}
+	return 0, false
+}
+
+// ewfPresentPaths names the files of the segments libewf found present in a
+// set with a hole. libewf reports a hole as the numbers present and the names
+// of the ones missing, never the paths of the present ones, so they are found
+// here the way its own discovery finds them: the regular files beside path
+// whose name has path's stem, compared without regard to case, and whose
+// extension counts to a segment number in path's naming family. path itself
+// stands for its own number, spelled as given. The files are used only when
+// they name exactly the numbers libewf reported present; anything else is an
+// error rather than a guess.
+func ewfPresentPaths(path string, present []uint32) ([]string, error) {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	family, self, ok := ewfParseFamily(ext)
+	if !ok {
+		return nil, fmt.Errorf("%s names no EWF segment family", name)
+	}
+
+	wanted := make(map[uint32]bool, len(present))
+	for _, number := range present {
+		wanted[number] = true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	found := make(map[uint32]string, len(present))
+	for _, entry := range entries {
+		candidate := entry.Name()
+		candidateExt := filepath.Ext(candidate)
+		if !strings.EqualFold(strings.TrimSuffix(candidate, candidateExt), stem) {
+			continue
+		}
+		number, ok := family.number(candidateExt)
+		if !ok || !wanted[number] {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, candidate)); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if previous, clash := found[number]; clash {
+			return nil, fmt.Errorf("%s and %s both name segment %d", previous, candidate, number)
+		}
+		found[number] = candidate
+	}
+	found[self] = name
+
+	paths := make([]string, 0, len(present))
+	for _, number := range present {
+		file, ok := found[number]
+		if !ok {
+			return nil, fmt.Errorf("libewf counts segment %d present and no file beside %s names it", number, name)
+		}
+		paths = append(paths, filepath.Join(dir, file))
+	}
+	if len(found) != len(present) {
+		return nil, fmt.Errorf("the files beside %s name %d segments and libewf counts %d", name, len(found), len(present))
+	}
+	return paths, nil
+}
+
+// ewfFamily is an EWF segment naming family -- the letter every extension in
+// a set starts with, and whether it is spelled the EWF2 way (.Ex01) -- with
+// libewf's counting rules: .E01 to .E99, then letter pairs from segment 100,
+// then the leading letter carries (.FAA is segment 776 of an E set).
+type ewfFamily struct {
+	base byte
+	v2   bool
+}
+
+// ewfParseFamily reads the family and segment number from an extension, which
+// includes its dot. The base letter must be E, L or s, in either case.
+func ewfParseFamily(ext string) (ewfFamily, uint32, bool) {
+	family, field, ok := ewfSplitExt(ext)
+	if !ok {
+		return ewfFamily{}, 0, false
+	}
+	switch family.base | 0x20 {
+	case 'e', 'l', 's':
+	default:
+		return ewfFamily{}, 0, false
+	}
+	number, ok := ewfFieldNumber(field, 0)
+	return family, number, ok
+}
+
+// number is the segment ext denotes in family f, if it denotes one.
+func (f ewfFamily) number(ext string) (uint32, bool) {
+	other, field, ok := ewfSplitExt(ext)
+	if !ok || other.v2 != f.v2 {
+		return 0, false
+	}
+	carry := int(other.base&^0x20) - int(f.base&^0x20)
+	if carry < 0 {
+		return 0, false
+	}
+	return ewfFieldNumber(field, uint32(carry))
+}
+
+func ewfSplitExt(ext string) (ewfFamily, string, bool) {
+	if len(ext) < 4 || len(ext) > 5 || ext[0] != '.' || !ewfIsLetter(ext[1]) {
+		return ewfFamily{}, "", false
+	}
+	family := ewfFamily{base: ext[1]}
+	field := ext[2:]
+	if len(ext) == 5 {
+		if ext[2]|0x20 != 'x' {
+			return ewfFamily{}, "", false
+		}
+		family.v2 = true
+		field = ext[3:]
+	}
+	return family, field, true
+}
+
+// ewfFieldNumber decodes a two-character counting field; carry is how far the
+// leading letter has advanced past the family's.
+func ewfFieldNumber(field string, carry uint32) (uint32, bool) {
+	if len(field) != 2 {
+		return 0, false
+	}
+	if field[0] >= '0' && field[0] <= '9' && field[1] >= '0' && field[1] <= '9' {
+		n := uint32(field[0]-'0')*10 + uint32(field[1]-'0')
+		if carry != 0 || n == 0 {
+			return 0, false
+		}
+		return n, true
+	}
+	if ewfIsLetter(field[0]) && ewfIsLetter(field[1]) {
+		return ewfLetterPairSegment + carry*26*26 + 26*uint32(field[0]&^0x20-'A') + uint32(field[1]&^0x20-'A'), true
+	}
+	return 0, false
+}
+
+func ewfIsLetter(c byte) bool { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') }
 
 func (realEWFBackend) Open(segmentPaths []string, opts ewfOpenOptions) (ewfSession, error) {
 	files := make([]*os.File, 0, len(segmentPaths))
@@ -1376,33 +1657,35 @@ func (s *realRawSession) Close() error {
 	return s.file.Close()
 }
 
-func parseEWFSegmentPaths(arg object.Object, op string) ([]string, *object.Error) {
+// parseEWFSegmentPaths reads the segment argument, and says whether it was a
+// list: a list is the files the caller chose, and is opened as given.
+func parseEWFSegmentPaths(arg object.Object, op string) ([]string, bool, *object.Error) {
 	if pathObj, ok := arg.(*object.String); ok {
 		if pathObj.Value == "" {
-			return nil, newError("argument 1 to `%s` must not be empty", op)
+			return nil, false, newError("argument 1 to `%s` must not be empty", op)
 		}
-		return []string{pathObj.Value}, nil
+		return []string{pathObj.Value}, false, nil
 	}
 
 	arrObj, ok := arg.(*object.Array)
 	if !ok {
-		return nil, newError("argument 1 to `%s` must be STRING or ARRAY of STRING, got %s", op, arg.Type())
+		return nil, false, newError("argument 1 to `%s` must be STRING or ARRAY of STRING, got %s", op, arg.Type())
 	}
 	if len(arrObj.Elements) == 0 {
-		return nil, newError("argument 1 to `%s` must not be an empty ARRAY", op)
+		return nil, false, newError("argument 1 to `%s` must not be an empty ARRAY", op)
 	}
 
 	paths := make([]string, 0, len(arrObj.Elements))
 	for i, elem := range arrObj.Elements {
 		s, ok := elem.(*object.String)
 		if !ok {
-			return nil, newError("argument 1 to `%s` index %d must be STRING, got %s", op, i, elem.Type())
+			return nil, false, newError("argument 1 to `%s` index %d must be STRING, got %s", op, i, elem.Type())
 		}
 		if s.Value == "" {
-			return nil, newError("argument 1 to `%s` index %d must not be empty", op, i)
+			return nil, false, newError("argument 1 to `%s` index %d must not be empty", op, i)
 		}
 		paths = append(paths, s.Value)
 	}
 
-	return paths, nil
+	return paths, true, nil
 }

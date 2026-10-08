@@ -9,6 +9,8 @@ import (
 	"mutant/lsp/internal/analyzer"
 	"mutant/parser"
 	"mutant/token"
+
+	lsp "github.com/tliron/glsp/protocol_3_16"
 )
 
 // Canonical Mutant style. These are constants, not settings.
@@ -24,28 +26,39 @@ const (
 	indentUnit = "    "
 )
 
-// formatSnapshotText renders snapshot as canonical Mutant source.
-//
-// When the document has hard parse errors the AST cannot be trusted, so the
-// formatter degrades to whitespace normalisation rather than emitting a
-// mangled program. Recoverable problems (a missing or redundant `;`) do not
-// trigger the fallback — repairing those is the formatter's job, and it
-// happens naturally: terminators are emitted from Statement.RequiresSemicolon
-// rather than copied from the source, and stray semicolons never reach the
-// tree in the first place.
 // FormatSource returns the canonical formatting of Mutant source. It is the
-// exported entry point used by the `mutant fmt` CLI (via lsp/api); on a hard
-// parse error it degrades to whitespace normalization rather than mangling.
-func FormatSource(src string) string {
+// exported entry point used by the `mutant fmt` CLI (via lsp/api).
+//
+// ok is false when no formatting is available and the caller must leave the
+// source exactly as it is; parseErrors then says why.
+func FormatSource(src string) (formatted string, parseErrors []lsp.Diagnostic, ok bool) {
 	return formatSnapshotText(analyzer.New().Analyze(src))
 }
 
-func formatSnapshotText(snapshot *analyzer.Snapshot) string {
+// formatSnapshotText renders snapshot as canonical Mutant source, or refuses.
+//
+// A formatter that cannot read a file does not rewrite it. There was a
+// whitespace-only fallback here for a document with hard parse errors, and it
+// was worse than doing nothing: with no tree, "strip trailing whitespace from
+// every line" cannot tell a line of code from a line inside a triple-quoted
+// string, so `mutant fmt` quietly shortened banners and expected-output
+// literals in exactly the files it had already failed to understand -- and
+// reported success. gofmt, rustfmt and prettier all refuse such a file.
+//
+// Recoverable problems (a missing or redundant `;`) are not parse errors and
+// never reach the refusal — repairing those is the formatter's job, and it
+// happens naturally: terminators are emitted from Statement.RequiresSemicolon
+// rather than copied from the source, and stray semicolons never reach the
+// tree in the first place.
+func formatSnapshotText(snapshot *analyzer.Snapshot) (string, []lsp.Diagnostic, bool) {
 	if snapshot == nil {
-		return ""
+		return "", nil, false
 	}
-	if snapshot.Program == nil || len(snapshot.ParseErrors) > 0 {
-		return normalizeDocumentWhitespace(snapshot.Source)
+	if parseErrors := analyzer.ParseDiagnostics(snapshot); len(parseErrors) > 0 {
+		return "", parseErrors, false
+	}
+	if snapshot.Program == nil {
+		return "", nil, false
 	}
 
 	p := newPrinter(snapshot.Program)
@@ -53,9 +66,9 @@ func formatSnapshotText(snapshot *analyzer.Snapshot) string {
 
 	formatted := strings.TrimRight(body, "\n")
 	if formatted == "" {
-		return ""
+		return "", nil, true
 	}
-	return formatted + "\n"
+	return formatted + "\n", nil, true
 }
 
 // endOfSourceOffset is the offset past the final byte, used as the flush
@@ -707,26 +720,4 @@ func quoteString(value string) string {
 	}
 	out.WriteByte('"')
 	return out.String()
-}
-
-// normalizeDocumentWhitespace is the degraded path used when the document
-// does not parse: strip trailing whitespace, normalise line endings, and
-// guarantee a single trailing newline, without touching structure.
-func normalizeDocumentWhitespace(input string) string {
-	normalized := strings.ReplaceAll(strings.ReplaceAll(input, "\r\n", "\n"), "\r", "\n")
-	if normalized == "" {
-		return ""
-	}
-
-	lines := strings.Split(normalized, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " \t")
-	}
-
-	joined := strings.Join(lines, "\n")
-	joined = strings.TrimRight(joined, "\n")
-	if joined == "" {
-		return ""
-	}
-	return joined + "\n"
 }

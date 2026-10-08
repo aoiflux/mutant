@@ -3,6 +3,8 @@ package builtin
 import (
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"os"
 	"sort"
 	"strings"
@@ -55,10 +57,12 @@ type tableInfo struct {
 }
 
 type tablePartition struct {
-	Index       int
-	StartLBA    uint64
-	LengthLBA   uint64
-	EndLBA      uint64
+	Index     int
+	StartLBA  uint64
+	LengthLBA uint64
+	// EndLBA, StartByte and LengthByte are derived, and -1 when the derivation
+	// does not fit a signed 64-bit integer -- see tableByteRange.
+	EndLBA      int64
 	TypeCode    uint64
 	TypeName    string
 	Name        string
@@ -72,8 +76,8 @@ type tablePartition struct {
 	// Partition LBAs are relative to the table's own offset, so a script that
 	// multiplies StartLBA by BlockSize mislocates every partition on a table
 	// parsed at a non-zero offset -- a decoded container, or a nested table.
-	StartByte  uint64
-	LengthByte uint64
+	StartByte  int64
+	LengthByte int64
 	// Allocated, Unallocated, Meta and Structure decode Flags. The listing maps
 	// the whole device, not just its volumes, so most rows are not something to
 	// open as a filesystem: a script that walks the listing handing each entry
@@ -540,13 +544,13 @@ func makeTablePartitionHashes(partitions []tablePartition) []object.Object {
 func makeTablePartitionHash(part tablePartition) object.Object {
 	return makeHashObject(map[string]object.Object{
 		"index":      intObj(int64(part.Index)),
-		"start_lba":  intObj(int64(part.StartLBA)),
-		"length_lba": intObj(int64(part.LengthLBA)),
-		"end_lba":    intObj(int64(part.EndLBA)),
+		"start_lba":  intObj(tableInt(part.StartLBA)),
+		"length_lba": intObj(tableInt(part.LengthLBA)),
+		"end_lba":    intObj(part.EndLBA),
 		// Absolute byte offsets into the image. Prefer these over start_lba *
 		// block_size, which is wrong for any table parsed at a non-zero offset.
-		"start_byte":  intObj(int64(part.StartByte)),
-		"length_byte": intObj(int64(part.LengthByte)),
+		"start_byte":  intObj(part.StartByte),
+		"length_byte": intObj(part.LengthByte),
 		// type_code and attributes are uint64 bitfields whose high bit (e.g. the
 		// GPT "required partition" attribute, bit 63) overflows a signed integer,
 		// so they are surfaced as lossless hex strings.
@@ -747,6 +751,7 @@ func tablePartitionFrom(t *libtable.Table, p partition.Partition) tablePartition
 	if p.Nested != nil {
 		nestedType = string(p.Nested.Type)
 	}
+	startByte, lengthByte := tableByteRange(t.Offset, t.BlockSize, p.StartLBA, p.LengthLBA)
 
 	return tablePartition{
 		Index:         p.Index,
@@ -762,8 +767,8 @@ func tablePartitionFrom(t *libtable.Table, p partition.Partition) tablePartition
 		Attributes:    p.Attributes,
 		GUIDType:      p.GUIDType,
 		GUIDUnique:    p.GUIDUnique,
-		StartByte:     t.ByteOffset(p),
-		LengthByte:    t.ByteSize(p),
+		StartByte:     startByte,
+		LengthByte:    lengthByte,
 		Allocated:     p.Flags&partition.PartFlagAlloc != 0,
 		Unallocated:   p.Flags&partition.PartFlagUnalloc != 0,
 		Meta:          p.Flags&partition.PartFlagMeta != 0,
@@ -784,9 +789,44 @@ func tableWarningsFrom(warnings []partition.Warning) []tableWarning {
 // endLBA is the inclusive last LBA of a partition. A zero-length entry has no
 // last block, so it reports its start — which is indistinguishable from a
 // one-sector partition; use length_lba or length_byte to tell them apart.
-func endLBA(start uint64, length uint64) uint64 {
+// An end past the largest LBA is -1 rather than a sum that wrapped.
+func endLBA(start uint64, length uint64) int64 {
 	if length == 0 {
-		return start
+		return tableInt(start)
 	}
-	return start + length - 1
+	if start > math.MaxUint64-(length-1) {
+		return -1
+	}
+	return tableInt(start + length - 1)
+}
+
+// tableInt is a table's unsigned field as the signed INTEGER a script holds,
+// or -1 when it does not fit one. A cast would have turned an LBA past 2^63
+// into a negative number that reads as a real one.
+func tableInt(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return -1
+	}
+	return int64(v)
+}
+
+// tableByteRange is a partition's place in the image in bytes, with checked
+// arithmetic. libtable's ByteOffset and ByteSize multiply the entry's LBAs by
+// the block size unchecked, so a GPT entry at LBA 2^55+2048 came back at byte
+// 1048576 -- the real partition's start -- and its hash opened the real
+// volume under the crafted entry's name, while another entry's length came
+// back negative (M26-FS1-002). A value that overflows, or does not fit the
+// INTEGER a script holds, is -1: this family's "nowhere", which every *_open
+// refuses.
+func tableByteRange(tableOffset uint64, blockSize uint32, startLBA, lengthLBA uint64) (start, length int64) {
+	start, length = -1, -1
+	if hi, product := bits.Mul64(startLBA, uint64(blockSize)); hi == 0 {
+		if sum, carry := bits.Add64(product, tableOffset, 0); carry == 0 {
+			start = tableInt(sum)
+		}
+	}
+	if hi, product := bits.Mul64(lengthLBA, uint64(blockSize)); hi == 0 {
+		length = tableInt(product)
+	}
+	return start, length
 }

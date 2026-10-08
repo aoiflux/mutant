@@ -506,20 +506,24 @@ Core file:
 
 Behavior model:
 
-- If hard parse errors exist (or the snapshot is invalid), the formatter degrades
-  to whitespace normalization only (CRLF -> LF, strip trailing whitespace, exactly
-  one trailing newline).
+- If hard parse errors exist (or the snapshot is invalid), the formatter makes no
+  edits at all. `mutant fmt` prints the parse errors, leaves the file
+  byte-for-byte unchanged and exits 1 in every mode; the editor's formatting,
+  range-formatting and on-type-formatting requests return an empty edit list.
+  There is deliberately no whitespace-only fallback: with no tree, "strip
+  trailing whitespace" cannot tell a line of code from a line inside a
+  triple-quoted string, so it edited string data in the one case it was reached.
 - Otherwise it applies AST-driven formatting for statements/expressions. Comments
   and blank lines are handled **through** the AST printer (re-attached from the
   `program.Comments` side-table; runs of blank lines collapse to one), so the
-  presence of comments/blank lines no longer forces the normalization path.
+  presence of comments/blank lines does not stop the formatter.
 
 Strict semicolons (canonical):
 
 - Semicolons are emitted from the AST via `ast.Statement.RequiresSemicolon()`, not
   copied from source. The formatter therefore **repairs** missing semicolons and
-  **removes** redundant ones on format. Recoverable semicolon issues do not trigger
-  the normalization fallback; only hard parse errors do. Struct fields are
+  **removes** redundant ones on format. Recoverable semicolon issues do not stop
+  the formatter; only hard parse errors do. Struct fields are
   `;`-terminated including the last.
 
 Canonical style policy:

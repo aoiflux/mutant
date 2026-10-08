@@ -108,7 +108,7 @@ func evalFilter(args []object.Object) object.Object {
 		if isError(r) {
 			return r
 		}
-		if isTruthy(r) {
+		if object.IsTruthy(r) {
 			out = append(out, el)
 		}
 	}

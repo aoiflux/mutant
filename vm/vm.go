@@ -132,7 +132,6 @@ var (
 const (
 	initialStackCapacity   = global.StackSize
 	initialGlobalsCapacity = global.GlobalSize
-	initialFrameCapacity   = global.MaxFrames
 	integritySweepBase     = uint64(251)
 	integritySweepSpread   = uint64(83)
 	integrityProbeSpread   = uint64(31)
@@ -367,6 +366,39 @@ func (vm *VM) ensureGlobalCapacity(index int) {
 	vm.globals = resized
 }
 
+// initialFrameCapacity is how much room the frame slice is allocated with before
+// anything runs. ensureFrameCapacity grows it on demand, so it is a starting size
+// and not a ceiling; maxCallDepth below is the ceiling.
+//
+// It was global.MaxFrames, which is the whole of M26-VM-021's complaint about that
+// package and half of why M26-VM-006 went unnoticed: traceback.go and resource.go
+// are both written as though a runaway recursion ends in an error the VM reports,
+// and a constant called MaxFrames is why anyone would think so.
+const initialFrameCapacity = 2048
+
+// maxCallDepth is how many calls may be on the stack at once. The next one past it
+// is refused with an error naming the number, which is a diagnostic the author can
+// act on; what happened before was not.
+//
+// Nothing bounded depth at all. A recursion with no stopping case grew the frame
+// slice until the host gave out -- measured at 73,298 frames in 8 seconds with no
+// error -- and a recursion written through map, filter, each, reduce, sort_by,
+// with_resource or test grew the Go stack as well, because each of those re-enters
+// execLoop through CallClosureSync. That form ends in `fatal error: stack
+// overflow`, which no recover contains, so the process dies with the runner's
+// deferred cleanup unrun: no CleanupSensitiveData, no WaitForTasks.
+//
+// 10,000 is high enough that it is not a program's problem -- Python's default is
+// 1,000 and Node's is around 11,000 -- and low enough to hold the Go stack well
+// inside its own default. Measured: 10,000 nested CallClosureSync re-entries fit
+// in 32 MiB of Go stack and not in 16 MiB, against a 1 GiB default, so the frame
+// ceiling is what stops the native path too and no second limit is needed. The
+// refusal takes about two seconds to arrive, which is the per-sweep frame integrity
+// walk being quadratic in depth (M26-VM-012) and not this check.
+//
+//mutant:limit depth
+const maxCallDepth = 10_000
+
 func (vm *VM) ensureFrameCapacity(required int) {
 	if required <= len(vm.frames) {
 		return
@@ -379,7 +411,7 @@ func (vm *VM) ensureFrameCapacity(required int) {
 }
 
 func (vm *VM) encryptForStorage(obj object.Object) object.Object {
-	encObj, err := mutil.EncryptObject(obj, vm.inslen, vm.password)
+	encObj, err := mutil.EncryptObjectWithStream(obj, vm.inslen, vm.password, vm.valueStream())
 	if err == nil {
 		return encObj
 	}
@@ -387,7 +419,7 @@ func (vm *VM) encryptForStorage(obj object.Object) object.Object {
 }
 
 func (vm *VM) decryptForUse(obj object.Object) object.Object {
-	decObj, err := mutil.DecryptObject(obj, vm.inslen, vm.password)
+	decObj, err := mutil.DecryptObjectWithStream(obj, vm.inslen, vm.password, vm.valueStream())
 	if err == nil {
 		return decObj
 	}
@@ -474,8 +506,29 @@ func (vm *VM) getGlobal(index int) object.Object {
 // CleanupRuntimeSensitiveData clears encrypted runtime data buffers after execution.
 // clearGlobals controls whether globals are wiped; clearConstants controls whether constants are wiped.
 func (vm *VM) CleanupRuntimeSensitiveData(clearGlobals bool, clearConstants bool) {
+	// Whether the stack is wiped or merely released follows clearGlobals, and it
+	// has to: since M26-VM-001 a stack slot and a global can be the same object.
+	// A value that is only moving is moved rather than opened and sealed again,
+	// so OpSetGlobal hands the stack's own object to the global, and pop leaves
+	// its pointer behind in the slot it vacated -- so the backing array still
+	// reaches a global after the value has been stored there.
+	//
+	// Wiping in place is therefore incompatible with keeping the globals, and
+	// the caller has already said which it wants. clearGlobals is false only for
+	// the REPL, where the next line is the same program continuing and the
+	// globals are its state. Wiping the stack there emptied a hash a global still
+	// held, and record_seal refused a range with no "offset" on the line after
+	// the one that built it.
+	//
+	// So when the globals stay, the slots are dropped and not wiped. What no
+	// global owns becomes garbage, and in storage form: the stack holds sealed
+	// values, and the REPL keeps the password alive between lines in any case,
+	// because without it no global could be opened. When the globals go, the run
+	// is over and everything the stack can reach is wiped as before.
 	for i := range vm.stack {
-		vm.clearObjectSensitiveData(vm.stack[i])
+		if clearGlobals {
+			vm.clearObjectSensitiveData(vm.stack[i])
+		}
 		vm.stack[i] = nil
 	}
 	vm.stackPointer = 0
@@ -509,6 +562,11 @@ func (vm *VM) CleanupRuntimeSensitiveData(clearGlobals bool, clearConstants bool
 	}
 	vm.frameIndex = 0
 	vm.password = ""
+
+	// The stream was derived from the password the line above just dropped, and
+	// it now carries the key this VM's values are sealed with as well as its
+	// instructions (M26-VM-001). Nothing derived from the secret outlives it.
+	vm.xorStream.Zero()
 }
 
 // CleanupSensitiveData clears runtime buffers and constants. Intended for one-shot execution paths.
@@ -627,6 +685,21 @@ func (vm *VM) instructionStream() *security.XORStream {
 		vm.xorStream = security.NewXORStream(int64(vm.inslen), vm.password)
 	}
 	return vm.xorStream
+}
+
+// valueStream is the same derived key under the name the other half of the VM
+// reads it by. A stored value's payload is sealed from the start of the
+// keystream under (inslen, password) -- the pair the instruction stream is
+// derived from -- so one derivation per run now covers the opcodes and the
+// values both.
+//
+// Deriving it per value was the cost of a container load rather than the
+// cipher: building an array of 800 elements in a loop made 2,890,011
+// derivations, two SHA-256 hashes each, for 22 MiB of payload (M26-VM-001).
+// A value that records a seed of its own is still opened with a key derived
+// for that seed; mutil.sealKey has the case and the reason.
+func (vm *VM) valueStream() *security.XORStream {
+	return vm.instructionStream()
 }
 
 // readUint16 and readUint8 decode an operand at an absolute instruction offset.
@@ -1031,7 +1104,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			pos := int(res)
 			vm.currentFrame().ip += 2
 			condition := vm.pop()
-			if !isTruthy(condition) {
+			if !object.IsTruthy(condition) {
 				vm.currentFrame().ip = pos - 1
 			}
 		case code.OpSetGlobal:
@@ -1044,7 +1117,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 2
 			vm.ensureGlobalCapacity(int(globalIndex))
-			vm.setGlobal(int(globalIndex), vm.pop())
+			vm.setGlobalStored(int(globalIndex))
 		case code.OpGetGlobal:
 			if ip+2 >= len(ins) {
 				return fmt.Errorf("OpGetGlobal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -1055,7 +1128,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			vm.currentFrame().ip += 2
 			vm.ensureGlobalCapacity(int(globalIndex))
-			if err := vm.push(vm.getGlobal(int(globalIndex))); err != nil {
+			if err := vm.pushGlobal(int(globalIndex)); err != nil {
 				return err
 			}
 		case code.OpSetLocal:
@@ -1072,8 +1145,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if slot < 0 || slot >= len(vm.stack) {
 				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
 			}
-			obj := vm.pop()
-			vm.stack[slot] = vm.encryptForStorage(obj)
+			vm.stack[slot] = vm.popStored()
 		case code.OpGetLocal:
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("OpGetLocal: not enough bytes for operand at ip=%d, len=%d", ip, len(ins))
@@ -1088,7 +1160,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if slot < 0 || slot >= len(vm.stack) {
 				return vm.runtimeErrorfAt(ip, op, "local slot %d outside the stack (bp=%d, len=%d)", slot, frame.bp, len(vm.stack))
 			}
-			if err := vm.push(vm.decryptForUse(vm.stack[slot])); err != nil {
+			if err := vm.pushStored(vm.stack[slot]); err != nil {
 				return err
 			}
 		case code.OpGetBuiltin:
@@ -1137,7 +1209,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if cell, ok := captured.(*object.Cell); ok {
 				captured = cell.Value
 			}
-			if err := vm.push(vm.decryptForUse(captured)); err != nil {
+			if err := vm.pushStored(captured); err != nil {
 				return err
 			}
 		case code.OpSetFree:
@@ -1160,7 +1232,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 				// bytecode did not come from this compiler.
 				return vm.runtimeErrorfAt(ip, op, "captured variable %d is not assignable storage", freeIndex)
 			}
-			cell.Value = vm.encryptForStorage(vm.pop())
+			cell.Value = vm.popStored()
 		case code.OpGetLocalCell, code.OpSetLocalCell, code.OpCaptureLocal:
 			if ip+1 >= len(ins) {
 				return fmt.Errorf("%s: not enough bytes for operand at ip=%d, len=%d", runtimeOpcodeName(op), ip, len(ins))
@@ -1185,11 +1257,11 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			}
 			switch op {
 			case code.OpGetLocalCell:
-				if err := vm.push(vm.decryptForUse(cell.Value)); err != nil {
+				if err := vm.pushStored(cell.Value); err != nil {
 					return err
 				}
 			case code.OpSetLocalCell:
-				cell.Value = vm.encryptForStorage(vm.pop())
+				cell.Value = vm.popStored()
 			case code.OpCaptureLocal:
 				// The cell itself, not its contents: OpClosure copies what is on
 				// the stack into the new closure's Free list, and copying the
@@ -1319,7 +1391,7 @@ func (vm *VM) runInstructions(baseFrameIndex int) error {
 			if vm.stackPointer <= 0 {
 				return vm.runtimeErrorfAt(ip, op, "stack underflow")
 			}
-			if err := vm.push(vm.decryptForUse(vm.stack[vm.stackPointer-1])); err != nil {
+			if err := vm.pushStored(vm.stack[vm.stackPointer-1]); err != nil {
 				return vm.runtimeErrorAt(ip, op, err)
 			}
 		case code.OpDestructure:
@@ -1823,6 +1895,92 @@ func (vm *VM) push(obj object.Object) error {
 	return nil
 }
 
+// pushStored puts on the stack a value that is already in storage form, which
+// is what a stack slot, a global and a cell all hold.
+//
+// It is push(decryptForUse(obj)) with the two halves that cancel removed.
+// decryptForUse opens the value and push seals the result with the same seed
+// and the same password, so what lands on the stack is what it started as --
+// and for a sealed value that round trip is two ChaCha20 passes and two
+// allocations over the whole payload. Reading a 3 MiB buffer inside a loop
+// spent two thirds of its time on it (M26-VM-001).
+//
+// A container moves this way too, and that is the case the sweep cares about:
+// the example that failed its time limit keeps its 3 MiB buffer in a struct
+// field, so the value being moved is a struct and the round trip was four
+// passes over the buffer for every field read.
+//
+// For a container the stored object and the plaintext object are different
+// objects, so this does make the slot and the stack entry one object. That is
+// safe here, and the reason holds across the whole dispatch loop rather than
+// case by case: *nothing in this VM mutates a container in storage form*. Every
+// path that writes one opens it first -- execSetIndex and OpSetField both take
+// their target from pop(), and opening rebuilds the container and every element
+// in it -- so the write lands on a fresh copy and is stored back into the
+// binding that asked for it. `let b = a; b[0] = 9;` leaves a alone because the
+// write never touched the object a holds.
+//
+// The one place that writes a stored container in place is
+// clearObjectSensitiveData, and it is the exception that has to be handled
+// rather than waved through: a global is reachable from the stack's backing
+// array once a value has been moved into it, so a wipe of the stack reaches a
+// global. CleanupRuntimeSensitiveData therefore wipes the stack only when the
+// globals go with it; see the comment there, and
+// TestAGlobalSurvivesTheStackBeingReleased, which is the test this kit was
+// missing. vm/stored_form_test.go holds the aliasing invariant itself.
+func (vm *VM) pushStored(obj object.Object) error {
+	vm.ensureStackCapacity(vm.stackPointer + 1)
+	vm.stack[vm.stackPointer] = obj
+	vm.stackPointer++
+	return nil
+}
+
+// popStored takes the top of the stack in storage form: the mirror of
+// pushStored, for the stores, which seal what pop has just opened.
+func (vm *VM) popStored() object.Object {
+	if vm.stackPointer <= 0 {
+		faultf("stack underflow: pop with nothing on the stack")
+	}
+
+	obj := vm.stack[vm.stackPointer-1]
+	vm.stackPointer--
+	return obj
+}
+
+// pushGlobal is pushStored for a global, with the one case that has no storage
+// form to hand on: the wrapper memory mode keeps a global as ciphertext bytes
+// in a SecureGlobal rather than as an object, so there the value has to be
+// opened and resealed as it always was.
+func (vm *VM) pushGlobal(index int) error {
+	if _, wrapped := vm.secureGlobals[index]; !wrapped && index >= 0 && index < len(vm.globals) {
+		return vm.pushStored(vm.globals[index])
+	}
+	return vm.push(vm.getGlobal(index))
+}
+
+// setGlobalStored stores into a global a value that is already in storage form:
+// pushGlobal's mirror, and the other half of not opening a value that is only
+// moving. setGlobal(pop()) opened the top of the stack and sealed it again with
+// the same key, which is the same identity round trip in the other direction.
+//
+// The wrapper memory mode is the one case that cannot take it, for the reason
+// pushGlobal has: a SecureGlobal holds ciphertext bytes it produces itself,
+// from a value in the clear, so there the stack's value is opened as it always
+// was. The SecureGlobal a non-wrapper store replaces is still cleared, because
+// a global that has been one keeps its wrapper until something overwrites it.
+func (vm *VM) setGlobalStored(index int) {
+	if vm.useWrapperGlobals() {
+		vm.setGlobal(index, vm.pop())
+		return
+	}
+
+	if previous, ok := vm.secureGlobals[index]; ok {
+		previous.Clear()
+		delete(vm.secureGlobals, index)
+	}
+	vm.globals[index] = vm.popStored()
+}
+
 // pop takes the top of the stack. An empty stack is a fault rather than an
 // error return: pop is called from more than twenty places in the dispatch
 // switch, and it cannot happen for bytecode this toolchain produced. See
@@ -2084,26 +2242,28 @@ func (vm *VM) execErrorField(errObj, index object.Object) error {
 
 func (vm *VM) execMultiValueIndex(multiValue, index object.Object) error {
 	multi := multiValue.(*object.MultiValue)
-	i := index.(*object.Integer).Value
-	max := int64(len(multi.Values) - 1)
-	if i > max || i < 0 {
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(multi.Values))
+	if !ok {
 		return vm.push(global.Null)
 	}
-	return vm.push(multi.Values[i])
+	return vm.push(multi.Values[at])
 }
 
+// execStringIndex yields the rune at i as a one-rune string.
+//
+// By rune, not by byte, because that is what every other string operation here
+// means: the for-in iterator, str_char_at, str_substr and str_reverse all work in
+// runes, and object.NewIterator's comment says why. Indexing by byte did not even
+// return the byte -- Go converts a byte to the rune of that number, so byte 0xc3
+// came back as U+00C3, a character the string does not contain.
+//
+// Both rules are object.RuneAt's; see the head of object/index.go.
 func (vm *VM) execStringIndex(str, index object.Object) error {
-	strVal := str.(*object.String).Value
-	i := index.(*object.Integer).Value
-	max := int64(len(strVal) - 1)
-	if i > max {
+	char, ok := object.RuneAt(str.(*object.String).Value, index.(*object.Integer).Value)
+	if !ok {
 		return vm.push(global.Null)
-	} else if i < 0 {
-		strObj := &object.String{Value: string(strVal[max+i+1])}
-		return vm.push(strObj)
 	}
-	strObj := &object.String{Value: string(strVal[i])}
-	return vm.push(strObj)
+	return vm.push(&object.String{Value: char})
 }
 
 // execBytesIndex yields the byte at i as an INTEGER 0-255.
@@ -2114,31 +2274,20 @@ func (vm *VM) execStringIndex(str, index object.Object) error {
 // conversion. Negative indices count from the end, as they do everywhere else.
 func (vm *VM) execBytesIndex(buf, index object.Object) error {
 	data := buf.(*object.Bytes).Value
-	i := index.(*object.Integer).Value
-	max := int64(len(data) - 1)
-
-	if i > max {
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(data))
+	if !ok {
 		return vm.push(global.Null)
 	}
-	if i < 0 {
-		if max+i+1 < 0 {
-			return vm.push(global.Null)
-		}
-		return vm.push(&object.Integer{Value: int64(data[max+i+1])})
-	}
-	return vm.push(&object.Integer{Value: int64(data[i])})
+	return vm.push(&object.Integer{Value: int64(data[at])})
 }
 
 func (vm *VM) execArrayIndex(array, index object.Object) error {
-	arrayObj := array.(*object.Array)
-	i := index.(*object.Integer).Value
-	max := int64(len(arrayObj.Elements) - 1)
-	if i > max {
+	elements := array.(*object.Array).Elements
+	at, ok := object.IndexOf(index.(*object.Integer).Value, len(elements))
+	if !ok {
 		return vm.push(global.Null)
-	} else if i < 0 {
-		return vm.push(arrayObj.Elements[max+i+1])
 	}
-	return vm.push(arrayObj.Elements[i])
+	return vm.push(elements[at])
 }
 
 func (vm *VM) execHashIndex(hash, index object.Object) error {
@@ -2157,19 +2306,25 @@ func (vm *VM) execHashIndex(hash, index object.Object) error {
 	return vm.push(pair.Value)
 }
 
+// execBangOperation pushes the negation of the operand's truthiness, which is what
+// `!` means.
+//
+// It used to switch on pointer identity against global.True, global.False and
+// global.Null, and push False for anything else. Those three are the only values
+// such a rule can see, so the four falsy values that are not singletons -- 0, 0.0,
+// "" and an empty buffer -- came back false, the same answer as !true. 0 was falsy
+// and !0 was falsy, so `if (x)` and `if (!x)` both skipped their branch and `!!x`
+// was not `x` (M26-VM-007).
+//
+// Identity was not the fault, and that is worth recording because it looks like it
+// was. A false held in a variable, an array element, a hash value or a parameter
+// still arrives here as global.False: the pointer survives encryptForStorage,
+// mutil.EncryptObject in the global store, and decryptForUse on the way back. That
+// was measured, not assumed, and TestBangIsRightWhereverTheValueCameFrom keeps it
+// measured. The fault was a default arm standing in for a rule, and object.IsTruthy
+// is the rule.
 func (vm *VM) execBangOperation() error {
-	operand := vm.pop()
-
-	switch operand {
-	case global.True:
-		return vm.push(global.False)
-	case global.False:
-		return vm.push(global.True)
-	case global.Null:
-		return vm.push(global.True)
-	default:
-		return vm.push(global.False)
-	}
+	return vm.push(nativeBoolToBooleanObject(!object.IsTruthy(vm.pop())))
 }
 
 func (vm *VM) execMinusOperation() error {
@@ -2484,13 +2639,28 @@ func (vm *VM) currentFrame() *Frame {
 	}
 	return vm.frames[vm.frameIndex-1]
 }
-func (vm *VM) pushFrame(f *Frame) {
+
+// pushFrame enters a frame, or refuses to because the call would be too deep.
+//
+// The refusal belongs here rather than in callClosure because this is the only
+// place a frame is entered. OpCall reaches it through callClosure and so does
+// CallClosureSync, the bridge the executor-native builtins call a closure through,
+// so one check bounds both -- and a path added later is bounded without having to
+// be told. Counting frames rather than calls is deliberate: a program that calls a
+// function sixty thousand times in a loop is ordinary, and a program with ten
+// thousand calls open at once is not.
+func (vm *VM) pushFrame(f *Frame) error {
+	if vm.frameIndex >= maxCallDepth {
+		return fmt.Errorf("this call would be %d deep, over the limit of %d nested calls",
+			vm.frameIndex+1, maxCallDepth)
+	}
 	vm.ensureFrameCapacity(vm.frameIndex + 1)
 	vm.frames[vm.frameIndex] = f
 	vm.frameIndex++
 	if f != nil && f.cl != nil && f.cl.Fn != nil {
 		vm.registerFrameIntegrity(f.cl.Fn)
 	}
+	return nil
 }
 func (vm *VM) popFrame() *Frame {
 	if vm.frameIndex <= 0 {
@@ -2557,7 +2727,12 @@ func (vm *VM) callClosure(cl *object.Closure, numArgs int) error {
 	}
 
 	frame := NewFrame(cl, vm.stackPointer-numArgs)
-	vm.pushFrame(frame)
+	// Nothing is half-done when this fails: the frame was built but not entered and
+	// the stack pointer has not moved, so the error unwinds exactly like a wrong-arity
+	// one, and CallClosureSync's own restore puts a native re-entry back as it was.
+	if err := vm.pushFrame(frame); err != nil {
+		return err
+	}
 	vm.ensureStackCapacity(frame.bp + cl.Fn.NumLocals)
 	vm.stackPointer = frame.bp + cl.Fn.NumLocals
 	// Before boxing, so a captured local starts its cell empty rather than
@@ -2754,26 +2929,4 @@ func nativeBoolToBooleanObject(native bool) *object.Boolean {
 		return global.True
 	}
 	return global.False
-}
-
-func isTruthy(obj object.Object) bool {
-	// Conventional truthiness (dev-sec-platform-upgrades): false, null, empty
-	// string, 0 and 0.0 are falsy; everything else is truthy. This matches the
-	// webrepl path and removes the "" -is-truthy footgun.
-	switch o := obj.(type) {
-	case *object.Boolean:
-		return o.Value
-	case *object.Null:
-		return false
-	case *object.String:
-		return len(o.Value) != 0
-	case *object.Bytes:
-		return len(o.Value) != 0
-	case *object.Integer:
-		return o.Value != 0
-	case *object.Float:
-		return o.Value != 0
-	default:
-		return true
-	}
 }

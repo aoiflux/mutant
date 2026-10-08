@@ -298,15 +298,21 @@ func (c LintConfig) severityForRule(rule string) (*lsp.DiagnosticSeverity, bool)
 	return &severity, true
 }
 
-func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
-	if snapshot == nil {
+// ParseDiagnostics returns the document's hard parse errors, in source order,
+// and nothing else.
+//
+// Diagnostics reports these too, mixed in with every lint rule's findings. A
+// caller that has to decide whether the tree can be trusted at all -- the
+// formatter, and `mutant fmt` behind it -- wants the parse errors by
+// themselves, and should not have to run thirty lint rules to find them.
+func ParseDiagnostics(snapshot *Snapshot) []lsp.Diagnostic {
+	if snapshot == nil || len(snapshot.ParseErrors) == 0 {
 		return nil
 	}
 
-	diagnostics := make([]lsp.Diagnostic, 0, len(snapshot.ParseErrors)+4)
-
 	severity := lsp.DiagnosticSeverityError
 	source := "mutant-parser"
+	diagnostics := make([]lsp.Diagnostic, 0, len(snapshot.ParseErrors))
 	for _, parseErr := range snapshot.ParseErrors {
 		diagnostics = append(diagnostics, lsp.Diagnostic{
 			Range:    snapshot.Range(parseErr.Range),
@@ -315,6 +321,16 @@ func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
 			Message:  parseErr.Msg,
 		})
 	}
+	return diagnostics
+}
+
+func Diagnostics(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic {
+	if snapshot == nil {
+		return nil
+	}
+
+	diagnostics := make([]lsp.Diagnostic, 0, len(snapshot.ParseErrors)+4)
+	diagnostics = append(diagnostics, ParseDiagnostics(snapshot)...)
 	diagnostics = append(diagnostics, syntaxBalanceDiagnostics(snapshot.Source)...)
 
 	// A reach into another module the compiler will refuse. These are not

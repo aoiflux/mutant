@@ -185,6 +185,16 @@ func ledgerReadRefusal(session *ledgerSession, err error, nodeID store.NodeID, e
 // key order is part of the version hash, and decoding it into map[string]any
 // would render a value that happens to be valid UTF-8 as a string and the
 // identical bytes beside it as bytes.
+// minEncodedPropertyEntry is the fewest bytes one entry of a property blob can
+// take: an empty key and a nil value, one byte each. It bounds a count the
+// blob declares against the blob that declares it.
+//
+// It is not a limit. Raising it would not relax what Mutant will do, it would
+// make the check below wrong, so it is marked as the format fact it is.
+//
+//mutant:format MessagePack specification, Formats -- fixstr of length 0 and nil are one byte each
+const minEncodedPropertyEntry = 2
+
 func ledgerDecodeProperties(blob []byte) (map[string][]byte, error) {
 	if len(blob) == 0 {
 		return nil, nil
@@ -193,6 +203,31 @@ func ledgerDecodeProperties(blob []byte) (map[string][]byte, error) {
 	count, err := decoder.DecodeMapLen()
 	if err != nil {
 		return nil, err
+	}
+	// Nothing is sized from a number the blob declares before the blob is
+	// asked whether it could hold that many. DecodeMapLen reads a msgpack
+	// map32 header -- five bytes -- which can claim 2^32-1 entries, and
+	// make(map, count) allocates buckets for all of them before a single key
+	// is read: about 96 bytes per declared entry, measured, so a five-byte
+	// blob asks for something near 400 GB. That is a fatal runtime
+	// out-of-memory, which is not an error a script can catch. The decode did
+	// fail on the missing body, but only after allocating (M26-CUS-030).
+	//
+	// The blob is its own bound, so this needs no new limit. A blob of n bytes
+	// cannot hold more than n/minEncodedPropertyEntry entries, and a header
+	// claiming more is describing a map that is not there. Every blob this
+	// encoder writes takes at least three bytes an entry -- a key of at least
+	// one character and a two-byte empty value -- so an honest one has room to
+	// spare.
+	//
+	// Only the upper bound is checked. A negative count, which is how msgpack
+	// spells a nil map, still falls through to a make the runtime clamps to
+	// zero, so such a blob keeps returning an empty map instead of becoming a
+	// new error.
+	if count > len(blob)/minEncodedPropertyEntry {
+		return nil, fmt.Errorf("this property blob is %d bytes and declares %d entries, which it "+
+			"cannot hold: a blob that size holds at most %d",
+			len(blob), count, len(blob)/minEncodedPropertyEntry)
 	}
 	props := make(map[string][]byte, count)
 	for i := 0; i < count; i++ {

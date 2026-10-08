@@ -1010,17 +1010,8 @@ func (s *Server) references(_ *glsp.Context, params *lsp.ReferenceParams) ([]lsp
 		locations = nil
 	}
 
-	declared, ok := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position)
-	if !ok {
-		if len(locations) == 0 {
-			return nil, nil
-		}
-		return locations, nil
-	}
-
-	workspaceLocations := s.workspaceReferenceLocations(declared, params.Context.IncludeDeclaration)
-	locations = append(locations, workspaceLocations...)
-	locations = dedupeLocations(locations)
+	locations = s.withWorkspaceReferences(snapshot, params.TextDocument.URI, params.Position,
+		locations, params.Context.IncludeDeclaration)
 	if len(locations) == 0 {
 		return nil, nil
 	}
@@ -1069,15 +1060,17 @@ func (s *Server) rename(_ *glsp.Context, params *lsp.RenameParams) (*lsp.Workspa
 		// the cross-file path below is given its chance instead.
 		locations = nil
 	}
+	// The workspace locations are merged in whenever the position names a
+	// top-level declaration, rather than only when the file-local result came
+	// back empty. With the cursor on the declaration the local result is never
+	// empty -- it holds the declaration itself -- so the one position a rename
+	// is most often started from, F2 on a definition, was the one position
+	// that reached no importer. references() answered the same position
+	// correctly, which is how the two paths were found to have drifted
+	// (M26-LSP-003).
+	locations = s.withWorkspaceReferences(snapshot, params.TextDocument.URI, params.Position, locations, true)
 	if len(locations) == 0 {
-		declared, ok := s.workspaceDeclarationAt(snapshot, params.TextDocument.URI, params.Position)
-		if !ok {
-			return nil, nil
-		}
-		locations = s.workspaceReferenceLocations(declared, true)
-		if len(locations) == 0 {
-			return nil, nil
-		}
+		return nil, nil
 	}
 
 	editsByURI := make(map[lsp.DocumentUri][]lsp.TextEdit)
@@ -1244,8 +1237,13 @@ func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParam
 
 	// params.Options is intentionally ignored: Mutant formatting is canonical
 	// and never varies with the client's tabSize/insertSpaces settings.
-	formatted := formatSnapshotText(snapshot)
-	if formatted == doc.Text {
+	//
+	// A document with hard parse errors yields no edits at all, which is what
+	// every other language server does while you are mid-keystroke. The parse
+	// errors are already published as diagnostics; silently reflowing the
+	// whitespace of a file nobody can parse only risks the inside of a string.
+	formatted, _, ok := formatSnapshotText(snapshot)
+	if !ok || formatted == doc.Text {
 		return nil, nil
 	}
 
@@ -1275,8 +1273,8 @@ func (s *Server) rangeFormatting(_ *glsp.Context, params *lsp.DocumentRangeForma
 		snapshot = s.analyzeDoc(doc.URI, doc.Text)
 	}
 
-	formatted := formatSnapshotText(snapshot)
-	if formatted == doc.Text {
+	formatted, _, ok := formatSnapshotText(snapshot)
+	if !ok || formatted == doc.Text {
 		return nil, nil
 	}
 
@@ -1303,8 +1301,8 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 		snapshot = s.analyzeDoc(doc.URI, doc.Text)
 	}
 
-	formatted := formatSnapshotText(snapshot)
-	if formatted == doc.Text {
+	formatted, _, ok := formatSnapshotText(snapshot)
+	if !ok || formatted == doc.Text {
 		return nil, nil
 	}
 
@@ -1684,6 +1682,35 @@ func isTopLevelSymbol(symbol lsp.DocumentSymbol, location lsp.Location) bool {
 	return false
 }
 
+// withWorkspaceReferences merges the workspace-wide locations for the binding
+// at a position into the file-local ones, and removes duplicates.
+//
+// references and rename both end here. They used to hold a copy each, and the
+// copies had drifted: rename consulted the workspace only when the local
+// result was empty, which never happens with the cursor on a declaration
+// (M26-LSP-003). One function is the fix and also the guarantee, since there is
+// no longer a second place for the rule to be written differently.
+//
+// A position that names no top-level declaration has no workspace half, and the
+// local locations are returned deduplicated rather than raw -- references used
+// to return them untouched on that path. A references result with the same span
+// twice, and a rename that edits one span twice, are both defects, so removing
+// duplicates on every path is the conservative choice and not a new behaviour
+// anyone could be relying on.
+func (s *Server) withWorkspaceReferences(
+	snapshot *analyzer.Snapshot,
+	uri lsp.DocumentUri,
+	position lsp.Position,
+	local []lsp.Location,
+	includeDeclaration bool,
+) []lsp.Location {
+	declared, ok := s.workspaceDeclarationAt(snapshot, uri, position)
+	if !ok {
+		return dedupeLocations(local)
+	}
+	return dedupeLocations(append(local, s.workspaceReferenceLocations(declared, includeDeclaration)...))
+}
+
 func dedupeLocations(locations []lsp.Location) []lsp.Location {
 	if len(locations) == 0 {
 		return nil
@@ -1703,10 +1730,6 @@ func dedupeLocations(locations []lsp.Location) []lsp.Location {
 
 func locationKey(location lsp.Location) string {
 	return fmt.Sprintf("%s:%d:%d:%d:%d", location.URI, location.Range.Start.Line, location.Range.Start.Character, location.Range.End.Line, location.Range.End.Character)
-}
-
-func formatDocumentText(input string) string {
-	return normalizeDocumentWhitespace(input)
 }
 
 func fullDocumentRange(text string) lsp.Range {

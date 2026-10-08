@@ -128,7 +128,7 @@ func (vm *VM) hoFilter(args []object.Object) (object.Object, error) {
 		if err != nil {
 			return nil, err
 		}
-		if isTruthy(r) {
+		if object.IsTruthy(r) {
 			out = append(out, el)
 		}
 	}

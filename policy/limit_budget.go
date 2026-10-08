@@ -131,9 +131,6 @@ var LimitBudget = map[string][]string{
 	"builtin/ledger_redact.go": {
 		"N1 package level: ledgerReasonLeakMin = 4",
 	},
-	"builtin/lua.go": {
-		"L3 runLuaSource: 5*time.Second",
-	},
 	"builtin/memory_forensics.go": {
 		"L8 MemMap: 4096",
 		"L7 MemStrings: int64(4)",
@@ -141,13 +138,8 @@ var LimitBudget = map[string][]string{
 	"builtin/mft_builtins.go": {
 		"L4 reconstructMFTPaths: 256",
 	},
-	"builtin/mitm_http.go": {
-		"N1 package level: maxHTTPBodyBytes = 32 << 20",
-	},
 	"builtin/net.go": {
-		"L2 NetBanner: 4096",
 		"L3 NetDNSQuery: 5*time.Second",
-		"L8 NetCaptureRaw: 1_000_000",
 	},
 	"builtin/plist_builtins.go": {
 		"L4 parseObject: 100",
@@ -217,7 +209,6 @@ var LimitBudget = map[string][]string{
 	"global/const.go": {
 		"N1 package level: StackSize = 2048",
 		"N1 package level: GlobalSize = 65536",
-		"N1 package level: MaxFrames = 2048",
 	},
 	"lsp/internal/analyzer/fn_solver.go": {
 		"L5 solveFunctionParams: 8",
@@ -277,6 +268,6 @@ var LimitBudget = map[string][]string{
 	"vm/vm.go": {
 		"N1 package level: initialStackCapacity = global.StackSize",
 		"N1 package level: initialGlobalsCapacity = global.GlobalSize",
-		"N1 package level: initialFrameCapacity = global.MaxFrames",
+		"N1 package level: initialFrameCapacity = 2048",
 	},
 }

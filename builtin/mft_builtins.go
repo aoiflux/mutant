@@ -193,7 +193,37 @@ func mftRowFromEntry(e *libntfs.MFTEntry, recordNum uint64) mftRow {
 		row.size = fn.RealSize
 		row.allocated = fn.AllocatedSize
 	}
+	// The size is the file's default $DATA stream's wherever this record holds
+	// the start of it. $FILE_NAME carries a copy that NTFS updates lazily, and it
+	// is routinely stale and often zero, so a file's size -- and the length a
+	// recovery of a deleted one is cut to -- came from a figure the filesystem
+	// does not keep current (M26-FS2-002). A stream whose first extent lives in
+	// another record leaves the $FILE_NAME figure, the only one this record has.
+	if data := mftDefaultDataStream(e); data != nil {
+		switch {
+		case data.Resident != nil:
+			row.size = uint64(data.Resident.ValueLength)
+		case data.NonResident != nil && data.NonResident.StartingVCN == 0:
+			row.size, row.allocated = data.NonResident.RealSize, data.NonResident.AllocatedSize
+		}
+	}
 	return row
+}
+
+// mftDefaultDataStream returns a record's unnamed $DATA attribute, or nil. It
+// does not fall back to a named one, as libntfs's FindPrimaryDataAttribute does
+// for reading: a file's size is its default stream's, and an alternate data
+// stream's size in its place would be a different file's worth of bytes.
+func mftDefaultDataStream(e *libntfs.MFTEntry) *libntfs.Attribute {
+	for _, attr := range e.FindAllAttributes(libntfs.AttrTypeData) {
+		switch {
+		case attr.Resident != nil && attr.Resident.Name == "":
+			return attr
+		case attr.NonResident != nil && attr.NonResident.Name == "":
+			return attr
+		}
+	}
+	return nil
 }
 
 func (r mftRow) toHash(fullPath string) object.Object {
