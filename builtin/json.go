@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -83,7 +84,14 @@ func decodeJSONDocument(text string) (any, error) {
 		return nil, err
 	}
 	switch token, err := decoder.Token(); {
-	case err == io.EOF:
+	// errors.Is rather than ==, matching security/json_tail.go. Go 1.26
+	// carries two encoding/json engines and the newer one wraps Token()'s
+	// errors, so a bare comparison here would read a genuine end of input
+	// as a tail and refuse every well-formed document the day somebody
+	// builds with it. The two implementations of this one rule are held to
+	// each other by TestTheTwoRepeatedKeyReadersAgree; this is the other
+	// half of the same hazard.
+	case errors.Is(err, io.EOF):
 		return value, nil
 	case err != nil:
 		return nil, err

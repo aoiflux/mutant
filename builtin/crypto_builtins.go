@@ -41,6 +41,17 @@ func decodeJSONToObject(data []byte, what string) (object.Object, error) {
 	if err := security.RefuseTrailingContent(dec, what); err != nil {
 		return nil, err
 	}
+
+	// A repeated name is the same fault as a tail and reaches the same field:
+	// `{"alg":"none","alg":"HS256"}` is read as the last copy here and as the
+	// first by a reader that keeps the first, over the identical signed token,
+	// and alg is what decides whether a signature is checked at all. A
+	// separate row from the tail this sits under: M26-BLT-025 is two
+	// documents in one segment, this is two names in one document, and
+	// each needs its own check (M26-BLT-027).
+	if err := security.RefuseRepeatedKeys(data, what); err != nil {
+		return nil, err
+	}
 	return jsonValueToObject(v)
 }
 

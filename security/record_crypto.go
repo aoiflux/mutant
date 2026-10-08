@@ -1542,6 +1542,14 @@ func ParseCaseKeyFile(data []byte) (*CaseKeyFile, error) {
 	if err := RefuseTrailingContent(decoder, "the case key file"); err != nil {
 		return nil, fmt.Errorf("this key file is not verified: %w", err)
 	}
+
+	// DisallowUnknownFields does not catch a name that is simply there
+	// twice -- the name is known. CanonicalFile() rebuilds the authenticated
+	// bytes from the decoded struct, so the copy the decoder dropped is a byte
+	// neither the file MAC nor the signature ever sees (M26-CUS-032).
+	if err := RefuseRepeatedKeys(data, "the case key file"); err != nil {
+		return nil, fmt.Errorf("this key file is not verified: %w", err)
+	}
 	if f.Format != CaseKeyFileFormat {
 		return nil, fmt.Errorf("this is not a case key file: its format is %q", f.Format)
 	}

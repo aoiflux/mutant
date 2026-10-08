@@ -10,17 +10,34 @@ import (
 // RefuseTrailingContent reports whether anything but whitespace follows the
 // document a decoder has just read.
 //
-// A file this build verifies holds one document. Of the eleven json.NewDecoder
-// sites in this tree, seven decoded the first value and stopped without looking
-// further, and four asked Decoder.More(); bytes past the first value were
-// therefore never looked at, never hashed and never covered by the signature
-// the verifier went on to report as holding. The file was reported verified,
-// and a second document sitting behind the first was what the reader believed
-// they had checked. Four of the seven read a sealed or signed document and are
-// fixed through this function (M26-CUS-026), as are the three of the four that
-// read one and asked More(), for the reason below. The remaining four are
-// general-purpose parsers rather than verifiers: json_parse and ndjson_parse
-// are M26-DAT-017's, and jwt_decode and reg_open claim no verification.
+// A file this build verifies holds one document. Bytes past the first value
+// were never looked at, never hashed and never covered by the signature the
+// verifier went on to report as holding: the file was reported verified, and a
+// second document sitting behind the first was what the reader believed they
+// had checked (M26-CUS-026, and the four rows the same sweep raised).
+//
+// Ten json.NewDecoder sites in this tree read a document -- ten, and not the
+// eleven this comment used to claim, because the eleventh grep hit was this
+// sentence. Nine of the ten ask this function. The tenth is json_parse in
+// builtin/json.go, which has the same rule a token at a time in its own loop
+// and cannot call this one: json_parse is on the macro-safety allowlist, and
+// the purity walk that guards it is default-deny on packages, with
+// mutant/security named as exactly the hop it exists to refuse. That half is
+// M26-DAT-017's. builtin/format_text.go is not among the ten at all --
+// ndjson_parse reads its stream a line at a time and constructs no
+// json.Decoder -- which this comment also used to have wrong.
+//
+// Two of the nine verify nothing. jwt_decode and reg_open were routed through
+// this function because reading part of a file and reporting on all of it is
+// the same wrong wherever it happens, not because either claims a signature.
+// So the sentence the message below ends with -- that a file this build
+// VERIFIES holds one document -- is wrong at those two sites. Correcting it
+// means the message taking its closing wording from the caller instead of
+// assuming one, which is a change of its own and has no row yet.
+//
+// RefuseRepeatedKeys in json_keys.go is this function's sibling: the same rule
+// about the same documents, for the copy of a repeated name that the decoder
+// drops and the rebuilt canonical form therefore never covers (M26-CUS-032).
 //
 // `what` names the thing being read, in the lower case of a sentence's middle
 // -- "the case manifest", "the grant file" -- because the message is built

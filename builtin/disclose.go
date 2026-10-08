@@ -1074,6 +1074,13 @@ func DiscloseVerify(args ...object.Object) object.Object {
 	if err := security.RefuseTrailingContent(decoder, "the disclosure manifest"); err != nil {
 		return resultAndError(nil, newError("%s: %s is not verified: %s", op, manifestPath, err.Error()))
 	}
+
+	// The same rebuild through the same custodyCanonical, so the same forgery:
+	// a second copy of a field in front of the real one is a value the seal
+	// does not cover (M26-CUS-032).
+	if err := security.RefuseRepeatedKeys(raw, "the disclosure manifest"); err != nil {
+		return resultAndError(nil, newError("%s: %s is not verified: %s", op, manifestPath, err.Error()))
+	}
 	if stringField(manifest, "format") != discloseManifestFormat {
 		return resultAndError(nil, newError("%s: %s is not a disclosure manifest; its format is %q", op,
 			manifestPath, stringField(manifest, "format")))

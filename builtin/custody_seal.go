@@ -307,6 +307,18 @@ func custodyManifestDocument(op, path string) (map[string]any, *object.Error) {
 		return nil, newError("%s: %s is not verified: %s", op, path, err.Error())
 	}
 
+	// The seal covers custodyCanonical's rebuild of what the decoder kept,
+	// and encoding/json keeps the LAST of two identically-named fields. So a
+	// second copy of any field, inserted in front of the real one, is a value
+	// a reader sees and no hash and no signature covers. Measured as a working
+	// forgery against a manifest this program sealed and signed itself: 98
+	// honest bytes and 119 forged ones produced the identical canonical form,
+	// the identical digest, and one signature that verified over both
+	// (M26-CUS-032).
+	if err := security.RefuseRepeatedKeys(raw, "the manifest"); err != nil {
+		return nil, newError("%s: %s is not verified: %s", op, path, err.Error())
+	}
+
 	if _, ok := document["seal"].(map[string]any); !ok {
 		return nil, newError("%s: %s has no seal; it was not written by `case_write`", op, path)
 	}

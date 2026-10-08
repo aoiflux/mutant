@@ -95,6 +95,14 @@ var pureMembers = map[string][]string{
 	// Formatting only. Print and Fprint reach a stream.
 	"fmt": {"Sprintf", "Sprint", "Sprintln", "Errorf"},
 
+	// errors.Is only, and only for comparing against io.EOF in json_parse's
+	// one-value check. It is named rather than the package taken whole
+	// because Is walks the error's Unwrap chain, which is interface dispatch
+	// this walk cannot follow: the entry is sound only while every error an
+	// allowlisted builtin asks about is one the standard library made, which
+	// for a json.Decoder's Token() it is.
+	"errors": {"Is"},
+
 	// time formats and computes here; reading the clock is refused, and the
 	// builtins that do it are not on the allowlist.
 	"time": {

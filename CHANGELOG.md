@@ -1686,6 +1686,31 @@ exhaustive lists.
 
 ### Security
 
+- **A field named twice in a sealed document was authenticated away.** `encoding/json` keeps the
+  last of two identically-named fields and drops the first without a word, and four readers in this
+  tree authenticate a document over a canonical form they rebuild from what the decoder kept — so a
+  second copy of any field, inserted in front of the real one, was a value a reader saw and that no
+  hash and no signature covered. Measured rather than argued: a probe replicating
+  `case_manifest_verify`'s decoder settings and its canonical rebuild field for field signed an
+  honest 98-byte manifest with Ed25519, and that one signature verified against a forged 119-byte
+  file — both produced the identical canonical bytes and the identical SHA-256, so the digest
+  matched, the signature held, and the verifier reported the file verified. `DisallowUnknownFields`
+  does not catch it: the name is known, it is simply there twice. The four readers are the case
+  manifest, the disclosure manifest, the case key file and the grant file, and each now refuses
+  such a document as a verification failure, naming the field and the byte its second spelling ends
+  at. The canonical form itself is deliberately unchanged, so every document this build has already
+  sealed still verifies. `jwt_decode` had the same fault without a seal under it: a header spelled
+  `{"alg":"none","alg":"HS256"}` was read here as the last copy and by a library that keeps the
+  first as the other, over the identical signed token, and `alg` is the field that decides whether a
+  signature is checked at all. Both of its segments refuse a repeated name now, which RFC 7519
+  permits a parser to do. Nothing a JSON encoder emits is refused by any of this — no encoder writes
+  a member name twice — and the one shape this build itself writes, a manifest whose `fields` array
+  names a field that is also a key, still verifies and is held to that by a test. One more line
+  changed with them and nothing about it is visible today: `json_parse`'s own end-of-input check
+  compared a sentinel with `==`, which the newer of Go 1.26's two `encoding/json` engines would read
+  as a trailing document and refuse every well-formed file; it asks `errors.Is` now, as the shared
+  check beside it already did. (M26-CUS-032, M26-BLT-027)
+
 - **A file this build verifies holds one document, and every parser now reads all of it.** Nine
   parsers decoded the first JSON document in a file and stopped. Bytes after it were never looked
   at, never hashed and never covered by the signature the verifier went on to report as holding —

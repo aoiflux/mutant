@@ -697,6 +697,13 @@ func ParseGrantFile(data []byte) (*GrantFile, error) {
 	if err := RefuseTrailingContent(decoder, "the grant file"); err != nil {
 		return nil, fmt.Errorf("this grant file is not verified: %w", err)
 	}
+
+	// canonical() rebuilds the authenticated bytes field by length-prefixed
+	// field, so a repeated name is a byte nothing in the grant covers, in the
+	// case key file's manner (M26-CUS-032).
+	if err := RefuseRepeatedKeys(data, "the grant file"); err != nil {
+		return nil, fmt.Errorf("this grant file is not verified: %w", err)
+	}
 	if f.Format != GrantFileFormat {
 		return nil, fmt.Errorf("this is not a grant file: its format is %q", f.Format)
 	}
