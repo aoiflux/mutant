@@ -506,3 +506,79 @@ func TestOnlyReleaseIsDocumentedAsStrippingDebugInfo(t *testing.T) {
 		t.Errorf("%s calls StripDebugInfo %d time(s) but only %d are guarded by stripDebug. %s says release is the only build that strips, so either the guard comes back or the document changes", gen, calls, guarded, doc)
 	}
 }
+
+// The 30-minute tutorial installs in section 1 and runs `mutant release` in
+// section 7, and those two have to agree. A binary from a plain `go build` or
+// `go install` embeds no runtime assets -- .gitignore keeps releaseassets/data/
+// out of the repository and un-ignores only placeholder.bin -- so the release
+// step fails on it, which made the page contradict its own promise that
+// "Everything below is a command that was run and an output that came back"
+// (M26-DOC1-003).
+//
+// This is conditional on purpose. The page is only held to the build script for
+// as long as it asks the reader to run `mutant release`; drop that section and
+// the install step is free to be the shortest thing that works again.
+func TestTutorialInstallsTheWayItsOwnReleaseStepNeeds(t *testing.T) {
+	const doc = "docs/TUTORIAL_30_MIN.md"
+	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+
+	if !strings.Contains(text, "mutant release") {
+		return
+	}
+
+	start := strings.Index(text, "## 1.")
+	if start < 0 {
+		t.Fatalf("%s has no section 1, so there is no install step to check", doc)
+	}
+	end := strings.Index(text[start:], "\n## ")
+	if end < 0 {
+		t.Fatalf("%s section 1 never ends, so the install step cannot be isolated", doc)
+	}
+	install := text[start : start+end]
+
+	if !strings.Contains(install, "scripts/build.sh") {
+		t.Errorf("%s runs `mutant release` but its install step does not use scripts/build.sh. A binary built any other way has no embedded runtime assets, so that release step fails and the page shows output it cannot produce.", doc)
+	}
+
+	// A line that is nothing but `go install` or `go build ./...` is the install
+	// path that cannot work here. Matched whole, so that `go install
+	// golang.org/dl/go1.26.6@latest` -- which is advice about the toolchain, not
+	// about installing mutant -- does not trip it.
+	for _, line := range strings.Split(install, "\n") {
+		switch strings.TrimSpace(line) {
+		case "go install", "go install .", "go install ./...", "go build ./...", "go build .":
+			t.Errorf("%s installs with %q, and a binary built that way refuses the `mutant release` step this page goes on to show. Use the build script, or stop showing release.", doc, strings.TrimSpace(line))
+		}
+	}
+}
+
+// The other half of the same defect, kept beside it: the error a reader reaches
+// when they install the wrong way has to name the way out. The branch that
+// fires is the one for an asset the embed does not hold, and it used to say
+// only that the asset was "invalid" -- while the message that did name a remedy
+// sat on a branch no reader could reach, because the manifest is committed and
+// complete. releaseassets/assets_runtime_test.go checks the messages
+// themselves; this checks that the split still exists at all, so that a later
+// simplification back to one message is reported here rather than discovered by
+// someone following this page.
+func TestMissingAssetErrorDistinguishesAbsentFromCorrupt(t *testing.T) {
+	const src = "releaseassets/assets_runtime.go"
+	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+
+	if !strings.Contains(body, "errors.Is(err, fs.ErrNotExist)") {
+		t.Errorf("%s no longer separates an asset that was never embedded from one that is corrupt. Those have different remedies, and the first is what a plain `go build` produces.", src)
+	}
+	for _, want := range []string{"mutant gen assets", "scripts/build.sh"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s no longer names %q in any failure message, so a reader who built the wrong way is told what is wrong and not what to do.", src, want)
+		}
+	}
+}

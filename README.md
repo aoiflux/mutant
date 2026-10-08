@@ -36,7 +36,7 @@ Official binaries are available in this repository's release section
 Pre-Installation: Download & Install [GoLang](https://golang.org/)
 
 ```bash
-git clone https://github.com/gaurav-gogia/mutant
+git clone https://github.com/aoiflux/mutant
 cd mutant
 go install
 ```

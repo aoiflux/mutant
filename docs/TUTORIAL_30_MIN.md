@@ -23,16 +23,43 @@ it — the surprises are where the half-hour actually goes.
 
 ## 1. Install, and the first surprise
 
-Clone and install:
+Clone and build:
 
 ```bash
 git clone https://github.com/aoiflux/mutant
 cd mutant
-go build ./...
-go install
+./scripts/build.sh --host-only --no-wasm-repl
 ```
 
-That puts `mutant` on your `PATH`. Check it:
+On Windows, the same build in PowerShell:
+
+```powershell
+.\scripts\build.ps1 -HostOnly -WasmRepl:$false
+```
+
+**Not `go install`.** It is the obvious thing to type, and it does produce a
+working `mutant` — which is exactly why it is worth saying plainly that it is
+not enough. Section 7's `mutant release` needs a set of embedded runtime
+binaries that the build script generates and that a plain `go build` has no
+way to produce, so a `go install` binary refuses that last step.
+
+Give it about ten minutes. Almost all of that is generating those runtime
+binaries, one for each of the seven platforms you could later release to, and
+`--host-only` does not shorten it: that flag narrows the final build, not the
+runtimes. Nothing needs watching, so section 2 is worth reading while it runs.
+
+The script also holds you to the Go version `go.mod` names, and refuses any
+other rather than building something the project was never tested against. If
+your `go` is a different version it says so, and says what to pass instead.
+
+The binary lands in `dist/`, named for the platform it was built for. Put it
+on your `PATH` under the name the rest of this page uses:
+
+```bash
+cp dist/mutant-linux-amd64 ~/.local/bin/mutant   # or anywhere on PATH
+```
+
+Check it:
 
 ```bash
 $ mutant --version

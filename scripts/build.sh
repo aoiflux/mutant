@@ -120,9 +120,47 @@ ps_quote() {
   printf "'%s'" "$value"
 }
 
+# A POSIX path means nothing to PowerShell, and the three shells this script
+# runs under spell the same drive three ways: Git Bash and MSYS2 use /o/...,
+# WSL uses /mnt/o/..., and a native shell already has O:. Converting only the
+# WSL form left run_tool handing PowerShell '/o/project/mutant/dist/...',
+# which it reported as a command it could not find -- so build.sh could not
+# finish on Windows in Git Bash (M26-TOOL-041).
 to_windows_path() {
   local value="$1"
+
+  # Only an absolute POSIX path needs converting. A flag, a relative path or
+  # an already-Windows path is passed through untouched, which is what keeps
+  # arguments like --release-assets and -out intact.
+  if [[ "$value" != /* ]]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+
+  # WSL mounts Windows drives under /mnt/<letter>. This is matched before
+  # cygpath because under Git Bash `cygpath -w /mnt/o/x` resolves /mnt
+  # against the MSYS root and answers wrongly rather than failing, which
+  # would leave the wrong path unnoticed.
   if [[ "$value" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
+    local drive="${BASH_REMATCH[1]^^}"
+    local rest="${BASH_REMATCH[2]//\//\\}"
+    printf '%s:\%s\n' "$drive" "$rest"
+    return 0
+  fi
+
+  # cygpath ships with Git for Windows and MSYS2 and knows the real mapping,
+  # including a drive mounted somewhere other than /<letter> and a subst'd
+  # drive, neither of which a pattern can work out.
+  if command -v cygpath >/dev/null 2>&1; then
+    local converted
+    if converted="$(cygpath -w -- "$value" 2>/dev/null)" && [[ -n "$converted" ]]; then
+      printf '%s\n' "$converted"
+      return 0
+    fi
+  fi
+
+  # Git Bash and MSYS2 without cygpath put the drives at /<letter>.
+  if [[ "$value" =~ ^/([a-zA-Z])/(.*)$ ]]; then
     local drive="${BASH_REMATCH[1]^^}"
     local rest="${BASH_REMATCH[2]//\//\\}"
     printf '%s:\%s\n' "$drive" "$rest"
