@@ -125,7 +125,7 @@ func TestTheRecordDisclosureExampleRunsEndToEnd(t *testing.T) {
 		`fs_write: argument 2 holds 31 bytes of plaintext read from record`,
 		`classified "open" and "pii"`,
 		// The recipient's side.
-		"checks passed: 11 of 11",
+		"checks passed: 12 of 12",
 		"verified with no root: false",
 		"finding: ledger_inclusion:",
 		"counsel reads the record with 178 of 1471 bytes withheld",

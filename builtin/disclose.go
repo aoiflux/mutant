@@ -1067,7 +1067,7 @@ func DiscloseVerify(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("%s: %s is not a disclosure manifest: %s", op, manifestPath, err.Error()))
 	}
 	// Refused beside the format and the version checks, before any of the
-	// eleven. A finding would have been the wrong shape: every other finding
+	// twelve. A finding would have been the wrong shape: every other finding
 	// here is about the package the manifest describes, and this one is about
 	// which bytes the manifest is. A package whose manifest carried a second
 	// copy of itself passed all eleven (M26-CUS-026).
@@ -1169,6 +1169,14 @@ func (v *discloseVerification) checkFiles() {
 	files, _ := v.manifest["files"].([]any)
 	if len(files) == 0 {
 		v.add("files", false, "the manifest lists no files")
+		// Read the directory even here -- especially here. A manifest that
+		// vouches for nothing is the case where what the package actually
+		// holds matters most, and reading it keeps checks_run constant: a
+		// count that moved with the failure mode would make "11 of 12
+		// passed" unreadable, and a constant count is what
+		// disclose_bounds_test.go pins. A manifest that lists no files
+		// still vouches for itself, so that is the whole vouched set.
+		v.checkPackageContents(map[string]string{discloseManifestName: ""})
 		return
 	}
 	want := map[string]string{}
@@ -1195,29 +1203,126 @@ func (v *discloseVerification) checkFiles() {
 			problems = append(problems, name+" is not listed in the manifest")
 		}
 	}
-	// SHA256SUMS is the convenience on top, and it is checked to agree: a
-	// checksum file that disagrees with the manifest it sits beside is a
-	// package somebody assembled from two different ones.
+	// SHA256SUMS is the convenience on top, and it is checked to agree -- which
+	// has to mean every line, in both directions, and not only where the two
+	// already name the same file.
+	//
+	// It used to be compared under `if expected, listed := want[name]; listed &&
+	// ...`, so the comparison covered the overlap alone. A line naming a file
+	// the manifest does not list was skipped in silence, a manifest entry with
+	// no line at all was never missed, and a SHA256SUMS listing entirely
+	// different files agreed trivially because the overlap was empty. The
+	// comment above it claimed the guarantee the code did not provide
+	// (M26-REC-029).
+	//
+	// vouched is `want` plus one entry the manifest cannot carry: its own. A
+	// manifest cannot list its own digest, so SHA256SUMS legitimately holds one
+	// line more than the manifest does, and that line is compared against the
+	// manifest file as it sits on disk. That is both the stronger check and what
+	// makes it possible to require every OTHER line to be named in the manifest
+	// -- requiring it of all of them, with nothing standing for the manifest,
+	// would reject every package this build has ever written.
+	vouched := make(map[string]string, len(want)+1)
+	for name, digest := range want {
+		vouched[name] = digest
+	}
+	if got, err := custodyHashFile(filepath.Join(v.dir, discloseManifestName), "sha256"); err != nil {
+		problems = append(problems, fmt.Sprintf("%s cannot be read to hash it: %s",
+			discloseManifestName, err.Error()))
+	} else {
+		vouched[discloseManifestName] = got
+	}
+
 	if sums, err := disclosureReadBounded(filepath.Join(v.dir, discloseChecksumsName), 1<<20); err != nil {
 		problems = append(problems, "SHA256SUMS cannot be read: "+err.Error())
 	} else {
+		listed := make(map[string]bool, len(vouched))
 		for _, line := range strings.Split(strings.TrimSpace(string(sums)), "\n") {
 			fields := strings.SplitN(strings.TrimRight(line, "\r"), "  ", 2)
 			if len(fields) != 2 {
 				problems = append(problems, fmt.Sprintf("SHA256SUMS line %q is not a checksum line", line))
 				continue
 			}
-			if expected, listed := want[fields[1]]; listed && expected != fields[0] {
+			digest, name := fields[0], fields[1]
+			listed[name] = true
+			switch expected, ok := vouched[name]; {
+			case !ok:
+				problems = append(problems, fmt.Sprintf("SHA256SUMS names %s, which the manifest does "+
+					"not list, so nothing in this package vouches for it", name))
+			case expected != digest:
 				problems = append(problems, fmt.Sprintf("SHA256SUMS gives %s for %s and the manifest gives %s",
-					fields[0], fields[1], expected))
+					digest, name, expected))
 			}
 		}
+		// The other direction. Sorted, so the same package always reports the
+		// same sentence: a detail that moves between runs reads as two different
+		// findings to whoever is comparing them.
+		missing := make([]string, 0, len(vouched))
+		for name := range vouched {
+			if !listed[name] {
+				missing = append(missing, name)
+			}
+		}
+		sort.Strings(missing)
+		for _, name := range missing {
+			problems = append(problems, fmt.Sprintf("%s has no line in SHA256SUMS", name))
+		}
 	}
+
+	// The verdict on the two lists, before the directory is read, so that the
+	// checks come out in the order they were made. There is no early return
+	// here: a package can have both a digest that does not match AND a file
+	// nothing vouches for, and returning on the first would tell a recipient
+	// about one of them and leave the directory unread.
 	if len(problems) > 0 {
 		v.add("files", false, strings.Join(problems, "; "))
-		return
+	} else {
+		v.add("files", true, fmt.Sprintf("all %d files the manifest names hash to the digests it gives, "+
+			"and SHA256SUMS names those and the manifest and nothing else", len(want)))
 	}
-	v.add("files", true, fmt.Sprintf("all %d files hash to the digests the manifest names", len(want)))
+
+	// And the directory itself, which nothing used to read.
+	v.checkPackageContents(vouched)
+}
+
+// checkPackageContents is the half nothing used to do: read the directory. A
+// package is the files the manifest vouches for, the manifest itself, and a
+// SHA256SUMS over those; anything else is something a third party put there, and
+// a verification that called such a package verified would be saying more than
+// it checked.
+//
+// Its own check rather than part of `files` so that what a recipient reads says
+// what is actually the case -- there is a file here nothing vouches for --
+// instead of reading as a digest that did not match. A directory entry is
+// reported whether it is a file or a directory: this build writes a package into
+// an empty directory of its own and puts nothing nested in it.
+//
+// Only the KEYS of vouched are read. What a digest ought to be is the `files`
+// check's business; what is in the directory at all is this one's. It is a
+// method rather than the tail of checkFiles so that the early return above --
+// a manifest that lists no files -- can reach it too.
+func (v *discloseVerification) checkPackageContents(vouched map[string]string) {
+	if entries, err := os.ReadDir(v.dir); err != nil {
+		v.add("package_contents", false, fmt.Sprintf("%s cannot be listed: %s", v.dir, err.Error()))
+	} else {
+		extra := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			name := entry.Name()
+			if _, ok := vouched[name]; ok || name == discloseChecksumsName {
+				continue
+			}
+			extra = append(extra, name)
+		}
+		sort.Strings(extra)
+		if len(extra) > 0 {
+			v.add("package_contents", false, fmt.Sprintf("%s holds entries that are neither the manifest, "+
+				"nor a file the manifest names, nor SHA256SUMS, so nothing in this package vouches "+
+				"for them: %s", v.dir, strings.Join(extra, ", ")))
+		} else {
+			v.add("package_contents", true, fmt.Sprintf("the directory holds %d entries and every one of "+
+				"them is the manifest, a file the manifest names, or SHA256SUMS", len(entries)))
+		}
+	}
 }
 
 func (v *discloseVerification) checkRecord() {

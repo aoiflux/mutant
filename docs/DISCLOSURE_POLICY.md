@@ -683,21 +683,22 @@ examiner sends the root by another route, and `disclose_verify(dir, null)` is a
 finding, never a pass.
 
 **What `disclose_verify` runs**, each as its own reported check: the manifest's
-seal and signature; every file's digest and the checksum file beside them; the
-record's signature, with no key; that the grant names this disclosure and this
-record, and describes its header exactly; complete-as-authorised -- the grant
-opens exactly the segments whose class the view names, and the withheld list is
-every other segment; with the passphrase, that every granted segment decrypts
-with its tag holding; against the supplied root, that the ledger holds this
-disclosure property for property; and that what the ledger holds is this
-package -- the recipient, examiner and view the manifest states, and the record
-and grant files themselves by digest, uid, runs and descriptors root. The last
-is what stops a genuine package being relabelled for someone else, or given
-another disclosure's grant, and re-signed with any key: the manifest's signature
-holds over whatever its key signed, so the result also names that key
-(`manifest_public_key`, and the record's `record_public_key`) for the recipient
-to compare with one they already trust. `verified` is true only when all of them
-ran and passed.
+seal and signature; every file's digest and the checksum file beside them; that
+the directory holds nothing but the manifest, the files it names and that
+checksum file; the record's signature, with no key; that the grant names this
+disclosure and this record, and describes its header exactly;
+complete-as-authorised -- the grant opens exactly the segments whose class the
+view names, and the withheld list is every other segment; with the passphrase,
+that every granted segment decrypts with its tag holding; against the supplied
+root, that the ledger holds this disclosure property for property; and that
+what the ledger holds is this package -- the recipient, examiner and view the
+manifest states, and the record and grant files themselves by digest, uid, runs
+and descriptors root. The last is what stops a genuine package being relabelled
+for someone else, or given another disclosure's grant, and re-signed with any
+key: the manifest's signature holds over whatever its key signed, so the result
+also names that key (`manifest_public_key`, and the record's
+`record_public_key`) for the recipient to compare with one they already trust.
+`verified` is true only when all of them ran and passed.
 
 **A grant is sealed under a passphrase, and under nothing else.** That is the
 owner's decision (2026-09-23), not a gap left for later: there is no
