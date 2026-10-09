@@ -1164,12 +1164,21 @@ or post simply emits nothing for those phases.
 type LoopContext struct {
     breakPositions    []int   // byte offsets of OpJump instructions from break
     continuePositions []int   // byte offsets of OpJump instructions from continue
+    pendingAtEntry    int     // operands the enclosing expressions held at entry
 }
 ```
 
 When `break` or `continue` is encountered:
 
-- Emit `OpJump 9999` (placeholder).
+- Emit one `OpPop` for every operand the enclosing expressions have pushed
+  since the loop was entered — `c.pendingOperands - ctx.pendingAtEntry` of
+  them. Each target a break or a continue can reach reads the stack at the
+  depth the loop was entered with, so a jump out of the middle of an
+  expression has to drop that expression's operands on the way out. Without
+  the pops, `let t = [0, if (c) { break; } else { 1 }];` leaves the array's
+  first element behind and the `OpPop` meant for a for-in's cursor takes it
+  instead.
+- Emit `OpJump 9999` (placeholder), after those pops.
 - Append the emitted position to `ctx.breakPositions` / `ctx.continuePositions`.
 
 After the loop body and post-increment are fully compiled:

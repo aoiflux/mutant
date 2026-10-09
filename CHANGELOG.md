@@ -859,6 +859,82 @@ exhaustive lists.
 
 ### Fixed
 
+- **A `break` or a `continue` reached from inside an expression no longer leaves
+  that expression's operands on the compiler's stack, and the compiler no longer
+  emits a jump that nothing resolves.** Three defects in the same lines of
+  `compiler/compiler.go`, landing together because separating them would mean
+  writing the same statements twice.
+
+  The first is the companion to the evaluator fix below, and the shape is the
+  same: a block is a value, so a `break` can be reached from somewhere a larger
+  expression was being assembled. The compiler emitted a bare jump. The operands
+  already pushed for that expression -- an infix left operand, the elements of an
+  array written so far, a callee and the arguments ahead of this one, a
+  container and an index waiting for a store -- were left behind, and every
+  target a jump can reach expects the stack at the depth the loop was entered
+  with. In a `for…in` the pop meant for the loop's cursor took a leaked value
+  instead, the cursor stayed put, and the next advance read whatever had piled on
+  top of it.
+
+  The compiler now counts what an expression holds across a nested compile, at
+  the fourteen places that hold anything, and a `break` or a `continue` drops
+  exactly its own operands before it jumps. The count is per loop, not absolute,
+  because a loop can sit inside an expression itself: `[0, if (c) { for (v in
+  xs) { break; } 1 }]` enters its loop with a slot pending that belongs to the
+  array, and popping to zero there would steal it.
+
+  Measured. Of twenty-two programs that put a loop control statement in an
+  operand position, twenty were wrong before: eleven died with `loop cursor was
+  replaced on the stack`, which names a VM invariant rather than the program, and
+  **nine answered a plausible wrong number with no diagnostic at all** -- the
+  reported case iterated `[1, 2, 3]` and printed `[1]`. A twenty-first did not
+  terminate. The nine programs that were already correct -- a break with nothing
+  pending, the right operand of `&&`, a prefix operand, a closure's own loop --
+  are correct before and after, because over-popping is the quieter failure this
+  kind of fix invites: the slot it steals belongs to whatever contains the loop.
+  Outside a `for…in` the leak was entirely silent, and the stack-depth probe is
+  what shows it: the same program held 2 slots after 2 iterations and 60 after
+  60.
+
+  Nothing shipped changes. All 123 `.mut` programs under `examples/` compile to
+  byte-identical instruction streams before and after -- same length, same
+  constant count, same SHA-256 -- and the 14 that need the linker fail
+  identically on both sides. Since a pending operand would have shown up as an
+  extra `OpPop`, identical bytecode also proves no shipped example uses the
+  shape.
+
+  The second and third were found while rebasing the first, and both end in the
+  same instruction: `OpJump 9999`, the placeholder emitted before anything
+  resolves it, still there in the finished program. A `continue` in a counting
+  `for`'s step was never patched at all, because the back-patch runs before the
+  step is compiled. And a `break` in a step was patched in the wrong copy of a
+  slice: the patch read a pointer taken before the step, and a loop inside the
+  step grows `loopContexts` from one element to two, which reallocates it -- the
+  shallowest nesting there is, so there was no depth at which it was safe.
+
+  What an unresolved jump does is decided by the program's size rather than by
+  anything its author wrote, and all three outcomes were measured. Under 9999
+  bytes of instructions it runs off the end, the run is treated as finished, and
+  the program answers whatever was last popped: a boolean, for a program whose
+  value is an integer. Over 9999 bytes it decodes whatever that byte happens to
+  be, which reported `unknown opcode 225: the bytecode may be damaged or
+  decrypted with the wrong key, or it may have been built by a newer version of
+  mutant` -- three claims that were all false, for a mistake in a `for` header.
+  And when byte 9999 falls on an instruction boundary, the VM resumes in
+  unrelated code and does not come back.
+
+  A `break` in a step is legal and still means the loop ends. A `continue` there
+  is now refused, because no reading of it terminates: going on to the condition
+  skips the step that advances the loop, and jumping to the start of the step --
+  where every other `continue` in that loop is patched -- reaches the same
+  `continue` again. The sentence lives in `sema` and both engines raise it, so
+  one program cannot be refused in two wordings.
+
+  The engines now agree on all forty-two shapes in
+  `parity/expression_signal_parity_test.go`. The four it recorded as divergent
+  were the compiler's, and it named all four and refused to pass until they were
+  moved, which is what that table is for.
+
 - **A `break`, a `continue` or a `return` reached from inside an expression is
   no longer used as a value by the tree-walking engine.** A block is a value in
   this language -- `let v = if (c) { break; } else { 1 };` is ordinary source --
@@ -870,8 +946,7 @@ exhaustive lists.
 
   Measured over forty-two shapes across both engines. The tree-walker was wrong
   on twelve of thirteen loop-control shapes and five of seven `return` shapes.
-  Nine
-  surfaced as errors naming the control object as a type -- `type mismatch:
+  Nine surfaced as errors naming the control object as a type -- `type mismatch:
   INTEGER+BREAK`, `unknown operator: -BREAK`, `index operator not supported:
   ARRAY` -- which at least said something was wrong. **Thirteen answered an
   ordinary number with no diagnostic at all:** a `break` stored in an array, a

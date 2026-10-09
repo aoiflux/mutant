@@ -14,14 +14,18 @@ package parity
 // the loop or function it was meant for never saw it.
 //
 // Measured at a923a5c over these shapes: the evaluator was wrong on twelve of
-// thirteen loop-control shapes and on six of seven return shapes, three of each
-// SILENTLY -- a wrong number with no diagnostic. One did not terminate at all.
+// the thirteen loop-control shapes and on five of the seven return shapes.
+// Thirteen were SILENT -- a wrong number with no diagnostic -- ten of the
+// loop-control shapes and three of the return ones. One did not terminate at
+// all.
 //
-// The engines do not yet agree everywhere, and that is recorded here rather
-// than left out: vmAgrees marks each shape, and the test below fails if a
-// shape marked as still-divergent starts agreeing. M26-CMP-003 is the compiler
-// half, and when it lands it has to move those entries rather than discover
-// them.
+// Where the engines disagree is recorded here rather than left out: vmAgrees
+// marks each shape, and the test below fails if a shape marked as divergent
+// starts agreeing, so a fix has to move the entry rather than discover it. That
+// is what happened: the compiler half, M26-CMP-003, landed with the four
+// entries this table carried as divergent, and the test named all four and
+// refused to pass until they were moved. They now read vmAgrees: true and the
+// engines agree on all forty-two.
 
 import (
 	"strings"
@@ -198,20 +202,20 @@ var expressionSignalShapes = []signalShape{
 		name:     "continue from a hash value",
 		src:      `let n = 0; for (v in [1,2,3]) { let h = {"k": if (v == 2) { continue; } else { v }}; n = n + 1; } n;`,
 		want:     "INTEGER(2)",
-		vmAgrees: false,
+		vmAgrees: true,
 		silent:   true,
 	},
 	{
 		name:     "continue from a match arm, reached through an operand",
 		src:      `let score = 0; for (k in ["a","skip","b"]) { score = score + match (k) { "skip" => { continue; }, "a" => 1, _ => 2 }; } score;`,
 		want:     "INTEGER(3)",
-		vmAgrees: false,
+		vmAgrees: true,
 	},
 	{
 		name:     "continue binds to the innermost loop, from an operand",
 		src:      `let n = 0; for (a in [1,2]) { for (b in [1,2,3]) { n = n + (if (b == 2) { continue; } else { b }); } } n;`,
 		want:     "INTEGER(8)",
-		vmAgrees: false,
+		vmAgrees: true,
 	},
 
 	// ---- return, reached from an operand position ----
@@ -337,7 +341,7 @@ var expressionSignalShapes = []signalShape{
 		name:     "an array element after the first, inner loop breaking",
 		src:      `let out = []; for (a in [1,2,3]) { for (b in [10,20]) { let t = [0, if (b == 20) { break; } else { b }]; } out = push(out, a); } out;`,
 		want:     "ARRAY([1, 2, 3])",
-		vmAgrees: false,
+		vmAgrees: true,
 	},
 }
 
@@ -513,9 +517,13 @@ func TestASignalWithNoLoopLeftIsRefusedInTheCompilersWords(t *testing.T) {
 // same continue again. Both loop for ever. The evaluator was measured doing the
 // first, as a hang, so the shape is refused and sema owns the sentence.
 //
-// The compiler still accepts it and answers a boolean for a program whose value
-// is an integer -- its half of M26-CMP-003. When that lands this test gains the
-// compiler assertion; until then it asserts the one engine that has an answer.
+// The compiler used to accept it and answer a boolean for a program whose value
+// is an integer. That turned out to have a cause of its own rather than being
+// the same pending-operand defect: the continue back-patch in
+// compileForStatement runs before the post section is compiled, so the jump
+// kept the OpJump 9999 placeholder nothing had resolved -- M26-CMP-020. It now
+// refuses, and this test asserts both engines against the same sema function,
+// which is the point of putting the sentence there.
 func TestContinueInALoopStepIsRefusedRatherThanGivenAMeaning(t *testing.T) {
 	src := `let n = 0; for (let i = 0; i < 5; i = i + (if (i == 2) { continue; } else { 1 })) { n = n + 1; } n;`
 
@@ -538,11 +546,31 @@ func TestContinueInALoopStepIsRefusedRatherThanGivenAMeaning(t *testing.T) {
 		t.Errorf("refused in different words than sema owns:\n  got:  %s\n  want: %s", raised.Message, want)
 	}
 
+	// The compiler's half. It refuses at compile time, so there is no answer to
+	// compare -- what has to match is the sentence, because two engines refusing
+	// one program in two different wordings is its own defect.
+	complaint, refused := compilerComplaint(src)
+	if !refused {
+		t.Fatal("the compiler accepted a continue in a for's post section; it has no " +
+			"terminating reading, so both engines have to refuse it")
+	}
+	if want := sema.ContinueInLoopStepRefusal().Message; complaint != want {
+		t.Errorf("the compiler refused in different words than sema owns:\n  got:  %s\n  want: %s",
+			complaint, want)
+	}
+
 	// A break in the same position is NOT refused: it has exactly one meaning
 	// and both engines agree on it. The refusal has to be this narrow, or it
 	// would be a false flag on working code.
 	sound := `let n = 0; for (let i = 0; i < 5; i = i + (if (i == 2) { break; } else { 1 })) { n = n + 1; } n;`
 	if got := normalize(evalViaEvaluator(sound)); got != "INTEGER(3)" {
 		t.Errorf("a break in a post section answered %s, want INTEGER(3)", got)
+	}
+	vmAnswer, runErr := evalViaVM(t, sound)
+	if runErr != nil {
+		t.Fatalf("a break in a post section failed on the VM: %s", runErr)
+	}
+	if got := normalize(vmAnswer); got != "INTEGER(3)" {
+		t.Errorf("a break in a post section answered %s on the VM, want INTEGER(3)", got)
 	}
 }

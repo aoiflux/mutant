@@ -24,6 +24,21 @@ type Compiler struct {
 	enumDefinitions   map[string][]string          // Maps enum name to tag names
 	loopContexts      []LoopContext
 
+	// pendingOperands is how many stack slots the expressions being compiled
+	// right now have already pushed and still need: the left operand of an
+	// infix while its right is compiled, the elements of an array written so
+	// far, a callee and the arguments ahead of this one. compilePending is
+	// where it is kept, and its comment is the whole of the rule.
+	//
+	// It exists for `break` and `continue`. Both compile to a bare jump, and
+	// every target one of them can reach -- a loop's end, its head, its post
+	// section -- expects the stack at the depth the loop was entered with. A
+	// jump out of the middle of an expression used to leave that expression's
+	// operands behind, so the pop meant for a for-in's cursor took a leaked
+	// value instead and the cursor was still there to be read as the next
+	// one. This count is what tells such a jump how many slots to drop first.
+	pendingOperands int
+
 	// structLiteralDepth is how many struct literals are having their
 	// initialisers compiled inside one another right now. It is read only to
 	// key the scratch slots emitStructFieldsInSourceOrder spills a literal's
@@ -518,6 +533,20 @@ type scopeDebug struct {
 type LoopContext struct {
 	breakPositions    []int
 	continuePositions []int
+
+	// pendingAtEntry is pendingOperands as it stood when this loop was
+	// entered, which is the stack depth all of its jump targets expect.
+	//
+	// It is recorded rather than assumed to be zero because a loop can sit
+	// inside an expression itself: `[0, if (c) { for (v in xs) { break; } 1
+	// }]` compiles the loop with the array's first element already pushed,
+	// and that slot belongs to the array, not to the break.
+	pendingAtEntry int
+
+	// inLoopStep is set while a counting for's post section is compiled -- the
+	// step that advances the loop. A `continue` reached there is refused, and
+	// M26-CMP-020 is what it used to do instead.
+	inLoopStep bool
 }
 
 func New() *Compiler {
@@ -862,7 +891,8 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.Compile(node.Left); err != nil {
 			return err
 		}
-		if err := c.Compile(node.Right); err != nil {
+		// The left operand waits on the stack for the whole of the right one.
+		if err := c.compilePending(1, node.Right); err != nil {
 			return err
 		}
 		opcode, known := infixOpcode(node.Operator)
@@ -908,7 +938,8 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.Compile(node.Left); err != nil {
 			return err
 		}
-		if err := c.Compile(node.Index); err != nil {
+		// The container is on the stack under the index.
+		if err := c.compilePending(1, node.Index); err != nil {
 			return err
 		}
 		c.emit(code.OpIndex)
@@ -932,8 +963,9 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			c.emit(code.OpFalse)
 		}
 	case *ast.ArrayLiteral:
-		for _, element := range node.Elements {
-			if err := c.Compile(element); err != nil {
+		for i, element := range node.Elements {
+			// The elements before this one are on the stack waiting for OpArray.
+			if err := c.compilePending(i, element); err != nil {
 				return err
 			}
 		}
@@ -953,11 +985,14 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		// all distinct it still ran a key's and a value's side effects in
 		// alphabetical order rather than written order, which the tree-walking
 		// evaluator never did.
-		for _, pair := range node.Pairs {
-			if err := c.Compile(pair.Key); err != nil {
+		for i, pair := range node.Pairs {
+			// Keys and values alternate on the stack, so a pair's key sits above
+			// the pairs already written and its value one slot above that.
+			pending := 2 * i
+			if err := c.compilePending(pending, pair.Key); err != nil {
 				return err
 			}
-			if err := c.Compile(pair.Value); err != nil {
+			if err := c.compilePending(pending+1, pair.Value); err != nil {
 				return err
 			}
 		}
@@ -1150,8 +1185,10 @@ func (c *Compiler) compileNode(node ast.Node) error {
 			return nil
 		}
 
-		for _, expr := range returnExprs {
-			if err := c.Compile(expr); err != nil {
+		for i, expr := range returnExprs {
+			// The values ahead of this one are on the stack waiting for
+			// OpMultiValue.
+			if err := c.compilePending(i, expr); err != nil {
 				return err
 			}
 		}
@@ -1172,16 +1209,45 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if len(c.loopContexts) == 0 {
 			return sema.LoopControlRefusal("break")
 		}
-		jumpPos := c.emit(code.OpJump, 9999)
 		ctx := &c.loopContexts[len(c.loopContexts)-1]
+		// Before the jump rather than after it: the operands this break is
+		// abandoning have to be gone by the time control reaches the loop's
+		// end, where the pop that drops a for-in's cursor is waiting.
+		if err := c.emitPendingPops(ctx.pendingAtEntry); err != nil {
+			return err
+		}
+		jumpPos := c.emit(code.OpJump, 9999)
 		ctx.breakPositions = append(ctx.breakPositions, jumpPos)
 
 	case *ast.ContinueStatement:
 		if len(c.loopContexts) == 0 {
 			return sema.LoopControlRefusal("continue")
 		}
-		jumpPos := c.emit(code.OpJump, 9999)
 		ctx := &c.loopContexts[len(c.loopContexts)-1]
+		if ctx.inLoopStep {
+			// Refused because there is no target to jump to, not because the
+			// shape is unusual. Going on to the condition skips the step that
+			// advances the loop; jumping to the start of the step, which is
+			// where every other continue in this loop is patched, reaches this
+			// same continue again. Both loop for ever.
+			//
+			// M26-CMP-020 is what happened instead: the continue back-patch
+			// has already run by the time the step is compiled, so this jump
+			// kept its placeholder operand and the program answered a boolean,
+			// or blamed the bytecode for being damaged, or never came back.
+			//
+			// sema owns the sentence because the tree-walking evaluator
+			// refuses the same shape -- M26-EVL-025 -- and two engines
+			// refusing one program in two different wordings is its own defect.
+			return sema.ContinueInLoopStepRefusal()
+		}
+		// The head of a for-in and the post section of a for both read the
+		// stack the same way the loop end does, so a continue owes the same
+		// pops a break does.
+		if err := c.emitPendingPops(ctx.pendingAtEntry); err != nil {
+			return err
+		}
+		jumpPos := c.emit(code.OpJump, 9999)
 		ctx.continuePositions = append(ctx.continuePositions, jumpPos)
 
 	case *ast.StructStatement:
@@ -1220,8 +1286,10 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.Compile(node.Function); err != nil {
 			return err
 		}
-		for _, arg := range node.Arguments {
-			if err := c.Compile(arg); err != nil {
+		for i, arg := range node.Arguments {
+			// The callee sits under every argument, so even the first one has a
+			// slot pending above the statement it belongs to.
+			if err := c.compilePending(1+i, arg); err != nil {
 				return err
 			}
 		}
@@ -1492,6 +1560,65 @@ func (c *Compiler) compileLogicalExpression(node *ast.InfixExpression) error {
 	endPos := len(c.currentInstructions())
 	c.changeOperand(trueEnd1, endPos)
 	c.changeOperand(trueEnd2, endPos)
+	return nil
+}
+
+// compilePending compiles node while n values an enclosing expression has
+// already pushed are still on the stack and still wanted.
+//
+// Every caller is a place where the emitted code holds operands across a
+// nested compile: the left side of an infix while the right is compiled, the
+// callee and the arguments ahead of this one, the elements of an array or the
+// fields of a struct literal written so far, the container and the index of
+// an assignment while its value is compiled. The count is kept here, where
+// the operand is pushed, rather than recovered from the finished instruction
+// stream: that stream is not linear -- an `if` pushes one value down two
+// paths -- so nothing reading it afterwards can tell a live operand from a
+// branch that was never taken.
+//
+// The count is restored on the error path too. That costs nothing and keeps
+// it meaningful to anything that looks at it while an error unwinds.
+func (c *Compiler) compilePending(n int, node ast.Node) error {
+	return c.withPending(n, func() error { return c.Compile(node) })
+}
+
+// withPending is compilePending for emission that is not one node: the
+// assignment chain passes its value expression around as a closure, so there
+// is no ast.Node to hand over.
+func (c *Compiler) withPending(n int, emit func() error) error {
+	c.pendingOperands += n
+	err := emit()
+	c.pendingOperands -= n
+	return err
+}
+
+// emitPendingPops drops every operand pushed since the loop was entered, so
+// that a break or a continue reaches its target with the stack at the depth
+// the target expects.
+//
+// Dropping them is the answer rather than refusing the shape, and the reason
+// is that there is no line between the two. `let v = if (c) { break; } else {
+// 1 };` has nothing pending and has always worked; `let v = [0, if (c) {
+// break; } else { 1 }];` differs from it by one slot and means the same
+// thing -- leave the loop, abandoning a half-built value nobody can ever
+// read, because the code that would have read it is the code being jumped
+// over. Refusing the second would be refusing a program whose meaning is
+// plain, and the author would have no way to act on the complaint.
+//
+// Fewer operands pending than the loop was entered with cannot come from any
+// program: it would mean an increment somewhere that its decrement never
+// matched. Saying so is cheaper than the alternative, which is popping a
+// slot belonging to whatever contains the loop.
+func (c *Compiler) emitPendingPops(entry int) error {
+	if c.pendingOperands < entry {
+		return fmt.Errorf(
+			"internal: %d operands pending inside a loop entered with %d",
+			c.pendingOperands, entry,
+		)
+	}
+	for i := entry; i < c.pendingOperands; i++ {
+		c.emit(code.OpPop)
+	}
 	return nil
 }
 
@@ -1864,9 +1991,11 @@ func (c *Compiler) emitStoreOnly(symbol Symbol) error {
 //
 // The cursor is left on the stack for the whole loop and dropped at `end`,
 // which is also where `break` is patched to -- so every way out of the loop
-// goes through the same pop and none of them leaks a stack slot. `continue`
-// is patched to `head`, where the advance lives: a for-in has no post section
-// of its own, the advance *is* the post section.
+// goes through the same pop. That pop takes the cursor only when the stack is
+// at the depth the loop was entered with, which is why a break drops whatever
+// the expression it sits inside had pending before it jumps: see
+// emitPendingPops. `continue` is patched to `head`, where the advance lives: a
+// for-in has no post section of its own, the advance *is* the post section.
 func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
 	// The header is a scope, as in a counted for: the key and value names
 	// belong to the loop, and the body nests inside so it may shadow them.
@@ -1907,7 +2036,7 @@ func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
 		c.emitBindingStore(keySymbol)
 	}
 
-	c.loopContexts = append(c.loopContexts, LoopContext{})
+	c.loopContexts = append(c.loopContexts, LoopContext{pendingAtEntry: c.pendingOperands})
 	if err := c.Compile(node.Body); err != nil {
 		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
 		return err
@@ -1986,7 +2115,12 @@ func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
 
 		for i, pattern := range arm.Patterns {
 			c.emit(code.OpDup)
-			if err := c.Compile(pattern); err != nil {
+			// The subject and the copy OpDup just made are both pending. No
+			// pattern the parser admits can jump out of a loop -- it accepts a
+			// literal, a negated number or a dotted path and nothing else -- but
+			// this is the count, and a tree a macro produced is not held to the
+			// parser's grammar.
+			if err := c.compilePending(2, pattern); err != nil {
 				return err
 			}
 			c.emit(code.OpEqual)
@@ -2112,7 +2246,7 @@ func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
 
 	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
 
-	c.loopContexts = append(c.loopContexts, LoopContext{})
+	c.loopContexts = append(c.loopContexts, LoopContext{pendingAtEntry: c.pendingOperands})
 	if err := c.Compile(node.Body); err != nil {
 		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
 		return err
@@ -2170,7 +2304,7 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 
 	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
 
-	c.loopContexts = append(c.loopContexts, LoopContext{})
+	c.loopContexts = append(c.loopContexts, LoopContext{pendingAtEntry: c.pendingOperands})
 	if err := c.Compile(node.Body); err != nil {
 		c.loopContexts = c.loopContexts[:len(c.loopContexts)-1]
 		return err
@@ -2179,10 +2313,17 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 	// No removeLastPop after the body -- see compileWhileStatement for why the
 	// leak this used to introduce is only ever visible under a for-in.
 	postStartPosition := len(c.currentInstructions())
-	ctx := &c.loopContexts[len(c.loopContexts)-1]
-	for _, pos := range ctx.continuePositions {
+	for _, pos := range c.loopContexts[len(c.loopContexts)-1].continuePositions {
 		c.changeOperand(pos, postStartPosition)
 	}
+
+	// Every continue this loop had recorded has just been given its target, so
+	// from here to the end of the post section there is no longer a list that
+	// anything reads. A continue compiled inside the step is refused by the
+	// Compile arm on the strength of this flag -- M26-CMP-020 -- and the flag
+	// is set by index rather than through a pointer for the reason the break
+	// patch below is: the step can contain a loop, and a loop appends.
+	c.loopContexts[len(c.loopContexts)-1].inLoopStep = true
 
 	// The post section is an Expression, not a Statement, so nothing else
 	// discards its value -- and an assignment is an expression that yields the
@@ -2198,13 +2339,23 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 			return err
 		}
 		c.emit(code.OpPop)
+		c.loopContexts[len(c.loopContexts)-1].inLoopStep = false
 	}
 
 	c.emit(code.OpJump, conditionStartPosition)
 	loopEndPosition := len(c.currentInstructions())
 	c.changeOperand(jumpFalsePosition, loopEndPosition)
 
-	for _, pos := range ctx.breakPositions {
+	// Read here, and by index, rather than carried down from before the post
+	// section. A loop inside the step appends to c.loopContexts, and at that
+	// moment this loop's own append has made the slice len 1 cap 1, so the
+	// append reallocates and any pointer taken earlier refers to an array
+	// nothing writes to any more. A break compiled after that recorded its
+	// jump in the live array while this loop read the abandoned one, and the
+	// jump kept its placeholder: M26-CMP-021, measured as a program whose
+	// value is an integer answering a boolean. The shallowest nesting there is
+	// triggers it, so there was no depth to be safe at.
+	for _, pos := range c.loopContexts[len(c.loopContexts)-1].breakPositions {
 		c.changeOperand(pos, loopEndPosition)
 	}
 
@@ -2545,9 +2696,19 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 	last := steps[depth-1]
 
 	// store mutates the container already on the stack and leaves it there.
+	//
+	// That container is pending for the whole of store, and the index joins it
+	// while the value is compiled. The counts are relative, which is what
+	// spares the recursion below any arithmetic of its own: each level adds
+	// only the slots it pushed itself, on top of whatever its caller holds.
+	//
+	// The spill M26-CMP-004 added does not change either count. It pops the
+	// index into a slot and pushes it straight back, so by the time the value
+	// is compiled the stack holds the container and the index exactly as it did
+	// before, and a break inside the value owes two pops either way.
 	store := func() error {
 		if last.index != nil {
-			if err := c.Compile(last.index); err != nil {
+			if err := c.compilePending(1, last.index); err != nil {
 				return err
 			}
 			if indexSlot != nil {
@@ -2560,13 +2721,13 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 				}
 				c.loadSymbol(*indexSlot)
 			}
-			if err := emitValue(); err != nil {
+			if err := c.withPending(2, emitValue); err != nil {
 				return err
 			}
 			c.emit(code.OpSetIndex)
 			return nil
 		}
-		if err := emitValue(); err != nil {
+		if err := c.withPending(1, emitValue); err != nil {
 			return err
 		}
 		c.emit(code.OpSetField, c.addConstant(&object.String{Value: last.field}))
@@ -2600,9 +2761,14 @@ func (c *Compiler) emitPathLoad(symbol Symbol, steps []assignStep, depth int, in
 	c.loadSymbol(symbol)
 	for i, step := range steps[:depth] {
 		if step.index != nil {
+			// The value reached so far is pending under the index, and OpIndex
+			// collapses the two back into one -- so one slot is all this loop
+			// ever adds, however long the path is. The spilled-index branch
+			// pushes without compiling anything, so no expression can leave it
+			// abruptly and it needs no count.
 			if indexSlot != nil && i == depth-1 {
 				c.loadSymbol(*indexSlot)
-			} else if err := c.Compile(step.index); err != nil {
+			} else if err := c.compilePending(1, step.index); err != nil {
 				return err
 			}
 			c.emit(code.OpIndex)
@@ -2651,7 +2817,8 @@ func (c *Compiler) compileTemplateLiteral(node *ast.TemplateLiteral) error {
 		if i >= len(node.Parts) {
 			continue
 		}
-		if err := c.Compile(node.Parts[i]); err != nil {
+		// The pieces already pushed are waiting for OpConcat.
+		if err := c.compilePending(pieces, node.Parts[i]); err != nil {
 			return err
 		}
 		pieces++
@@ -2851,8 +3018,16 @@ func (c *Compiler) compileStructLiteral(node *ast.StructLiteral) error {
 	// nearly all of them are written, emits exactly what it has always emitted.
 	// Only one that does not pays for the reordering.
 	if structLiteralIsInDeclarationOrder(node.Fields, typeDef) {
-		for _, field := range typeDef {
-			if err := c.Compile(fieldExprByName[field.Value]); err != nil {
+		for i, field := range typeDef {
+			// The fields already written are on the stack waiting for
+			// OpMakeStruct.
+			//
+			// The other branch needs no count of its own, which is worth saying
+			// because it looks like the same loop: emitStructFieldsInSourceOrder
+			// stores each value into a slot the moment it is compiled, so the
+			// stack is back to where it started between one field and the next
+			// and a break there has nothing of the literal's to drop.
+			if err := c.compilePending(i, fieldExprByName[field.Value]); err != nil {
 				return err
 			}
 		}
