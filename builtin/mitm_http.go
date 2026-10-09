@@ -83,17 +83,23 @@ func HTTPParseRequest(args ...object.Object) object.Object {
 	return resultAndError(requestToHash(BuiltinNameHttpParseRequest, req))
 }
 
-// HTTPParseResponse parses a raw HTTP response into a structured hash.
-// http_parse_response(raw STRING) -> HASH {status, status_text, proto, headers, body}
+// HTTPParseResponse parses a raw HTTP response into a structured hash. The
+// optional second argument is the method of the request this answers, which is
+// needed for a response to HEAD and for nothing else -- see httpResponseMethod.
+// http_parse_response(raw STRING, method STRING?) -> HASH {status, status_text, proto, headers, body}
 func HTTPParseResponse(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) != 1 && len(args) != 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	raw, ok := args[0].(*object.String)
 	if !ok {
 		return resultAndError(nil, newError("argument 1 to `http_parse_response` must be STRING, got %s", args[0].Type()))
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw.Value)), nil)
+	method, errObj := httpResponseMethod(BuiltinNameHttpParseResponse, args, 2)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw.Value)), httpRequestForMethod(method))
 	if err != nil {
 		return resultAndError(nil, newError("http_parse_response: %s", err.Error()))
 	}
@@ -123,15 +129,18 @@ func HTTPConnReadRequest(args ...object.Object) object.Object {
 }
 
 // HTTPConnReadResponse reads exactly one HTTP response from a connection handle.
-// http_conn_read_response(handle INTEGER, timeout_ms INTEGER) -> HASH
+// The optional third argument is the method of the request this answers, which
+// a relay already read with http_conn_read_request one call earlier, and which
+// is needed for a response to HEAD -- see httpResponseMethod.
+// http_conn_read_response(handle INTEGER, timeout_ms INTEGER, method STRING?) -> HASH
 func HTTPConnReadResponse(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadResponse, args)
+	mc, timeoutMs, method, errObj := connTimeoutAndMethod(BuiltinNameHttpConnReadResponse, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
 	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
-	resp, err := http.ReadResponse(mc.buffered(), nil)
+	resp, err := http.ReadResponse(mc.buffered(), httpRequestForMethod(method))
 	headTooLarge := mc.readLimitReached()
 	mc.clearReadLimit()
 	if err != nil {
@@ -194,18 +203,20 @@ func HTTPConnReadRequestHead(args ...object.Object) object.Object {
 
 // HTTPConnReadResponseHead reads a response's status line + headers WITHOUT
 // consuming the body, leaving it on the connection for streaming via
-// net_conn_read. See HTTPConnReadRequestHead.
-// http_conn_read_response_head(handle, timeout_ms) -> HASH {status,status_text,
+// net_conn_read. See HTTPConnReadRequestHead. The optional third argument is
+// the method of the request this answers; see httpResponseMethod, and below for
+// what it changes here.
+// http_conn_read_response_head(handle, timeout_ms, method?) -> HASH {status,status_text,
 //
 //	proto,headers,content_length,chunked}
 func HTTPConnReadResponseHead(args ...object.Object) object.Object {
-	mc, timeoutMs, errObj := connAndTimeout(BuiltinNameHttpConnReadResponseHead, args)
+	mc, timeoutMs, method, errObj := connTimeoutAndMethod(BuiltinNameHttpConnReadResponseHead, args)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
 	applyReadDeadline(mc, timeoutMs)
 	mc.setReadLimit(maxHTTPHeaderBytes + httpHeadReadSlack)
-	resp, err := http.ReadResponse(mc.buffered(), nil)
+	resp, err := http.ReadResponse(mc.buffered(), httpRequestForMethod(method))
 	headTooLarge := mc.readLimitReached()
 	mc.clearReadLimit()
 	if err != nil {
@@ -217,13 +228,30 @@ func HTTPConnReadResponseHead(args ...object.Object) object.Object {
 	if fieldErr := checkHTTPHeaderFields(resp.Header); fieldErr != nil {
 		return resultAndError(nil, newError("http_conn_read_response_head: %s", fieldErr.Error()))
 	}
+
+	// These two fields say what to read off the connection next, which for a
+	// response to HEAD is nothing: its Content-Length describes the
+	// representation the request asked about and no body follows it (RFC 9110
+	// section 9.3.2). net/http reports the declared number in ContentLength
+	// there -- 50000 for a HEAD response that declares 50000, measured -- so a
+	// relay that streamed it waited for bytes that are never sent. The declared
+	// length is still in headers, which is where the evidence belongs. For a
+	// status that carries no body net/http already answers this way by itself:
+	// a 304 declaring 1234 arrives here with ContentLength 0.
+	contentLength := resp.ContentLength
+	chunked := isChunked(resp.TransferEncoding)
+	if method == http.MethodHead {
+		contentLength = 0
+		chunked = false
+	}
+
 	return resultAndError(makeHashObject(map[string]object.Object{
 		"status":         intObj(int64(resp.StatusCode)),
 		"status_text":    stringObj(http.StatusText(resp.StatusCode)),
 		"proto":          stringObj(resp.Proto),
 		"headers":        headerToHash(resp.Header),
-		"content_length": intObj(resp.ContentLength),
-		"chunked":        boolObj(isChunked(resp.TransferEncoding)),
+		"content_length": intObj(contentLength),
+		"chunked":        boolObj(chunked),
 	}), nil)
 }
 
@@ -312,18 +340,24 @@ func HTTPBuildRequest(args ...object.Object) object.Object {
 }
 
 // HTTPBuildResponse serialises a response hash back into wire bytes.
-// http_build_response(response HASH) -> STRING
+// http_build_response(response HASH, method STRING?) -> STRING
 // Fields: status (default 200), status_text, proto (default HTTP/1.1),
-// headers (HASH), body (STRING). A Content-Length header is added when absent.
+// headers (HASH), body (STRING). A Content-Length header is added when absent,
+// unless the message carries no body: see the gate on bodyAllowed below, and
+// httpResponseMethod for what the optional method is for.
 func HTTPBuildResponse(args ...object.Object) object.Object {
-	if len(args) != 1 {
-		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1", len(args)))
+	if len(args) != 1 && len(args) != 2 {
+		return resultAndError(nil, newError("wrong number of arguments. got=%d, want=1 or 2", len(args)))
 	}
 	resp := args[0]
 	if _, ok := resp.(*object.Hash); !ok {
 		if _, ok := resp.(*object.Struct); !ok {
 			return resultAndError(nil, newError("argument 1 to `http_build_response` must be HASH or STRUCT, got %s", resp.Type()))
 		}
+	}
+	method, errObj := httpResponseMethod(BuiltinNameHttpBuildResponse, args, 2)
+	if errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	status := optInt(resp, "status", 200)
@@ -343,13 +377,26 @@ func HTTPBuildResponse(args ...object.Object) object.Object {
 	b.WriteString("\r\n")
 
 	headers := headersToOrdered(resp)
-	// A status with no body has no length to agree or disagree with, and must
-	// not be given one. See responseBodyAllowed.
-	if responseBodyAllowed(status) {
+	// A message with no body has no length to agree or disagree with, and must
+	// not be given one. See responseBodyAllowed, and httpResponseMethod for why
+	// the method is the only thing that can say a 200 is such a message: the
+	// response to a HEAD request declares the length of the representation that
+	// was asked about, and no body follows it (RFC 9110 section 9.3.2). Without
+	// the method the length check refused to rebuild a HEAD response the read
+	// side can now parse, which would have left a HEAD exchange unrelayable
+	// through a different door than before.
+	bodyAllowed := responseBodyAllowed(status) && method != http.MethodHead
+	if bodyAllowed {
 		if errObj := checkDeclaredLength(BuiltinNameHttpBuildResponse, headers, body); errObj != nil {
 			return resultAndError(nil, errObj)
 		}
 	} else if body != "" {
+		if method == http.MethodHead {
+			return resultAndError(nil, newError(
+				"%s: the response to a HEAD request carries no body, and this one holds %d bytes; "+
+					"bytes after it are read as the start of the next message",
+				BuiltinNameHttpBuildResponse, len(body)))
+		}
 		return resultAndError(nil, newError(
 			"%s: a %d response carries no body, and this one holds %d bytes; "+
 				"bytes after a bodyless status are read as the start of the next message",
@@ -362,7 +409,7 @@ func HTTPBuildResponse(args ...object.Object) object.Object {
 		}
 	}
 	writeHeaderLines(&b, headers)
-	if !hasContentLength && responseBodyAllowed(status) {
+	if !hasContentLength && bodyAllowed {
 		b.WriteString("Content-Length: ")
 		b.WriteString(strconv.Itoa(len(body)))
 		b.WriteString("\r\n")
@@ -380,6 +427,87 @@ func HTTPBuildResponse(args ...object.Object) object.Object {
 type orderedHeader struct {
 	key   string
 	value string
+}
+
+// httpResponseMethod reads the optional argument that says which request a
+// response answers, and returns "" when it is absent.
+//
+// net/http reads exactly one thing off that request: whether the method is the
+// four bytes "HEAD" (noResponseBodyExpected, net/http/transfer.go in go1.26.6).
+// A response to HEAD carries the Content-Length of the representation and no
+// body at all, and only the method says so, so with no request net/http waited
+// for bytes that never arrive and the parse failed with "unexpected EOF"
+// (M26-NET-039). Nothing else about the request is consulted, which is why one
+// string is the whole argument.
+//
+// The comparison over there is byte-for-byte, so "head" would have been framed
+// as a GET -- measured, not assumed -- and the method is upper-cased here, as
+// http_request already upper-cases its own. A method that is not a token is
+// refused rather than quietly treated as a GET, because quietly treating it as
+// a GET is the defect this argument exists to end.
+func httpResponseMethod(opName string, args []object.Object, position int) (string, *object.Error) {
+	if len(args) < position {
+		return "", nil
+	}
+	arg, ok := args[position-1].(*object.String)
+	if !ok {
+		return "", newError("argument %d to `%s` must be STRING, got %s", position, opName, args[position-1].Type())
+	}
+	method := strings.ToUpper(strings.TrimSpace(arg.Value))
+	if !httpIsMethodToken(method) {
+		return "", newError(
+			"%s: %q is not a request method; pass the method the response answers, such as \"HEAD\" or \"GET\"",
+			opName, arg.Value)
+	}
+	return method, nil
+}
+
+// httpIsMethodToken reports whether every byte of s is a token character, which
+// is what a method is -- RFC 9110 section 9.1, and the grammar net/http quotes
+// in its own validMethod (net/http/request.go:844-856 in go1.26.6, which is
+// unexported).
+func httpIsMethodToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// httpRequestForMethod is the request handed to http.ReadResponse so it can
+// frame the body. It is nil when no method was given, which is what every call
+// written before the argument existed passes, and keeps exactly the old
+// behaviour for those.
+func httpRequestForMethod(method string) *http.Request {
+	if method == "" {
+		return nil
+	}
+	return &http.Request{Method: method}
+}
+
+// connTimeoutAndMethod is connAndTimeout plus the optional method argument of
+// the two response readers.
+func connTimeoutAndMethod(opName string, args []object.Object) (*managedConn, int64, string, *object.Error) {
+	if len(args) != 2 && len(args) != 3 {
+		return nil, 0, "", newError("wrong number of arguments. got=%d, want=2 or 3", len(args))
+	}
+	method, errObj := httpResponseMethod(opName, args, 3)
+	if errObj != nil {
+		return nil, 0, "", errObj
+	}
+	mc, timeoutMs, errObj := connAndTimeout(opName, args[:2])
+	if errObj != nil {
+		return nil, 0, "", errObj
+	}
+	return mc, timeoutMs, method, nil
 }
 
 func connAndTimeout(opName string, args []object.Object) (*managedConn, int64, *object.Error) {

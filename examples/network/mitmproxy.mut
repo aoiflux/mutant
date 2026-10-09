@@ -18,6 +18,12 @@
 //   http_conn_read_request, http_build_request, http_conn_read_response,
 //   http_build_response, text_split, text_contains, spawn.
 //
+// THE METHOD TRAVELS WITH THE RESPONSE: http_conn_read_response and
+// http_build_response take the method of the request being answered. Only a
+// HEAD response needs it -- its Content-Length describes the representation the
+// client asked about and no body follows -- but passing it on every message
+// costs nothing and is what lets this proxy relay a HEAD exchange at all.
+//
 // CONCURRENCY: the accept loop hands each connection to spawn, which runs the
 // handler on its own VM, so a slow upstream no longer stalls every other
 // client. Still one request per connection -- the handler reads a request,
@@ -70,34 +76,46 @@ let origin_addr = fn(host) {
     return host;
 };
 
+// A response this proxy writes itself, when it could not reach the origin. It
+// obeys the rule the origin's own response obeys: the answer to a HEAD request
+// carries no body, so the reason goes in a header where a HEAD client can still
+// read it.
+let proxy_error = fn(method, status, reason) {
+    if (method == "HEAD") {
+        return {"status": status, "body": "", "headers": {"X-Mutant-Proxy": reason}};
+    };
+    return {"status": status, "body": "mutant-proxy: " + reason, "headers": {}};
+};
+
 // Relay a decrypted request to its real upstream over TLS and return the
 // upstream response hash (or a synthetic 502 on failure).
 let relay_https = fn(host_port, host, request) {
+    let method = request["method"];
     let upstream, err = net_connect(host_port, 8000);
     if (err) {
-        return {"status": 502, "body": "mutant-proxy: upstream connect failed", "headers": {}};
+        return proxy_error(method, 502, "upstream connect failed");
     };
     let up_opts = {"server_name": host};
     let _, err = net_tls_upgrade_client(upstream, up_opts);
     if (err) {
         net_conn_close(upstream);
-        return {"status": 502, "body": "mutant-proxy: upstream TLS failed", "headers": {}};
+        return proxy_error(method, 502, "upstream TLS failed");
     };
 
     let wire, err = http_build_request(request);
     if (err) {
         net_conn_close(upstream);
-        return {"status": 502, "body": "mutant-proxy: request rebuild failed", "headers": {}};
+        return proxy_error(method, 502, "request rebuild failed");
     };
     let _, err = net_conn_write(upstream, wire);
     if (err) {
         net_conn_close(upstream);
-        return {"status": 502, "body": "mutant-proxy: upstream write failed", "headers": {}};
+        return proxy_error(method, 502, "upstream write failed");
     };
-    let resp, err = http_conn_read_response(upstream, 15000);
+    let resp, err = http_conn_read_response(upstream, 15000, method);
     net_conn_close(upstream);
     if (err) {
-        return {"status": 502, "body": "mutant-proxy: upstream read failed", "headers": {}};
+        return proxy_error(method, 502, "upstream read failed");
     };
     return resp;
 };
@@ -140,7 +158,7 @@ let handle_connect = fn(client, ca, host_port) {
     let resp = relay_https(host_port, host, request);
     putln("  [response ] ", resp["status"], " (", len(resp["body"]), " bytes)");
 
-    let back, err = http_build_response(resp);
+    let back, err = http_build_response(resp, request["method"]);
     if (err) {
         putln("  [!] response rebuild failed: ", err);
         net_conn_close(client);
@@ -177,13 +195,13 @@ let handle_plain = fn(client, request) {
         net_conn_close(client);
         return false;
     };
-    let resp, err = http_conn_read_response(upstream, 15000);
+    let resp, err = http_conn_read_response(upstream, 15000, request["method"]);
     net_conn_close(upstream);
     if (err) {
         net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
     } else {
         putln("  [response ] ", resp["status"]);
-        let back, build_err = http_build_response(resp);
+        let back, build_err = http_build_response(resp, request["method"]);
         if (build_err) {
             net_conn_write(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
         } else {

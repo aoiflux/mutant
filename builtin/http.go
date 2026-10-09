@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -191,8 +194,8 @@ func HttpRequest(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("http_request: %s", err.Error()))
 	}
 
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	if errObj := applyRequestHeaders(BuiltinNameHttpRequest, req, headers, body); errObj != nil {
+		return resultAndError(nil, errObj)
 	}
 
 	client, err := httpClient()
@@ -201,6 +204,84 @@ func HttpRequest(args ...object.Object) object.Object {
 	}
 	resp, err := client.Do(req)
 	return httpResponseOrError2(resp, err, BuiltinNameHttpRequest)
+}
+
+// applyRequestHeaders puts a caller's headers on a request, and refuses the ones
+// it cannot send rather than dropping them.
+//
+// Three fields never travelled as header fields at all, because net/http's
+// client takes them off the Request struct instead and ignores req.Header for
+// them, so setting them there was silently nothing:
+//
+//   - Host. The client sends req.Host, or the URL's host when that is empty. A
+//     caller naming a virtual host got the default host's answer, with no error
+//     and nothing in the result to show which host answered (M26-NET-023). It
+//     is assigned to req.Host now, which is the field that is sent.
+//   - Content-Length. The transport writes the real length of the body it was
+//     handed. One that agrees with the body is therefore already true and is
+//     dropped; one that disagrees is refused naming both numbers, exactly as
+//     http_build_request refuses the same disagreement (M26-NET-016). Sending
+//     the correct length under a caller who believes a different one went out
+//     measures a desynchronised connection as a working one.
+//   - Transfer-Encoding. The transport frames the body itself, from
+//     req.TransferEncoding and not from this header, so asking for chunked got
+//     a Content-Length. A request framed by hand is written with
+//     net_conn_write, which this does not stand in the way of.
+//
+// Two keys that name one field are refused too. net/http canonicalises a field
+// name, so "X-Probe" and "x-probe" in one hash are one field with two values
+// and only the last one assigned survives -- an order no part of the language
+// defines.
+func applyRequestHeaders(opName string, req *http.Request, headers map[string]string, body string) *object.Error {
+	byField := make(map[string]string, len(headers))
+	duplicated := []string{}
+	for k, v := range headers {
+		field := textproto.CanonicalMIMEHeaderKey(k)
+		if _, dup := byField[field]; dup {
+			duplicated = append(duplicated, field)
+			continue
+		}
+		byField[field] = v
+	}
+	if len(duplicated) > 0 {
+		// Sorted, because the hash yields its keys in no defined order and a
+		// refusal that names a different field each time cannot be acted on.
+		slices.Sort(duplicated)
+		return newError(
+			"%s: the headers name %s more than once, differing only in case; one value would have been sent and the other dropped",
+			opName, strings.Join(slices.Compact(duplicated), ", "))
+	}
+
+	// In this order, and not in the hash's, so that a message with more than
+	// one thing wrong with it is always refused for the same reason.
+	if value, ok := byField["Transfer-Encoding"]; ok {
+		return newError(
+			"%s: a Transfer-Encoding of %q is not sent: the body given here is framed for you. "+
+				"Write the request with net_conn_write to frame it yourself",
+			opName, value)
+	}
+	if value, ok := byField["Content-Length"]; ok {
+		declared, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return newError("%s: Content-Length %q is not a number", opName, value)
+		}
+		if declared != len(body) {
+			return newError(
+				"%s: Content-Length declares %d bytes and the body holds %d; "+
+					"the body's own length is what gets sent, so drop the header",
+				opName, declared, len(body))
+		}
+		delete(byField, "Content-Length")
+	}
+	if value, ok := byField["Host"]; ok {
+		req.Host = value
+		delete(byField, "Host")
+	}
+
+	for field, value := range byField {
+		req.Header.Set(field, value)
+	}
+	return nil
 }
 
 func httpHeaderMap(obj object.Object) (map[string]string, *object.Error) {
