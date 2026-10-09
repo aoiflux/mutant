@@ -596,14 +596,28 @@ func SignRecordFooter(footer *RecordFooter, header []byte, root [sha256.Size]byt
 		footer.SignatureReason = "the record was sealed with sign:false"
 		return nil
 	}
-	private, public, generated, reason, err := EnsureLocalSigningKeyPair()
+	// The fourth return is the key store's DIRECTORY, and it is dropped here
+	// deliberately. Binding it to a name like `reason` and assigning it to
+	// SignatureReason put the examiner's key-store path into the footer of
+	// every signed record -- <home>/.mutant/keys on a default install, so the
+	// operating-system account name with it. The field sits outside the signed
+	// message, and disclose_bundle copies the .mrec byte for byte, so the path
+	// travelled in every recipient package (M26-SEC-002).
+	//
+	// builtin/custody_seal.go keeps the key location out of custody manifests
+	// for the same reason, in as many words: it is useless to a recipient and
+	// it tells them where to go looking for the key.
+	//
+	// SignatureReason records why a record has NO signature. A signed record
+	// has no reason to give, so the field stays empty and omitempty leaves it
+	// out of the JSON altogether.
+	private, public, generated, _, err := EnsureLocalSigningKeyPair()
 	if err != nil {
 		footer.Signed = false
 		footer.SignatureReason = err.Error()
 		return nil
 	}
 	footer.Signed = true
-	footer.SignatureReason = reason
 	footer.KeyCreatedForThisRun = generated
 	footer.PublicKey = hex.EncodeToString(public)
 	footer.Signature = hex.EncodeToString(

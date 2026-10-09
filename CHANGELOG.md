@@ -2601,6 +2601,7 @@ exhaustive lists.
   encoder can write, since every entry it writes takes at least three bytes.
   No released version is affected: the ledger family is new in 2.6.0.
   (M26-CUS-030)
+- A signed record's footer no longer carries the key store's directory. `SignRecordFooter` wrote the key-store path into `signature_reason`, a field whose purpose is to say why a record has *no* signature, so every signed `.mrec` -- and every copy `disclose_bundle` placed in a recipient's package -- published the absolute path of the examiner's private-key directory, and with it their operating-system account name. The field is now left empty on a signed record. Records sealed before this release keep the path in the files already issued (**M26-SEC-002**).
 
 ## [2.5.0] — 2026-09-17
 
