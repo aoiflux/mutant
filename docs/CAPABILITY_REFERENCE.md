@@ -599,15 +599,15 @@ Live process inspection: enumeration, tree, environment, open files, threads, mo
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `process_env(pid?: INTEGER) -> (HASH, ERROR)` | all | Returns environment variables for a process (cross-platform; other processes may require privileges). |
+| `process_env(pid?: INTEGER) -> (HASH, ERROR)` | all | Returns environment variables for a process (cross-platform; other processes may require privileges). A Windows per-drive entry keeps its own name, which begins with '=' ('=C:'). Refuses, rather than reporting an empty environment, when another process's environment could not be read. |
 | `process_hash(pid?: INTEGER) -> (HASH, ERROR)` | all | Computes SHA-256 hash metadata for a process executable. |
 | `process_kill(pid: INTEGER, signal?: INTEGER) -> (BOOLEAN, ERROR)` | all | Sends a signal to a process (default SIGKILL semantics). |
 | `process_list() -> ([]HASH, ERROR)` | all | Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS. |
-| `process_memory_scan(pid: INTEGER, pattern: STRING) -> (HASH, ERROR)` | windows, linux | Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS. |
-| `process_modules(pid?: INTEGER) -> ([]STRING, ERROR)` | windows, linux | Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). |
+| `process_memory_scan(pid: INTEGER, pattern: STRING) -> (HASH, ERROR)` | windows, linux | Scans another process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/<pid>/mem) and Windows (OpenProcess+VirtualQueryEx+ReadProcessMemory), needing read access to the target; honest error on macOS. Refuses the calling process, whose own copy of the pattern is in the memory being scanned, so every pattern would match. |
+| `process_modules(pid?: INTEGER) -> ([]STRING, ERROR)` | windows, linux | Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). Refuses pid 0 on Windows, where Toolhelp32 reads 0 as the calling process and would report Mutant's own modules as the System Idle Process's. |
 | `process_open_files(pid?: INTEGER) -> ([]STRING, ERROR)` | all | Lists open file paths for a process (cross-platform; may require privileges for other processes). |
 | `process_threads(pid?: INTEGER) -> (HASH, ERROR)` | all | Returns {pid, count, tids} for a process. The thread count is cross-platform; tids are populated where the OS exposes them (e.g. Linux). |
-| `process_tree(rootPid?: INTEGER) -> (HASH, ERROR)` | all | Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. Each pid is reported at most once and the root is never its own descendant, so a parent cycle -- Windows reports pid 0 as its own parent -- ends the walk rather than repeating it. |
+| `process_tree(rootPid?: INTEGER) -> (HASH, ERROR)` | all | Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. Each pid is reported at most once and the root is never its own descendant, so a parent cycle -- Windows reports pid 0 as its own parent -- ends the walk rather than repeating it. A root pid that is not in the process table is refused rather than reported as a process with no descendants. |
 
 ## Memory Forensics (7)
 

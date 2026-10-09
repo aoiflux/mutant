@@ -173,8 +173,8 @@ var LimitBudget = map[string][]string{
 		"N1 package level: memScanChunkSize = 4 << 20",
 	},
 	"builtin/system_forensics_memscan_linux.go": {
-		"L2 sfScanSelfMemory: 1024*1024",
-		"L1 sfScanSelfMemory: 64*1024",
+		"L2 sfScanProcessMemory: 1024*1024",
+		"L1 sfScanProcessMemory: 64*1024",
 	},
 	"builtin/tasks.go": {
 		"N1 package level: maxLiveTasks = 1024",

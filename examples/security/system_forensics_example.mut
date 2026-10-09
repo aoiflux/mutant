@@ -21,7 +21,23 @@ putln("process_threads:", threads, "err:", err);
 let modules, err = process_modules();
 putln("process_modules:", modules, "err:", err);
 
-let scan, err = process_memory_scan(phash["pid"], "malware");
-putln("process_memory_scan:", scan, "err:", err);
+// process_memory_scan reads another process's memory. Asking it about this one
+// is refused on purpose: the pattern argument is itself in the memory that would
+// be scanned, so every pattern would match and "matched" would never mean no.
+let self_scan, err = process_memory_scan(phash["pid"], "malware");
+putln("process_memory_scan(self):", self_scan, "err:", err);
+
+// A real scan names another process. Reading its memory needs access to it, so
+// an ordinary run may well print a refusal here instead of a count -- which is
+// the honest answer, and the one to expect without elevation.
+let others, err = process_list();
+let target = phash["pid"];
+for (proc in others) {
+    if (proc["pid"] != phash["pid"] && proc["pid"] > 0) {
+        target = proc["pid"];
+    }
+}
+let scan, err = process_memory_scan(target, "malware");
+putln("process_memory_scan(", target, "):", scan, "err:", err);
 
 putln("process_kill is available but intentionally not called in this example.");

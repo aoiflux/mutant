@@ -3,23 +3,42 @@
 package builtin
 
 import (
+	"fmt"
+	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// sfScanSelfMemory scans this process's own committed, readable memory regions
-// for pattern, enumerating regions with VirtualQuery and reading them with
-// ReadProcessMemory against the current-process pseudo-handle.
-func sfScanSelfMemory(pattern []byte, maxMatches int) ([]uint64, bool, error) {
+// sfScanProcessMemory scans a process's committed, readable memory regions for
+// pattern, enumerating regions with VirtualQueryEx and reading them with
+// ReadProcessMemory.
+//
+// For another process this opens a handle with PROCESS_QUERY_INFORMATION and
+// PROCESS_VM_READ, which is what both calls need and no more; a protected or
+// higher-integrity target refuses that open and the refusal is returned as it
+// came. For this process the current-process pseudo-handle is used, and the
+// caller is responsible for knowing that a self-scan cannot tell a finding from
+// its own query -- ProcessMemoryScan refuses one for that reason.
+func sfScanProcessMemory(pid int, pattern []byte, maxMatches int) ([]uint64, bool, error) {
 	proc := windows.CurrentProcess()
+	if pid != os.Getpid() {
+		handle, err := windows.OpenProcess(
+			windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, uint32(pid))
+		if err != nil {
+			return nil, false, fmt.Errorf("open process %d: %w", pid, err)
+		}
+		defer windows.CloseHandle(handle)
+		proc = handle
+	}
+
 	matches := make([]uint64, 0)
 	overlap := uint64(len(pattern) - 1)
 
 	var addr uintptr
 	for {
 		var mbi windows.MemoryBasicInformation
-		if err := windows.VirtualQuery(addr, &mbi, unsafe.Sizeof(mbi)); err != nil {
+		if err := windows.VirtualQueryEx(proc, addr, &mbi, unsafe.Sizeof(mbi)); err != nil {
 			break // walked past the top of the address space
 		}
 		if mbi.RegionSize == 0 {

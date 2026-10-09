@@ -73,7 +73,7 @@ func ProcessTree(args ...object.Object) object.Object {
 		if !ok {
 			return resultAndError(nil, newError("argument 1 to `process_tree` must be INTEGER, got %s", args[0].Type()))
 		}
-		validated, errObj := sfValidatePID(BuiltinNameProcessTree, pidObj.Value)
+		validated, errObj := sfValidateReadPID(BuiltinNameProcessTree, pidObj.Value)
 		if errObj != nil {
 			return resultAndError(nil, errObj)
 		}
@@ -83,6 +83,11 @@ func ProcessTree(args ...object.Object) object.Object {
 	procs, err := sfListProcesses()
 	if err != nil {
 		return resultAndError(nil, newError("process_tree: %s", err.Error()))
+	}
+	if !sfPIDInTable(procs, rootPID) {
+		return resultAndError(nil, newError(
+			"process_tree: no process with pid %d; the table holds %d process(es)",
+			rootPID, len(procs)))
 	}
 
 	return resultAndError(makeHashObject(map[string]object.Object{
@@ -298,18 +303,30 @@ func ProcessMemoryScan(args ...object.Object) object.Object {
 	if patternObj.Value == "" {
 		return resultAndError(nil, newError("process_memory_scan: pattern must be non-empty"))
 	}
-	pid, errObj := sfValidatePID(BuiltinNameProcessMemoryScan, pidObj.Value)
+	pid, errObj := sfValidateReadPID(BuiltinNameProcessMemoryScan, pidObj.Value)
 	if errObj != nil {
 		return resultAndError(nil, errObj)
 	}
-	// Cross-process scanning needs elevated privileges and per-OS handle work;
-	// for now only the self process is supported (honest error otherwise).
-	if pid != os.Getpid() {
-		return resultAndError(nil, newError("process_memory_scan currently supports the self process only (pid %d, self is %d)", pidObj.Value, os.Getpid()))
+	// This process is the one process whose scan cannot answer the question it
+	// was asked, so it is the one pid refused.
+	//
+	// The pattern argument, the copy of it handed to the scanner, and whatever
+	// the program built it from all sit in the memory being scanned, in
+	// allocations this package does not own and cannot find. So a pattern that
+	// exists nowhere else on the machine still matches -- a freshly generated
+	// random string matched twice when this was measured and six times when it
+	// was first reported -- and there is no way to tell those copies from a
+	// finding. "Is this indicator resident in memory?" could only ever come back
+	// yes, which is worse than no answer, because a count is quoted in a report.
+	//
+	// Another process does not hold the query, so that scan means what it says,
+	// and it is what this builtin now does.
+	if pid == os.Getpid() {
+		return resultAndError(nil, newError("process_memory_scan cannot scan the calling process (pid %d): the pattern is itself in the memory being scanned, so every pattern matches; name another process", pid))
 	}
 
 	const maxMatches = 10000
-	addresses, truncated, err := sfScanSelfMemory([]byte(patternObj.Value), maxMatches)
+	addresses, truncated, err := sfScanProcessMemory(pid, []byte(patternObj.Value), maxMatches)
 	if err != nil {
 		return resultAndError(nil, newError("process_memory_scan: %s", err.Error()))
 	}
@@ -350,17 +367,52 @@ func ProcessEnv(args ...object.Object) object.Object {
 
 	pairs := make(map[string]object.Object, len(envLines))
 	for _, line := range envLines {
-		if line == "" {
+		key, value, ok := sfSplitEnvLine(line)
+		if !ok {
 			continue
 		}
-		idx := strings.Index(line, "=")
-		if idx < 0 {
-			continue
+		pairs[key] = stringObj(value)
+	}
+
+	// An empty answer about another process is the one result here that cannot
+	// be taken at face value, so it is the one that gets asked about. See
+	// sfProcessEnvUnreadable: the Windows reader returns no variables and no
+	// error when the read was refused, and 189 of the 391 other processes on the
+	// machine this was measured on came back that way.
+	if len(pairs) == 0 && pid != os.Getpid() {
+		if err := sfProcessEnvUnreadable(pid); err != nil {
+			return resultAndError(nil, newError(
+				"process_env: cannot read the environment of pid %d: %s", pid, err.Error()))
 		}
-		pairs[line[:idx]] = stringObj(line[idx+1:])
 	}
 
 	return resultAndError(makeHashObject(pairs), nil)
+}
+
+// sfSplitEnvLine splits one environment line into its name and its value.
+//
+// A Windows environment carries hidden per-drive entries whose NAME begins with
+// the separator: "=C:=C:\dir" records the working directory on C:, and
+// "=ExitCode=00000000" the last exit status. Splitting at the first "=" gives
+// every one of them the empty name, and since they all get the same name each
+// overwrites the last -- three such entries collapsed into a single variable
+// called "" holding a garbled value, and the per-drive working directories they
+// carry, which are useful live-response context, were gone. A leading separator
+// is part of the name, so the split is at the first "=" after it.
+func sfSplitEnvLine(line string) (string, string, bool) {
+	if line == "" {
+		return "", "", false
+	}
+	from := 0
+	if line[0] == '=' {
+		from = 1
+	}
+	idx := strings.Index(line[from:], "=")
+	if idx < 0 {
+		return "", "", false
+	}
+	idx += from
+	return line[:idx], line[idx+1:], true
 }
 
 func ProcessKill(args ...object.Object) object.Object {
@@ -455,7 +507,46 @@ func sfParsePIDArg(opName string, args []object.Object) (int, *object.Error) {
 	if !ok {
 		return 0, newError("argument 1 to `%s` must be INTEGER, got %s", opName, args[0].Type())
 	}
-	return sfValidatePID(opName, pidObj.Value)
+	return sfValidateReadPID(opName, pidObj.Value)
+}
+
+// sfValidateReadPID is sfValidatePID plus the refusal of an id that names a
+// thread rather than a process, for the builtins that ask a question about a
+// pid rather than send it a signal.
+//
+// It is one function because the alternative is the same check written at six
+// call sites, and a check that has to be remembered six times is a check that
+// will be missing from one of them. process_kill does not come through here:
+// a signal to a thread of THIS process is refused by its own guard, and a
+// signal to a thread of another process is a question about where the signal
+// lands rather than about what the answer is labelled with, which this does not
+// settle.
+func sfValidateReadPID(opName string, pid int64) (int, *object.Error) {
+	validated, errObj := sfValidatePID(opName, pid)
+	if errObj != nil {
+		return 0, errObj
+	}
+	if errObj := sfRefuseThreadID(opName, validated); errObj != nil {
+		return 0, errObj
+	}
+	return validated, nil
+}
+
+// sfPIDInTable reports whether pid is one of the processes the table holds.
+//
+// process_tree never asked, so it answered {root_pid: N, descendants: []} for
+// any number in range -- "that process exists and has nothing under it" about a
+// process that does not exist, and about a Windows thread id, which is how this
+// was found. It is the one builtin here that needs the question asked, because
+// it walks a snapshot of the table instead of opening the pid; the five that
+// open it get the backend's own "process does not exist" for nothing.
+func sfPIDInTable(procs []sfProcess, pid int) bool {
+	for _, p := range procs {
+		if p.pid == pid {
+			return true
+		}
+	}
+	return false
 }
 
 // sfValidatePID narrows a pid argument to the range the backends under this
@@ -474,10 +565,13 @@ func sfParsePIDArg(opName string, args []object.Object) (int, *object.Error) {
 // the System Idle Process as pid 0 -- first, because the list is sorted
 // ascending -- and syslog_parse writes 0 for any line with no procid, so a
 // script that loops over what Mutant handed it reaches 0 without ever naming
-// it. Those builtins answer for 0 today and go on doing so; what one of them
-// answers WRONGLY for 0 on Windows is M26-NET-019, which is a refusal owed at
-// that one site and not a range to narrow here. Negative values are refused
-// because no platform has one.
+// it. Those builtins answer for 0 today and go on doing so. The one that
+// answered WRONGLY for 0 -- process_modules on Windows, where Toolhelp32 reads
+// a process id of 0 as the calling process -- refuses it at that API instead
+// (M26-NET-019), which is why this range was not narrowed: refusing 0 here
+// would have replaced one wrong answer with several missing ones, and
+// process_threads(0) and process_tree(0) are both right on Windows. Negative
+// values are refused because no platform has one.
 //
 // The one builtin that sends a signal rather than asking a question needs a
 // floor of 1, and asks for it separately: see sfValidateKillPID.
@@ -497,10 +591,17 @@ func sfValidatePID(opName string, pid int64) (int, *object.Error) {
 // This narrows a number, and a number is not the only way to name this process.
 // A thread id from process_threads is in range and is not equal to os.Getpid(),
 // and on Linux a signal sent to a non-leader tid is delivered to the whole
-// thread group, so process_kill(process_threads()["tids"][0]) still ends the
-// run. The refuse-self guard does not hold against that and nothing here makes
-// it hold: M26-NET-029 is that, filed separately, because it needs no
-// truncation and is a different fix.
+// thread group, so process_kill(process_threads()["tids"][0]) once ended the
+// run. Nothing here makes the refuse-self guard hold against that, and nothing
+// here needs to: ProcessKill asks sfIsThreadOfThisProcess, which is where
+// M26-NET-029 was fixed, because it needs no truncation and is a different
+// check from a range.
+//
+// A thread of ANOTHER process is not refused here either, and that is not an
+// omission. M26-NET-033 refuses a thread id at the builtins that answer a
+// question about a pid, through sfValidateReadPID, because what is wrong there
+// is the label on an answer. A signal has no label: where it lands is the whole
+// of it, and that is a question this row did not settle.
 func sfValidateKillPID(opName string, pid int64) (int, *object.Error) {
 	if pid < 1 {
 		return 0, newError("argument 1 to `%s` must be a pid of 1 or more, got %d", opName, pid)

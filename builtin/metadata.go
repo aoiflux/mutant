@@ -2082,7 +2082,7 @@ var builtinDocs = map[string]builtinDoc{
 	BuiltinNameProcessList: {signature: "process_list()", summary: "Lists running processes (pid, ppid, name) natively on Windows, Linux, and macOS.", returns: pairRet("one hash per running process", ParamArray).ofElem(ParamHash).withFields("name", "pid", "ppid")},
 	BuiltinNameProcessTree: {
 		signature: "process_tree(rootPid?)",
-		summary:   "Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. Each pid is reported at most once and the root is never its own descendant, so a parent cycle -- Windows reports pid 0 as its own parent -- ends the walk rather than repeating it.",
+		summary:   "Returns descendant processes for a root pid (default current process). Cross-platform, using real parent PIDs on every OS. Each pid is reported at most once and the root is never its own descendant, so a parent cycle -- Windows reports pid 0 as its own parent -- ends the walk rather than repeating it. A root pid that is not in the process table is refused rather than reported as a process with no descendants.",
 		params:    []builtinParamDoc{param("rootPid?", "Optional root process ID; defaults to current process.", ParamInt)},
 		returns:   pairRet("descendant processes for a root pid (default current process)", ParamHash)},
 	BuiltinNameProcessOpenFiles: {
@@ -2097,7 +2097,7 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("the process's thread IDs, and how many there are", ParamHash).withFields("count", "pid", "tids")},
 	BuiltinNameProcessModules: {
 		signature: "process_modules(pid?)",
-		summary:   "Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS).",
+		summary:   "Lists loaded module/library paths for a process (memory maps on Linux, Toolhelp32 on Windows; fails honestly on platforms without a backend, e.g. macOS). Refuses pid 0 on Windows, where Toolhelp32 reads 0 as the calling process and would report Mutant's own modules as the System Idle Process's.",
 		params:    []builtinParamDoc{param("pid?", "Optional process ID; defaults to current process.", ParamInt)},
 		platforms: []string{"windows", "linux"},
 		returns:   pairRet("the loaded module paths", ParamArray).ofElem(ParamString)},
@@ -2108,16 +2108,16 @@ var builtinDocs = map[string]builtinDoc{
 		returns:   pairRet("the executable's SHA-256 digest and size", ParamHash).withFields("path", "pid", "sha256", "size")},
 	BuiltinNameProcessMemoryScan: {
 		signature: "process_memory_scan(pid, pattern)",
-		summary:   "Scans a process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/self/mem) and Windows (VirtualQuery+ReadProcessMemory); self process only for now; honest error on macOS.",
+		summary:   "Scans another process's readable memory for a byte pattern and returns {pid, pattern, matched, truncated, addresses}. Real scan on Linux (/proc/<pid>/mem) and Windows (OpenProcess+VirtualQueryEx+ReadProcessMemory), needing read access to the target; honest error on macOS. Refuses the calling process, whose own copy of the pattern is in the memory being scanned, so every pattern would match.",
 		params: []builtinParamDoc{
-			param("pid", "Target process ID (must be the current process for now).", ParamInt),
+			param("pid", "Target process ID; the calling process is refused.", ParamInt),
 			param("pattern", "Non-empty byte pattern to search for.", ParamString),
 		},
 		platforms: []string{"windows", "linux"},
 		returns:   pairRet("the addresses at which the pattern matched", ParamHash).withFields("addresses", "matched", "pattern", "pid", "truncated")},
 	BuiltinNameProcessEnv: {
 		signature: "process_env(pid?)",
-		summary:   "Returns environment variables for a process (cross-platform; other processes may require privileges).",
+		summary:   "Returns environment variables for a process (cross-platform; other processes may require privileges). A Windows per-drive entry keeps its own name, which begins with '=' ('=C:'). Refuses, rather than reporting an empty environment, when another process's environment could not be read.",
 		params:    []builtinParamDoc{param("pid?", "Optional process ID; defaults to current process.", ParamInt)},
 		returns:   pairRet("environment variables for a process (cross-platform; other processes may require privileges)", ParamHash)},
 	BuiltinNameProcessKill: {
@@ -2127,7 +2127,7 @@ var builtinDocs = map[string]builtinDoc{
 			param("pid", "Target process ID.", ParamInt),
 			param("signal?", "Optional integer signal number.", ParamInt),
 		},
-		platformNote: "On Windows only SIGKILL semantics are honored; other signal numbers are ignored.",
+		platformNote: "On Windows only SIGKILL semantics are honored; any other signal number is refused with an error, not ignored.",
 		returns:      pairRet("true once the signal has been delivered", ParamBool)},
 	BuiltinNameExecString: {
 		signature: "exec_string(command, shell?)",

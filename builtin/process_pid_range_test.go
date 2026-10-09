@@ -109,14 +109,23 @@ func TestNegativePidsAreRefusedEverywhere(t *testing.T) {
 // a pid at all. It names every process in the caller's group, which includes
 // the shell the examiner is sitting in.
 //
-// Two of the query builtins are left out on purpose, because what they do at
-// pid 0 is another open row's subject and not this one's to close:
-// process_modules is M26-NET-019, and process_tree is M26-NET-003 -- the walk
-// that does not terminate when a pid is its own parent, which on Windows pid 0
-// is. Calling process_tree(0) here grew the heap until the test binary was
-// killed by the allocator, on bare 01bee3f as much as with this kit applied;
-// stageP1-net-live is what fixes it, and neither builtin goes back in this list
-// before its own row is closed.
+// Both of the builtins this list used to leave out are back in it, because the
+// rows they were waiting on are closed.
+//
+// process_tree was out because M26-NET-003's walk did not terminate when a pid
+// is its own parent, which on Windows pid 0 is: calling process_tree(0) here
+// grew the heap until the allocator killed the test binary. The seen set in
+// sfDescendants fixed that, and it was measured again when this list changed --
+// process_tree(0) returns the real children of ppid 0 over a table of 399
+// processes.
+//
+// process_modules was out because M26-NET-019 was open: Toolhelp32 reads a
+// process id of 0 as the calling process, so it answered with this binary's own
+// DLLs. It refuses pid 0 now, and that is why both are asserted the way this
+// list asserts everything -- not that they answer, but that if they refuse,
+// they do not refuse for the RANGE. A range refusal is this package's own
+// invention and the one that would break a loop over process_list; a refusal
+// that says what pid 0 is on this platform is the builtin doing its job.
 func TestOnlyProcessKillRefusesPidZero(t *testing.T) {
 	zero := &object.Integer{Value: 0}
 
@@ -141,6 +150,8 @@ func TestOnlyProcessKillRefusesPidZero(t *testing.T) {
 		{"process_open_files", func() object.Object { return ProcessOpenFiles(zero) }},
 		{"process_env", func() object.Object { return ProcessEnv(zero) }},
 		{"process_memory_scan", func() object.Object { return ProcessMemoryScan(zero, stringObj("needle")) }},
+		{"process_modules", func() object.Object { return ProcessModules(zero) }},
+		{"process_tree", func() object.Object { return ProcessTree(zero) }},
 	}
 
 	for _, tc := range queries {
@@ -177,7 +188,16 @@ func TestThePidDefaultAndThisProcessStillWork(t *testing.T) {
 	if _, errObj := unwrapPair(t, ProcessEnv()); errObj != nil {
 		t.Fatalf("process_env() with no argument: %s", errObj.Message)
 	}
-	if _, errObj := unwrapPair(t, ProcessMemoryScan(self, stringObj("needle"))); errObj != nil {
-		t.Fatalf("process_memory_scan(getpid(), ...): %s", errObj.Message)
+	// process_memory_scan is the one builtin here that refuses this process,
+	// and for a reason of its own: its pattern argument sits in the memory it
+	// would scan, so every pattern matches (M26-NET-007). The guard this test
+	// exists for still applies -- the refusal must not be a range refusal,
+	// which is what would break the loop above.
+	_, errObj := unwrapPair(t, ProcessMemoryScan(self, stringObj("needle")))
+	if errObj == nil {
+		t.Fatal("process_memory_scan(getpid(), ...) answered about the calling process")
+	}
+	if strings.Contains(errObj.Message, "must be a pid") {
+		t.Fatalf("process_memory_scan(getpid()) was refused for its range: %q", errObj.Message)
 	}
 }

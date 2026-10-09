@@ -9,16 +9,27 @@ import (
 	"strings"
 )
 
-// sfScanSelfMemory scans this process's own readable memory regions for pattern,
-// reading /proc/self/maps for the region list and /proc/self/mem for the bytes.
-func sfScanSelfMemory(pattern []byte, maxMatches int) ([]uint64, bool, error) {
-	mapsFile, err := os.Open("/proc/self/maps")
+// sfScanProcessMemory scans a process's readable memory regions for pattern,
+// reading /proc/<pid>/maps for the region list and /proc/<pid>/mem for the
+// bytes.
+//
+// Reading another process's memory needs ptrace access to it, so on a host with
+// the usual yama setting an unprivileged caller reaches its own descendants and
+// nothing else. That arrives as the open error, which is returned as it came
+// rather than reported as a scan that found nothing.
+func sfScanProcessMemory(pid int, pattern []byte, maxMatches int) ([]uint64, bool, error) {
+	dir := "/proc/self"
+	if pid != os.Getpid() {
+		dir = "/proc/" + strconv.Itoa(pid)
+	}
+
+	mapsFile, err := os.Open(dir + "/maps")
 	if err != nil {
 		return nil, false, err
 	}
 	defer mapsFile.Close()
 
-	mem, err := os.Open("/proc/self/mem")
+	mem, err := os.Open(dir + "/mem")
 	if err != nil {
 		return nil, false, err
 	}

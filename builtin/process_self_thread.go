@@ -1,8 +1,12 @@
 package builtin
 
 import (
+	"bufio"
 	"os"
 	"strconv"
+	"strings"
+
+	"mutant/object"
 )
 
 // sfSelfTaskDir is this process's procfs thread directory.
@@ -61,4 +65,74 @@ func sfIsThreadOfThisProcess(id int) (isThread bool, answered bool) {
 		return false, true
 	}
 	return true, true
+}
+
+// sfRefuseThreadID refuses an id that names a thread rather than a process, for
+// the builtins that answer a question about a pid.
+//
+// This is the general form of the question above: not "is this one of my
+// threads" but "is this a process at all". Linux puts a thread's directory at
+// /proc/<tid> as well as under /proc/<pid>/task/<tid>, and nothing about it says
+// which it is except its Tgid line, so gopsutil opens /proc/<id> without asking
+// and every builtin that took a pid answered for a thread id -- then labelled
+// the answer with it, a number process_list can never return, because /proc does
+// not list thread directories. The two together were self-contradictory: a
+// script could read a pid out of one builtin's answer that another said did not
+// exist (M26-NET-033).
+//
+// It refuses rather than answering with a note saying which thread group the
+// answer is really about. The data under that answer is the thread group's and
+// is not wrong; only the label is, and a label is the one thing a forensic
+// record cannot be unsure about. The caller asked about a process and there is
+// no process by that number, so the refusal names the pid to ask about instead.
+//
+// No build tag, for the same reason the function above has none: off Linux there
+// is no such file, sfThreadGroupID says it could not answer, and nothing is
+// refused. That is correct and not a gap. Windows draws thread ids and process
+// ids from one allocator, so a thread id is a plausible pid there too -- but it
+// was measured, not assumed: passing the current thread's own id to all six
+// builtins on Windows 11, five refused it already (OpenProcess and Toolhelp32
+// will not accept an id that is not a process) and the sixth, process_tree,
+// answered for any absent pid and now looks its root up in the process table.
+func sfRefuseThreadID(opName string, pid int) *object.Error {
+	tgid, answered := sfThreadGroupID(pid)
+	if !answered || tgid == pid {
+		return nil
+	}
+	return newError("argument 1 to `%s` is thread %d of pid %d, not a process id; ask about %d",
+		opName, pid, tgid, tgid)
+}
+
+// sfThreadGroupID reads Tgid out of /proc/<pid>/status, which is the only place
+// the kernel says whether an id is a thread group leader.
+//
+// Two bits like its neighbour, and for the same reason: "not a thread" and
+// "could not say" are different answers, and a caller that collapsed them would
+// refuse every pid on a host with no procfs. Not answered is also what a pid
+// that does not exist gives, and that is deliberately not turned into a refusal
+// here -- each builtin's own error path already answers for an absent pid, with
+// its backend's message, and a second refusal in front of it would hide that.
+//
+// The path is a literal and deliberately not configurable, as sfSelfTaskDir
+// above explains.
+func sfThreadGroupID(pid int) (tgid int, answered bool) {
+	f, err := os.Open("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		rest, found := strings.CutPrefix(scanner.Text(), "Tgid:")
+		if !found {
+			continue
+		}
+		parsed, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	}
+	return 0, false
 }

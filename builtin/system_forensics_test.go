@@ -114,45 +114,26 @@ func TestProcessOpenFilesThreadsModules(t *testing.T) {
 	}
 }
 
-func TestProcessMemoryScanReal(t *testing.T) {
-	// A distinctive pattern kept alive in this process's memory must be found by a
-	// real self-scan on supported platforms (Linux, Windows).
-	needle := []byte("mutant-memscan-marker-\x00\x01\x02-a7f3")
-	keepAlive := make([]byte, len(needle))
-	copy(keepAlive, needle)
-
-	payload, errObj := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj(string(needle))))
-
-	switch runtime.GOOS {
-	case "linux", "windows":
-		if errObj != nil {
-			t.Fatalf("process_memory_scan error on %s: %s", runtime.GOOS, errObj.Inspect())
-		}
-		h, ok := payload.(*object.Hash)
-		if !ok {
-			t.Fatalf("process_memory_scan payload type: %T", payload)
-		}
-		if got := sfHashInt(t, h, "matched"); got < 1 {
-			t.Fatalf("expected the marker to be found in self memory, matched=%d", got)
-		}
-		addrs, ok := sfHashValue(t, h, "addresses").(*object.Array)
-		if !ok || len(addrs.Elements) < 1 {
-			t.Fatalf("expected at least one match address")
-		}
-	default:
-		if errObj == nil {
-			t.Fatalf("expected process_memory_scan unsupported error on %s", runtime.GOOS)
-		}
-	}
-	runtime.KeepAlive(keepAlive)
-
-	// Non-self pid and empty pattern are rejected honestly.
-	otherPid := os.Getpid() + 1
-	if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(otherPid)}, stringObj("x"))); e == nil {
-		t.Fatal("scanning a non-self pid should error")
+// What process_memory_scan refuses. This used to assert that a self-scan found
+// a marker the test had itself put in this process's memory, which is the one
+// thing a self-scan can always do: the pattern argument is in the memory being
+// scanned, so the assertion held whether the scanner worked or not, and a
+// pattern that existed nowhere on the machine matched too. The scan itself is
+// proved against another process in process_identity_test.go; what is left here
+// is the pair of arguments that are refused. M26-NET-007.
+func TestProcessMemoryScanRefusals(t *testing.T) {
+	if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj("x"))); e == nil {
+		t.Fatal("scanning the calling process should error: its own copy of the pattern is in range")
 	}
 	if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: int64(os.Getpid())}, stringObj(""))); e == nil {
 		t.Fatal("empty pattern should error")
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		// Off the two platforms with a region walker, even a reachable pid is
+		// an honest unsupported error rather than an empty result.
+		if _, e := unwrapPair(t, ProcessMemoryScan(&object.Integer{Value: 1}, stringObj("x"))); e == nil {
+			t.Fatalf("expected process_memory_scan unsupported error on %s", runtime.GOOS)
+		}
 	}
 }
 
