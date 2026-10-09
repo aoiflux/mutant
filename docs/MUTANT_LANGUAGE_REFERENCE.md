@@ -365,6 +365,30 @@ for (n in range(0, 10)) { putln(n); }
 for (n in range(10, 0, -2)) { putln(n); }
 ```
 
+Because an `if` and a `match` are expressions, a `break` can be reached from
+somewhere a value was being built. It **abandons that value**: the expression
+does not finish, nothing is bound or stored, and the loop ends.
+
+```mutant
+for (v in xs) {
+    let row = [v, if (v == stop) { break; } else { score(v) }];
+    keep(row);                 // not reached on the iteration that breaks
+}
+```
+
+So `break`, `continue` and `return` are not values and can never be used as
+one. The array above is never built on the breaking iteration, `row` is never
+bound, and `keep` is never called. The same holds for a hash value, a call
+argument, an operand of an operator, a `match` subject, an `if` condition and a
+template literal's hole.
+
+A loop's **header** is outside the loop. A `break` written in a `while`
+condition, in a counting `for`'s condition or init section, or in a `for…in`'s
+collection, belongs to the loop *surrounding* this one, and is refused outright
+if there is none. The one exception is a counting `for`'s step, which belongs to
+the loop: a `break` there ends it. A `continue` there is refused, because
+skipping the step is a loop that cannot end.
+
 ### Matching (`match`)
 
 `match` is an **expression**: it evaluates to the arm that matched, so it binds,

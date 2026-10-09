@@ -53,7 +53,7 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 
 	case *ast.PrefixExpression:
 		right := eval(node.Right, env)
-		if isError(right) {
+		if isSignal(right) {
 			return right
 		}
 		return evalPrefixExpression(node.Operator, right)
@@ -65,11 +65,11 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 			return evalLogicalExpression(node, env)
 		}
 		left := eval(node.Left, env)
-		if isError(left) {
+		if isSignal(left) {
 			return left
 		}
 		right := eval(node.Right, env)
-		if isError(right) {
+		if isSignal(right) {
 			return right
 		}
 		return evalInfixExpression(node.Operator, left, right)
@@ -101,27 +101,27 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 			return quote(node.Arguments[0], env)
 		}
 		function := eval(node.Function, env)
-		if isError(function) {
+		if isSignal(function) {
 			return function
 		}
 		args := evalExpressions(node.Arguments, env)
-		if len(args) == 1 && isError(args[0]) {
+		if len(args) == 1 && isSignal(args[0]) {
 			return args[0]
 		}
 		return applyFunction(function, args)
 	case *ast.ArrayLiteral:
 		elements := evalExpressions(node.Elements, env)
-		if len(elements) == 1 && isError(elements[0]) {
+		if len(elements) == 1 && isSignal(elements[0]) {
 			return elements[0]
 		}
 		return &object.Array{Elements: elements}
 	case *ast.IndexExpression:
 		left := eval(node.Left, env)
-		if isError(left) {
+		if isSignal(left) {
 			return left
 		}
 		index := eval(node.Index, env)
-		if isError(index) {
+		if isSignal(index) {
 			return index
 		}
 		return evalIndexExpression(left, index)
@@ -141,6 +141,12 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 	case *ast.ReturnStatement:
 		values, errObj := evalReturnValues(node, env)
 		if errObj != nil {
+			// Either a fault or an abrupt completion reached while evaluating
+			// one of the returned expressions. It is handed up as it stands and
+			// NOT wrapped: `return 1 + (if (c) { return 99; } else { x })` has
+			// already decided what the function answers, and wrapping a
+			// ReturnValue in a second one would make the function answer a
+			// ReturnValue object.
 			return errObj
 		}
 
@@ -155,7 +161,11 @@ func eval(n ast.Node, env *object.Environment) object.Object {
 
 	case *ast.LetStatement:
 		val := eval(node.Value, env)
-		if isError(val) {
+		if isSignal(val) {
+			// Nothing is bound. The initialiser never produced a value, so
+			// there is no value to bind, and binding the signal object instead
+			// is how `let w = if (v == 2) { break; } else { v };` came to read
+			// `type mismatch: INTEGER+BREAK` one line later.
 			return val
 		}
 		names := node.Names
@@ -246,7 +256,10 @@ func evalTemplateLiteral(node *ast.TemplateLiteral, env *object.Environment) obj
 		} else {
 			piece = Eval(node.Parts[i], env)
 		}
-		if isError(piece) {
+		if isSignal(piece) {
+			// A hole that breaks abandons the whole literal rather than
+			// printing "BREAK" into it, which is what Inspect below would
+			// otherwise do.
 			return piece
 		}
 		if str, isString := piece.(*object.String); isString {
@@ -270,6 +283,17 @@ func evalProgram(stmts []ast.Statement, env *object.Environment) object.Object {
 			return res.Value
 		case *fault:
 			return res
+		}
+
+		// A break or a continue that reached the top level has no loop to act
+		// on, and the compiler refuses such a program outright. This is the
+		// second boundary loopControlEscaped guards -- the first is a function
+		// body -- and it has to be a refusal here for the same reason: a
+		// program that falls off the end of a `break` carries on with an
+		// answer nobody can tell from a deliberate one. `let n = 1; break; n;`
+		// answered 1.
+		if escaped := loopControlEscaped(res); escaped != nil {
+			return escaped
 		}
 	}
 	return res
@@ -432,8 +456,15 @@ func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Enviro
 	return env
 }
 
-// loopControlEscaped reports a `break` or a `continue` that reached the end of
-// a function body with no loop in that body to act on.
+// loopControlEscaped reports a `break` or a `continue` that reached a boundary
+// with no loop on this side of it to act on.
+//
+// There are two such boundaries and it guards both: the end of a function body,
+// which is where M26-EVL-023 needed it, and the end of the program, which is
+// where M26-EVL-025 did. The compiler draws the same line in the same two
+// places -- it clears loopContexts when it enters a function body and starts
+// with it empty at the top level -- so these are the two places a signal can
+// still be travelling with nothing left above it.
 //
 // It is the backstop half of M26-EVL-023, and it is a backstop rather than the
 // fix: the compiler refuses the shape, so a program that reaches here has come
@@ -483,7 +514,7 @@ func evalReturnValues(node *ast.ReturnStatement, env *object.Environment) ([]obj
 		}
 
 		value := eval(expr, env)
-		if isError(value) {
+		if isSignal(value) {
 			return nil, value
 		}
 		values = append(values, value)
@@ -525,9 +556,11 @@ func destructureValues(source object.Object, arity int) []object.Object {
 // falsy; for ||, it is skipped when the left is truthy.
 func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) object.Object {
 	left := eval(node.Left, env)
-	if isError(left) {
+	if isSignal(left) {
 		return left
 	}
+	// Before IsTruthy, which answers true for a Break -- so the short circuit
+	// read a break as "keep going" and the operator produced a boolean.
 	leftTruthy := object.IsTruthy(left)
 
 	if node.Operator == "&&" {
@@ -541,7 +574,7 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 	}
 
 	right := eval(node.Right, env)
-	if isError(right) {
+	if isSignal(right) {
 		return right
 	}
 	if object.IsTruthy(right) {
@@ -561,7 +594,7 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 	for _, pair := range node.Pairs {
 		keyNode, valueNode := pair.Key, pair.Value
 		key := eval(keyNode, env)
-		if isError(key) {
+		if isSignal(key) {
 			return key
 		}
 		hashKey, ok := key.(object.Hashable)
@@ -569,7 +602,10 @@ func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Obje
 			return newError("unusable as hash key: %s", key.Type())
 		}
 		value := eval(valueNode, env)
-		if isError(value) {
+		if isSignal(value) {
+			// One of the three silent shapes of M26-EVL-025: a Break is not
+			// Hashable, so it could only ever arrive as a VALUE, and it was
+			// stored in the hash and the loop ran on.
 			return value
 		}
 		hashed := hashKey.HashKey()
@@ -584,7 +620,12 @@ func evalForInStatement(node *ast.ForInStatement, env *object.Environment) objec
 	}
 
 	iterable := eval(node.Iterable, env)
-	if isError(iterable) {
+	if isSignal(iterable) {
+		// Propagated OUTWARD, not acted on here. The compiler compiles the
+		// iterable before pushing this loop's context
+		// (compiler.compileForInStatement), so a break written in it belongs to
+		// an enclosing loop, or to no loop at all -- and the signal has to
+		// travel for either answer to be reachable.
 		return iterable
 	}
 
@@ -636,7 +677,14 @@ func evalWhileStatement(node *ast.WhileStatement, env *object.Environment) objec
 
 	for {
 		condition := eval(node.Condition, loopEnv)
-		if isError(condition) {
+		if isSignal(condition) {
+			// Outward, for the reason given in evalForInStatement: the compiler
+			// compiles a while condition before pushing the loop context.
+			//
+			// Without this the evaluator did not terminate. `while (if (i == 2)
+			// { break; } else { true })` produced a Break object, IsTruthy
+			// answered true for it, and the loop ran for ever on a program the
+			// compiler refuses outright.
 			return condition
 		}
 		if !object.IsTruthy(condition) {
@@ -665,9 +713,16 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 	// Create a new scope for the loop to isolate init variable
 	loopEnv := object.NewEnclosedEnvironement(env)
 
-	// Execute init statement once
+	// Execute init statement once. Its result was discarded, which meant a
+	// failure in it was discarded too: `for (let i = (1 + "x"); i < 3; ...)`
+	// swallowed the type error and the loop then ran with i unbound, reporting
+	// `identifier not found: i` from the condition. A signal here is handed
+	// outward for the same reason the condition's is -- the compiler compiles
+	// the init section before pushing this loop's context.
 	if node.Init != nil {
-		eval(node.Init, loopEnv)
+		if initResult := eval(node.Init, loopEnv); isSignal(initResult) {
+			return initResult
+		}
 	}
 
 	var result object.Object
@@ -676,7 +731,8 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 	for {
 		if node.Condition != nil {
 			condition := eval(node.Condition, loopEnv)
-			if isError(condition) {
+			if isSignal(condition) {
+				// Outward, as in evalWhileStatement.
 				return condition
 			}
 			if !object.IsTruthy(condition) {
@@ -701,11 +757,33 @@ func evalForStatement(node *ast.ForStatement, env *object.Environment) object.Ob
 			}
 		}
 
-		// Execute post expression
+		// Execute post expression.
+		//
+		// The post section is the one part of a loop header that belongs to the
+		// loop: the compiler compiles it INSIDE this loop's context, after the
+		// body, so a break written there is this loop's break. The condition,
+		// the init section and a for-in's iterable are all compiled outside it
+		// and propagate instead. That asymmetry is the compiler's, and matching
+		// it is the point -- it is not an asymmetry worth inventing twice.
 		if node.Post != nil {
 			postResult := eval(node.Post, loopEnv)
 			if isError(postResult) {
 				return postResult
+			}
+			if postResult != nil {
+				switch postResult.Type() {
+				case object.BREAK_OBJ:
+					return NULL
+				case object.CONTINUE_OBJ:
+					// Refused, because neither reading of it terminates: going
+					// on to the condition skips the advance, and re-running the
+					// section -- which is where the compiler's jump points --
+					// reaches the same continue again. Measured both ways
+					// before it was refused; the first hangs.
+					return newError("%s", sema.ContinueInLoopStepRefusal().Message)
+				case object.RETURN_VALUE_OBJ:
+					return postResult
+				}
 			}
 		}
 	}
@@ -805,7 +883,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	// Handle simple identifier assignment: x = value
 	if ident, ok := node.Left.(*ast.Identifier); ok {
 		value := evalAssignedValue(node, env)
-		if isError(value) {
+		if isSignal(value) {
 			return value
 		}
 		if _, updated := env.Update(ident.Value, value); !updated {
@@ -818,7 +896,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	if fieldExpr, ok := node.Left.(*ast.FieldExpression); ok {
 		// Evaluate the left side (should be a struct)
 		obj := eval(fieldExpr.Left, env)
-		if isError(obj) {
+		if isSignal(obj) {
 			return obj
 		}
 
@@ -829,7 +907,7 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 		}
 
 		value := evalAssignedValue(node, env)
-		if isError(value) {
+		if isSignal(value) {
 			return value
 		}
 
@@ -849,12 +927,12 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 	// store after OpSetIndex and this does not.
 	if idxExpr, ok := node.Left.(*ast.IndexExpression); ok {
 		container := eval(idxExpr.Left, env)
-		if isError(container) {
+		if isSignal(container) {
 			return container
 		}
 
 		index := eval(idxExpr.Index, env)
-		if isError(index) {
+		if isSignal(index) {
 			return index
 		}
 
@@ -879,12 +957,12 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 				return current
 			}
 			right := eval(node.Value, env)
-			if isError(right) {
+			if isSignal(right) {
 				return right
 			}
 			value = evalInfixExpression(node.Operator, current, right)
 		}
-		if isError(value) {
+		if isSignal(value) {
 			return value
 		}
 
@@ -916,12 +994,12 @@ func evalAssignedValue(node *ast.AssignExpression, env *object.Environment) obje
 	}
 
 	current := eval(node.Left, env)
-	if isError(current) {
+	if isSignal(current) {
 		return current
 	}
 
 	value := eval(node.Value, env)
-	if isError(value) {
+	if isSignal(value) {
 		return value
 	}
 
@@ -1034,7 +1112,7 @@ func evalFieldExpression(node *ast.FieldExpression, env *object.Environment) obj
 
 	// Evaluate the left side
 	left := eval(node.Left, env)
-	if isError(left) {
+	if isSignal(left) {
 		return left
 	}
 
@@ -1094,7 +1172,7 @@ func evalStructLiteral(node *ast.StructLiteral, env *object.Environment) object.
 				node.Name.Value, fieldVal.Name.Value))
 		}
 		val := eval(fieldVal.Value, env)
-		if isError(val) {
+		if isSignal(val) {
 			return val
 		}
 		fields[fieldVal.Name.Value] = val

@@ -50,6 +50,16 @@ func evalUnquoteCalls(quoted ast.Node, env *object.Environment) (ast.Node, *faul
 			failure, _ = unquoted.(*fault)
 			return node
 		}
+		// A break or a continue inside an unquote argument has no loop to act
+		// on -- the argument is evaluated here, during expansion, with no
+		// enclosing loop in sight -- and loopControlEscaped says so in the
+		// compiler's own words. Without this the signal reached
+		// convertObjectToASTNode, whose error names a type rather than the
+		// mistake, and a nil failure would have been reported as a success.
+		if escaped := loopControlEscaped(unquoted); escaped != nil {
+			failure, _ = escaped.(*fault)
+			return node
+		}
 
 		converted, err := convertObjectToASTNode(unquoted)
 		if err != nil {

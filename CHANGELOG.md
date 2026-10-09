@@ -859,6 +859,53 @@ exhaustive lists.
 
 ### Fixed
 
+- **A `break`, a `continue` or a `return` reached from inside an expression is
+  no longer used as a value by the tree-walking engine.** A block is a value in
+  this language -- `let v = if (c) { break; } else { 1 };` is ordinary source --
+  so evaluating a block hands the signal back as the block's result, and
+  expression evaluation only ever guarded against errors. A signal is not an
+  error, so it was treated as a value: appended to an argument list, stored as a
+  hash value, used as an array element, or added to an integer. The loop or the
+  function it was meant for never saw it.
+
+  Measured over forty-two shapes across both engines. The tree-walker was wrong
+  on twelve of thirteen loop-control shapes and five of seven `return` shapes.
+  Nine
+  surfaced as errors naming the control object as a type -- `type mismatch:
+  INTEGER+BREAK`, `unknown operator: -BREAK`, `index operator not supported:
+  ARRAY` -- which at least said something was wrong. **Thirteen answered an
+  ordinary number with no diagnostic at all:** a `break` stored in an array, a
+  hash or an argument list, the loop running to completion, exit 0. And `while
+  (if (i == 2) { break; } else { true })` did not terminate, because a Break
+  object is truthy, so the condition read it as "keep going" -- a program the
+  compiler refuses outright made the engine loop for ever.
+
+  It matters beyond the tree-walker's own entry point, which is what made it
+  worth fixing before the compiler half: `mutant gen` runs `DefineMacros` and
+  `ExpandMacros` for every module with no flag behind it, so a macro body of one
+  of those thirteen shapes spliced a wrong value into the generated program and
+  said nothing.
+
+  The fix propagates the signal instead of consuming it, at every position where
+  a sub-expression's result is used as a value, and refuses it where it has
+  nowhere left to go -- the end of the program, next to the end of a function
+  body, which the previous fix in this family already guarded. A loop's header
+  follows the compiler: a condition, an init section and a `for…in`'s collection
+  are outside the loop, so a signal in one belongs to an enclosing loop or is
+  refused; a counting `for`'s step is inside it, so a `break` there ends the
+  loop. A `continue` in a step is refused, because neither reading of it
+  terminates -- going on to the condition skips the advance, and re-running the
+  step reaches the same `continue` again. The sentence for that refusal lives in
+  `sema` with the others, so the compiler cannot phrase it differently when its
+  half lands.
+
+  The compiler still gets four of these shapes wrong in its own way, by leaving
+  a half-built operand on the stack, and answers a boolean for the step case.
+  That is tracked separately, and `parity/expression_signal_parity_test.go`
+  records which four rather than leaving them out of the suite: it fails if one
+  of them starts agreeing, so the compiler fix has to update the list rather
+  than discover it.
+
 - **`go run ./cmd/gendocs -check` answers for the hand-written documents too.**
   It compared the three artifacts it generates and nothing else, and reported
   `docs/CAPABILITY_REFERENCE.md is up to date` in the same words whether or not

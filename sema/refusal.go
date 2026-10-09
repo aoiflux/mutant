@@ -41,6 +41,12 @@ const (
 	// body is a loop boundary in both engines now, so a break inside a closure
 	// has no loop even when the call sits inside one.
 	RefuseLoopControlOutsideLoop
+
+	// RefuseContinueInLoopStep is a `continue` reached while evaluating a for
+	// loop's post section -- the step that advances it.
+	//
+	// Appended, as every code here is.
+	RefuseContinueInLoopStep
 )
 
 // Refusal is a resolution the language does not permit.
@@ -189,6 +195,32 @@ func LoopControlRefusal(keyword string) *Refusal {
 	return &Refusal{
 		Code:    RefuseLoopControlOutsideLoop,
 		Message: keyword + " used outside of for loop",
+	}
+}
+
+// ContinueInLoopStepRefusal is the sentence for a `continue` reached while a
+// for loop's post section is being evaluated.
+//
+// It is refused rather than given a meaning because it has no terminating one.
+// The post section is the step that advances the loop, and a `continue` in it
+// can only be read two ways: re-run the section from the start, which is what
+// the compiler's jump target says and which re-reaches the same `continue`; or
+// abandon it and go to the condition, which skips the advance. Both loop for
+// ever on a program the author plainly meant to terminate, and the second is
+// what the tree-walker did while this was being written -- measured as a hang,
+// from a program the compiler accepted and answered a boolean for.
+//
+// A `break` in a post section is not refused. It has exactly one meaning, the
+// loop ends, and both engines agree on it.
+//
+// Lives here, like LoopControlRefusal, so the two engines cannot phrase it two
+// ways. The tree-walker raises it today; the compiler accepts the shape and
+// leaves a half-built operand on the stack, which is M26-CMP-003's work.
+func ContinueInLoopStepRefusal() *Refusal {
+	return &Refusal{
+		Code: RefuseContinueInLoopStep,
+		Message: "continue in a for loop's post section would skip the step that advances the loop, " +
+			"so the loop could never end; write it in the body instead",
 	}
 }
 

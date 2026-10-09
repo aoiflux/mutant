@@ -7,12 +7,21 @@ import (
 	"mutant/object"
 )
 
+// evalExpressions evaluates an argument list or an array literal's elements,
+// left to right, stopping at the first signal.
+//
+// The one-element slice is how a signal is reported: both callers test
+// `len(result) == 1 && isSignal(result[0])`. That is why the stop has to happen
+// here rather than in the callers -- a Break appended to the list alongside two
+// real operands arrives as a three-element slice and reads as three values. It
+// did, and `len([if (v == 2) { break; } else { v }])` answered 1 inside a loop
+// that should have ended.
 func evalExpressions(exps []ast.Expression, env *object.Environment) []object.Object {
 	var result []object.Object
 
 	for _, e := range exps {
 		evaluated := eval(e, env)
-		if isError(evaluated) {
+		if isSignal(evaluated) {
 			return []object.Object{evaluated}
 		}
 		result = append(result, evaluated)
@@ -188,7 +197,7 @@ func evalMatchArmBody(arm *ast.MatchArm, env *object.Environment) object.Object 
 // some arm had produced it.
 func evalMatchExpression(node *ast.MatchExpression, env *object.Environment) object.Object {
 	subject := eval(node.Subject, env)
-	if isError(subject) {
+	if isSignal(subject) {
 		return subject
 	}
 
@@ -203,7 +212,7 @@ func evalMatchExpression(node *ast.MatchExpression, env *object.Environment) obj
 
 		for _, pattern := range arm.Patterns {
 			value := eval(pattern, env)
-			if isError(value) {
+			if isSignal(value) {
 				return value
 			}
 
@@ -276,7 +285,10 @@ func evalBytesInfixExpression(operator string, left, right object.Object) object
 
 func evalIfExpression(node *ast.IfExpression, env *object.Environment) object.Object {
 	condition := eval(node.Condition, env)
-	if isError(condition) {
+	if isSignal(condition) {
+		// Before IsTruthy. A Break is truthy, so the consequence used to run:
+		// `if (if (v == 2) { break; } else { false }) { n = n + 100; }` added
+		// 100 on the iteration that was meant to leave the loop.
 		return condition
 	}
 	if object.IsTruthy(condition) {
