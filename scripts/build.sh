@@ -10,10 +10,9 @@ WASM_REPL=1
 # value this line can see. --output-dir foo used to leave the wasm artifacts,
 # and now their SHA256SUMS, sitting under dist/ next to nothing.
 WASM_OUT_DIR=""
-# How the Go toolchain is spelled on this machine. Which VERSION a release
-# may be built with is go.mod's business, and it is checked below rather than
-# trusted. Nothing is read from the environment: pass --go go1.26.6 to use a
-# golang.org/dl shim.
+# How the Go toolchain is spelled on this machine. Nothing is read from the
+# environment: pass --go go1.26.6 to use a golang.org/dl shim. The version is
+# NOT checked here -- see the note above GO_BUILD_FLAGS.
 GO_NAME="go"
 
 while [[ $# -gt 0 ]]; do
@@ -62,8 +61,8 @@ Options:
   --wasm-repl         Build browser REPL wasm artifact and copy wasm_exec.js (default: enabled)
   --no-wasm-repl      Skip browser REPL wasm build
   --wasm-out-dir <d>  Output directory for wasm artifacts (default: dist/wasm-repl)
-  --go <command>      Go toolchain to build with (default: go). It must be the
-                      version go.mod names, e.g. --go go1.26.6
+  --go <command>      Go toolchain to build with (default: go). go.mod names the
+                      version a release is meant to use, e.g. --go go1.26.6
 
 Writes a SHA256SUMS beside the binaries, and another beside the wasm
 artifacts, each checkable with `cd <dir> && sha256sum -c SHA256SUMS`.
@@ -212,24 +211,15 @@ if [[ -z "$GO_BIN" ]]; then
   exit 1
 fi
 
-# A release is built with the toolchain go.mod names, and this script refuses
-# any other. Not pedantry about patch numbers: go1.27.0 turns the jsonv2
-# experiment on by default, so encoding/json compiles from its v2_*.go sources
-# and the v1 files are not built at all, while every gate of the 2.6.0 review
-# ran on the v1 engine. Owner decision 2026-10-08. release_gate.sh already
-# refuses a mismatch; without the same check HERE a release could be gated on
-# one engine and shipped from the other, which is how v2.5.0 came to be built
-# with a newer Go than its own tag pinned.
-GO_MOD_VERSION="$(sed -n 's/^go[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$REPO_ROOT/go.mod" | head -n 1)"
-GO_VERSION="$(run_tool "$GO_BIN" env GOVERSION)"
-
-if [[ "$GO_VERSION" != "go$GO_MOD_VERSION" ]]; then
-  echo "go.mod pins go $GO_MOD_VERSION but '$GO_NAME' is $GO_VERSION." >&2
-  echo "Install it with: go install golang.org/dl/go$GO_MOD_VERSION@latest" >&2
-  echo "then: go$GO_MOD_VERSION download" >&2
-  echo "then pass: --go go$GO_MOD_VERSION" >&2
-  exit 1
-fi
+# This script does NOT check the toolchain version. Owner decision 2026-10-09:
+# the refusal made compiling difficult and came out of both build scripts.
+# go.mod still names the version a release is meant to be built with, and
+# release_gate.sh still refuses a mismatch, so the pin is enforced where a
+# release is gated rather than on every build. Worth knowing if the two ever
+# disagree: go1.27.0 turns the jsonv2 experiment on by default, so encoding/json
+# compiles from its v2_*.go sources and the v1 files are not built at all, and
+# `go env GOEXPERIMENT` will not show it -- `go list -f '{{.GoFiles}}'
+# encoding/json` is the check that does.
 
 GO_BUILD_FLAGS=(
   -trimpath

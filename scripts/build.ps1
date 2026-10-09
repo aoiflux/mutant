@@ -5,9 +5,9 @@ Param(
     [switch]$HostOnly,
     [switch]$WasmRepl,
     [string]$WasmOutDir = "$OutputDir/wasm-repl",
-    # How the Go toolchain is spelled on this machine. WHICH version a release
-    # may be built with is go.mod's business, and it is checked below rather
-    # than trusted. Pass -Go go1.26.6 to use a golang.org/dl shim.
+    # How the Go toolchain is spelled on this machine. Pass -Go go1.26.6 to use
+    # a golang.org/dl shim. The version is NOT checked here -- see the note
+    # above $targets.
     [string]$Go = "go"
 )
 
@@ -20,14 +20,15 @@ if ($PSBoundParameters.ContainsKey("WasmRepl")) {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
-# A release is built with the toolchain go.mod names, and this script refuses
-# any other. Not pedantry about patch numbers: go1.27.0 turns the jsonv2
-# experiment on by default, so encoding/json compiles from its v2_*.go sources
-# and the v1 files are not built at all, while every gate of the 2.6.0 review
-# ran on the v1 engine. Owner decision 2026-10-08. release_gate.ps1 already
-# refuses a mismatch; without the same check HERE a release could be gated on
-# one engine and shipped from the other, which is how v2.5.0 came to be built
-# with a newer Go than its own tag pinned.
+# This script does NOT check the toolchain version. Owner decision 2026-10-09:
+# the refusal made compiling difficult and came out of both build scripts.
+# go.mod still names the version a release is meant to be built with, and
+# release_gate.ps1 still refuses a mismatch, so the pin is enforced where a
+# release is gated rather than on every build. Worth knowing if the two ever
+# disagree: go1.27.0 turns the jsonv2 experiment on by default, so encoding/json
+# compiles from its v2_*.go sources and the v1 files are not built at all, and
+# `go env GOEXPERIMENT` will not show it -- `go list -f '{{.GoFiles}}'
+# encoding/json` is the check that does.
 $targets = @(
     @{ GoOS = "windows"; GoArch = "amd64"; ExeSuffix = ".exe" },
     @{ GoOS = "windows"; GoArch = "arm64"; ExeSuffix = ".exe" },
