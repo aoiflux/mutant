@@ -55,13 +55,16 @@ func lintRoleLiteral(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnostic
 			if hash == nil {
 				return
 			}
-			// Two `role` keys in one literal leave which one the run time reads
-			// to the order it builds the hash in, which the syntax does not say.
+			// A `role` key written twice is refused by the parser, so a literal
+			// that gets here names it at most once. The count is still checked:
+			// `keys != 1` also covers a literal that names no role at all, and a
+			// program the parser has refused still reaches the lint, because the
+			// editor lints what is on screen.
 			var role mast.Expression
 			keys := 0
-			for key, value := range hash.Pairs {
-				if text, literal := literalString(key); literal && text == "role" {
-					role = value
+			for _, pair := range hash.Pairs {
+				if text, literal := literalString(pair.Key); literal && text == "role" {
+					role = pair.Value
 					keys++
 				}
 			}

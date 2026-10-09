@@ -204,9 +204,12 @@ func Clone(node Node) Node {
 		if node == nil {
 			return nil
 		}
-		pairs := make(map[Expression]Expression, len(node.Pairs))
-		for key, value := range node.Pairs {
-			pairs[cloneExpression(key)] = cloneExpression(value)
+		pairs := make([]HashPair, 0, len(node.Pairs))
+		for _, pair := range node.Pairs {
+			pairs = append(pairs, HashPair{
+				Key:   cloneExpression(pair.Key),
+				Value: cloneExpression(pair.Value),
+			})
 		}
 		return &HashLiteral{Token: node.Token, Pairs: pairs}
 	case *StructLiteral:

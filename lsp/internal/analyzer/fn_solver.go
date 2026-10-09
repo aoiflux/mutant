@@ -430,9 +430,9 @@ func walkBodyExpressions(body *mast.BlockStatement, visit func(mast.Expression))
 				walkExpression(el)
 			}
 		case *mast.HashLiteral:
-			for key, value := range n.Pairs {
-				walkExpression(key)
-				walkExpression(value)
+			for _, pair := range n.Pairs {
+				walkExpression(pair.Key)
+				walkExpression(pair.Value)
 			}
 		case *mast.IfExpression:
 			walkExpression(n.Condition)

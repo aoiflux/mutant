@@ -255,9 +255,9 @@ func (s *structBindingScan) expression(node ast.Expression) {
 		}
 
 	case *ast.HashLiteral:
-		for key, value := range node.Pairs {
-			s.expression(key)
-			s.expression(value)
+		for _, pair := range node.Pairs {
+			s.expression(pair.Key)
+			s.expression(pair.Value)
 		}
 
 	case *ast.StructLiteral:

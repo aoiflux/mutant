@@ -240,9 +240,9 @@ func namesHeldAsPairs(statements []mast.Statement) map[string]struct{} {
 			if node == nil {
 				return
 			}
-			for key, value := range node.Pairs {
-				walkExpression(key)
-				walkExpression(value)
+			for _, pair := range node.Pairs {
+				walkExpression(pair.Key)
+				walkExpression(pair.Value)
 			}
 		case *mast.StructLiteral:
 			if node == nil {

@@ -264,12 +264,15 @@ func TestBooleanExpressions(t *testing.T) {
 			},
 		},
 		{
+			// The constants are 1 then 2, not 2 then 1: `<` compiles its left
+			// operand first, like every other binary operator. See
+			// TestLessCompilesItsOperandsInSourceOrder.
 			input:             "1 < 2",
-			expectedConstants: []interface{}{2, 1},
+			expectedConstants: []interface{}{1, 2},
 			expectedInstructions: []code.Instructions{
 				code.Make(code.OpConstant, 0),
 				code.Make(code.OpConstant, 1),
-				code.Make(code.OpGreater),
+				code.Make(code.OpLess),
 				code.Make(code.OpPop),
 			},
 		},

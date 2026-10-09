@@ -148,13 +148,13 @@ func Modify(node Node, modifier ModifierFunc) Node {
 			node.Parts[i], _ = Modify(node.Parts[i], modifier).(Expression)
 		}
 	case *HashLiteral:
-		newPairs := make(map[Expression]Expression)
-		for key, val := range node.Pairs {
-			newKey, _ := Modify(key, modifier).(Expression)
-			newVal, _ := Modify(val, modifier).(Expression)
-			newPairs[newKey] = newVal
+		// In place, which keeps the order the author wrote. The pairs used to be
+		// rebuilt into a fresh map here, and a map has no order to keep -- so a
+		// macro expansion reordered every hash literal it touched.
+		for i := range node.Pairs {
+			node.Pairs[i].Key, _ = Modify(node.Pairs[i].Key, modifier).(Expression)
+			node.Pairs[i].Value, _ = Modify(node.Pairs[i].Value, modifier).(Expression)
 		}
-		node.Pairs = newPairs
 	case *StructLiteral:
 		if node.Name != nil {
 			node.Name, _ = Modify(node.Name, modifier).(*Identifier)

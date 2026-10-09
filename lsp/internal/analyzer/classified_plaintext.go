@@ -200,8 +200,8 @@ func (f classifiedFinder) origin(expr mast.Expression, depth int) (source, held 
 		if node == nil {
 			return "", "", false
 		}
-		for _, value := range node.Pairs {
-			if source, _, ok := f.origin(value, depth+1); ok {
+		for _, pair := range node.Pairs {
+			if source, _, ok := f.origin(pair.Value, depth+1); ok {
 				return source, "a hash holding the plaintext", true
 			}
 		}

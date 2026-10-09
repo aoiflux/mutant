@@ -196,7 +196,7 @@ fixed** by the declaration order below, so do not reorder them.
 | 8  | `OpFalse`          | —                               | `→ false`                | Push the singleton `False` object                                |
 | 9  | `OpEqual`          | —                               | `b, a → bool`            | `a == b`                                                         |
 | 10 | `OpUnEqual`        | —                               | `b, a → bool`            | `a != b`                                                         |
-| 11 | `OpGreater`        | —                               | `b, a → bool`            | `a > b` (also used for `<` by swapping operands at compile time) |
+| 11 | `OpGreater`        | —                               | `b, a → bool`            | `a > b`                                                          |
 | 12 | `OpMinus`          | —                               | `a → -a`                 | Unary negation                                                   |
 | 13 | `OpBang`           | —                               | `a → !a`                 | Unary logical NOT                                                |
 | 14 | `OpJumpFalse`      | `target` (2)                    | `cond →`                 | Pop condition; if falsy jump to `target`                         |
@@ -227,7 +227,7 @@ fixed** by the declaration order below, so do not reorder them.
 | 39 | `OpGetField`       | `nameIdx` (2)                   | `struct → val`           | Pop struct; push `struct.Fields[constants[nameIdx]]`             |
 | 40 | `OpSetField`       | `nameIdx` (2)                   | `val, struct → struct`   | Pop value then struct; set field; push struct back               |
 | 41 | `OpEnumValue`      | `typeIdx` (2), `tagIdx` (2)     | `→ EnumValue`            | Create `EnumValue{TypeName, Tag, ordinal}`                       |
-| 42 | `OpGreaterEqual`   | —                               | `b, a → bool`            | `a >= b` (also used for `<=` by swapping operands)               |
+| 42 | `OpGreaterEqual`   | —                               | `b, a → bool`            | `a >= b`                                                         |
 | 43 | `OpSetIndex`       | —                               | `val, idx, obj → obj`    | Mutate `obj[idx]` in place; push the container back              |
 | 44 | `OpBitAnd`         | —                               | `b, a → a&b`             | Bitwise AND; both operands must be `INTEGER`                     |
 | 45 | `OpBitOr`          | —                               | `b, a → a\|b`            | Bitwise OR; both operands must be `INTEGER`                      |
@@ -244,6 +244,8 @@ fixed** by the declaration order below, so do not reorder them.
 | 56 | `OpIterInit`       | —                               | `iterable → iter`        | Pop a collection; push a cursor over it (hash keys in `Inspect` order) |
 | 57 | `OpIterNext`       | `target` (2), `binds` (1)       | `iter → iter[, key], val` | Advance the cursor: push `binds` values on top of it, or jump to `target` when spent |
 | 58 | `OpMatchFail`      | —                               | `subject → (error)`      | Pop the unmatched subject and raise, naming the value that fell through |
+| 59 | `OpLess`           | —                               | `b, a → bool`            | `a < b`                                                          |
+| 60 | `OpLessEqual`      | —                               | `b, a → bool`            | `a <= b`                                                         |
 
 ### 3.2 Stack Notation
 
@@ -255,17 +257,27 @@ The "Stack effect" column uses the convention:
 - `(caller frame)` means the caller's frame is restored — no net stack value in
   the new frame's context.
 
-### 3.3 The `<` Operator Trick
+### 3.3 Comparison Operands Run In Source Order
 
-There is no `OpLess` opcode. When the compiler sees `a < b` it compiles:
+`<` and `<=` have opcodes of their own. Like every other binary operator they
+compile the left operand first, so the operands' side effects run in the order
+they are written:
 
 ```
-[compile b]         ← right operand first
-[compile a]         ← left operand second  (reversed!)
-OpGreater
+[compile a]         ← left operand first
+[compile b]         ← right operand second
+OpLess
 ```
 
-This reuses `OpGreater` without a dedicated less-than opcode.
+There used to be no `OpLess`: the compiler emitted `a < b` as `b > a`, pushing
+the right operand first and reusing `OpGreater`. That saved two opcodes and
+cost the source-order guarantee — `next() < next()` called the right-hand
+`next` first, while every other operator, and the tree-walking evaluator macro
+expansion computes an `unquote` with, called the left-hand one first. The same
+expression then answered differently inline and inside a macro. `OpLess` and
+`OpLessEqual` were appended to the instruction set and the swap removed;
+`OpGreater` and `OpGreaterEqual` keep the values and the meanings they always
+had, so bytecode compiled before the change still runs.
 
 ---
 
@@ -388,6 +400,20 @@ the user wrote; `MacroTable` gives the macro's definition. Both are needed: when
 generated code is wrong, the call site contains none of the logic that failed.
 The parser's `ast.Program.MacroExpansions` side-table carries this from
 expansion to compilation.
+
+**An entry whose line is 0 is a reset.** A lookup answers with the last entry at
+or before an offset, so "populated only over instructions a macro produced"
+needs an entry recording where an expansion stops as much as one recording where
+it starts -- without it the last macro in a program is reported as the origin of
+every instruction compiled after it. `MacroTable` and `EndTable` therefore carry
+entries whose accumulated line is 0, which mean the previous entry's coverage
+ends here: offsets from there on have no macro origin and no recorded end, and a
+reporter falls back to a caret rather than underlining a span it would be taking
+from another construct. `LineTable` never carries one -- an instruction with no
+position of its own belongs to the construct it was emitted for and inherits its
+line, which is what writing no entry achieves. The entry encoding does not
+change, so a decoder that knows nothing about resets reads line 0, and every
+consumer of a position already treats a zero line as no position at all.
 
 **Versioning.** These fields needed no `Version` bump, unlike `BuiltinNames`.
 gob omits zero values and ignores fields it does not know, so a new runtime

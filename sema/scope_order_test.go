@@ -20,22 +20,26 @@ import (
 // costs 70ns and does not grow with the file.
 //
 // The search that makes it flat needs the children sorted, and the walk does
-// not produce them sorted: ast.HashLiteral.Pairs is a Go map, so a function
-// literal written inside one is reached whenever the map hands it over. That
-// same non-determinism already made HashLiteral.String disagree with itself and
-// find-references return shuffled locations, and BuildFile already sorts the
-// references it produces because of it.
+// not promise them sorted: a scope is reached when its parent's case hands it
+// over, and no case is obliged to hand its children over in source order.
+// ast.HashLiteral.Pairs used to make that a certainty rather than a risk -- it
+// was a Go map, so a function literal written inside one was reached whenever
+// the map handed it over, and that same non-determinism made HashLiteral.String
+// disagree with itself and find-references return shuffled locations. The pairs
+// are ordered now (M26-CMP-010); BuildFile still sorts, and this still tests
+// the sort.
 //
-// So this is a test about an invariant rather than about an answer. An
-// unsorted build does not fail outright -- it finds the right scope on the runs
-// where the map happened to agree with the source, and an enclosing one on the
+// So this is a test about an invariant rather than about an answer. An unsorted
+// build would not fail outright -- it would find the right scope on the runs
+// where the walk happened to agree with the source, and an enclosing one on the
 // rest, which reads as the editor intermittently forgetting a parameter. That
 // is the worst shape a defect can have, and it is why the property is asserted
 // directly instead of through a query that would usually pass.
 
-// hashOfFunctions is the fixture: sibling function scopes reachable only
-// through a map. Twelve of them, so that a build which left them in walk order
-// would have to draw the sorted permutation of twelve to pass once.
+// hashOfFunctions is the fixture: twelve sibling function scopes, each
+// reachable only through a hash literal's pairs. Twelve, so that a build which
+// left them in an order of its own would have to draw the sorted permutation of
+// twelve to pass once.
 func hashOfFunctions(pairs int) string {
 	var sb strings.Builder
 	sb.WriteString("let table = {\n")

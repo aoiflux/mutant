@@ -729,7 +729,8 @@ answer the `bytes` type exists to prevent: the bits of a float are not the bits
 of the number it spells, so there is no honest result to return.
 
 The compound forms `&= |= ^= <<= >>=` are sugar in exactly the way `+=` is —
-`x &= mask` is `x = x & mask`.
+`x &= mask` is `x = x & mask`, and the target is evaluated once, exactly as
+it is for `+=`. See [Compound assignment and increment/decrement](#compound-assignment-and-incrementdecrement).
 
 > Masks are written in decimal for now: Mutant has no hex literals, so `0xFF`
 > does not parse. Write `255`.
@@ -738,12 +739,20 @@ The compound forms `&= |= ^= <<= >>=` are sugar in exactly the way `+=` is —
 
 `+= -= *= /= %=`, and the bitwise `&= |= ^= <<= >>=`, update a variable in
 place using its current value, and postfix `++` / `--` add or subtract one.
-They are pure syntactic sugar: `x += y` is exactly
-`x = x + y`, and `x++` is exactly `x = x + 1`, so they follow the same operator
-semantics (integer vs. float promotion, `+=` concatenating strings, integer
-division/modulo-by-zero errors). The target must be an assignable lvalue — a
-variable, field, or index — and, like any `=`, the whole expression evaluates to
-the newly stored value.
+They are syntactic sugar: `x += y` is `x = x + y`, and `x++` is `x = x + 1`, so
+they follow the same operator semantics (integer vs. float promotion, `+=`
+concatenating strings, integer division/modulo-by-zero errors). The target must
+be an assignable lvalue — a variable, field, or index — and, like any `=`, the
+whole expression evaluates to the newly stored value.
+
+The target is evaluated **once**, which is the one place the sugar is not a
+literal rewrite of the text. Given a `next` that returns a different index each
+time it is called, `hist[next()] += 1` calls it once and folds the element that
+single call named; the expansion written out by hand,
+`hist[next()] = hist[next()] + 1`, calls it twice and so adds to a different
+element than it read. Only the target's last index is treated this
+way, because an index before the last one is refused outright unless it is a
+name or a literal.
 
 ```mutant
 let total = 0;
@@ -800,7 +809,32 @@ let stored = (grid[0][1] = 9);   // 9, not [1, 9] and not [[1, 9]]
 
 The parts of an assignment are evaluated in the order they are written: the
 container, then the index, then the value. A compound assignment reads its
-target before its right-hand side, because `x += v` is `x = x + v`.
+target before its right-hand side, because `x += v` is `x = x + v` — and it
+evaluates that target's index once, not once per appearance in the expansion.
+
+**A compound literal runs its parts in the order they are written**, and that
+is a promise about both engines. An array's elements, a hash literal's pairs --
+each key, then its value, pair by pair -- and a struct literal's initialisers
+all run top to bottom as written, whatever order the struct's declaration lists
+its fields in:
+
+```mutant
+let n = 0;
+let next = fn() { n = n + 1; return n; };
+
+struct Header { size, magic }
+let h = Header{magic: next(), size: next()};   // magic is 1, size is 2
+```
+
+**A hash literal may not set one key twice.** `{"k": 1, "k": 2}` is a compile
+error that names the key and where it was written, because one of the two values
+would be dropped and the syntax does not say which -- the same reason
+`P{a: 1, a: 2}` is refused for a struct, and the same answer `json_parse` gives a
+document that names a key twice. Only keys the literal itself states are
+compared, and a kind is part of a key: `1`, `1.0` and `"1"` are three keys, not
+one. `{a: 1, b: 2}` is accepted whatever `a` and `b` turn out to hold, because
+that is not something the compiler can know; if they turn out to be the same key
+at run time, the later pair wins.
 
 ### Macros (`macro`, `quote`, `unquote`)
 

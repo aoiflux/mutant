@@ -37,6 +37,15 @@ func BuildLineIndex(t LineTable) *LineIndex {
 	index := &LineIndex{firstIP: make(map[int]int, 32)}
 
 	t.forEach(func(entry lineEntry) bool {
+		if entry.line <= 0 {
+			// A reset entry records where the entry before it stopped covering
+			// the stream, not a line with code on it, so it must never become a
+			// line an editor offers a breakpoint on. Only the macro and end
+			// tables carry resets and only the main line table is indexed
+			// today, so this excludes nothing at present; it costs one
+			// comparison, and its absence costs a breakpoint on line 0.
+			return true
+		}
 		if _, seen := index.firstIP[entry.line]; seen {
 			// Decoding runs forwards and offsets never decrease, so the first
 			// sighting of a line is already its lowest offset. A later entry

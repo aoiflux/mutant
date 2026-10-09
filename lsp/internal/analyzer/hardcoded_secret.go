@@ -192,9 +192,9 @@ func secretSites(statements []mast.Statement) []secretSite {
 				if node == nil {
 					return
 				}
-				for key, value := range node.Pairs {
-					if text, ok := literalString(key); ok {
-						note(text, value)
+				for _, pair := range node.Pairs {
+					if text, ok := literalString(pair.Key); ok {
+						note(text, pair.Value)
 					}
 				}
 			case *mast.StructLiteral:

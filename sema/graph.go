@@ -530,13 +530,14 @@ func buildFile(moduleKey string, program *ast.Program, w *Workspace, structOf St
 		b.statement(stmt)
 	}
 
-	// Sorted rather than left in walk order. HashLiteral.Pairs is a Go map, so
-	// the walk reaches the uses inside a hash literal in a different order on
-	// every run -- the same non-determinism that made HashLiteral.String
-	// disagree with itself and two clone tests fail at random. Find-references
-	// over a hash literal returned its locations shuffled for the same reason.
-	// Sorting once here is cheaper than making every walk order-stable and
-	// cannot be forgotten by a later case.
+	// Sorted rather than left in walk order. A node is reached when its parent's
+	// case hands it over, and no case is obliged to hand its children over in
+	// source order -- so sorting once here is cheaper than making every walk
+	// order-stable and cannot be forgotten by a case added later. It used to be
+	// load-bearing for a stronger reason: HashLiteral.Pairs was a Go map, so the
+	// uses inside a hash literal came out shuffled on every run, and
+	// find-references over one returned its locations in a different order each
+	// time (M26-CMP-010).
 	sort.SliceStable(g.refList, func(i, j int) bool {
 		return startsBefore(g.refList[i].UseRange, g.refList[j].UseRange)
 	})

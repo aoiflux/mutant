@@ -227,9 +227,9 @@ func walkExpressionsFiltered(
 				walkExpression(el)
 			}
 		case *mast.HashLiteral:
-			for key, value := range n.Pairs {
-				walkExpression(key)
-				walkExpression(value)
+			for _, pair := range n.Pairs {
+				walkExpression(pair.Key)
+				walkExpression(pair.Value)
 			}
 		case *mast.StructLiteral:
 			for _, field := range n.Fields {

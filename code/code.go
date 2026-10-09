@@ -54,7 +54,7 @@ const (
 	OpSetField
 	OpEnumValue
 	// dev-sec-platform-upgrades — appended to keep existing opcode values stable.
-	OpGreaterEqual // >= (and <= via operand swap)
+	OpGreaterEqual // >=
 	OpSetIndex     // a[i] = v / h[k] = v
 	// L-5 bitwise operators — appended for the same reason: an opcode's numeric
 	// value is part of the on-disk format, so new ones go on the end.
@@ -107,6 +107,25 @@ const (
 	// error value -- would make the match evaluate *to* that error, which is
 	// the silent wrong answer a fall-through was supposed to stop being.
 	OpMatchFail
+	// M26-CMP-005 `<` and `<=` -- appended for the same reason. These did
+	// not exist because the compiler reused the greater family and compiled
+	// the operands in the other order, emitting `a < b` as `b > a`. That ran
+	// the right operand's side effects first, which no other binary operator
+	// does and which the tree-walking evaluator macro expansion runs on does
+	// not do either: `next() < next()` answered one way inline and the other
+	// way inside a macro.
+	//
+	// Two opcodes rather than one that swaps the top of the stack: a swap
+	// would add an instruction to every comparison, and it would keep the
+	// asymmetry in the stream a reader is trying to follow instead of
+	// removing it.
+	//
+	// They order exactly what the greater family orders -- two integers, two
+	// floats, and a mixed pair promoted to float -- and refuse everything
+	// else with the same sentence it uses. `<` disagreeing with `>` about
+	// which types are ordered would be a worse answer than either.
+	OpLess      // <
+	OpLessEqual // <=
 )
 
 type Definition struct {
@@ -174,6 +193,8 @@ var definitions = map[Opcode]*Definition{
 	OpIterInit:       {"OpIterInit", []int{}},
 	OpIterNext:       {"OpIterNext", []int{2, 1}},
 	OpMatchFail:      {"OpMatchFail", []int{}},
+	OpLess:           {"OpLess", []int{}},
+	OpLessEqual:      {"OpLessEqual", []int{}},
 }
 
 // ConstantOperands lists, per opcode, which of its operand slots hold an index

@@ -438,11 +438,12 @@ func fieldID(t *testing.T, g *Graph) string {
 	return ""
 }
 
-// Walk order is not source order. HashLiteral.Pairs is a Go map, so the uses
-// inside one are reached in a different order on every run -- the same
-// non-determinism that made two clone tests fail at random before
-// HashLiteral.String started sorting. Find-references over a hash literal
-// returned its locations shuffled for exactly this reason.
+// Source order, whatever order the walk reached the uses in. This used to be a
+// hash literal's own defect: HashLiteral.Pairs was a Go map, so the uses inside
+// one were reached in a different order on every run and find-references over a
+// hash literal returned its locations shuffled. The pairs are ordered now
+// (M26-CMP-010), so what this pins is BuildFile's sort -- the thing that keeps
+// the answer in source order for every walk and not just this one.
 //
 // Built repeatedly because one build could come out sorted by chance; eight
 // entries make that a one-in-forty-thousand draw, and twenty independent draws

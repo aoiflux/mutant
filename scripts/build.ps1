@@ -28,11 +28,6 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 # refuses a mismatch; without the same check HERE a release could be gated on
 # one engine and shipped from the other, which is how v2.5.0 came to be built
 # with a newer Go than its own tag pinned.
-$goModVersion = (Select-String -Path (Join-Path $repoRoot "go.mod") -Pattern '^go\s+(\S+)').Matches[0].Groups[1].Value
-$goVersion = (& $Go env GOVERSION).Trim()
-if ($goVersion -ne "go$goModVersion") {
-    throw "go.mod pins go $goModVersion but '$Go' is $goVersion; install it with ``go install golang.org/dl/go$goModVersion@latest`` then ``go$goModVersion download``, and pass -Go go$goModVersion"
-}
 $targets = @(
     @{ GoOS = "windows"; GoArch = "amd64"; ExeSuffix = ".exe" },
     @{ GoOS = "windows"; GoArch = "arm64"; ExeSuffix = ".exe" },

@@ -80,6 +80,10 @@ const (
 //
 // MacroLine is non-zero only for an instruction a macro produced, and points at
 // the macro's definition rather than its call. Line already points at the call.
+// What holds that "only" up is the entry the compiler records in the macro
+// table where an expansion ends: without one the table's last entry stays in
+// force, and every instruction after the first macro in a program reports that
+// macro as its origin. See code.LineTableBuilder.AddOrReset.
 type TracebackFrame struct {
 	Function string
 

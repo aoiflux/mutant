@@ -232,11 +232,11 @@ func (s *Snapshot) structTypeNameInExpression(expr mast.Expression, target *mast
 			}
 		}
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			if typeName, ok := s.structTypeNameInExpression(key, target); ok {
+		for _, pair := range node.Pairs {
+			if typeName, ok := s.structTypeNameInExpression(pair.Key, target); ok {
 				return typeName, true
 			}
-			if typeName, ok := s.structTypeNameInExpression(value, target); ok {
+			if typeName, ok := s.structTypeNameInExpression(pair.Value, target); ok {
 				return typeName, true
 			}
 		}

@@ -130,21 +130,27 @@ func TestModify(t *testing.T) {
 	}
 
 	hashLiteral := &HashLiteral{
-		Pairs: map[Expression]Expression{
-			one(): one(),
-			two(): two(),
+		Pairs: []HashPair{
+			{Key: one(), Value: one()},
+			{Key: two(), Value: two()},
 		},
 	}
 	Modify(hashLiteral, turnOneIntoTwo)
 
-	for key, val := range hashLiteral.Pairs {
-		key, _ := key.(*IntegerLiteral)
-		if key.Value != 2 {
-			t.Errorf("value is not %d, got=%d", 2, key.Value)
+	// The count and the positions are part of what Modify has to leave alone:
+	// two pairs that modify into the same two numbers are still two pairs, in
+	// the order they were written.
+	if len(hashLiteral.Pairs) != 2 {
+		t.Fatalf("modify left %d pairs, want 2", len(hashLiteral.Pairs))
+	}
+	for i, pair := range hashLiteral.Pairs {
+		key, _ := pair.Key.(*IntegerLiteral)
+		if key == nil || key.Value != 2 {
+			t.Errorf("pair %d key is not %d, got=%v", i, 2, pair.Key)
 		}
-		val, _ := val.(*IntegerLiteral)
-		if val.Value != 2 {
-			t.Errorf("value is not %d, got=%d", 2, val.Value)
+		val, _ := pair.Value.(*IntegerLiteral)
+		if val == nil || val.Value != 2 {
+			t.Errorf("pair %d value is not %d, got=%v", i, 2, pair.Value)
 		}
 	}
 }

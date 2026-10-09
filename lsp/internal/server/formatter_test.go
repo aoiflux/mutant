@@ -163,9 +163,11 @@ func TestFormatterDoesNotInventBlankLines(t *testing.T) {
 	}
 }
 
-// HashLiteral.Pairs is a Go map. Printing it without sorting yields a
-// different byte sequence per run, which would make formatting
-// non-deterministic and break format-on-save.
+// Hash literals used to be the one construct whose rendering was not a function
+// of the tree: HashLiteral.Pairs was a Go map, and printing it without sorting
+// yielded a different byte sequence per run, which would make formatting
+// non-deterministic and break format-on-save. The pairs are ordered now
+// (M26-CMP-010), and this keeps saying so.
 func TestFormatterIsDeterministicForHashLiterals(t *testing.T) {
 	src := `let h = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6};`
 

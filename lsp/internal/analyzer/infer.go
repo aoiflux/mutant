@@ -289,9 +289,9 @@ func (inf *typeInferer) exprKind(e mast.Expression, env *typeEnv) Type {
 		}
 		return arrayOf(elem)
 	case *mast.HashLiteral:
-		for k, v := range n.Pairs {
-			inf.expr(k, env)
-			inf.expr(v, env)
+		for _, pair := range n.Pairs {
+			inf.expr(pair.Key, env)
+			inf.expr(pair.Value, env)
 		}
 		return tHash
 	case *mast.StructLiteral:

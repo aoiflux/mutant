@@ -562,12 +562,56 @@ func slotNames(store map[string]Symbol, scope SymbolScope, count int) []string {
 }
 
 // freeOriginal returns the outer symbol that this table's free variable index
-// captures. The compiler uses it to tell an ordinary captured variable, which
-// lives in a cell and can be assigned, from the enclosing function's own name,
-// which is captured by value and cannot.
+// captures: the immediate original, one hop out and no further.
+//
+// One hop is deliberate, and is also why this is not on its own the answer to
+// any question about what a capture ultimately refers to. A FreeScope original
+// means the enclosing function had already captured the same name, so the chain
+// carries on in its table; freeCapturesFunctionName below is what follows it.
 func (st *SymbolTable) freeOriginal(index int) (Symbol, bool) {
 	if index < 0 || index >= len(st.FreeSymbols) {
 		return Symbol{}, false
 	}
 	return st.FreeSymbols[index], true
+}
+
+// freeCapturesFunctionName reports whether this table's free variable index
+// ultimately names the enclosing function itself rather than any storage.
+//
+// freeOriginal answers for one hop, and one hop stops being enough as soon as a
+// third function is involved: the middle function captured the name first, so
+// the inner function's immediate original is a FreeScope symbol and the name
+// reads as an ordinary captured variable. It is not one at any depth. A
+// function's own name is handed along by value with OpCurrentClosure -- see
+// emitCapture -- so there is no cell behind it however many frames it has been
+// passed through, which is why the whole chain has to be followed.
+//
+// The index is read in a different table at each step, and that is the shape
+// defineFree builds: a FreeScope entry in this table's FreeSymbols was returned
+// by st.Outer.Resolve, so its index is a position in st.Outer's FreeSymbols.
+//
+// The walk terminates. Every step moves one table outward along Outer and never
+// back inward, and the Outer chain is a finite list -- NewEnclosedSymbolTable
+// only ever points a new table at one that already exists, so it cannot be made
+// to contain a cycle -- which ends at the root. The root is also where a chain
+// has to have ended already: Resolve calls defineFree only when Outer is
+// non-nil, so the root's FreeSymbols is always empty.
+//
+// A chain that reaches neither -- a broken index, or a FreeScope original with
+// no table left to read it in -- answers false. That is the honest answer to
+// "is this certainly the function's own name": a false yes would refuse a write
+// to a cell that has always worked, while a false no leaves the VM's own check
+// on the operand as the backstop it already is.
+func (st *SymbolTable) freeCapturesFunctionName(index int) bool {
+	for table := st; table != nil; table = table.Outer {
+		original, ok := table.freeOriginal(index)
+		if !ok {
+			return false
+		}
+		if original.Scope != FreeScope {
+			return original.Scope == FunctionScope
+		}
+		index = original.Index
+	}
+	return false
 }

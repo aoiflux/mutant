@@ -255,9 +255,21 @@ func TestNestedIndexAssignmentParity(t *testing.T) {
 // the two itself and could pick either order; it used to pick the other one.
 //
 // Both halves have to have a side effect for the order to be visible at all,
-// which is why the target's index is a call here: `a[note("idx")] += note("val")`
-// reads the index, reads it again as part of reading the target, and only then
-// evaluates the right-hand side.
+// which is why the target's index is a call here:
+// `a[note("idx")] += note("val")` reads the index, then reads the element that
+// index names, then evaluates the right-hand side.
+//
+// `order` was [idx, idx, val] until the index stopped being evaluated twice,
+// and the paragraph above used to describe that second read as the design. It
+// was not the design: both engines evaluated the index again while reading the
+// target back, and this test's golden value recorded the defect. Reading the
+// target before the right-hand side is the invariant this test guards; reading
+// the target's index twice never was.
+//
+// The value is [6, 1] either way -- both reads of note("idx", 0) answered 0, so
+// the second one cost a side effect and not the result, which is how it went
+// unnoticed. TestCompoundAssignmentEvaluatesItsLastIndexOnce pins the shape
+// where it does cost the result.
 func TestCompoundAssignmentReadsItsTargetFirst(t *testing.T) {
 	const input = `let order = [];
 let note = fn(tag, n) { order = push(order, tag); return n; };
@@ -274,7 +286,7 @@ a[note("idx", 0)] += note("val", 5);
 	if evalRes != vmRes {
 		t.Errorf("engine divergence: evaluator=%s vm=%s", evalRes, vmRes)
 	}
-	if want := "ARRAY([[idx, idx, val], [6, 1]])"; vmRes != want {
+	if want := "ARRAY([[idx, val], [6, 1]])"; vmRes != want {
 		t.Errorf("compound assignment = %s, want %s", vmRes, want)
 	}
 }

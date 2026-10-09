@@ -1543,9 +1543,9 @@ func (c *nestingCollector) collectExpression(expr mast.Expression, inFunction bo
 			c.collectExpression(element, inFunction, depth)
 		}
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			c.collectExpression(key, inFunction, depth)
-			c.collectExpression(value, inFunction, depth)
+		for _, pair := range node.Pairs {
+			c.collectExpression(pair.Key, inFunction, depth)
+			c.collectExpression(pair.Value, inFunction, depth)
 		}
 	}
 }
@@ -1885,9 +1885,9 @@ func (c *builtinCallCollector) collectExpression(expr mast.Expression) {
 			c.collectExpression(element)
 		}
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			c.collectExpression(key)
-			c.collectExpression(value)
+		for _, pair := range node.Pairs {
+			c.collectExpression(pair.Key)
+			c.collectExpression(pair.Value)
 		}
 	}
 }
@@ -2418,9 +2418,9 @@ func collectUnusedCandidatesFromExpression(expr mast.Expression, out *[]*mast.Id
 			collectUnusedCandidatesFromExpression(part, out)
 		}
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			collectUnusedCandidatesFromExpression(key, out)
-			collectUnusedCandidatesFromExpression(value, out)
+		for _, pair := range node.Pairs {
+			collectUnusedCandidatesFromExpression(pair.Key, out)
+			collectUnusedCandidatesFromExpression(pair.Value, out)
 		}
 	}
 }

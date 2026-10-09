@@ -87,11 +87,13 @@ func TestRoleLiteralIsSilentWhereTheRunTimeAccepts(t *testing.T) {
 	}
 }
 
-// Two `role` keys in one literal leave the one the run time reads to the order
-// it builds the hash in, which the syntax does not say, so the rule stays quiet
-// even when one of them is refused. The syntax tree holds the pairs in a map, so
-// the source is analysed many times: a rule that read whichever pair came first
-// would report on some of them.
+// Two `role` keys in one literal are refused by the parser (M26-LEX-004), and
+// the editor lints what is on screen whether or not it parses clean, so the
+// rule still has to decide what to say about one. It says nothing: the literal
+// names no single role, and the mistake already has a diagnostic of its own.
+// This used to be a statement about order instead -- the pairs were a map, so a
+// rule that read whichever pair came first reported on some runs and not
+// others, which is why the source is analysed many times below.
 func TestRoleLiteralIsSilentOnTwoRoleKeys(t *testing.T) {
 	src := `case_open("IR-1", "examiner", {"role": "legal", "role": "investigator"});` + "\n"
 	for range 32 {

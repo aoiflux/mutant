@@ -551,8 +551,15 @@ func evalLogicalExpression(node *ast.InfixExpression, env *object.Environment) o
 }
 
 func evalHashLiteral(node *ast.HashLiteral, env *object.Environment) object.Object {
-	pairs := make(map[object.HashKey]object.HashPair)
-	for keyNode, valueNode := range node.Pairs {
+	pairs := make(map[object.HashKey]object.HashPair, len(node.Pairs))
+	// In the order the author wrote them, which is the order the compiler emits
+	// them in. A key or a value may call something, and until M26-CMP-010 the
+	// order those calls ran in was whatever Go map iteration chose, so one
+	// program ran its own side effects in a different order on every run. A key
+	// set twice is the later pair, here and in vm.buildHash; the parser refuses
+	// one, so only a macro can produce one.
+	for _, pair := range node.Pairs {
+		keyNode, valueNode := pair.Key, pair.Value
 		key := eval(keyNode, env)
 		if isError(key) {
 			return key
@@ -851,7 +858,32 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 			return index
 		}
 
-		value := evalAssignedValue(node, env)
+		// A compound assignment folds the element THIS index names. Going
+		// through evalAssignedValue would read the target back by evaluating
+		// node.Left, which evaluates the index a second time: `a[f()] += 1`
+		// called f() twice and folded the element at one index into the slot of
+		// another. The compiler had the same defect in its own way, so the two
+		// engines agreed about the wrong answer and a parity harness could not
+		// be what found it.
+		//
+		// evalIndexExpression is the call the *ast.IndexExpression arm of eval
+		// ends in, so an out-of-range or mistyped index answers here exactly as
+		// it does where the target is merely read. The target is still read
+		// before the right-hand side.
+		var value object.Object
+		if node.Operator == "" {
+			value = eval(node.Value, env)
+		} else {
+			current := evalIndexExpression(container, index)
+			if isError(current) {
+				return current
+			}
+			right := eval(node.Value, env)
+			if isError(right) {
+				return right
+			}
+			value = evalInfixExpression(node.Operator, current, right)
+		}
 		if isError(value) {
 			return value
 		}
@@ -867,6 +899,12 @@ func evalAssignExpression(node *ast.AssignExpression, env *object.Environment) o
 
 // evalAssignedValue is what the assignment stores: the right-hand side, or, for
 // a compound assignment, the target's current value folded with it.
+//
+// The index-assignment branch of evalAssignExpression does NOT fold through
+// here: it has already evaluated the index and has to fold the element that
+// index names, and reading node.Left back here would evaluate the index a
+// second time. An identifier or field target has no index to lose, so those
+// branches still read the target through this.
 //
 // The target is read before the right-hand side because the compiler desugars
 // `x += v` to `x = x <op> v` and then compiles that infix expression left to

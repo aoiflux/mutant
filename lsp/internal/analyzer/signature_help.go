@@ -457,11 +457,11 @@ func functionLiteralInExpressionForIdent(expr mast.Expression, target *mast.Iden
 			}
 		}
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			if literal, ok := functionLiteralInExpressionForIdent(key, target); ok {
+		for _, pair := range node.Pairs {
+			if literal, ok := functionLiteralInExpressionForIdent(pair.Key, target); ok {
 				return literal, true
 			}
-			if literal, ok := functionLiteralInExpressionForIdent(value, target); ok {
+			if literal, ok := functionLiteralInExpressionForIdent(pair.Value, target); ok {
 				return literal, true
 			}
 		}

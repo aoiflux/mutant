@@ -272,12 +272,12 @@ func (b *builder) expression(expr ast.Expression, boundTo *Node) {
 		}
 
 	case *ast.HashLiteral:
-		// Pairs is a map, so this reaches the entries in a different order on
-		// every run. BuildFile sorts the references it produces for exactly
-		// this reason.
-		for key, value := range node.Pairs {
-			b.expression(key, nil)
-			b.expression(value, nil)
+		// The pairs are a slice, so this reaches them in the order they were
+		// written. BuildFile sorts the references it produces anyway: it is the
+		// one place that cannot be forgotten by a case added later.
+		for _, pair := range node.Pairs {
+			b.expression(pair.Key, nil)
+			b.expression(pair.Value, nil)
 		}
 	}
 }

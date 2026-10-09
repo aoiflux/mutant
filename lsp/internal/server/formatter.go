@@ -484,43 +484,19 @@ func (p *printer) structLiteral(node *mast.StructLiteral, level int) string {
 	return name + "{" + strings.Join(fields, ", ") + "}"
 }
 
-// hashLiteral emits entries in the order the author wrote them.
+// hashLiteral emits entries in the order the author wrote them, which is the
+// order HashLiteral.Pairs holds them in.
 //
-// HashLiteral.Pairs is a Go map, so ranging over it yields a random order —
-// printing that directly would make the formatter non-deterministic and break
-// idempotency outright. Recovering the authored order from each key's source
-// range fixes that without reordering anyone's code; keys the parser did not
-// record fall back to their rendered text so the result is still total.
+// It used to recover that order from each key's source range, because the pairs
+// were a Go map and ranging it yielded a random one -- printing that directly
+// would have made the formatter non-deterministic and broken idempotency
+// outright. That was never quite the authored order either: a key the parser
+// had recorded no range for fell back to its rendered text, so the result was
+// total but not always what was written.
 func (p *printer) hashLiteral(node *mast.HashLiteral, level int) string {
-	type entry struct {
-		text     string
-		offset   int
-		hasRange bool
-	}
-
-	entries := make([]entry, 0, len(node.Pairs))
-	for key, value := range node.Pairs {
-		e := entry{text: p.expression(key, level) + ": " + p.expression(value, level)}
-		if rng, ok := p.program.RangeOf(key); ok {
-			e.offset = rng.Start.Offset
-			e.hasRange = true
-		}
-		entries = append(entries, e)
-	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].hasRange != entries[j].hasRange {
-			return entries[i].hasRange
-		}
-		if entries[i].hasRange && entries[i].offset != entries[j].offset {
-			return entries[i].offset < entries[j].offset
-		}
-		return entries[i].text < entries[j].text
-	})
-
-	parts := make([]string, 0, len(entries))
-	for _, e := range entries {
-		parts = append(parts, e.text)
+	parts := make([]string, 0, len(node.Pairs))
+	for _, pair := range node.Pairs {
+		parts = append(parts, p.expression(pair.Key, level)+": "+p.expression(pair.Value, level))
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
 }

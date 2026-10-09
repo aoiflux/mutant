@@ -17,6 +17,17 @@ package code
 // practice that keeps a table to single-digit percent of the stream it
 // annotates.
 //
+// An entry whose accumulated line is zero is a reset: it records where the
+// previous entry's coverage ended rather than a position of its own, and At
+// reports "unknown" for every offset it covers. Only the tables whose position
+// is optional per construct carry them -- the macro table and the end table,
+// written through AddOrReset -- and they are what stops the last macro a
+// program expanded being reported as the origin of everything compiled after
+// it. The encoding does not change for them, so a reset is just another
+// three-varint entry to anything that decodes one, a runtime older than this
+// paragraph included: it reads line 0, and every consumer of a position
+// already treats a zero line as no position at all.
+//
 // The zero value is a table with no entries, which is what every stream
 // compiled before positions existed has and what every stream deliberately
 // stripped of them has. Lookups against it report "unknown" rather than
@@ -33,9 +44,11 @@ type LineTable []byte
 func (t LineTable) Empty() bool { return len(t) == 0 }
 
 // At returns the source position covering ip: the position of the last entry
-// recorded at or before it. ok is false when the table is empty or when ip
-// falls before its first entry, which happens for instructions the compiler
-// emitted while it had no position to attribute them to.
+// recorded at or before it. ok is false when the table is empty, when ip falls
+// before its first entry -- which happens for instructions the compiler emitted
+// while it had no position to attribute them to -- and when the entry covering
+// ip is a reset, which is how the macro and end tables say that the construct
+// an offset belongs to has no macro origin and no recorded end.
 //
 // Lookup is a forward decode rather than a binary search. The table has no
 // index, and the frame counts a traceback walks are small; the cost is paid
@@ -56,7 +69,12 @@ func (t LineTable) At(ip int) (line, col int, ok bool) {
 		return true
 	})
 
-	if !found {
+	// A reset carries line 0 and marks where the entry before it stopped
+	// covering the stream, so an offset it covers has no position -- the same
+	// answer as an offset ahead of the first entry, and the same answer an
+	// empty table gives. Returning the zero with ok true instead would hand
+	// every caller a line 0 that passes its ok check.
+	if !found || line <= 0 {
 		return 0, 0, false
 	}
 	return line, col, true
@@ -123,6 +141,11 @@ func (t LineTable) forEach(visit func(lineEntry) bool) {
 // than one that reports nothing. Remapping preserves order because the maps
 // this is used with are monotonic -- instructions may move apart but never past
 // one another.
+//
+// Dropping a reset is the one case where dropping is not neutral: it re-extends
+// the entry before it over everything the pass shifted. The maps this is used
+// with name every instruction start, which is where every entry sits, so no
+// reset is ever the entry that goes missing.
 func (t LineTable) Remap(offsets map[int]int) LineTable {
 	if len(t) == 0 || offsets == nil {
 		return nil
@@ -131,7 +154,11 @@ func (t LineTable) Remap(offsets map[int]int) LineTable {
 	var out LineTableBuilder
 	t.forEach(func(entry lineEntry) bool {
 		if moved, ok := offsets[entry.ip]; ok {
-			out.Add(moved, entry.line, entry.col)
+			// AddOrReset rather than Add, so that a reset survives the move
+			// instead of being taken for an entry with nothing in it. A table
+			// that holds no resets -- the main line table -- cannot tell the
+			// two apart.
+			out.AddOrReset(moved, entry.line, entry.col)
 		}
 		return true
 	})
@@ -156,13 +183,55 @@ type LineTableBuilder struct {
 // compile over:
 //
 //   - line <= 0, meaning the node carried no position. Instructions the
-//     compiler synthesised on its own behalf are the common case.
+//     compiler synthesised on its own behalf are the common case, and dropping
+//     the call is what makes them inherit the position of the construct they
+//     were emitted for.
 //   - a position identical to the previous entry, which is the compression.
 //   - an ip before the previous entry's. Emission is monotonic, so this cannot
 //     happen; the guard is here so a future caller that violates the invariant
 //     produces a short table rather than one that decodes into nonsense.
 func (b *LineTableBuilder) Add(ip, line, col int) {
-	if line <= 0 || ip < 0 {
+	if line <= 0 {
+		return
+	}
+	b.add(ip, line, col)
+}
+
+// AddOrReset is Add for a table whose position is optional per construct: it
+// records line:col exactly as Add does, and records the absence of one as a
+// reset entry instead of dropping the call.
+//
+// Dropping is right for the main line table, where "no position" means the
+// instruction was synthesised and belongs to whatever construct the compiler
+// was working on. It is wrong for the macro table and the end table, where the
+// construct being compiled genuinely has no macro origin or no end the parser
+// recorded: there the last entry would stay in force and At would answer with
+// it, so the first macro a program expanded was reported as the origin of every
+// instruction after it, and a construct with no end was underlined with the
+// span of the one before it.
+//
+// A reset ahead of any real entry is dropped rather than encoded. There is no
+// coverage to end, and At already reports unknown for an offset before the
+// first entry, so encoding one would spend bytes saying what an empty table
+// says -- which matters, because most programs expand no macro at all and
+// their macro table has to stay empty.
+func (b *LineTableBuilder) AddOrReset(ip, line, col int) {
+	if line <= 0 {
+		if !b.started {
+			return
+		}
+		b.add(ip, 0, 0)
+		return
+	}
+	b.add(ip, line, col)
+}
+
+// add encodes one entry, under the guards that hold whether the entry carries a
+// position or ends the previous entry's coverage. A reset arrives here as line
+// 0 column 0, so the dedup below collapses a run of them to the single entry
+// that says what they all say.
+func (b *LineTableBuilder) add(ip, line, col int) {
+	if ip < 0 {
 		return
 	}
 	if b.started {

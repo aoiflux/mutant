@@ -191,9 +191,9 @@ func literalEntry(expr mast.Expression, key string) (mast.Expression, bool) {
 		if node == nil {
 			return nil, false
 		}
-		for name, value := range node.Pairs {
-			if text, ok := literalString(name); ok && text == key {
-				return value, true
+		for _, pair := range node.Pairs {
+			if text, ok := literalString(pair.Key); ok && text == key {
+				return pair.Value, true
 			}
 		}
 	case *mast.StructLiteral:

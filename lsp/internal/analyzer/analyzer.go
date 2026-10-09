@@ -1014,9 +1014,9 @@ func collectExpressionTokenOverrides(expr mast.Expression, overrides map[mast.No
 		collectExpressionTokenOverrides(e.Left, overrides)
 		collectExpressionTokenOverrides(e.Index, overrides)
 	case *mast.HashLiteral:
-		for key, value := range e.Pairs {
-			collectExpressionTokenOverrides(key, overrides)
-			collectExpressionTokenOverrides(value, overrides)
+		for _, pair := range e.Pairs {
+			collectExpressionTokenOverrides(pair.Key, overrides)
+			collectExpressionTokenOverrides(pair.Value, overrides)
 		}
 	case *mast.AssignExpression:
 		collectExpressionTokenOverrides(e.Left, overrides)

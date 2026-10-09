@@ -142,9 +142,9 @@ func (s *Snapshot) collectExpressionWriteRanges(expr mast.Expression, targetName
 		s.collectExpressionWriteRanges(node.Left, targetName, out)
 		s.collectExpressionWriteRanges(node.Index, targetName, out)
 	case *mast.HashLiteral:
-		for key, value := range node.Pairs {
-			s.collectExpressionWriteRanges(key, targetName, out)
-			s.collectExpressionWriteRanges(value, targetName, out)
+		for _, pair := range node.Pairs {
+			s.collectExpressionWriteRanges(pair.Key, targetName, out)
+			s.collectExpressionWriteRanges(pair.Value, targetName, out)
 		}
 	case *mast.FieldExpression:
 		s.collectExpressionWriteRanges(node.Left, targetName, out)

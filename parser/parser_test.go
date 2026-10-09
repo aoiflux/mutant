@@ -1015,14 +1015,20 @@ func TestParsingHashLiteralsStringKeys(t *testing.T) {
 		t.Errorf("hash.Pairs has wrong length. got=%d", len(hash.Pairs))
 	}
 
-	expected := map[string]int64{"one": 1, "two": 2, "three": 3}
-	for key, value := range hash.Pairs {
-		literal, ok := key.(*ast.StringLiteral)
+	expected := []struct {
+		key   string
+		value int64
+	}{{"one", 1}, {"two", 2}, {"three", 3}}
+	for i, pair := range hash.Pairs {
+		literal, ok := pair.Key.(*ast.StringLiteral)
 		if !ok {
-			t.Errorf("key is not ast.StringLiteral. got=%T", key)
+			t.Errorf("key is not ast.StringLiteral. got=%T", pair.Key)
+			continue
 		}
-		expectedValue := expected[literal.String()]
-		testIntegerLiteral(t, value, expectedValue)
+		if literal.String() != expected[i].key {
+			t.Errorf("pair %d is keyed %s, want %s", i, literal.String(), expected[i].key)
+		}
+		testIntegerLiteral(t, pair.Value, expected[i].value)
 	}
 }
 
@@ -1043,14 +1049,20 @@ func TestParsingHashLiteralsFloatVals(t *testing.T) {
 		t.Errorf("hash.Pairs has wrong length. got=%d", len(hash.Pairs))
 	}
 
-	epxected := map[string]float64{"a": 1.500000, "b": 2.4141, "c": 355.25511}
-	for key, value := range hash.Pairs {
-		literal, ok := key.(*ast.StringLiteral)
+	expected := []struct {
+		key   string
+		value float64
+	}{{"a", 1.500000}, {"b", 2.4141}, {"c", 355.25511}}
+	for i, pair := range hash.Pairs {
+		literal, ok := pair.Key.(*ast.StringLiteral)
 		if !ok {
-			t.Errorf("key is not ast.StringLiteral. got=%T", key)
+			t.Errorf("key is not ast.StringLiteral. got=%T", pair.Key)
+			continue
 		}
-		expectedValue := epxected[literal.String()]
-		testFloatLiteral(t, value, expectedValue)
+		if literal.String() != expected[i].key {
+			t.Errorf("pair %d is keyed %s, want %s", i, literal.String(), expected[i].key)
+		}
+		testFloatLiteral(t, pair.Value, expected[i].value)
 	}
 }
 
@@ -1093,10 +1105,10 @@ func TestParsingHashLiteralsWithExpressions(t *testing.T) {
 		"three": func(e ast.Expression) { testInfixExpression(t, e, 15, "/", 5) },
 	}
 
-	for key, value := range hash.Pairs {
-		literal, ok := key.(*ast.StringLiteral)
+	for _, pair := range hash.Pairs {
+		literal, ok := pair.Key.(*ast.StringLiteral)
 		if !ok {
-			t.Errorf("key is not ast.StringLiteral. got=%T", key)
+			t.Errorf("key is not ast.StringLiteral. got=%T", pair.Key)
 			continue
 		}
 
@@ -1106,7 +1118,7 @@ func TestParsingHashLiteralsWithExpressions(t *testing.T) {
 			continue
 		}
 
-		testFunc(value)
+		testFunc(pair.Value)
 	}
 }
 

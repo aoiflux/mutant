@@ -57,23 +57,24 @@ func lintSecretOption(snapshot *Snapshot, lintConfig LintConfig) []lsp.Diagnosti
 			if hash == nil {
 				return
 			}
-			// The first such key as written: the run time refuses the call at
-			// whichever it meets first, and one report per call is enough.
+			// The first such key as written, which is the first in the literal's
+			// own order: the run time refuses the call at whichever it meets
+			// first, and one report per call is enough. A key the parser recorded
+			// no range for is passed over rather than reported without one.
 			var first mast.Expression
 			var firstRange mast.Range
 			var firstName string
-			for key := range hash.Pairs {
-				text, literal := literalString(key)
+			for _, pair := range hash.Pairs {
+				text, literal := literalString(pair.Key)
 				if !literal || !slices.Contains(secrets, text) {
 					continue
 				}
-				rng, found := snapshot.Program.RangeOf(key)
+				rng, found := snapshot.Program.RangeOf(pair.Key)
 				if !found {
 					continue
 				}
-				if first == nil || rng.Start.Offset < firstRange.Start.Offset {
-					first, firstRange, firstName = key, rng, text
-				}
+				first, firstRange, firstName = pair.Key, rng, text
+				break
 			}
 			if first == nil {
 				return

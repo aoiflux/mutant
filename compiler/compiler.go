@@ -12,7 +12,7 @@ import (
 	"mutant/object"
 	"mutant/sema"
 	"path/filepath"
-	"sort"
+	"strings"
 )
 
 type Compiler struct {
@@ -23,6 +23,14 @@ type Compiler struct {
 	structDefinitions map[string][]*ast.Identifier // Maps struct name to field names
 	enumDefinitions   map[string][]string          // Maps enum name to tag names
 	loopContexts      []LoopContext
+
+	// structLiteralDepth is how many struct literals are having their
+	// initialisers compiled inside one another right now. It is read only to
+	// key the scratch slots emitStructFieldsInSourceOrder spills a literal's
+	// initialisers into, so that a literal written inside another literal's
+	// initialiser cannot claim a slot the outer one has written and not yet
+	// read back.
+	structLiteralDepth int
 
 	// declScopes is a stack of the names each open scope has itself declared,
 	// innermost last. It is what the one-declaration-per-scope rule is asked
@@ -177,6 +185,12 @@ type ByteCode struct {
 	// beginning with the first module linked. A single-file program has exactly
 	// one entry, so there is no special case to get wrong.
 	//
+	// The first module linked is not the entry module. The linker walks the
+	// import graph in post-order, so every dependency is emitted before the
+	// file that imported it and the entry -- the file SourceFile names -- is
+	// the LAST span. Graph.Modules in module/graph.go is where that order comes
+	// from, and entrySpan below is what reads it.
+	//
 	// Debug info, and stripped with the rest of it: it would otherwise hand a
 	// release artifact the whole import graph and every absolute path in it.
 	ModuleSpans []ModuleSpan
@@ -242,7 +256,8 @@ func (bc *ByteCode) ModuleAt(line int) (path string, localLine int, ok bool) {
 // A program with no spans is one module, so the blob is the file and the line
 // passes through unchanged. That is also the answer for an empty path, which is
 // how a caller says "the program's own source" without having to know whether
-// the program was linked.
+// the program was linked. For a linked program the program's own source is the
+// entry module, which entrySpan finds.
 //
 // Matching is by cleaned path first and by base name second. The second pass is
 // there because the path an editor sends is the one the user opened, and the
@@ -252,6 +267,14 @@ func (bc *ByteCode) ModuleAt(line int) (path string, localLine int, ok bool) {
 // would be a right answer to the wrong question. An ambiguous base name matches
 // nothing rather than the first candidate: two modules named util.mut is
 // exactly the case where guessing puts the breakpoint in the wrong file.
+//
+// A line past the end of the file named is refused rather than mapped. The
+// arithmetic alone would run out of that module's span and into the next one,
+// so an editor asking about line 40 of a thirty-line file would be told its
+// breakpoint is verified at a line of some other module: an inverse of ModuleAt
+// only within each span, which is not what being an inverse means.
+// code.LineIndex.At refuses a line past the last one with code for the same
+// reason, and this is the same judgement one step earlier.
 func (bc *ByteCode) ModuleLine(path string, line int) (absLine int, ok bool) {
 	if bc == nil || line <= 0 {
 		return 0, false
@@ -260,19 +283,69 @@ func (bc *ByteCode) ModuleLine(path string, line int) (absLine int, ok bool) {
 		return line, true
 	}
 
-	if index, found := bc.moduleSpanFor(path); found {
-		return bc.ModuleSpans[index].StartLine + line - 1, true
+	index, found := bc.moduleSpanFor(path)
+	if !found {
+		return 0, false
+	}
+
+	absLine = bc.ModuleSpans[index].StartLine + line - 1
+	if last, bounded := bc.spanLastLine(index); bounded && absLine > last {
+		return 0, false
+	}
+	return absLine, true
+}
+
+// spanLastLine reports the last line of the blob belonging to span index, and
+// whether anything bounds that span at all.
+//
+// Every span but the last is bounded by its successor: a module's source ends
+// where the next module's begins, and the linker starts each module on a line
+// of its own, so the successor's StartLine is always one past this module's
+// end.
+//
+// The last span has no successor and is bounded only by the blob, which
+// SourceText holds -- so the blob's line count is that module's last line. An
+// artifact carrying the spans but not the text, assembled by hand or decoded
+// from something older, leaves it unbounded, and saying so beats guessing: the
+// alternative is refusing every breakpoint in the entry module of such an
+// artifact, and an over-long line in the last span has no following module to
+// be misfiled into anyway.
+func (bc *ByteCode) spanLastLine(index int) (int, bool) {
+	if index+1 < len(bc.ModuleSpans) {
+		return bc.ModuleSpans[index+1].StartLine - 1, true
+	}
+	if lines := blobLineCount(bc.SourceText); lines > 0 {
+		return lines, true
 	}
 	return 0, false
+}
+
+// blobLineCount is how many lines of source a linked blob holds.
+//
+// Every module the linker appends ends in a newline -- it adds one to any file
+// that does not, so that two files' code can never share a line -- which makes
+// the newline count the line count. Text ending mid-line holds one line more
+// than it has newlines; the linker never produces that, but a ByteCode built by
+// hand in a test can, and undercounting it would refuse a real line of a real
+// file.
+func blobLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+
+	count := strings.Count(text, "\n")
+	if !strings.HasSuffix(text, "\n") {
+		count++
+	}
+	return count
 }
 
 // moduleSpanFor finds the span describing path, under the matching rule
 // ModuleLine documents.
 func (bc *ByteCode) moduleSpanFor(path string) (int, bool) {
 	if path == "" {
-		// No file named: the first span is the program's entry module, which is
-		// what SourceFile names and what a single-module program means.
-		return 0, true
+		// No file named: the program's own source, which is the entry module.
+		return bc.entrySpan()
 	}
 
 	want := filepath.Clean(path)
@@ -299,6 +372,76 @@ func (bc *ByteCode) moduleSpanFor(path string) (int, bool) {
 		return 0, false
 	}
 	return found, true
+}
+
+// entrySpan reports the index of the entry module's span -- the file SourceFile
+// names, and what a caller naming no file at all is asking about.
+//
+// It is not span 0. Spans are in link order and the linker walks the import
+// graph in post-order, so span 0 is the first module linked: the deepest
+// dependency of the program, a file the reader may never have opened. The entry
+// is appended only once its whole import graph is already in the slice, which
+// puts it last.
+//
+// SourceFile is consulted before that invariant is leaned on, because it is the
+// independent record of which file the entry is: the linker fills it from the
+// same display path it writes into the entry's own span, so for anything the
+// linker built the two agree string for string. The scan runs backwards, so an
+// artifact somehow carrying one file twice resolves to the copy nearest the
+// entry rather than to a dependency. Where SourceFile names no span -- it is
+// empty, or the spans were assembled against another spelling -- link order is
+// all there is, and the last span is the answer.
+func (bc *ByteCode) entrySpan() (int, bool) {
+	// ModuleAt and ModuleLine both guard the nil receiver, and moduleSpanFor is
+	// reached only through ModuleLine, so nothing can arrive here on a nil
+	// ByteCode today. The guard is here because moduleSpanFor answered an empty
+	// path without reading the receiver at all before the entry span had to be
+	// found, and a helper that panics where its only caller used to answer is a
+	// worse thing to leave lying around than one redundant line.
+	if bc == nil || len(bc.ModuleSpans) == 0 {
+		return 0, false
+	}
+
+	if bc.SourceFile != "" {
+		want := filepath.Clean(bc.SourceFile)
+		for i := len(bc.ModuleSpans) - 1; i >= 0; i-- {
+			if filepath.Clean(bc.ModuleSpans[i].Path) == want {
+				return i, true
+			}
+		}
+	}
+	return len(bc.ModuleSpans) - 1, true
+}
+
+// ModulesNamed counts the program's modules whose path could be what a caller
+// meant by path, under the same rule moduleSpanFor matches on: the cleaned path
+// if that hits, and otherwise the base name.
+//
+// It exists so a refusal can tell "no such file" apart from "more than one file
+// by that name", which moduleSpanFor deliberately conflates -- it returns no
+// match for an ambiguous base name because picking one would arm a breakpoint
+// in a file nobody is looking at. That is the right answer to give a caller and
+// the wrong one to repeat to a person.
+func (bc *ByteCode) ModulesNamed(path string) int {
+	if bc == nil || path == "" {
+		return 0
+	}
+
+	want := filepath.Clean(path)
+	for _, span := range bc.ModuleSpans {
+		if filepath.Clean(span.Path) == want {
+			return 1
+		}
+	}
+
+	base := filepath.Base(want)
+	count := 0
+	for _, span := range bc.ModuleSpans {
+		if filepath.Base(span.Path) == base {
+			count++
+		}
+	}
+	return count
 }
 
 // StripDebugInfo removes every source position from the program: the file name,
@@ -716,60 +859,17 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if node.Operator == "&&" || node.Operator == "||" {
 			return c.compileLogicalExpression(node)
 		}
-		// a < b  ==  b > a ;  a <= b  ==  b >= a. Compile with swapped operands
-		// so we need only the "greater" family of opcodes.
-		if node.Operator == "<" || node.Operator == "<=" {
-			if err := c.Compile(node.Right); err != nil {
-				return err
-			}
-			if err := c.Compile(node.Left); err != nil {
-				return err
-			}
-			if node.Operator == "<" {
-				c.emit(code.OpGreater)
-			} else {
-				c.emit(code.OpGreaterEqual)
-			}
-			return nil
-		}
 		if err := c.Compile(node.Left); err != nil {
 			return err
 		}
 		if err := c.Compile(node.Right); err != nil {
 			return err
 		}
-		switch node.Operator {
-		case "+":
-			c.emit(code.OpAdd)
-		case "-":
-			c.emit(code.OpSub)
-		case "*":
-			c.emit(code.OpMul)
-		case "/":
-			c.emit(code.OpDiv)
-		case "%":
-			c.emit(code.OpMod)
-		case "&":
-			c.emit(code.OpBitAnd)
-		case "|":
-			c.emit(code.OpBitOr)
-		case "^":
-			c.emit(code.OpBitXor)
-		case "<<":
-			c.emit(code.OpShiftLeft)
-		case ">>":
-			c.emit(code.OpShiftRight)
-		case ">":
-			c.emit(code.OpGreater)
-		case ">=":
-			c.emit(code.OpGreaterEqual)
-		case "==":
-			c.emit(code.OpEqual)
-		case "!=":
-			c.emit(code.OpUnEqual)
-		default:
+		opcode, known := infixOpcode(node.Operator)
+		if !known {
 			return fmt.Errorf("unknown operator %s", node.Operator)
 		}
+		c.emit(opcode)
 	case *ast.MatchExpression:
 		return c.compileMatchExpression(node)
 	case *ast.IfExpression:
@@ -839,17 +939,25 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		}
 		c.emit(code.OpArray, len(node.Elements))
 	case *ast.HashLiteral:
-		keys := []ast.Expression{}
-		for k := range node.Pairs {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
-
-		for _, k := range keys {
-			if err := c.Compile(k); err != nil {
+		// In the order the author wrote them, key then value, pair by pair.
+		//
+		// The pairs used to be ordered by key.String() instead, which is
+		// M26-CMP-010 and M26-LEX-004, and two things were wrong with it. The
+		// sort ran over a Go map and was not stable, so two keys that render
+		// alike -- a key written twice, or a string beside an identifier spelled
+		// the same way, because ast.StringLiteral.String() renders a string
+		// without its quotes -- came out in whichever order the map had handed
+		// them over: `{"k": 1, "k": 2}["k"]` compiled to 2 on twenty of
+		// twenty-four builds and to 1 on the other four, so one source had two
+		// bytecodes and a .mu artifact was not reproducible. And with the keys
+		// all distinct it still ran a key's and a value's side effects in
+		// alphabetical order rather than written order, which the tree-walking
+		// evaluator never did.
+		for _, pair := range node.Pairs {
+			if err := c.Compile(pair.Key); err != nil {
 				return err
 			}
-			if err := c.Compile(node.Pairs[k]); err != nil {
+			if err := c.Compile(pair.Value); err != nil {
 				return err
 			}
 		}
@@ -1253,14 +1361,36 @@ func (c *Compiler) emit(op code.Opcode, operands ...int) int {
 	return pos
 }
 
-// recordPosition notes where the instruction beginning at ip came from. Both
-// builders drop the call when there is no position to record, so an instruction
-// outside any macro costs nothing in the macro table.
+// recordPosition notes where the instruction beginning at ip came from, in all
+// three of the current scope's tables.
+//
+// An instruction with no position of its own records nothing in any of them and
+// so inherits the whole of the enclosing construct's entry -- its line, its end
+// and its macro origin together. That is the inheritance Compile describes for
+// the nodes the compiler synthesises on its own behalf, and the three tables
+// have to inherit together: an instruction described by a line from one
+// construct and an end from another is underlined across a span nobody wrote.
+//
+// An instruction that does carry a position belongs to a different construct
+// and must not keep what the last one recorded. The line table needs no help
+// with that, because a position it can record replaces the previous coverage.
+// The end and macro tables are optional per construct -- a range the parser
+// only half filled in has no end, and most code is not from a macro -- so for
+// them "nothing to record" has to be written down, as the end of the previous
+// entry's coverage. Dropping it is what made the first macro a program expanded
+// the reported origin of every instruction compiled after it.
 func (c *Compiler) recordPosition(ip int) {
 	scope := &c.scopes[c.scopeIndex]
 	scope.lines.Add(ip, c.posLine, c.posCol)
-	scope.ends.Add(ip, c.posEndLine, c.posEndCol)
-	scope.macros.Add(ip, c.macroLine, c.macroCol)
+
+	if c.posLine <= 0 {
+		scope.ends.Add(ip, c.posEndLine, c.posEndCol)
+		scope.macros.Add(ip, c.macroLine, c.macroCol)
+		return
+	}
+
+	scope.ends.AddOrReset(ip, c.posEndLine, c.posEndCol)
+	scope.macros.AddOrReset(ip, c.macroLine, c.macroCol)
 }
 
 func (c *Compiler) addInstruction(ins []byte) int {
@@ -1699,7 +1829,14 @@ func (c *Compiler) emitStoreOnly(symbol Symbol) error {
 		// captured by value for recursion. Writing it is refused here rather
 		// than at run time, where the failure would be an opaque type error
 		// about a closure.
-		if original, ok := c.symbolTable.freeOriginal(symbol.Index); ok && original.Scope == FunctionScope {
+		//
+		// Asked of the whole capture chain rather than of the first hop. Two
+		// functions deep the first hop is the middle function's own capture of
+		// the name, so the check saw FreeScope, concluded "an ordinary captured
+		// variable" and emitted the write -- which then failed at run time with
+		// precisely the opaque complaint about a closure that this refusal exists
+		// to replace.
+		if c.symbolTable.freeCapturesFunctionName(symbol.Index) {
 			return fmt.Errorf("cannot assign to the name of the function being defined: %s", symbol.Name)
 		}
 		c.emit(code.OpSetFree, symbol.Index)
@@ -2076,24 +2213,101 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 	return nil
 }
 
+// infixOpcode maps a binary operator to the opcode that applies it to two
+// operands already pushed in source order.
+//
+// It is a table rather than part of the InfixExpression arm because a compound
+// assignment sometimes has to fold without an InfixExpression to compile at all
+// -- see compileAssignExpression. Both callers read this one table, so the fold
+// cannot drift from the expression it desugars to, which is the reason the fold
+// is not hand-emitted with a switch of its own.
+//
+// The operators deliberately absent are the ones an opcode alone cannot
+// express: `&&` and `||` short-circuit through jumps, and `<` and `<=` compile
+// their operands in the opposite order. No compound assignment can ask for any
+// of them -- compoundAssignBaseOperator in parser/parse_expressions.go maps only
+// `+ - * / % & | ^ << >>` -- so this table is complete for the fold.
+func infixOpcode(operator string) (code.Opcode, bool) {
+	switch operator {
+	case "+":
+		return code.OpAdd, true
+	case "-":
+		return code.OpSub, true
+	case "*":
+		return code.OpMul, true
+	case "/":
+		return code.OpDiv, true
+	case "%":
+		return code.OpMod, true
+	case "&":
+		return code.OpBitAnd, true
+	case "|":
+		return code.OpBitOr, true
+	case "^":
+		return code.OpBitXor, true
+	case "<<":
+		return code.OpShiftLeft, true
+	case ">>":
+		return code.OpShiftRight, true
+	case ">":
+		return code.OpGreater, true
+	case ">=":
+		return code.OpGreaterEqual, true
+	// `<` and `<=` have opcodes of their own rather than reusing the
+	// greater family with the operands compiled in the other order. The
+	// swap was invisible for two literals and decisive as soon as either
+	// operand had a side effect: it ran the right one first, so one
+	// expression meant one thing here and another thing inside a macro,
+	// which the evaluator expands.
+	case "<":
+		return code.OpLess, true
+	case "<=":
+		return code.OpLessEqual, true
+	case "==":
+		return code.OpEqual, true
+	case "!=":
+		return code.OpUnEqual, true
+	}
+	return 0, false
+}
+
 func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
+	base, steps, ok := flattenAssignTarget(node.Left)
+	if !ok {
+		return fmt.Errorf("invalid assignment target")
+	}
+
 	// Compound assignment (x += v, x++) desugars to `x = x <op> v`: the value to
 	// store is the base operator applied to the target's current value and the
 	// right-hand side. Every store path below compiles valueExpr, so this is the
 	// single point where the fold is introduced.
+	//
+	// Rewriting the target into an InfixExpression is only correct while the
+	// target can be compiled twice. `a[f()] += 1` cannot: the index is compiled
+	// once as the store's operand and again inside the rewrite, so f() runs twice
+	// and the element at one index is folded into the slot of another. Where the
+	// last index is impure, no rewrite is built -- foldOperator carries the
+	// operator down to the fold, which reads a spilled copy of that index.
+	//
+	// The spilled index is reached by passing the slot, never by looking the index
+	// node up. A node pointer is not unique in an expanded program: a macro
+	// argument used at two unquote sites is spliced in BY POINTER -- only the
+	// macro template is cloned (evaluator/quote_unquote.go) -- so one node stands
+	// at two places that have to compile to different things.
+	// examples/modules/lib/stats.mut ships that shape.
 	valueExpr := node.Value
+	foldOperator := ""
 	if node.Operator != "" {
-		valueExpr = &ast.InfixExpression{
-			Token:    node.Token,
-			Left:     node.Left,
-			Operator: node.Operator,
-			Right:    node.Value,
+		if last := len(steps) - 1; last >= 0 && steps[last].index != nil && !pureAssignIndex(steps[last].index) {
+			foldOperator = node.Operator
+		} else {
+			valueExpr = &ast.InfixExpression{
+				Token:    node.Token,
+				Left:     node.Left,
+				Operator: node.Operator,
+				Right:    node.Value,
+			}
 		}
-	}
-
-	base, steps, ok := flattenAssignTarget(node.Left)
-	if !ok {
-		return fmt.Errorf("invalid assignment target")
 	}
 
 	// Handle identifier assignment: x = value
@@ -2170,8 +2384,40 @@ func (c *Compiler) compileAssignExpression(node *ast.AssignExpression) error {
 	// so the order a program's side effects run in does not change: container,
 	// then index, then value, exactly as before.
 	spill := c.internalSlot("assign")
-	if err := c.emitAssignChain(symbol, steps, len(steps), func() error {
-		if err := c.Compile(valueExpr); err != nil {
+
+	// The last index, for a compound assignment the rewrite above could not
+	// express. One slot per scope is enough, for the same reason it is enough for
+	// the value, but this window is wider and so worth writing out: the slot is
+	// written where the index was already being evaluated, then read once as the
+	// store's operand and once as the last hop of the fold's left operand -- and
+	// BOTH reads are emitted before the right-hand side is. The right-hand side is
+	// the only thing that can write the slot again (`a[f()] += (b[g()] += 1)`
+	// reuses it), and by the time it runs both reads have already put their value
+	// on the stack. Every hop before the last is a name or a literal, refused
+	// above otherwise, so nothing else between the write and the reads runs any of
+	// the program. Both shapes are regression rows.
+	var indexSlot *Symbol
+	if foldOperator != "" {
+		slot := c.internalSlot("assignindex")
+		indexSlot = &slot
+	}
+
+	if err := c.emitAssignChain(symbol, steps, len(steps), indexSlot, func() error {
+		if foldOperator != "" {
+			// The target's current value, read through the index already
+			// spilled rather than by evaluating that index a second time.
+			if err := c.emitPathLoad(symbol, steps, len(steps), indexSlot); err != nil {
+				return err
+			}
+			if err := c.Compile(node.Value); err != nil {
+				return err
+			}
+			opcode, known := infixOpcode(foldOperator)
+			if !known {
+				return fmt.Errorf("unknown operator %s", foldOperator)
+			}
+			c.emit(opcode)
+		} else if err := c.Compile(valueExpr); err != nil {
 			return err
 		}
 		if err := c.emitStoreOnly(spill); err != nil {
@@ -2290,7 +2536,12 @@ func pureAssignIndex(expr ast.Expression) bool {
 // -- is what the compiler used to do, and it is only true when a load hands back
 // the same object the slot holds. Globals and locals are stored encrypted, so a
 // load hands back a copy, and the write went into the copy.
-func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int, emitValue func() error) error {
+// indexSlot, when set, is the compiler's own storage for the index of the step
+// this level stores through: the index is compiled once into it and read back
+// both as this store's operand and by the fold in emitValue. It is nil for
+// every inner level of the chain, whose indexes the caller has already
+// restricted to names and literals.
+func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int, indexSlot *Symbol, emitValue func() error) error {
 	last := steps[depth-1]
 
 	// store mutates the container already on the stack and leaves it there.
@@ -2298,6 +2549,16 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 		if last.index != nil {
 			if err := c.Compile(last.index); err != nil {
 				return err
+			}
+			if indexSlot != nil {
+				// Spilled where it was already being evaluated, so the
+				// container-then-index order the program is written in is
+				// the order that runs, and pushed straight back as this
+				// store's operand.
+				if err := c.emitStoreOnly(*indexSlot); err != nil {
+					return err
+				}
+				c.loadSymbol(*indexSlot)
 			}
 			if err := emitValue(); err != nil {
 				return err
@@ -2322,8 +2583,8 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 		return c.emitStoreOnly(symbol)
 	}
 
-	return c.emitAssignChain(symbol, steps, depth-1, func() error {
-		if err := c.emitPathLoad(symbol, steps, depth-1); err != nil {
+	return c.emitAssignChain(symbol, steps, depth-1, nil, func() error {
+		if err := c.emitPathLoad(symbol, steps, depth-1, nil); err != nil {
 			return err
 		}
 		return store()
@@ -2331,11 +2592,17 @@ func (c *Compiler) emitAssignChain(symbol Symbol, steps []assignStep, depth int,
 }
 
 // emitPathLoad pushes the value of base + steps[:depth].
-func (c *Compiler) emitPathLoad(symbol Symbol, steps []assignStep, depth int) error {
+//
+// indexSlot, when set, holds the already-evaluated index of the LAST step being
+// loaded, so a compound assignment can read the element it is about to fold
+// without evaluating that index again.
+func (c *Compiler) emitPathLoad(symbol Symbol, steps []assignStep, depth int, indexSlot *Symbol) error {
 	c.loadSymbol(symbol)
-	for _, step := range steps[:depth] {
+	for i, step := range steps[:depth] {
 		if step.index != nil {
-			if err := c.Compile(step.index); err != nil {
+			if indexSlot != nil && i == depth-1 {
+				c.loadSymbol(*indexSlot)
+			} else if err := c.Compile(step.index); err != nil {
 				return err
 			}
 			c.emit(code.OpIndex)
@@ -2569,12 +2836,106 @@ func (c *Compiler) compileStructLiteral(node *ast.StructLiteral) error {
 	}
 
 	typeNameIndex := c.addConstant(&object.String{Value: structName})
-	for _, field := range typeDef {
-		if err := c.Compile(fieldExprByName[field.Value]); err != nil {
-			return err
+
+	// OpMakeStruct names the values it pops by the order the DECLARATION lists
+	// the fields in, so the stack has to end up in that order however the
+	// literal was written. Compiling the initialisers in that order is the
+	// obvious way to get there, and it is M26-CMP-010:
+	// `Header{magic: read_u32(h), size: read_u32(h)}` against
+	// `struct Header { size, magic }` read the two numbers the other way round
+	// and gave each field the other one's value, silently -- and the
+	// tree-walking evaluator, which evaluates node.Fields as written, disagreed
+	// with the compiler about that same literal.
+	//
+	// A literal that already lists its fields in declaration order, which is how
+	// nearly all of them are written, emits exactly what it has always emitted.
+	// Only one that does not pays for the reordering.
+	if structLiteralIsInDeclarationOrder(node.Fields, typeDef) {
+		for _, field := range typeDef {
+			if err := c.Compile(fieldExprByName[field.Value]); err != nil {
+				return err
+			}
 		}
+	} else if err := c.emitStructFieldsInSourceOrder(structName, node.Fields, typeDef); err != nil {
+		return err
 	}
 
 	c.emit(code.OpMakeStruct, typeNameIndex, len(typeDef))
+	return nil
+}
+
+// structLiteralIsInDeclarationOrder reports whether the literal sets its fields
+// in the order the declaration lists them, in which case the initialisers can
+// go straight onto the stack in the order they are written.
+//
+// It is only ever asked after the refusals above have established that the
+// literal sets exactly the declared fields, once each, so the two lengths agree
+// and a position-by-position comparison is the whole question.
+func structLiteralIsInDeclarationOrder(fields []*ast.StructFieldValue, typeDef []*ast.Identifier) bool {
+	if len(fields) != len(typeDef) {
+		return false
+	}
+	for i, field := range fields {
+		if field == nil || field.Name == nil || typeDef[i] == nil {
+			return false
+		}
+		if field.Name.Value != typeDef[i].Value {
+			return false
+		}
+	}
+	return true
+}
+
+// emitStructFieldsInSourceOrder compiles the initialisers where the author
+// wrote them and leaves their values on the stack in declaration order.
+//
+// Each value is spilled into one of the compiler's own slots as soon as it is
+// computed -- the same storage an assignment through a container uses to keep
+// the assigned value alive across its stores, see internalSlot -- and the slots
+// are read back in the order OpMakeStruct names them. That costs two extra
+// instructions per field and no new opcode. An opcode that permutes the top of
+// the stack would be the alternative, and adding one to an append-only
+// instruction set for something the existing spill already does is a worse
+// trade than two instructions on the literals that are written out of order.
+//
+// The slot keys carry the nesting depth and nothing else. Sibling literals
+// share slots safely, because one finishes before the next begins. A literal
+// written inside another literal's initialiser must not share them, because it
+// runs between that initialiser's spill and the outer literal's read-back, so
+// one key in common would overwrite a value the outer literal still needs --
+// and it cannot, because a literal that spills holds the depth raised for the
+// whole of its own field compilation, so anything nested inside it sees a
+// strictly greater depth. The key is spelled with spaces, which no source line
+// can produce, for the reason internalSlot gives.
+func (c *Compiler) emitStructFieldsInSourceOrder(
+	structName string, fields []*ast.StructFieldValue, typeDef []*ast.Identifier,
+) error {
+	depth := c.structLiteralDepth
+	c.structLiteralDepth++
+	defer func() { c.structLiteralDepth-- }()
+
+	slots := make(map[string]Symbol, len(fields))
+	for i, field := range fields {
+		if err := c.Compile(field.Value); err != nil {
+			return err
+		}
+		slot := c.internalSlot(fmt.Sprintf("struct %d %d", depth, i))
+		if err := c.emitStoreOnly(slot); err != nil {
+			return err
+		}
+		slots[field.Name.Value] = slot
+	}
+
+	for _, field := range typeDef {
+		slot, spilled := slots[field.Value]
+		if !spilled {
+			// Unreachable: the refusals in compileStructLiteral have already
+			// established that the literal sets every declared field. Saying so
+			// beats loading slot zero, which holds something else entirely.
+			return fmt.Errorf("internal: struct %s literal has no initializer for field %s",
+				structName, field.Value)
+		}
+		c.loadSymbol(slot)
+	}
 	return nil
 }
