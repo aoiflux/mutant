@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-66 limits in 7 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 120 limits that are not named yet; `policy/limit_budget.go` lists each one.
+68 limits in 8 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 120 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -73,6 +73,13 @@ and are not listed.
 | Limit | Value | Unit | Flag | Why | File |
 | --- | --- | --- | --- | --- | --- |
 | `documentLinkStatBudget` | 1,024 | count | -- | documentLinkStatBudget bounds how many distinct literals one documentLink request asks the filesystem about. | `lsp/internal/server/link_path.go` |
+
+## `parser`
+
+| Limit | Value | Unit | Flag | Why | File |
+| --- | --- | --- | --- | --- | --- |
+| `maxNestingDepth` | 1,000 | depth | -- | maxNestingDepth bounds how deeply one construct may be nested inside another: parenthesised expressions, prefix operators, array and hash literals, calls, indexes, function literals and block bodies all count, because each one is a frame on the parser's stack. | `parser/parser.go` |
+| `maxParseErrors` | 100 | count | -- | maxParseErrors bounds how many errors one parse reports. | `parser/parser.go` |
 
 ## `runner`
 

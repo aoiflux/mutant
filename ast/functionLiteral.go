@@ -17,11 +17,14 @@ type FunctionLiteral struct {
 func (fl *FunctionLiteral) expressionNode()      {}
 func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Literal }
 func (fl *FunctionLiteral) String() string {
+	if fl == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	params := []string{}
 
 	for _, p := range fl.Parameters {
-		params = append(params, p.String())
+		params = append(params, render(p))
 	}
 
 	out.WriteString(fl.TokenLiteral())
@@ -31,7 +34,7 @@ func (fl *FunctionLiteral) String() string {
 	out.WriteString("(")
 	out.WriteString(strings.Join(params, ", "))
 	out.WriteString(") ")
-	out.WriteString(fl.Body.String())
+	out.WriteString(render(fl.Body))
 
 	return out.String()
 }

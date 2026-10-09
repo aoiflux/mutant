@@ -127,11 +127,47 @@ func (p *Program) TokenLiteral() string {
 	return ""
 }
 
+// missingNode is what a String() prints where a child should be and is not.
+//
+// It is printed rather than the child being skipped because skipping is a
+// silent drop: `f(1, , 2)` rendered as `(1, 2)`, which reads as an honest call
+// of two arguments, and `1 + ;` would render as `(1 + )` whether the operand
+// was missing or the renderer dropped it. The marker is not valid source in any
+// position, so output holding one cannot be mistaken for a program.
+const missingNode = "<missing>"
+
+// render prints one child of a node.
+//
+// A tree that came back from a parse with errors has holes in it: when no
+// prefix function claims the current token parseExpression appends an error and
+// returns nil, and the node that asked for the operand keeps that nil as a
+// child. Dereferencing one was a nil panic in ten of this package's String()
+// methods -- `1 + ;`, `-;`, `!` and `f()[-,] = 1;` each produced one -- and the
+// language server died of it rather than reporting a diagnostic, because it
+// calls String() on an assignment's target to lint it and nothing between that
+// call and the jsonrpc2 reader goroutine recovers (M26-LEX-010).
+//
+// Every String() in this package also tolerates a nil receiver. That is the
+// other half of the same invariant and it is not redundant: a child field whose
+// type is a concrete pointer -- FunctionLiteral.Body, IfExpression.Consequence,
+// LetStatement.Name -- becomes a NON-nil interface holding a typed nil when it
+// is passed to a parameter of type Node, so the check here cannot see it. The
+// receiver guard is where that one is caught.
+func render(n Node) string {
+	if n == nil {
+		return missingNode
+	}
+	return n.String()
+}
+
 func (p *Program) String() string {
+	if p == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	for _, s := range p.Statements {
-		out.WriteString(s.String())
+		out.WriteString(render(s))
 	}
 
 	return out.String()

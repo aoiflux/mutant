@@ -1312,8 +1312,73 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 	}}, nil
 }
 
+// diagnose runs the lint set over one snapshot and survives a panic inside it.
+//
+// Diagnostics is called on jsonrpc2's single reader goroutine, and until now
+// nothing on that path recovered: not this server, and neither glsp nor
+// jsonrpc2 contains a recover() anywhere. A panic in any one of the lint rules
+// therefore did not fail a request, it ended the process -- the editor's
+// language server vanished mid-keystroke, and since the workspace scan parses
+// every .mut it finds, a file that provoked one took the server down again on
+// the next start. M26-LEX-010 was a panic of exactly that kind, reached from
+// the assignment-target rule by printing a tree a failed parse had left a hole
+// in, and fixing it removed that source rather than the exposure: every rule
+// walks the same trees.
+//
+// The panic is reported and not swallowed. A silent recovery would make a
+// broken rule indistinguishable from a clean file, which is worse than the
+// crash was in one specific way -- the crash was at least visible. So the file
+// gets one diagnostic saying its analysis stopped, and the parse errors are
+// recomputed outside the recover so that a rule failing does not also cost the
+// author their syntax errors, which are the ones least likely to be the cause.
+//
+// This lives in the server rather than in analyzer.Diagnostics on purpose. The
+// analyzer's own tests call Diagnostics directly, so a rule that panics still
+// fails the suite instead of being hidden by the thing that keeps the editor
+// alive.
+func (s *Server) diagnose(snapshot *analyzer.Snapshot) (diagnostics []lsp.Diagnostic) {
+	// Collected inside the protected region and read by the deferred function
+	// from this local. Calling back into the analyzer from the recover would
+	// defeat the recover: Diagnostics reports the parse errors first, so a
+	// panic raised in that part would be raised again by the deferred call --
+	// and a panic inside a deferred function after a recover propagates, so
+	// the process would die and the recover would be decoration.
+	var parseErrors []lsp.Diagnostic
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		severity := lsp.DiagnosticSeverityWarning
+		source := "mutant-lsp"
+		diagnostics = append(parseErrors, lsp.Diagnostic{
+			Range:    lsp.Range{},
+			Severity: &severity,
+			Source:   &source,
+			Message: fmt.Sprintf(
+				"the editor stopped analysing this file after an internal error (%v); "+
+					"the file itself may be fine, and syntax errors are still reported. "+
+					"Please report this with the text that produced it.", recovered),
+		})
+	}()
+
+	parseErrors = analyzer.ParseDiagnostics(snapshot)
+	return runLintSet(snapshot, s.currentLintConfig())
+}
+
+// runLintSet is the lint set, behind a variable so that the recover above
+// has something driving it.
+//
+// No input makes a rule panic on purpose any more -- that was M26-LEX-010, and
+// it is fixed -- so without a seam the recover would be untested, which is the
+// state the missing one was in: nobody knew the server had no recover until a
+// malformed assignment target proved it.
+var runLintSet = analyzer.Diagnostics
+
 func (s *Server) publishDiagnostics(ctx *glsp.Context, uri lsp.DocumentUri, version lsp.UInteger, snapshot *analyzer.Snapshot) {
-	diagnostics := analyzer.Diagnostics(snapshot, s.currentLintConfig())
+	diagnostics := s.diagnose(snapshot)
 	if len(diagnostics) == 0 {
 		diagnostics = []lsp.Diagnostic{}
 	}

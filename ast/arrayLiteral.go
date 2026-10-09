@@ -14,11 +14,14 @@ type ArrayLiteral struct {
 func (al *ArrayLiteral) expressionNode()      {}
 func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Literal }
 func (al *ArrayLiteral) String() string {
+	if al == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	elements := []string{}
 
 	for _, el := range al.Elements {
-		elements = append(elements, el.String())
+		elements = append(elements, render(el))
 	}
 
 	out.WriteString("[")

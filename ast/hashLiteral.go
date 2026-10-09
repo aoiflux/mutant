@@ -51,11 +51,14 @@ func (hl *HashLiteral) TokenLiteral() string { return hl.Token.Literal }
 // imposes an order the tree does not have. object.Hash.Inspect still sorts: a
 // hash VALUE has no written order to show.
 func (hl *HashLiteral) String() string {
+	if hl == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	pairs := make([]string, 0, len(hl.Pairs))
 	for _, pair := range hl.Pairs {
-		pairs = append(pairs, pair.Key.String()+":"+pair.Value.String())
+		pairs = append(pairs, render(pair.Key)+":"+render(pair.Value))
 	}
 
 	out.WriteString("{")

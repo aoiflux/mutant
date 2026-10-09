@@ -389,11 +389,19 @@ func (l *Lexer) nextRune() rune {
 // literal. A newline does not end it either, which is long-standing behaviour:
 // a lone " spanning lines has always been legal, and triple quotes are for
 // saying so on purpose.
-func (l *Lexer) readQuotedBody() string {
+//
+// The second return says whether the closing quote was found. End of input and
+// a closing quote both stop this loop and used to be indistinguishable to the
+// caller, which is why an unterminated literal became an ordinary STRING
+// holding the rest of the file (M26-LEX-005).
+func (l *Lexer) readQuotedBody() (string, bool) {
 	start := l.readPosition
 	for {
 		l.readRune()
-		if l.ch == 0 || l.ch == '"' {
+		if l.ch == 0 {
+			return l.input[start:l.position], false
+		}
+		if l.ch == '"' {
 			break
 		}
 		if l.ch == '\\' && l.peekRune() != 0 {
@@ -406,7 +414,7 @@ func (l *Lexer) readQuotedBody() string {
 			l.skipHole()
 		}
 	}
-	return l.input[start:l.position]
+	return l.input[start:l.position], true
 }
 
 // skipHole advances the cursor from the `$` of a `${` to the matching `}`,
@@ -442,26 +450,36 @@ func (l *Lexer) skipHole() {
 // the literal ends at the first quote and a raw string cannot contain one --
 // that is the entire rule, and r"""..."""  is how a program gets a quote back.
 // The cursor starts on the opening quote and is left on the closing one.
-func (l *Lexer) readRawBody() string {
+//
+// The second return says whether that closing quote was found.
+func (l *Lexer) readRawBody() (string, bool) {
 	start := l.readPosition
 	for {
 		l.readRune()
-		if l.ch == 0 || l.ch == '"' {
-			break
+		if l.ch == 0 {
+			return l.input[start:l.position], false
+		}
+		if l.ch == '"' {
+			return l.input[start:l.position], true
 		}
 	}
-	return l.input[start:l.position]
 }
 
 // readTripleBody returns the source text between the delimiters of a
 // """...""" literal. The cursor starts on the first of the three opening
 // quotes and is left on the last of the three closing ones.
-func (l *Lexer) readTripleBody(raw bool) string {
+//
+// The second return says whether all three closing quotes were found. This
+// scanner already distinguished the two endings internally -- it set end from
+// l.position in one arm and stepped over the delimiter in the other -- and
+// threw the distinction away at the return.
+func (l *Lexer) readTripleBody(raw bool) (string, bool) {
 	l.readRune()
 	l.readRune()
 
 	start := l.readPosition
 	end := len(l.input)
+	terminated := false
 	for {
 		l.readRune()
 		if l.ch == 0 {
@@ -472,6 +490,7 @@ func (l *Lexer) readTripleBody(raw bool) string {
 			end = l.position
 			l.readRune()
 			l.readRune()
+			terminated = true
 			break
 		}
 		if !raw && l.ch == '\\' && l.peekRune() != 0 {
@@ -479,7 +498,7 @@ func (l *Lexer) readTripleBody(raw bool) string {
 		}
 	}
 
-	return l.input[start:end]
+	return l.input[start:end], terminated
 }
 
 func newToken(tokenType token.TokenType, ch rune) token.Token {
@@ -734,13 +753,14 @@ func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
 	bodyStart := l.bodyPosition(triple)
 
 	var body string
+	var terminated bool
 	switch {
 	case triple:
-		body = l.readTripleBody(raw)
+		body, terminated = l.readTripleBody(raw)
 	case raw:
-		body = l.readRawBody()
+		body, terminated = l.readRawBody()
 	default:
-		body = l.readQuotedBody()
+		body, terminated = l.readQuotedBody()
 	}
 
 	end := l.readPosition
@@ -748,6 +768,15 @@ func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
 		end = len(l.input)
 	}
 	spelling := l.input[openOffset:end]
+
+	// Returned before the template check on purpose: a literal that was never
+	// closed has no parts to split, and splitting it would report a hole's
+	// position inside text the program does not contain. The decoded body is
+	// carried so a caller that wants to show what was swallowed can, and the
+	// caller that matters -- the parser -- shows where the quote was opened.
+	if !terminated {
+		return token.Token{Type: token.UNTERMINATED, Literal: body, Raw: spelling}
+	}
 
 	// A raw literal has no holes for the same reason it has no escapes: raw
 	// means the text is the text. Nothing else would make r"${x}" usable for

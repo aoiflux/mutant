@@ -16,10 +16,13 @@ func (bs *BlockStatement) statementNode() {}
 func (bs *BlockStatement) RequiresSemicolon() bool { return false }
 func (bs *BlockStatement) TokenLiteral() string    { return bs.Token.Literal }
 func (bs *BlockStatement) String() string {
+	if bs == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	for _, s := range bs.Statements {
-		out.WriteString(s.String())
+		out.WriteString(render(s))
 	}
 
 	return out.String()

@@ -35,15 +35,22 @@ func (tl *TemplateLiteral) TokenLiteral() string { return tl.Token.Literal }
 // formatter reads Token.Raw directly for the opposite reason: what it needs is
 // the spelling the author wrote.
 func (tl *TemplateLiteral) String() string {
+	if tl == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	out.WriteString(`"`)
 	for i, text := range tl.Texts {
 		out.WriteString(text)
-		if i >= len(tl.Parts) || tl.Parts[i] == nil {
+		// Running past Parts is the ordinary case and not a hole: Texts holds
+		// one more chunk than Parts, the text after the last ${}. A nil part
+		// WITHIN range is a hole whose expression did not parse, and that one
+		// is printed.
+		if i >= len(tl.Parts) {
 			continue
 		}
 		out.WriteString("${")
-		out.WriteString(tl.Parts[i].String())
+		out.WriteString(render(tl.Parts[i]))
 		out.WriteString("}")
 	}
 	out.WriteString(`"`)

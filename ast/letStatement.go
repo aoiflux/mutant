@@ -17,24 +17,22 @@ func (ls *LetStatement) statementNode()          {}
 func (ls *LetStatement) RequiresSemicolon() bool { return true }
 func (ls *LetStatement) TokenLiteral() string    { return ls.Token.Literal }
 func (ls *LetStatement) String() string {
+	if ls == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	out.WriteString(ls.TokenLiteral() + " ")
 	if len(ls.Names) > 0 {
 		names := make([]string, 0, len(ls.Names))
 		for _, ident := range ls.Names {
-			if ident == nil {
-				continue
-			}
-			names = append(names, ident.String())
+			names = append(names, render(ident))
 		}
 		out.WriteString(strings.Join(names, ", "))
 	} else if ls.Name != nil {
 		out.WriteString(ls.Name.String())
 	}
 	out.WriteString(" = ")
-	if ls.Value != nil {
-		out.WriteString(ls.Value.String())
-	}
+	out.WriteString(render(ls.Value))
 	out.WriteString(";")
 	return out.String()
 }

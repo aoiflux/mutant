@@ -23,16 +23,15 @@ func (ws *WhileStatement) statementNode() {}
 func (ws *WhileStatement) RequiresSemicolon() bool { return false }
 func (ws *WhileStatement) TokenLiteral() string    { return ws.Token.Literal }
 func (ws *WhileStatement) String() string {
+	if ws == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("while (")
-	if ws.Condition != nil {
-		out.WriteString(ws.Condition.String())
-	}
+	out.WriteString(render(ws.Condition))
 	out.WriteString(") ")
-	if ws.Body != nil {
-		out.WriteString(ws.Body.String())
-	}
+	out.WriteString(render(ws.Body))
 
 	return out.String()
 }

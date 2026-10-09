@@ -15,11 +15,14 @@ type InfixExpression struct {
 func (ie *InfixExpression) expressionNode()      {}
 func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
 func (ie *InfixExpression) String() string {
+	if ie == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	out.WriteString("(")
-	out.WriteString(ie.Left.String())
+	out.WriteString(render(ie.Left))
 	out.WriteString(" " + ie.Operator + " ")
-	out.WriteString(ie.Right.String())
+	out.WriteString(render(ie.Right))
 	out.WriteString(")")
 	return out.String()
 }

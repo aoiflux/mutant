@@ -19,11 +19,14 @@ func (ss *StructStatement) statementNode() {}
 func (ss *StructStatement) RequiresSemicolon() bool { return false }
 func (ss *StructStatement) TokenLiteral() string    { return ss.Token.Literal }
 func (ss *StructStatement) String() string {
+	if ss == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	fields := []string{}
 
 	for _, f := range ss.Fields {
-		fields = append(fields, f.String())
+		fields = append(fields, render(f))
 	}
 
 	out.WriteString("struct ")

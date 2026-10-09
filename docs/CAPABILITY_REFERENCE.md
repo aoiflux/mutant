@@ -210,7 +210,7 @@ The formats evidence actually arrives in. JSON and NDJSON/JSONL (Zeek, Elastic b
 | `to_base(n: INTEGER, base: INTEGER) -> STRING` | all | Formats integer n in the given base (2–36). |
 | `to_bool(v: BOOLEAN\|INTEGER\|FLOAT\|STRING) -> (BOOLEAN, ERROR)` | all | Converts a bool/number/string to BOOLEAN; returns (bool, err). |
 | `to_float(v: INTEGER\|FLOAT\|BOOLEAN\|STRING) -> (FLOAT, ERROR)` | all | Converts a number/bool/string to FLOAT; returns (float, err). |
-| `to_int(v: INTEGER\|FLOAT\|BOOLEAN\|STRING) -> (INTEGER, ERROR)` | all | Converts a number/bool/string to INTEGER; returns (int, err). |
+| `to_int(v: INTEGER\|FLOAT\|BOOLEAN\|STRING) -> (INTEGER, ERROR)` | all | Converts a number/bool/string to INTEGER; a STRING is read in base 10, so a zero-padded field such as "08" or "010" is the decimal number it looks like. Use parse_int(s, 0) for a string carrying a 0x, 0b or 0o prefix. Returns (int, err). |
 | `to_string(v) -> STRING` | all | Converts any value to its STRING representation. |
 | `toml_parse(data: BYTES\|STRING) -> (HASH, ERROR)` | all | Parses TOML into a hash. Offset date-times become RFC 3339 strings in UTC, so they sort against every other timestamp the language produces; local date-times, dates and times name no instant and keep the form they were written in (1979-05-27T07:32:00, 1979-05-27, 07:32:00). Arrays and inline tables nested past 256 levels, and keys of more than 256 dotted parts, are refused before decoding. |
 | `toml_stringify(value: HASH\|STRUCT) -> (STRING, ERROR)` | all | Serializes a hash or struct as TOML. The top level must be a table -- TOML has no other document shape -- and a buffer is written as hex, matching yaml_stringify. |

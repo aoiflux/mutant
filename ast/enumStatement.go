@@ -18,11 +18,14 @@ func (es *EnumStatement) statementNode() {}
 func (es *EnumStatement) RequiresSemicolon() bool { return false }
 func (es *EnumStatement) TokenLiteral() string    { return es.Token.Literal }
 func (es *EnumStatement) String() string {
+	if es == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	variants := []string{}
 
 	for _, v := range es.Variants {
-		variants = append(variants, v.String())
+		variants = append(variants, render(v))
 	}
 
 	out.WriteString("enum ")

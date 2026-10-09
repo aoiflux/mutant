@@ -20,14 +20,18 @@ type StructLiteral struct {
 func (sl *StructLiteral) expressionNode()      {}
 func (sl *StructLiteral) TokenLiteral() string { return sl.Token.Literal }
 func (sl *StructLiteral) String() string {
+	if sl == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	fields := []string{}
 
 	for _, f := range sl.Fields {
-		if f == nil || f.Name == nil || f.Value == nil {
+		if f == nil {
+			fields = append(fields, missingNode)
 			continue
 		}
-		fields = append(fields, f.Name.String()+": "+f.Value.String())
+		fields = append(fields, render(f.Name)+": "+render(f.Value))
 	}
 
 	if sl.Name != nil {

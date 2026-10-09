@@ -110,6 +110,35 @@ type RecoverableError struct {
 	Kind RecoverableKind
 }
 
+// maxNestingDepth bounds how deeply one construct may be nested inside
+// another: parenthesised expressions, prefix operators, array and hash
+// literals, calls, indexes, function literals and block bodies all count,
+// because each one is a frame on the parser's stack.
+//
+// Source as it is written nests a handful deep and generated source little
+// more, so a program past this limit is one built to make the parse recurse,
+// and it is refused rather than followed. The value is three orders of
+// magnitude above anything a reader would write and three below the point
+// where the Go stack gives out: 100,000 levels parsed in 85 ms at HEAD and
+// 1,000,000 ended the process with a fatal stack overflow, which recover()
+// cannot catch and which therefore takes the language server with it
+// (M26-LEX-003).
+//
+//mutant:limit depth
+const maxNestingDepth = 1000
+
+// maxParseErrors bounds how many errors one parse reports.
+//
+// The errors are a list that grows once per mistake, and some mistakes are one
+// per character: every unclosed '(' in a file of them produced its own error,
+// so a 700 KB file of nothing else produced 700,001 of them and about a
+// megabyte of strings, all saying the same thing about the same program. The
+// first hundred are the ones anybody reads; the hundred-and-first is the parse
+// repeating itself.
+//
+//mutant:limit count
+const maxParseErrors = 100
+
 type Parser struct {
 	l              *lexer.Lexer
 	curToken       token.Token
@@ -127,6 +156,16 @@ type Parser struct {
 	// are linked into one program before it runs, so an import inside a
 	// function body could not mean "load this when control reaches here".
 	blockDepth int
+
+	// depth counts the frames of parser recursion currently open, across both
+	// expressions and block bodies, and is what maxNestingDepth bounds. It is
+	// a different question from blockDepth, which counts only braces and only
+	// so that `import` can refuse to be inside one.
+	depth int
+
+	// depthReported stops the nesting refusal being appended once per frame as
+	// a thousand of them unwind.
+	depthReported bool
 }
 
 func New(l *lexer.Lexer) *Parser {
@@ -146,6 +185,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.MATCH, p.parseMatchExpression)
 	p.registerPrefix(token.FUNCTION, p.parseFunctionLiteral)
 	p.registerPrefix(token.STRING, p.parseStringLiteral)
+	p.registerPrefix(token.UNTERMINATED, p.parseUnterminatedString)
 	p.registerPrefix(token.TEMPLATE, p.parseTemplateLiteral)
 	p.registerPrefix(token.LSQUARE, p.parseArrayLiteral)
 
@@ -367,12 +407,43 @@ func (p *Parser) recordRedundantSemicolon(tok token.Token) {
 }
 
 func (p *Parser) appendError(tok token.Token, msg string) {
+	// Past the cap the parse is repeating itself, so it says so once and stops.
+	// The note is appended to errors only: typedErrors is what the language
+	// server renders, and a diagnostic about the number of diagnostics has no
+	// range to put itself at.
+	if len(p.errors) >= maxParseErrors {
+		if len(p.errors) == maxParseErrors {
+			p.errors = append(p.errors, fmt.Sprintf(
+				"too many parse errors; stopped reporting after %d", maxParseErrors))
+		}
+		return
+	}
 	p.errors = append(p.errors, msg)
 	p.typedErrors = append(p.typedErrors, ParseError{
 		Msg:   msg,
 		Range: ast.Range{Start: tok.Start, End: tok.End},
 	})
 }
+
+// enterNesting opens one level of parser recursion and reports whether the
+// parse may go deeper. On a refusal the counter is NOT incremented, so the
+// frame that was refused owes no matching leaveNesting.
+func (p *Parser) enterNesting() bool {
+	if p.depth >= maxNestingDepth {
+		if !p.depthReported {
+			p.depthReported = true
+			p.appendError(p.curToken, fmt.Sprintf(
+				"nested more than %d levels deep at line %d, column %d: this is past what the parser will follow, and a program written by hand does not reach it",
+				maxNestingDepth, p.curToken.Start.Line, p.curToken.Start.Column))
+		}
+		return false
+	}
+	p.depth++
+	return true
+}
+
+// leaveNesting closes the level enterNesting opened.
+func (p *Parser) leaveNesting() { p.depth-- }
 
 func (p *Parser) parseIdentifier() ast.Expression {
 	start := p.startMark()

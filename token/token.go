@@ -132,6 +132,18 @@ const (
 	ILLEGAL = "ILLEGAL"
 	EOF     = "EOF"
 
+	// UNTERMINATED is a string literal whose closing delimiter is missing: the
+	// scan for it reached end of input instead. Literal carries the decoded
+	// text that was read and Start is the opening quote, which is the position
+	// a reader has to be given -- the end of the token is the end of the file
+	// and says nothing about where the mistake is.
+	//
+	// It is not ILLEGAL. ILLEGAL is a rune no reader claims, reported one rune
+	// at a time; this is a token many runes wide, read correctly, that no
+	// program can contain. Keeping them apart is what lets the parser explain
+	// this one instead of saying no prefix function was found (M26-LEX-005).
+	UNTERMINATED = "UNTERMINATED"
+
 	// Identifiers + Literals
 	// ex: add, foobar, x, y, ....
 	IDENT  = "IDENT"

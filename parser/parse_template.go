@@ -62,6 +62,12 @@ func (p *Parser) parseHole(part token.StringPart) ast.Expression {
 	padding := strings.Repeat("\n", part.Start.Line-1) + strings.Repeat(" ", part.Start.Column-1)
 	sub := New(lexer.New(padding + part.Text))
 
+	// The sub-parser recurses on this parser's stack, so it inherits the depth
+	// already spent. Without this a hole inside a hole inside a hole is the
+	// same stack with the counter reset to zero at every level, and the bound
+	// bounds nothing.
+	sub.depth = p.depth
+
 	if statementKeyword(sub.curToken.Type) {
 		p.appendError(p.curToken, fmt.Sprintf(
 			"%s at line %d:%d starts a statement, and a hole has to be an expression: it has to produce the value that goes into the string",

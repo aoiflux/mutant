@@ -14,16 +14,15 @@ type FieldExpression struct {
 func (fe *FieldExpression) expressionNode()      {}
 func (fe *FieldExpression) TokenLiteral() string { return fe.Token.Literal }
 func (fe *FieldExpression) String() string {
+	if fe == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("(")
-	if fe.Left != nil {
-		out.WriteString(fe.Left.String())
-	}
+	out.WriteString(render(fe.Left))
 	out.WriteString(".")
-	if fe.Field != nil {
-		out.WriteString(fe.Field.String())
-	}
+	out.WriteString(render(fe.Field))
 	out.WriteString(")")
 
 	return out.String()

@@ -23,12 +23,13 @@ type AssignExpression struct {
 func (ae *AssignExpression) expressionNode()      {}
 func (ae *AssignExpression) TokenLiteral() string { return ae.Token.Literal }
 func (ae *AssignExpression) String() string {
+	if ae == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("(")
-	if ae.Left != nil {
-		out.WriteString(ae.Left.String())
-	}
+	out.WriteString(render(ae.Left))
 	if ae.Postfix != "" {
 		out.WriteString(ae.Postfix)
 		out.WriteString(")")
@@ -39,9 +40,7 @@ func (ae *AssignExpression) String() string {
 	} else {
 		out.WriteString(" = ")
 	}
-	if ae.Value != nil {
-		out.WriteString(ae.Value.String())
-	}
+	out.WriteString(render(ae.Value))
 	out.WriteString(")")
 
 	return out.String()

@@ -23,22 +23,20 @@ type MatchExpression struct {
 func (me *MatchExpression) expressionNode()      {}
 func (me *MatchExpression) TokenLiteral() string { return me.Token.Literal }
 func (me *MatchExpression) String() string {
+	if me == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("match (")
-	if me.Subject != nil {
-		out.WriteString(me.Subject.String())
-	}
+	out.WriteString(render(me.Subject))
 	out.WriteString(") {")
 	for i, arm := range me.Arms {
-		if arm == nil {
-			continue
-		}
 		if i > 0 {
 			out.WriteString(",")
 		}
 		out.WriteString(" ")
-		out.WriteString(arm.String())
+		out.WriteString(render(arm))
 	}
 	out.WriteString(" }")
 
@@ -75,6 +73,9 @@ func (ma *MatchArm) IsWildcard() bool { return ma != nil && len(ma.Patterns) == 
 func (ma *MatchArm) TokenLiteral() string { return ma.Token.Literal }
 
 func (ma *MatchArm) String() string {
+	if ma == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	if ma.IsWildcard() {
@@ -84,19 +85,15 @@ func (ma *MatchArm) String() string {
 		if i > 0 {
 			out.WriteString(" | ")
 		}
-		if pattern != nil {
-			out.WriteString(pattern.String())
-		}
+		out.WriteString(render(pattern))
 	}
 
 	out.WriteString(" => ")
-	if ma.Body != nil {
-		// BlockStatement.String() prints its statements and no braces, the same
-		// way IfExpression.String() prints a consequence, so both arm forms
-		// render alike here. Braced exists for the formatter, which does have
-		// to reproduce the author's choice.
-		out.WriteString(ma.Body.String())
-	}
+	// BlockStatement.String() prints its statements and no braces, the same way
+	// IfExpression.String() prints a consequence, so both arm forms render
+	// alike here. Braced exists for the formatter, which does have to reproduce
+	// the author's choice.
+	out.WriteString(render(ma.Body))
 
 	return out.String()
 }

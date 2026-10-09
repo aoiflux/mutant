@@ -7,12 +7,38 @@ import (
 	"reflect"
 )
 
+// parseBlockStatement reads a `{ ... }` body, and refuses one that ends at end
+// of input instead of at its closing brace.
+//
+// The loop below stops on either, and used to say nothing about which it was.
+// A block that runs off the end swallows every statement after it -- with
+// `let f = fn() { return 1;` the call to f() becomes part of f's body, so it
+// never runs and the parse reports no errors at all -- which is the same
+// mistake, in the same direction, as a string literal that ends at end of
+// input (M26-LEX-005). The brace reported is the opening one, for the same
+// reason: the end of the token is the end of the file.
 func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	start := p.startMark()
+	opening := p.curToken
 	block := &ast.BlockStatement{Token: p.curToken}
 	block.Statements = []ast.Statement{}
 	p.blockDepth++
 	defer func() { p.blockDepth-- }()
+
+	// A `for` or `while` body is reached without passing through
+	// parseExpression, so the nesting check there does not cover `for(;;){ for
+	// (;;){ ... } }`. On a refusal the rest of the input is consumed rather
+	// than a matching '}' being looked for, because finding one is the same
+	// recursion under another name and the parse already carries a hard error.
+	if !p.enterNesting() {
+		for !p.curTokenIs(token.EOF) {
+			p.nextToken()
+		}
+		p.recordRange(block, start)
+		return block
+	}
+	defer p.leaveNesting()
+
 	p.nextToken()
 	for !p.curTokenIs(token.RBRACE) && !p.curTokenIs(token.EOF) {
 		beforeErrCount := len(p.errors)
@@ -24,6 +50,11 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 			p.synchronizeToStatementBoundary()
 		}
 		p.nextToken()
+	}
+	if p.curTokenIs(token.EOF) {
+		p.appendError(opening, fmt.Sprintf(
+			"unclosed block: the '{' at line %d, column %d has no matching '}', so everything after it was read as part of this body",
+			opening.Start.Line, opening.Start.Column))
 	}
 	p.recordRange(block, start)
 	return block

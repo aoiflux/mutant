@@ -144,10 +144,17 @@ func TestAHashLiteralMayNotSetOneKeyTwice(t *testing.T) {
 		{"a float key", `let h = {1.5: 1, 1.5: 2};`, "1.5"},
 		{"a boolean key", `let h = {true: 1, true: 2};`, "true"},
 		{"not adjacent", `let h = {"a": 1, "b": 2, "a": 3};`, `"a"`},
-		// The value and not the spelling: ParseInt reads 07 in base 0, so these
-		// are two spellings of the integer 7 and one key.
-		{"one integer written two ways", `let h = {07: 1, 7: 2};`, "7"},
-		// Likewise 1.50 and 1.5.
+		// The value and not the spelling: 1.50 and 1.5 are two spellings of one
+		// float, so this is one key written twice.
+		//
+		// There used to be an integer row here as well, `{07: 1, 7: 2}`, on the
+		// grounds that ParseInt read 07 in base 0 and so the two were one key.
+		// That reading is gone: a leading zero is refused now, because `0755`
+		// is a permission mask to one reader and a zero-padded decimal to
+		// another and the text does not say which (M26-LEX-008). An integer
+		// literal therefore has exactly one spelling per value, and what became
+		// of that row is in
+		// TestALeadingZeroIsRefusedBeforeTheDuplicateKeyCheckCanSeeIt below.
 		{"one float written two ways", `let h = {1.50: 1, 1.5: 2};`, "1.5"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -161,6 +168,34 @@ func TestAHashLiteralMayNotSetOneKeyTwice(t *testing.T) {
 				t.Errorf("the refusal does not name %s as a key set twice:\n  %s", c.key, errs[0])
 			}
 		})
+	}
+}
+
+// TestALeadingZeroIsRefusedBeforeTheDuplicateKeyCheckCanSeeIt is what became of
+// the `{07: 1, 7: 2}` row above.
+//
+// It was a duplicate-key case only because the parser read 07 as octal, which
+// made it the integer 7 and the key a repeat. That reading was M26-LEX-008 and
+// it is gone, so this program is still refused and for a better reason: the
+// literal itself is, before anything looks at the keys. Which refusal arrives
+// is worth pinning, because the two say different things to whoever wrote it --
+// one says a value is being dropped, the other says the number is not the
+// number it looks like.
+func TestALeadingZeroIsRefusedBeforeTheDuplicateKeyCheckCanSeeIt(t *testing.T) {
+	p := parser.New(lexer.New(`let h = {07: 1, 7: 2};`))
+	p.ParseProgram()
+
+	errs := p.Errors()
+	if len(errs) == 0 {
+		t.Fatal("{07: 1, 7: 2} was accepted")
+	}
+	if !strings.Contains(errs[0], "a leading zero does not make 07 octal") {
+		t.Errorf("the first refusal should be about the literal, got:\n  %s", errs[0])
+	}
+	for _, e := range errs {
+		if strings.Contains(e, "twice") {
+			t.Errorf("07 is no longer the integer 7, so nothing is set twice here: %s", e)
+		}
 	}
 }
 

@@ -31,6 +31,9 @@ func (is *ImportStatement) RequiresSemicolon() bool { return true }
 func (is *ImportStatement) TokenLiteral() string    { return is.Token.Literal }
 
 func (is *ImportStatement) String() string {
+	if is == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 	out.WriteString(is.TokenLiteral())
 	if is.Alias != nil {

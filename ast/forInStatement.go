@@ -30,6 +30,9 @@ func (fs *ForInStatement) statementNode() {}
 func (fs *ForInStatement) RequiresSemicolon() bool { return false }
 func (fs *ForInStatement) TokenLiteral() string    { return fs.Token.Literal }
 func (fs *ForInStatement) String() string {
+	if fs == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("for (")
@@ -41,13 +44,9 @@ func (fs *ForInStatement) String() string {
 		out.WriteString(fs.Value.String())
 	}
 	out.WriteString(" in ")
-	if fs.Iterable != nil {
-		out.WriteString(fs.Iterable.String())
-	}
+	out.WriteString(render(fs.Iterable))
 	out.WriteString(") ")
-	if fs.Body != nil {
-		out.WriteString(fs.Body.String())
-	}
+	out.WriteString(render(fs.Body))
 
 	return out.String()
 }

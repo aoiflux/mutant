@@ -20,24 +20,19 @@ func (fs *ForStatement) statementNode() {}
 func (fs *ForStatement) RequiresSemicolon() bool { return false }
 func (fs *ForStatement) TokenLiteral() string    { return fs.Token.Literal }
 func (fs *ForStatement) String() string {
+	if fs == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("for (")
-	if fs.Init != nil {
-		out.WriteString(fs.Init.String())
-	}
+	out.WriteString(render(fs.Init))
 	out.WriteString("; ")
-	if fs.Condition != nil {
-		out.WriteString(fs.Condition.String())
-	}
+	out.WriteString(render(fs.Condition))
 	out.WriteString("; ")
-	if fs.Post != nil {
-		out.WriteString(fs.Post.String())
-	}
+	out.WriteString(render(fs.Post))
 	out.WriteString(") ")
-	if fs.Body != nil {
-		out.WriteString(fs.Body.String())
-	}
+	out.WriteString(render(fs.Body))
 
 	return out.String()
 }

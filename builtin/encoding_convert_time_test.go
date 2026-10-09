@@ -57,9 +57,19 @@ func TestEncodingRoundTrips(t *testing.T) {
 }
 
 func TestConvertBuiltins(t *testing.T) {
-	i, errObj := unwrapPair(t, ToInt(stringObj("0x1F")))
+	// to_int reads base 10, so a prefix is not a prefix to it. This assertion
+	// used to be the opposite one -- to_int("0x1F") == 31 -- which is how
+	// M26-BLT-008 came to be pinned by a test: the same base-0 call that made
+	// "010" into 8 and "08" into an error also made this answer 31, and only
+	// the third of the three was ever asserted. parse_int is where a base is
+	// detected, and TestToIntReadsBaseTenAndParseIntDetectsTheBase covers the
+	// rest of the contract.
+	if _, errObj := unwrapPair(t, ToInt(stringObj("0x1F"))); errObj == nil {
+		t.Fatal("to_int(0x1F) should refuse a prefix: base 10 is the contract")
+	}
+	i, errObj := unwrapPair(t, ToInt(stringObj("31")))
 	if errObj != nil || i.(*object.Integer).Value != 31 {
-		t.Fatalf("to_int(0x1F) = %v %v", i, errObj)
+		t.Fatalf("to_int(31) = %v %v", i, errObj)
 	}
 	if _, errObj := unwrapPair(t, ToInt(stringObj("nope"))); errObj == nil {
 		t.Fatal("to_int of garbage should error")

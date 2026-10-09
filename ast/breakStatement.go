@@ -10,5 +10,8 @@ func (bs *BreakStatement) statementNode()          {}
 func (bs *BreakStatement) RequiresSemicolon() bool { return true }
 func (bs *BreakStatement) TokenLiteral() string    { return bs.Token.Literal }
 func (bs *BreakStatement) String() string {
+	if bs == nil {
+		return missingNode
+	}
 	return bs.TokenLiteral() + ";"
 }

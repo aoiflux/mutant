@@ -33,8 +33,8 @@ func (es *ExpressionStatement) RequiresSemicolon() bool {
 }
 func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
 func (es *ExpressionStatement) String() string {
-	if es.Expression != nil {
-		return es.Expression.String()
+	if es == nil {
+		return missingNode
 	}
-	return ""
+	return render(es.Expression)
 }

@@ -29,9 +29,21 @@ func ToInt(args ...object.Object) object.Object {
 		}
 		return resultAndError(intObj(0), nil)
 	case *object.String:
-		n, err := strconv.ParseInt(v.Value, 0, 64)
+		// Base 10, not base 0. Base 0 auto-detected a prefix, and the strings
+		// to_int is given are data whose spelling nobody chose: a zero-padded
+		// month read as octal, so "010" came back 8 and "0755" came back 493,
+		// while the two months that are not octal digits failed outright --
+		// to_int("08") and to_int("09") could not be parsed at all. One
+		// timeline field could therefore be wrong, refused or right depending
+		// only on which month it named (M26-BLT-008).
+		//
+		// Zero-padding is a property of the format, not a base, so a field out
+		// of a log or a CSV is decimal. The builtin that auto-detects a base is
+		// parse_int(s, 0) and it still does, which is where to_int("0x1F") went:
+		// it answered 31 here until now, and no summary ever said it would.
+		n, err := strconv.ParseInt(v.Value, 10, 64)
 		if err != nil {
-			return resultAndError(nil, newError("to_int: cannot parse %q as integer", v.Value))
+			return resultAndError(nil, newError("to_int: cannot parse %q as a base-10 integer; parse_int(s, 0) reads a 0x, 0b or 0o prefix", v.Value))
 		}
 		return resultAndError(intObj(n), nil)
 	default:

@@ -6,6 +6,7 @@ import (
 	"mutant/ast"
 	"mutant/token"
 	"strconv"
+	"strings"
 )
 
 func (p *Parser) parseFloatLiteral() ast.Expression {
@@ -24,15 +25,51 @@ func (p *Parser) parseFloatLiteral() ast.Expression {
 	return lit
 }
 
+// parseIntegerLiteral reads an integer literal in base ten, and refuses one
+// written with a leading zero.
+//
+// The base is given explicitly because base 0 -- what this used to pass -- read
+// a leading zero as octal, so `010` was 8 and `0100 + 1` was 65 with nothing
+// said about either (M26-LEX-008). Nothing else base 0 understands can reach
+// this function: the literal arrives from the lexer's readNumber, which loops
+// on IsDigit and '.', so the text is digits and nothing else. A prefix is split
+// off as a separate identifier -- `0x1F` lexes as INT(0) IDENT(x1F), `1_000` as
+// INT(1) IDENT(_000) -- so base 0 was never handed one. The leading zero was
+// the whole of what it did here.
+//
+// A float was never read that way -- ParseFloat has no octal -- so `010` was 8
+// while `010.5` was 10.5, and the same spelling meant two different things
+// depending on whether a '.' followed it. Floats are left alone deliberately:
+// no language reads `010.5` as octal, so there is no second reading to refuse.
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	// defer untrace(trace("parseIntegerLiteral"))
 
 	start := p.startMark()
 	lit := &ast.IntegerLiteral{Token: p.curToken}
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+
+	// Refused rather than quietly read as decimal, because both readings are
+	// plausible and the text does not say which was meant: a zero-padded field
+	// pasted out of a date, a sector listing or tool output means ten, and
+	// `0755` written by hand means a permission mask. Reading it either way in
+	// silence is wrong for whoever meant the other, and which of the two it is
+	// cannot be recovered from the program. This is an error a compile can
+	// catch, so it is caught here.
+	text := p.curToken.Literal
+	if len(text) > 1 && text[0] == '0' {
+		decimal := strings.TrimLeft(text, "0")
+		if decimal == "" {
+			decimal = "0"
+		}
+		p.appendError(p.curToken, fmt.Sprintf(
+			`a leading zero does not make %s octal, and this language has no octal literal: write %s for the decimal value, or parse_int("%s", 8) for the octal one`,
+			text, decimal, text))
+		return nil
+	}
+
+	value, err := strconv.ParseInt(text, 10, 64)
 
 	if err != nil {
-		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
+		msg := fmt.Sprintf("could not parse %q as integer", text)
 		p.appendError(p.curToken, msg)
 		return nil
 	}
@@ -41,6 +78,26 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 
 	p.recordRange(lit, start)
 	return lit
+}
+
+// parseUnterminatedString reports a string literal whose closing delimiter is
+// missing, and produces no node.
+//
+// The position named is where the literal opens -- the `r` of a raw one, not
+// its quote, because that is where the token starts -- and it is named because
+// it is the only position that helps: the token ends at end of file, and the
+// text in between is whatever the scan swallowed, which is the part the author
+// cannot see is inside a string.
+// There is deliberately no recovery -- no node, and the error is not
+// recoverable in the parser's sense -- because every spelling of this was
+// accepted in silence and ran a prefix of the program as though it had
+// finished (M26-LEX-005).
+func (p *Parser) parseUnterminatedString() ast.Expression {
+	opening := p.curToken.Start
+	p.appendError(p.curToken, fmt.Sprintf(
+		"unterminated string literal: the literal opened at line %d, column %d is never closed, so everything after it was read as text",
+		opening.Line, opening.Column))
+	return nil
 }
 
 func (p *Parser) parseStringLiteral() ast.Expression {

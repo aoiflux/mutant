@@ -14,12 +14,15 @@ type IndexExpression struct {
 func (ie *IndexExpression) expressionNode()      {}
 func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Literal }
 func (ie *IndexExpression) String() string {
+	if ie == nil {
+		return missingNode
+	}
 	var out bytes.Buffer
 
 	out.WriteString("(")
-	out.WriteString(ie.Left.String())
+	out.WriteString(render(ie.Left))
 	out.WriteString("[")
-	out.WriteString(ie.Index.String())
+	out.WriteString(render(ie.Index))
 	out.WriteString("])")
 
 	return out.String()

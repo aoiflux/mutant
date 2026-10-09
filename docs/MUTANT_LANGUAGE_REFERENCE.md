@@ -758,6 +758,14 @@ it is for `+=`. See [Compound assignment and increment/decrement](#compound-assi
 
 > Masks are written in decimal for now: Mutant has no hex literals, so `0xFF`
 > does not parse. Write `255`.
+>
+> A leading zero is refused rather than read, for the same reason. `0755` is a
+> permission mask to anyone who has written C and a zero-padded decimal to
+> anyone who has pasted a field out of a date or an offset listing, and the
+> text does not say which. Mutant read it as octal and said nothing -- `010`
+> was 8 and `0100 + 1` was 65 -- so it is now a compile error that names both
+> readings: write `755`, or `parse_int("0755", 8)`. A single `0` is a number,
+> and a float was never read that way, so `010.5` has always been 10.5.
 
 ### Compound assignment and increment/decrement
 
@@ -1136,8 +1144,26 @@ In an ordinary or triple-quoted string: `\n`, `\r`, `\t`, `\"`, `\\`, `\0`, and
 `\$`. Anything else is kept as both characters, so `"\d+"` is a usable regex
 without doubling -- though `r"\d+"` says so on purpose.
 
+#### A literal has to be closed
+
+All four spellings are refused if the closing delimiter is missing, and the
+error names the line and column the literal opened at rather than the end of
+the file.
+
+That is worth stating because the opposite behaviour is easy to write and hard
+to see: an unterminated literal used to swallow the rest of the file as its own
+text, so the program compiled, ran the statements written before the stray
+quote, and reported success. Anything after it -- a verification step, an
+`exit`, a custody write -- was inside the string and never ran, with nothing
+said about it.
+
+A newline inside an ordinary `"` literal is still allowed; it always has been.
+What is refused is reaching the end of the file without the closing quote.
+
 ### Notes
 - **Semicolons are required to terminate statements** — including statements whose value is a block, e.g. `let f = fn() { ... };` and `if (c) { ... };`. The language server's formatter enforces this canonically (it repairs missing semicolons and removes redundant ones on format), and the `semicolon` diagnostic flags them while you type.
+- **A block has to be closed too.** A `{` with no matching `}` is refused, naming the line and column it opened at. It used to be accepted: everything after it became part of that body, so in `let f = fn() { return 1;` followed by `putln(f());` the call was inside `f` and never ran, and the parse reported nothing wrong at all.
+- **Nesting is bounded.** One construct may be nested inside another up to 1,000 levels deep — parentheses, prefix operators, array and hash literals, calls, indexes, function literals and block bodies all count. Nothing written by hand comes near it, and a long expression is not a deep one: `1 + 1 + 1 + ...` does not nest at all. Past the limit the program is refused, where it previously ended the process with a stack overflow. See [LIMITS_REFERENCE.md](LIMITS_REFERENCE.md).
 
 ## Reserved Keywords
 

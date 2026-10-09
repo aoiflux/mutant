@@ -113,6 +113,16 @@ func (p *Parser) parseGroupedExpression() ast.Expression {
 func (p *Parser) parseExpression(precedence int) ast.Expression {
 	// defer untrace(trace("parseExpression"))
 
+	// Every expression form that recurses does it through here, so this one
+	// check bounds all of them: parseGroupedExpression for '(', the prefix
+	// operators, the element and value scans of the array and hash literals,
+	// a call's arguments, an index, and the body of a function literal by way
+	// of parseBlockStatement (M26-LEX-003).
+	if !p.enterNesting() {
+		return nil
+	}
+	defer p.leaveNesting()
+
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
 		p.notPrefixParseFnError(p.curToken.Type)

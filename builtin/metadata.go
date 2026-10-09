@@ -811,7 +811,7 @@ var builtinDocs = map[string]builtinDoc{
 	// accepted sets are exact. to_string is the exception: its default branch
 	// falls back to Inspect(), so it genuinely accepts every value.
 	BuiltinNameToInt: {
-		signature: "to_int(v)", summary: "Converts a number/bool/string to INTEGER; returns (int, err).",
+		signature: "to_int(v)", summary: "Converts a number/bool/string to INTEGER; a STRING is read in base 10, so a zero-padded field such as \"08\" or \"010\" is the decimal number it looks like. Use parse_int(s, 0) for a string carrying a 0x, 0b or 0o prefix. Returns (int, err).",
 		params:  []builtinParamDoc{param("v", "Value to convert; numbers, booleans, and numeric strings are accepted. A FLOAT that is NaN, infinite or outside the 64-bit integer range has no integer value and comes back as an error.", ParamInt, ParamFloat, ParamBool, ParamString)},
 		returns: pairRet("the integer value", ParamInt)},
 	BuiltinNameToFloat: {
