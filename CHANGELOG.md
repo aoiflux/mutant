@@ -859,6 +859,28 @@ exhaustive lists.
 
 ### Fixed
 
+- **The compiler refuses to finish a stream that still holds a jump nobody
+  patched.** A forward jump is emitted before anyone knows where it goes, with a
+  placeholder standing in for the target, and something later has to come back
+  and write the real one. Nothing used to check that anything did, and two of the
+  three defects in the entry below were exactly that failure: both compiled
+  without complaint and ran.
+
+  Every placeholder is now recorded as it is emitted, cleared when it is
+  patched, and the set is required to be empty at the two moments a stream stops
+  being editable: when a function's scope closes, and at the end of the program.
+  One left over is an internal compiler error naming the opcode, its offset and
+  the line it came from -- no source text can ask for an unpatched jump, so it
+  is a defect in the compiler and says so, rather than becoming a wrong answer
+  in whatever program happened to trip it.
+
+  Measured against the commit before those two were fixed, with nothing
+  but this guard applied: both are refused, each naming the one jump and the
+  column of the `for` header it came from, while the control program that always
+  compiled correctly is untouched. All 123 `.mut` programs under `examples/`
+  compile to byte-identical instruction streams, so the guard is inert on
+  everything that already worked.
+
 - **A `break` or a `continue` reached from inside an expression no longer leaves
   that expression's operands on the compiler's stack, and the compiler no longer
   emits a jump that nothing resolves.** Three defects in the same lines of

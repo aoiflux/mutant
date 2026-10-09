@@ -11,10 +11,11 @@ import (
 	"mutant/parser"
 )
 
-// placeholderTarget is the operand every forward jump is emitted with, before
-// the loop that owns it back-patches the real target. One still sitting in a
-// finished stream means the patch was written somewhere else.
-const placeholderTarget = 9999
+// placeholderTarget is declared in compiler.go, where the jumps are emitted
+// with it. One still sitting in a finished stream means the patch was written
+// somewhere else -- which assertJumpsResolved now refuses at compile time, so
+// these cases assert the same thing twice on purpose: once of the compiler's
+// own record, and once of the bytecode, which is what a program actually runs.
 
 // compileLoopCase parses and compiles input, failing the test on a parse error so
 // that a typo in a case below cannot pass as an empty program. It hands back the

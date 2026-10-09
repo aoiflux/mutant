@@ -602,6 +602,12 @@ func (st *SymbolTable) freeOriginal(index int) (Symbol, bool) {
 // "is this certainly the function's own name": a false yes would refuse a write
 // to a cell that has always worked, while a false no leaves the VM's own check
 // on the operand as the backstop it already is.
+//
+// Which of the two falses answers is worth one line, since the question comes
+// up on reading it: always the one inside the loop. Reaching the root means
+// freeOriginal's bounds check fires there, because the root's FreeSymbols is
+// empty, so the loop cannot run to completion and the return after it is
+// required by Go rather than reachable.
 func (st *SymbolTable) freeCapturesFunctionName(index int) bool {
 	for table := st; table != nil; table = table.Outer {
 		original, ok := table.freeOriginal(index)

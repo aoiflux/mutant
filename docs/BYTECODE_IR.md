@@ -504,8 +504,14 @@ type CompilationScope struct {
     instructions    code.Instructions    // byte buffer being built
     lastInstruction EmittedInstruction   // most recently emitted instruction
     prevInstruction EmittedInstruction   // the one before last (for pop-removal)
+
+    unresolvedJumps map[int]unresolvedJump  // forward jumps awaiting a target
 }
 ```
+
+`unresolvedJumps` is per scope and not per compiler because a jump position is
+an offset into one stream and means something else in any other. The three
+position tables the scope also builds are omitted above; see section 11.
 
 The main program compiles into `scopes[0]`. Each function literal pushes a new
 scope via `enterScope()` and pops it with `leaveScope()`.
@@ -521,17 +527,54 @@ jumps can be back-patched:
 
 ```go
 // Emit jump with placeholder target
-jumpPos := c.emit(code.OpJumpFalse, 9999)
+jumpPos := c.emitPlaceholder(code.OpJumpFalse)
 
 // ... compile consequence ...
 
-// Back-patch: replace the 9999 target with the real destination
+// Back-patch: replace the placeholder with the real destination
 c.changeOperand(jumpPos, realTarget)
 ```
 
 `changeOperand` calls `replaceInstruction` which overwrites the bytes at `pos`
 in the current instruction buffer. This works because `Make` produces the same
-byte length regardless of the operand value.
+byte length regardless of the operand value. Operands after the first are read
+back and re-emitted unchanged, so a wider instruction — `OpIterNext` carries a
+binding count after its target — keeps its tail instead of having it fall off
+the end of a shorter rebuilt instruction.
+
+#### The placeholder is owed a target
+
+`emitPlaceholder` emits operand 0 as `placeholderTarget` (9999) and records the
+position in the current scope's `unresolvedJumps`; `changeOperand` removes it.
+Nothing else writes to that map, so between them it is exactly the set of jumps
+the compiler still owes a target.
+
+`assertJumpsResolved` requires the set to be empty before a stream is finished,
+and there are two such moments: `leaveScope`, after which a function's stream
+becomes a constant in the pool and nobody holds offsets into it any more, and
+the end of the `*ast.Program` arm, which is the only ending the main stream has.
+Reaching either with an entry left is reported as an internal compiler error
+naming the opcode, the offset and the line it was emitted from — no program can
+ask for an unpatched jump, so it is a defect in the compiler rather than in the
+source.
+
+The check is there because what an unpatched jump does instead is decided by
+the length of the program it is in, and all three outcomes were measured:
+
+| the stream | what runs |
+| --- | --- |
+| shorter than 9999 bytes | jumps past the end; the run is treated as finished and the program answers whatever was last popped — a boolean, for a program whose value is an integer |
+| longer, byte 9999 mid-instruction | decodes that byte as an opcode: *"unknown opcode 225: the bytecode may be damaged or decrypted with the wrong key, or it may have been built by a newer version of mutant"*, none of which is true |
+| longer, byte 9999 on a boundary | resumes in unrelated code and does not terminate |
+
+`assertJumpsResolved` takes a mark — only jumps emitted at or after it are
+counted — because a program is not always the outermost thing being compiled,
+and an enclosing construct may legitimately be holding a forward jump of its
+own while everything inside it is compiled.
+
+A backward jump does not go through `emitPlaceholder`: a loop's head is a
+position already known, so `emit` is given the real target and there is nothing
+to owe.
 
 ### 6.4 Pop-Removal Optimisation
 

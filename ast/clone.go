@@ -14,9 +14,19 @@ package ast
 // Tokens are copied by value; they carry position information from the original
 // source, which is the honest answer for a node the macro expander produced. A
 // cloned Program deliberately carries no NodePositions: those keys are the
-// original node pointers, and a clone is by definition not those nodes. Only
-// the LSP reads that side-table, and it works on parsed source rather than on
-// expanded macros.
+// original node pointers, and a clone is by definition not those nodes, so
+// there is no entry a copy could honestly be given.
+//
+// What that costs is worth knowing before cloning anything else. The table is
+// not the LSP's alone: Compiler.Compile absorbs it on every program it is
+// given and looks each node up in it to decide the position an instruction is
+// attributed to, so an instruction compiled from a cloned node has no position
+// at all -- no line in an error, nothing for the debugger to stop on. The
+// linker walks it as well, in Program.ShiftPositions, to rebase every position
+// onto the concatenated source it hands the compiler. A clone is therefore the
+// right answer for a macro template, which is a tree that must not be
+// rewritten in place, and the wrong one anywhere the point is to give nodes
+// fresh identity while keeping what the parser knew about them.
 func Clone(node Node) Node {
 	switch node := node.(type) {
 	case nil:

@@ -12,6 +12,7 @@ import (
 	"mutant/object"
 	"mutant/sema"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -508,10 +509,43 @@ type EmittedInstruction struct {
 	Position int
 }
 
+// placeholderTarget is the operand every forward jump is emitted with, before
+// whatever owns it learns where it goes and back-patches the real target. The
+// value is arbitrary and only has to be a position no small program reaches;
+// what matters is that it is one value, so that a stream can be asked whether
+// any of them survived. compiler/loop_boundary_test.go asks exactly that of the
+// finished bytecode, and assertJumpsResolved asks it of the compiler's own
+// record while the source is still in hand.
+const placeholderTarget = 9999
+
+// unresolvedJump is one forward jump awaiting its target, remembered so that a
+// stream finishing with one still outstanding can say which instruction and
+// which line of the program it came from. The opcode and the position alone
+// would name the defect; the line is what lets whoever hit it say where.
+type unresolvedJump struct {
+	op   code.Opcode
+	line int
+	col  int
+}
+
 type CompilationScope struct {
 	instructions    code.Instructions
 	lastInstruction EmittedInstruction
 	prevInstruction EmittedInstruction
+
+	// Every forward jump emitted into this stream that nothing has
+	// back-patched yet, keyed by the position of the instruction. Written by
+	// emitPlaceholder, cleared by changeOperand, and required to be empty
+	// before the stream is finished -- see assertJumpsResolved.
+	//
+	// Per scope rather than per compiler, because a position is an offset in
+	// one stream and means something else in any other: patching a closure's
+	// jump at an offset belonging to the enclosing stream is M26-CMP-002, and
+	// it overwrote an unrelated instruction's operand rather than failing.
+	//
+	// Nil until the first placeholder, so a zero CompilationScope is still
+	// usable and the composite literals elsewhere did not have to change.
+	unresolvedJumps map[int]unresolvedJump
 
 	// One line table per instruction stream, built as the stream is emitted.
 	// Value types, so a zero CompilationScope is usable and the two existing
@@ -851,11 +885,21 @@ func parameterNames(params []*ast.Identifier) []string {
 func (c *Compiler) compileNode(node ast.Node) error {
 	switch node := node.(type) {
 	case *ast.Program:
+		// Where this program's own forward jumps start. Not zero: a program is
+		// not always the outermost thing being compiled, and an enclosing
+		// expression may be holding a jump of its own that is not this
+		// program's to answer for.
+		jumpMark := len(c.currentInstructions())
 		for _, s := range node.Statements {
 			if err := c.Compile(s); err != nil {
 				return err
 			}
 			c.maybeEmitRandomSecurityCheckOpcodes()
+		}
+		// The main stream never leaves a scope, so this is the only place it is
+		// asked. M26-CMP-020 and M26-CMP-021 were both here.
+		if err := c.assertJumpsResolved(jumpMark, "the program"); err != nil {
+			return err
 		}
 	case *ast.BlockStatement:
 		// A block is a scope. Reaching this case means the block is not a
@@ -908,7 +952,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		}
 
 		// emit bogus jumpFalse location
-		jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
+		jumpFalsePosition := c.emitPlaceholder(code.OpJumpFalse)
 
 		if err := c.Compile(node.Consequence); err != nil {
 			return err
@@ -917,7 +961,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		c.leaveOneValue(node.Consequence)
 
 		// emit bogus jump location
-		jumpPos := c.emit(code.OpJump, 9999)
+		jumpPos := c.emitPlaceholder(code.OpJump)
 
 		afterConsequencePosition := len(c.currentInstructions())
 		c.changeOperand(jumpFalsePosition, afterConsequencePosition)
@@ -1133,7 +1177,10 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		// discovered while the inner literal is compiled and every inner literal
 		// is inside the body just compiled.
 		capturedLocals := c.symbolTable.CapturedLocals()
-		insts, debug := c.leaveScope()
+		insts, debug, err := c.leaveScope()
+		if err != nil {
+			return err
+		}
 
 		// The reads and writes of a captured slot were emitted before anyone knew
 		// it would be captured, so they are patched now rather than at emit time.
@@ -1216,7 +1263,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.emitPendingPops(ctx.pendingAtEntry); err != nil {
 			return err
 		}
-		jumpPos := c.emit(code.OpJump, 9999)
+		jumpPos := c.emitPlaceholder(code.OpJump)
 		ctx.breakPositions = append(ctx.breakPositions, jumpPos)
 
 	case *ast.ContinueStatement:
@@ -1247,7 +1294,7 @@ func (c *Compiler) compileNode(node ast.Node) error {
 		if err := c.emitPendingPops(ctx.pendingAtEntry); err != nil {
 			return err
 		}
-		jumpPos := c.emit(code.OpJump, 9999)
+		jumpPos := c.emitPlaceholder(code.OpJump)
 		ctx.continuePositions = append(ctx.continuePositions, jumpPos)
 
 	case *ast.StructStatement:
@@ -1421,6 +1468,91 @@ func (c *Compiler) addConstant(obj object.Object) int {
 	return len(c.constants) - 1
 }
 
+// emitPlaceholder emits a forward jump whose target is not known yet and
+// remembers that it is owed one.
+//
+// Operand 0 is the placeholder; anything after it is the opcode's own and is
+// passed through, which is why this takes the rest rather than all of them --
+// OpIterNext carries a binding count that is not a target and must not be
+// mistaken for one.
+//
+// Every jump the compiler cannot resolve at emit time comes through here, and
+// changeOperand is the only thing that resolves one, so the two together are
+// the whole bookkeeping. A backward jump -- a loop's head -- is emitted with
+// its real target by emit and is not recorded, because there is nothing to owe.
+func (c *Compiler) emitPlaceholder(op code.Opcode, rest ...int) int {
+	pos := c.emit(op, append([]int{placeholderTarget}, rest...)...)
+
+	scope := &c.scopes[c.scopeIndex]
+	if scope.unresolvedJumps == nil {
+		scope.unresolvedJumps = map[int]unresolvedJump{}
+	}
+	scope.unresolvedJumps[pos] = unresolvedJump{op: op, line: c.posLine, col: c.posCol}
+	return pos
+}
+
+// assertJumpsResolved refuses to finish a stream that still owes a forward jump
+// its target, counting only the jumps emitted at or after mark.
+//
+// This is the guard M26-CMP-020 and M26-CMP-021 did not have. Both were one
+// forward jump that nothing back-patched -- a continue whose target list had
+// already been walked by the time the post section was compiled, and a break
+// recorded in a copy of loopContexts that an append had left behind -- and
+// neither failed at the point of the mistake. What a surviving placeholder does
+// instead is decided by the length of the program it is in: a stream shorter
+// than the placeholder runs off the end and answers whatever was last popped,
+// a longer one decodes whatever byte sits at that offset and reports that the
+// bytecode may be damaged or decrypted with the wrong key, and one whose offset
+// lands on an instruction boundary resumes in unrelated code and does not come
+// back. None of those names the jump, and the first names nothing at all.
+//
+// mark excludes placeholders an enclosing construct is legitimately still
+// holding: a program compiled inside an expression that has already emitted a
+// jump of its own would otherwise be blamed for it. Within one scope positions
+// only grow, so a position below the mark was emitted before this construct
+// began and belongs to whatever began earlier.
+//
+// Being an internal error rather than a refusal is deliberate. No program can
+// ask for this -- there is no source text that means "leave a jump unpatched" --
+// so reaching it is a defect in the compiler, and the one useful thing it can
+// do is say so with enough detail to be reported: the opcode, where it sits in
+// the stream, and the line of the program being compiled when it was emitted.
+func (c *Compiler) assertJumpsResolved(mark int, where string) error {
+	scope := &c.scopes[c.scopeIndex]
+
+	var left []int
+	for pos := range scope.unresolvedJumps {
+		if pos >= mark {
+			left = append(left, pos)
+		}
+	}
+	if len(left) == 0 {
+		return nil
+	}
+	sort.Ints(left)
+
+	described := make([]string, 0, len(left))
+	for _, pos := range left {
+		jump := scope.unresolvedJumps[pos]
+		name := fmt.Sprintf("opcode %d", jump.op)
+		if def, err := code.Lookup(byte(jump.op)); err == nil {
+			name = def.Name
+		}
+		at := "no line"
+		if jump.line > 0 {
+			at = fmt.Sprintf("line %d, column %d", jump.line, jump.col)
+		}
+		described = append(described, fmt.Sprintf("%s at %d (%s)", name, pos, at))
+	}
+
+	return fmt.Errorf(
+		"internal: %s left %d forward jump(s) with no target: %s. Each was emitted "+
+			"with the placeholder and never back-patched, which would run as a jump "+
+			"to offset %d",
+		where, len(left), strings.Join(described, "; "), placeholderTarget,
+	)
+}
+
 func (c *Compiler) emit(op code.Opcode, operands ...int) int {
 	ins := code.Make(op, operands...)
 	pos := c.addInstruction(ins)
@@ -1517,6 +1649,12 @@ func (c *Compiler) changeOperand(pos int, operand int) {
 	}
 
 	c.replaceInstruction(pos, code.Make(op, operands...))
+
+	// The debt this jump was emitted with, now paid. Deleting a position that
+	// was never recorded is a no-op and is the ordinary case: changeOperand is
+	// also how a few instructions that were never placeholders get an operand
+	// rewritten.
+	delete(c.scopes[c.scopeIndex].unresolvedJumps, pos)
 }
 
 // compileLogicalExpression emits short-circuit code for && / || that leaves a
@@ -1529,13 +1667,13 @@ func (c *Compiler) compileLogicalExpression(node *ast.InfixExpression) error {
 	}
 
 	if node.Operator == "&&" {
-		leftFalse := c.emit(code.OpJumpFalse, 9999) // left falsy -> result is false
+		leftFalse := c.emitPlaceholder(code.OpJumpFalse) // left falsy -> result is false
 		if err := c.Compile(node.Right); err != nil {
 			return err
 		}
-		rightFalse := c.emit(code.OpJumpFalse, 9999) // right falsy -> result is false
+		rightFalse := c.emitPlaceholder(code.OpJumpFalse) // right falsy -> result is false
 		c.emit(code.OpTrue)
-		toEnd := c.emit(code.OpJump, 9999)
+		toEnd := c.emitPlaceholder(code.OpJump)
 		falsePos := len(c.currentInstructions())
 		c.changeOperand(leftFalse, falsePos)
 		c.changeOperand(rightFalse, falsePos)
@@ -1545,16 +1683,16 @@ func (c *Compiler) compileLogicalExpression(node *ast.InfixExpression) error {
 	}
 
 	// "||": OpJumpFalse falls through when the left is truthy -> result is true.
-	leftFalse := c.emit(code.OpJumpFalse, 9999)
+	leftFalse := c.emitPlaceholder(code.OpJumpFalse)
 	c.emit(code.OpTrue)
-	trueEnd1 := c.emit(code.OpJump, 9999)
+	trueEnd1 := c.emitPlaceholder(code.OpJump)
 	c.changeOperand(leftFalse, len(c.currentInstructions())) // left falsy -> test right
 	if err := c.Compile(node.Right); err != nil {
 		return err
 	}
-	rightFalse := c.emit(code.OpJumpFalse, 9999)
+	rightFalse := c.emitPlaceholder(code.OpJumpFalse)
 	c.emit(code.OpTrue)
-	trueEnd2 := c.emit(code.OpJump, 9999)
+	trueEnd2 := c.emitPlaceholder(code.OpJump)
 	c.changeOperand(rightFalse, len(c.currentInstructions()))
 	c.emit(code.OpFalse)
 	endPos := len(c.currentInstructions())
@@ -1648,7 +1786,20 @@ func (c *Compiler) enterScope() {
 	c.declScopes = append(c.declScopes, map[string]bool{})
 }
 
-func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
+// leaveScope hands back the stream the scope collected and the three position
+// tables built alongside it.
+//
+// It refuses a scope that still owes a forward jump its target. The check lives
+// here rather than in the caller because this is the moment a stream stops
+// being editable: the positions a patch would use are offsets into it, and once
+// it is a constant in the pool nothing holds those offsets any more. A mark of
+// zero is right because the scope is the construct -- every placeholder in it
+// was emitted after it was entered.
+func (c *Compiler) leaveScope() (code.Instructions, scopeDebug, error) {
+	if err := c.assertJumpsResolved(0, "this function body"); err != nil {
+		return nil, scopeDebug{}, err
+	}
+
 	instructions := c.currentInstructions()
 	debug := scopeDebug{
 		lines:  c.scopes[c.scopeIndex].lines.Build(),
@@ -1662,7 +1813,7 @@ func (c *Compiler) leaveScope() (code.Instructions, scopeDebug) {
 	if len(c.declScopes) > 1 {
 		c.declScopes = c.declScopes[:len(c.declScopes)-1]
 	}
-	return instructions, debug
+	return instructions, debug, nil
 }
 
 // openBlock begins a scope that ends with the construct that opened it.
@@ -2027,7 +2178,7 @@ func (c *Compiler) compileForInStatement(node *ast.ForInStatement) error {
 	}
 
 	headPosition := len(c.currentInstructions())
-	nextPosition := c.emit(code.OpIterNext, 9999, bindings)
+	nextPosition := c.emitPlaceholder(code.OpIterNext, bindings)
 
 	// Stored in reverse of the push order: OpIterNext pushes the key first and
 	// the value on top, so the value comes off first.
@@ -2126,15 +2277,15 @@ func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
 			c.emit(code.OpEqual)
 
 			if i == len(arm.Patterns)-1 {
-				missedJump = c.emit(code.OpJumpFalse, 9999)
+				missedJump = c.emitPlaceholder(code.OpJumpFalse)
 				break
 			}
 
 			// Not the last alternative of `a | b | c`: failing this one only
 			// rules out this one, so it falls through to the next test rather
 			// than leaving the arm.
-			nextAlternative := c.emit(code.OpJumpFalse, 9999)
-			matchedJumps = append(matchedJumps, c.emit(code.OpJump, 9999))
+			nextAlternative := c.emitPlaceholder(code.OpJumpFalse)
+			matchedJumps = append(matchedJumps, c.emitPlaceholder(code.OpJump))
 			c.changeOperand(nextAlternative, len(c.currentInstructions()))
 		}
 
@@ -2150,7 +2301,7 @@ func (c *Compiler) compileMatchExpression(node *ast.MatchExpression) error {
 		}
 		c.leaveOneValue(arm.Body)
 
-		endJumps = append(endJumps, c.emit(code.OpJump, 9999))
+		endJumps = append(endJumps, c.emitPlaceholder(code.OpJump))
 
 		if arm.IsWildcard() {
 			// `_` is emitted with no test at all, so there is no jump to
@@ -2244,7 +2395,7 @@ func (c *Compiler) compileWhileStatement(node *ast.WhileStatement) error {
 		return err
 	}
 
-	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
+	jumpFalsePosition := c.emitPlaceholder(code.OpJumpFalse)
 
 	c.loopContexts = append(c.loopContexts, LoopContext{pendingAtEntry: c.pendingOperands})
 	if err := c.Compile(node.Body); err != nil {
@@ -2302,7 +2453,7 @@ func (c *Compiler) compileForStatement(node *ast.ForStatement) error {
 		c.emit(code.OpTrue)
 	}
 
-	jumpFalsePosition := c.emit(code.OpJumpFalse, 9999)
+	jumpFalsePosition := c.emitPlaceholder(code.OpJumpFalse)
 
 	c.loopContexts = append(c.loopContexts, LoopContext{pendingAtEntry: c.pendingOperands})
 	if err := c.Compile(node.Body); err != nil {
