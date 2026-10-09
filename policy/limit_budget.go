@@ -121,9 +121,6 @@ var LimitBudget = map[string][]string{
 	"builtin/ioc_builtins.go": {
 		"L8 CIDRHosts: 1 << 20",
 	},
-	"builtin/jumplist_builtins.go": {
-		"L4 parseAutomaticJumplist: 64<<20",
-	},
 	"builtin/ledger_read.go": {
 		"N1 package level: ledgerPatternMinNodes = 2",
 		"N1 package level: ledgerPatternMaxNodes = 20",
@@ -140,9 +137,6 @@ var LimitBudget = map[string][]string{
 	},
 	"builtin/net.go": {
 		"L3 NetDNSQuery: 5*time.Second",
-	},
-	"builtin/plist_builtins.go": {
-		"L4 parseObject: 100",
 	},
 	"builtin/prefetch_builtins.go": {
 		"N1 package level: maxPrefetchDecompressed = 64 << 20",

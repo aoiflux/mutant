@@ -265,3 +265,136 @@ func TestABinaryPlistIsNotSizedByItsCounts(t *testing.T) {
 		}
 	})
 }
+
+// xmlPlistNest builds a plist whose root is `levels` containers nested one
+// inside the next, with `leaf` written inside the innermost one. The element is
+// "array" or "dict"; a dict needs a <key> before each value, which is the shape
+// the parser actually walks.
+//
+// The leaf matters when the figure does. A container with nothing inside it
+// never asks the parser for the level below, so 101 bare containers reach depth
+// 100 while 101 containers around a leaf reach 101.
+func xmlPlistNest(element string, levels int, leaf string) []byte {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	sb.WriteString(`<plist version="1.0">` + "\n")
+	for i := 0; i < levels; i++ {
+		sb.WriteString("<" + element + ">")
+		if element == "dict" {
+			sb.WriteString("<key>k</key>")
+		}
+	}
+	sb.WriteString(leaf)
+	for i := 0; i < levels; i++ {
+		sb.WriteString("</" + element + ">")
+	}
+	sb.WriteString("\n</plist>\n")
+	return []byte(sb.String())
+}
+
+// TestAnXMLPlistIsRefusedPastTheSameDepthAsABinaryOne is M26-ART-009.
+//
+// The binary parser has always refused past maxPlistDepth. The XML parser had no
+// counter, and parseXMLPlistValue and parseXMLPlistArray call each other once
+// per level, so nested <array> elements grew the stack until the process died --
+// a stack overflow is fatal, no recover catches it, and PlistParse's own recover
+// is therefore no help. The row measured 168 to 839 bytes of stack per level,
+// which the default gigabyte reaches at a 9 to 45 MB file.
+//
+// Run under a lowered ceiling, so a regression dies at 64 MiB rather than
+// taking the machine with it. It still takes the test binary with it, which is
+// the loudest a fatal error can fail.
+func TestAnXMLPlistIsRefusedPastTheSameDepthAsABinaryOne(t *testing.T) {
+	smallStack(t)
+	for _, element := range []string{"array", "dict"} {
+		_, errObj := plistParseWithin(t, xmlPlistNest(element, 1000, ""), 10*time.Second)
+		if errObj == nil || !strings.Contains(errObj.Inspect(), "nested more than 100 levels deep") {
+			t.Errorf("plist_parse of 1000 nested <%s>: error = %v, want the depth refusal",
+				element, errObj)
+		}
+	}
+
+	// The wrapper is optional, and a plist without one reaches the value parser
+	// by a different line. The count has to start there too.
+	bare := []byte(`<?xml version="1.0"?>` + strings.Repeat("<array>", 1000) +
+		strings.Repeat("</array>", 1000))
+	_, errObj := plistParseWithin(t, bare, 10*time.Second)
+	if errObj == nil || !strings.Contains(errObj.Inspect(), "nested more than 100 levels deep") {
+		t.Errorf("plist_parse of 1000 nested <array> with no <plist> wrapper: error = %v, "+
+			"want the depth refusal", errObj)
+	}
+}
+
+// TestTheXMLAndBinaryPlistDepthBoundsAreTheSameOne keeps the bound from becoming
+// the defect, and checks the agreement the shared constant is there to express.
+//
+// Both parsers count the root as level zero, walk the leaf as a level of its
+// own, and refuse past maxPlistDepth. So both accept 100 containers around a
+// value and refuse 101 -- the same figure on the same shape, which is a stronger
+// statement than the same figure on two different shapes. The numbers are
+// written out rather than derived from the constant, so that moving the constant
+// is a decision someone makes here as well.
+func TestTheXMLAndBinaryPlistDepthBoundsAreTheSameOne(t *testing.T) {
+	if maxPlistDepth != 100 {
+		t.Fatalf("these figures are written for a bound of 100, not %d", maxPlistDepth)
+	}
+
+	for _, element := range []string{"array", "dict"} {
+		within := xmlPlistNest(element, 100, "<true/>")
+		if _, errObj := plistParseWithin(t, within, 10*time.Second); errObj != nil {
+			t.Errorf("100 nested <%s> around a value is within the bound: error = %v",
+				element, errObj)
+		}
+		past := xmlPlistNest(element, 101, "<true/>")
+		if _, errObj := plistParseWithin(t, past, 10*time.Second); errObj == nil {
+			t.Errorf("101 nested <%s> around a value is past the bound, but it was accepted",
+				element)
+		}
+	}
+
+	// The binary path, as a chain of arrays each holding the next and a boolean
+	// at the end, so the two are compared on one shape and not on one wording.
+	chain := func(levels int) []byte {
+		objects := make([][]byte, 0, levels+1)
+		for i := 0; i < levels; i++ {
+			objects = append(objects, bpArray(i+1))
+		}
+		return bplistOf(0, append(objects, []byte{0x09})...)
+	}
+	if _, errObj := plistParseWithin(t, chain(100), 10*time.Second); errObj != nil {
+		t.Errorf("a binary plist of 100 nested arrays around a value is within the bound: "+
+			"error = %v", errObj)
+	}
+	if _, errObj := plistParseWithin(t, chain(101), 10*time.Second); errObj == nil {
+		t.Errorf("a binary plist of 101 nested arrays around a value is past the bound, " +
+			"but it was accepted")
+	}
+}
+
+// TestATruncatedXMLPlistKeepsWhatItHeld pins the leniency the depth refusal had
+// to be threaded past.
+//
+// Both container parsers answer a child's error with the part of the tree they
+// already hold and no error of their own, which is how a plist cut short still
+// parses. A depth refusal returned that way would make the parse succeed and
+// hand back only the tree above the bound -- a silent truncation of the file's
+// contents -- so it travels as a sentinel instead, and only the sentinel is
+// propagated. This is the test that notices if that distinction is lost: it
+// fails if the refusal starts swallowing the ordinary case with it.
+func TestATruncatedXMLPlistKeepsWhatItHeld(t *testing.T) {
+	cut := []byte(`<?xml version="1.0"?><plist version="1.0"><dict>` +
+		`<key>kept</key><string>yes</string>` +
+		`<key>dangling</key><array><string>also kept</string>`)
+
+	value, errObj := plistParseWithin(t, cut, 10*time.Second)
+	if errObj != nil {
+		t.Fatalf("a truncated plist is read as far as it goes: error = %v", errObj)
+	}
+	hash, ok := value.(*object.Hash)
+	if !ok {
+		t.Fatalf("got %T, want the dict that was read before the file ended", value)
+	}
+	if !strings.Contains(hash.Inspect(), "kept") {
+		t.Errorf("the pairs read before the end are kept, got %s", hash.Inspect())
+	}
+}

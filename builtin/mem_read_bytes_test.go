@@ -3,6 +3,7 @@ package builtin
 import (
 	"bytes"
 	"encoding/hex"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,5 +150,78 @@ func TestMemReadBytesErrorsNameThemselves(t *testing.T) {
 				t.Errorf("error names the wrong builtin: %s", errObj.Message)
 			}
 		})
+	}
+}
+
+// TestAHugeLengthReadsTheTailRatherThanPanicking is M26-ART-024.
+//
+// A length larger than the image is how a caller asks for the rest of it, and
+// the pair already answers a short read that way -- the test above holds them
+// to it. The sum of the offset and the length was formed before anything
+// measured it, though, so a length near MaxInt64 wrapped negative, and a test
+// for `end > len(data)` cannot fire on a negative number. The slice expression
+// then panicked.
+//
+// What made it worth more than a wrong answer: a builtin panic is not contained
+// in the builtin. The VM turns it into a runtime error that ends the program,
+// and records a vm-panic integrity failure in the audit chain that a case
+// manifest seals -- so an ordinary argument wrote a tamper record into the
+// evidence of the case being worked. That is the same reason M26-BLT-006 was
+// raised to a P1, and this is the site that row names and does not touch.
+//
+// The offset has to be past zero. With an offset of zero the sum does not
+// overflow, so the one case anybody would try by hand worked.
+func TestAHugeLengthReadsTheTailRatherThanPanicking(t *testing.T) {
+	image := []byte("0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "mem.bin")
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, length := range []int64{math.MaxInt64, math.MaxInt64 - 1, math.MaxInt64 / 2, 1 << 62} {
+		for _, offset := range []int64{0, 1, 15, 16} {
+			want := image[offset:]
+
+			got := memReadBytesOf(t, path, offset, length)
+			if !bytes.Equal(got, want) {
+				t.Errorf("mem_read_bytes(offset=%d, size=%d) = %q, want the tail %q",
+					offset, length, got, want)
+			}
+
+			// The hex path shares the arithmetic and so shared the panic.
+			payload, errObj := unwrapPair(t, MemRead(stringObj(path), intObj(offset), intObj(length)))
+			if errObj != nil {
+				t.Fatalf("mem_read(offset=%d, size=%d): %s", offset, length, errObj.Inspect())
+			}
+			h := payload.(*object.Hash)
+			if hStr(t, h, "hex") != hex.EncodeToString(want) {
+				t.Errorf("mem_read(offset=%d, size=%d) hex = %q, want %q",
+					offset, length, hStr(t, h, "hex"), hex.EncodeToString(want))
+			}
+			if hInt(t, h, "size") != int64(len(want)) {
+				t.Errorf("mem_read(offset=%d, size=%d) size = %d, want %d",
+					offset, length, hInt(t, h, "size"), len(want))
+			}
+		}
+	}
+}
+
+// TestALengthThatFitsIsStillHonoured keeps the clamp from becoming the defect:
+// measuring the length against what is left must not shorten a read that fits.
+func TestALengthThatFitsIsStillHonoured(t *testing.T) {
+	image := []byte("0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "mem.bin")
+	if err := os.WriteFile(path, image, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct{ offset, length int64 }{
+		{0, 1}, {0, 16}, {1, 15}, {4, 4}, {15, 1}, {16, 0},
+	} {
+		want := image[c.offset : c.offset+c.length]
+		if got := memReadBytesOf(t, path, c.offset, c.length); !bytes.Equal(got, want) {
+			t.Errorf("mem_read_bytes(offset=%d, size=%d) = %q, want %q",
+				c.offset, c.length, got, want)
+		}
 	}
 }

@@ -18,6 +18,30 @@ import (
 // Cocoa/Core Foundation epoch (2001-01-01 UTC) in Unix seconds.
 const cocoaEpochUnix = 978307200
 
+// maxPlistDepth bounds how deeply dictionaries and arrays may nest in one
+// property list. A plist written by a tool nests a handful of levels deep -- a
+// dict of dicts of arrays of strings -- and both parsers walk a level with a
+// call, so a file nested deeper than this is one built to make the walk
+// recurse. The bound is what the binary parser has always refused past; it is
+// named here because the XML parser had no bound at all, and there was nothing
+// for it to agree with (M26-ART-009).
+//
+//mutant:limit depth
+const maxPlistDepth = 100
+
+// errPlistTooDeep is the XML path's depth refusal, and it is compared with ==
+// rather than wrapped or matched.
+//
+// It needs to be told apart from every other error a child can return, because
+// the container parsers treat those as the end of a truncated document and
+// answer with the part of the tree they already hold. That is deliberate and is
+// how a cut-short plist still parses. Answering a depth refusal the same way
+// would make the parse succeed and return the tree above the bound, which is a
+// silent truncation of the file's own contents.
+var errPlistTooDeep = fmt.Errorf(
+	"xml plist nested more than %d levels deep: a property list is written a few levels deep, "+
+		"and this is past what the parser will follow", maxPlistDepth)
+
 // PlistParse parses an Apple property list (binary bplist00 or XML) into a Mutant
 // value (dict->hash, array->array, plus string/integer/real/bool; dates and data
 // become strings). Pure-Go, no dependencies. Returns (value, err).
@@ -63,15 +87,15 @@ func parseXMLPlist(data []byte) (object.Object, error) {
 		}
 		if se, ok := tok.(xml.StartElement); ok {
 			if se.Name.Local == "plist" {
-				return parseXMLPlistInner(dec)
+				return parseXMLPlistInner(dec, 0)
 			}
 			// Some plists omit the <plist> wrapper.
-			return parseXMLPlistValue(dec, se)
+			return parseXMLPlistValue(dec, se, 0)
 		}
 	}
 }
 
-func parseXMLPlistInner(dec *xml.Decoder) (object.Object, error) {
+func parseXMLPlistInner(dec *xml.Decoder, depth int) (object.Object, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -79,19 +103,22 @@ func parseXMLPlistInner(dec *xml.Decoder) (object.Object, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			return parseXMLPlistValue(dec, t)
+			return parseXMLPlistValue(dec, t, depth)
 		case xml.EndElement:
 			return globalNullObject(), nil
 		}
 	}
 }
 
-func parseXMLPlistValue(dec *xml.Decoder, start xml.StartElement) (object.Object, error) {
+func parseXMLPlistValue(dec *xml.Decoder, start xml.StartElement, depth int) (object.Object, error) {
+	if depth > maxPlistDepth {
+		return nil, errPlistTooDeep
+	}
 	switch start.Name.Local {
 	case "dict":
-		return parseXMLPlistDict(dec)
+		return parseXMLPlistDict(dec, depth+1)
 	case "array":
-		return parseXMLPlistArray(dec)
+		return parseXMLPlistArray(dec, depth+1)
 	case "string":
 		return stringObj(readXMLText(dec, start)), nil
 	case "integer":
@@ -121,7 +148,7 @@ func parseXMLPlistValue(dec *xml.Decoder, start xml.StartElement) (object.Object
 	}
 }
 
-func parseXMLPlistDict(dec *xml.Decoder) (object.Object, error) {
+func parseXMLPlistDict(dec *xml.Decoder, depth int) (object.Object, error) {
 	pairs := map[string]object.Object{}
 	for {
 		tok, err := dec.Token()
@@ -136,8 +163,13 @@ func parseXMLPlistDict(dec *xml.Decoder) (object.Object, error) {
 			}
 			key := readXMLText(dec, t)
 			// next start element is the value
-			val, verr := nextXMLValue(dec)
+			val, verr := nextXMLValue(dec, depth)
+			if verr == errPlistTooDeep {
+				return nil, verr
+			}
 			if verr != nil {
+				// The document ended inside this dict. What was read before
+				// that is kept, which is how a truncated plist parses.
 				return makeHashObject(pairs), nil
 			}
 			pairs[key] = val
@@ -147,7 +179,7 @@ func parseXMLPlistDict(dec *xml.Decoder) (object.Object, error) {
 	}
 }
 
-func parseXMLPlistArray(dec *xml.Decoder) (object.Object, error) {
+func parseXMLPlistArray(dec *xml.Decoder, depth int) (object.Object, error) {
 	elems := []object.Object{}
 	for {
 		tok, err := dec.Token()
@@ -156,8 +188,13 @@ func parseXMLPlistArray(dec *xml.Decoder) (object.Object, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			v, verr := parseXMLPlistValue(dec, t)
+			v, verr := parseXMLPlistValue(dec, t, depth)
+			if verr == errPlistTooDeep {
+				return nil, verr
+			}
 			if verr != nil {
+				// As in the dict: the end of a truncated document keeps what
+				// was read before it.
 				return &object.Array{Elements: elems}, nil
 			}
 			elems = append(elems, v)
@@ -167,14 +204,14 @@ func parseXMLPlistArray(dec *xml.Decoder) (object.Object, error) {
 	}
 }
 
-func nextXMLValue(dec *xml.Decoder) (object.Object, error) {
+func nextXMLValue(dec *xml.Decoder, depth int) (object.Object, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			return nil, err
 		}
 		if se, ok := tok.(xml.StartElement); ok {
-			return parseXMLPlistValue(dec, se)
+			return parseXMLPlistValue(dec, se, depth)
 		}
 	}
 }
@@ -271,8 +308,8 @@ type bplistParser struct {
 }
 
 func (p *bplistParser) parseObject(idx, depth int) (object.Object, error) {
-	if depth > 100 {
-		return nil, fmt.Errorf("binary plist nesting too deep")
+	if depth > maxPlistDepth {
+		return nil, fmt.Errorf("binary plist nested more than %d levels deep", maxPlistDepth)
 	}
 	if idx < 0 || idx >= p.numObjects {
 		return nil, fmt.Errorf("object index %d out of range", idx)

@@ -100,9 +100,20 @@ func memRead(args []object.Object, opName string, binary bool) object.Object {
 	if start > len(data) {
 		return resultAndError(nil, newError("%s: offset out of range", opName))
 	}
-	end := start + int(lengthObj.Value)
-	if end > len(data) {
-		end = len(data)
+	// The length is measured against what is left before it is added to the
+	// offset, not after. A length larger than the image -- which is how a caller
+	// asks for the rest of it, and `mem_read(path, 1, n)` with n at MaxInt64 is
+	// the reported case -- made the sum wrap negative, and a test for
+	// `end > len(data)` cannot fire on a negative number, so the slice
+	// expression panicked. A builtin panic is not contained in the builtin: the
+	// VM turns it into a runtime error that ends the program, and records a
+	// vm-panic integrity failure in the audit chain a case manifest seals, so an
+	// ordinary argument forged a tamper record. Returning the tail is both the
+	// right answer and a complete fix (M26-ART-024, the same shape as
+	// M26-BLT-006's str_substr).
+	end := len(data)
+	if remaining := int64(len(data) - start); lengthObj.Value < remaining {
+		end = start + int(lengthObj.Value)
 	}
 	slice := data[start:end]
 
