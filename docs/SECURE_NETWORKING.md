@@ -111,8 +111,8 @@ let leaf, err = tls_sign_cert(ca_cert, ca_key, leaf_opts);
 | --- | --- | --- |
 | `http_parse_request` | `(raw)` | `{method, url, path, host, proto, query, headers, body}` |
 | `http_parse_response` | `(raw)` | `{status, status_text, proto, headers, body}` |
-| `http_build_request` | `(request)` | raw request string (adds `Content-Length` when a body is present and none was supplied) |
-| `http_build_response` | `(response)` | raw response string (adds `Content-Length`) |
+| `http_build_request` | `(request)` | raw request string (adds `Content-Length` when a body is present and none was supplied; refuses one that disagrees with the body) |
+| `http_build_response` | `(response)` | raw response string (same, and refuses the same disagreement; a 1xx, 204 or 304 is never given a `Content-Length` and is refused if a body comes with it) |
 | `http_conn_read_request` | `(handle, timeoutMs)` | parsed request off a live socket |
 | `http_conn_read_response` | `(handle, timeoutMs)` | parsed response off a live socket |
 
@@ -130,6 +130,30 @@ bound counted in bytes does not see a head of a hundred thousand five-byte
 fields. Repeats of one field name each count as a field. Byte reads
 (`net_conn_read`) and framed reads share the same buffered stream per handle, so
 they can be mixed safely on one connection.
+
+**A refusal does not close the connection.** None of these builtins closes a
+handle on any error, and that is deliberate: closing a `net/http` body consumes
+whatever is left of it, so closing after a refusal would drain the body of the
+message just refused -- and against a peer that declares a body and never sends
+it, that drain waits for the deadline. The handle stays the script's, so a
+script that keeps reading after a refused message must `net_conn_close` it
+itself, or it leaks a descriptor per refusal.
+
+The same 32 MiB body cap applies to `http_get`, `http_post` and `http_request`,
+whose read was unbounded until it was capped. Those three have no streaming
+form, so a larger download is refused outright; the status and headers are still
+reported, because they arrived, and the body is dropped rather than returned
+cut short. They also report where the answer came from -- `final_url`,
+`redirects` and `final_method` -- because they follow redirects, including to
+another host, and a redirect that leaves `https` for plain `http` is refused.
+
+In a `headers` hash, a field that arrived on more than one line is combined into
+one comma-separated value, except `Set-Cookie`, which [RFC 9110 section
+5.3](https://www.rfc-editor.org/rfc/rfc9110#section-5.3) names as the one field
+that may not be folded -- a cookie's `Expires` attribute holds a comma of its
+own, so the join could not be undone. It is a list, one element per line and a
+list whether one cookie arrived or five, and `http_build_response` writes one
+field line per element.
 
 ---
 

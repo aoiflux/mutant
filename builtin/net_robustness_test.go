@@ -91,13 +91,23 @@ func TestHTTPBuildRequestContentLength(t *testing.T) {
 	}
 
 	// Caller-supplied Content-Length must not be duplicated.
+	//
+	// It declares the body's real length. This test used to declare 99 beside a
+	// 14-byte body, which was arbitrary to what it was checking -- it counts
+	// header lines -- but is the whole of M26-NET-016, so the build refuses it
+	// now and the nil result panicked here. The disagreeing case is asserted by
+	// TestChangingABodyDoesNotLeaveTheOldLength in
+	// builtin/http_message_fidelity_test.go, which owns it.
 	reqExplicit := makeHashObject(map[string]object.Object{
 		"method":  stringObj("POST"),
 		"path":    stringObj("/submit"),
-		"headers": makeHashObject(map[string]object.Object{"Content-Length": stringObj("99")}),
+		"headers": makeHashObject(map[string]object.Object{"Content-Length": stringObj(itoa(int64(len(body))))}),
 		"body":    stringObj(body),
 	})
-	out2, _ := unwrapPair(t, HTTPBuildRequest(reqExplicit))
+	out2, errObj := unwrapPair(t, HTTPBuildRequest(reqExplicit))
+	if errObj != nil {
+		t.Fatalf("a correct Content-Length was refused: %s", errObj.Message)
+	}
 	if got := strings.Count(out2.(*object.String).Value, "Content-Length:"); got != 1 {
 		t.Fatalf("expected exactly one Content-Length header, got %d", got)
 	}

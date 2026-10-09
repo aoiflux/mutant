@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"io"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"sort"
 	"strconv"
@@ -22,17 +23,20 @@ import (
 	"mutant/object"
 )
 
-// maxHTTPBodyBytes bounds the body http_conn_read_request,
-// http_conn_read_response, http_parse_request and http_parse_response hand back
-// as one string, and a body past it is refused rather than cut. The peer at the
-// other end of an intercepted connection decides how much it sends and is not
-// trusted to be reasonable, and the body arrives as a VM variable, which is
+// maxHTTPBodyBytes bounds the body an HTTP builtin hands back as one string:
+// http_conn_read_request, http_conn_read_response, http_parse_request and
+// http_parse_response, and also http_get, http_post and http_request, whose
+// read had no bound of its own until M26-NET-021. A body past it is refused
+// rather than cut. The peer at the other end decides how much it sends and is
+// not trusted to be reasonable, and the body arrives as a VM variable, which is
 // re-encrypted on every store. Refusing is what makes the answer honest: a
 // clipped body returned as a whole one is a wrong result a script has no way to
-// detect, which is what this cap used to produce (M26-NET-031). A message whose
-// body may be larger is read with http_conn_read_request_head or
+// detect, which is what this cap used to produce (M26-NET-031). An intercepted
+// message whose body may be larger is read with http_conn_read_request_head or
 // http_conn_read_response_head plus net_conn_read, which leave the body on the
-// connection and stream it in pieces.
+// connection and stream it in pieces; the three fetching builtins have no such
+// streaming form, so a larger download is refused outright and the figure is
+// what they are refused at.
 //
 //mutant:limit bytes
 const maxHTTPBodyBytes = 32 << 20
@@ -275,6 +279,9 @@ func HTTPBuildRequest(args ...object.Object) object.Object {
 	b.WriteString("\r\n")
 
 	headers := headersToOrdered(req)
+	if errObj := checkDeclaredLength(BuiltinNameHttpBuildRequest, headers, body); errObj != nil {
+		return resultAndError(nil, errObj)
+	}
 	hasHost := false
 	hasContentLength := false
 	for _, h := range headers {
@@ -336,6 +343,18 @@ func HTTPBuildResponse(args ...object.Object) object.Object {
 	b.WriteString("\r\n")
 
 	headers := headersToOrdered(resp)
+	// A status with no body has no length to agree or disagree with, and must
+	// not be given one. See responseBodyAllowed.
+	if responseBodyAllowed(status) {
+		if errObj := checkDeclaredLength(BuiltinNameHttpBuildResponse, headers, body); errObj != nil {
+			return resultAndError(nil, errObj)
+		}
+	} else if body != "" {
+		return resultAndError(nil, newError(
+			"%s: a %d response carries no body, and this one holds %d bytes; "+
+				"bytes after a bodyless status are read as the start of the next message",
+			BuiltinNameHttpBuildResponse, status, len(body)))
+	}
 	hasContentLength := false
 	for _, h := range headers {
 		if strings.EqualFold(h.key, "Content-Length") {
@@ -343,7 +362,7 @@ func HTTPBuildResponse(args ...object.Object) object.Object {
 		}
 	}
 	writeHeaderLines(&b, headers)
-	if !hasContentLength {
+	if !hasContentLength && responseBodyAllowed(status) {
 		b.WriteString("Content-Length: ")
 		b.WriteString(strconv.Itoa(len(body)))
 		b.WriteString("\r\n")
@@ -478,16 +497,58 @@ func responseStatusText(resp *http.Response) string {
 	return http.StatusText(resp.StatusCode)
 }
 
+// headerToHash turns a header block into a hash.
+//
+// A field that arrived on more than one line is combined into one
+// comma-separated value, which RFC 9110 section 5.3 permits for any field whose
+// value is defined as a comma-separated list -- and which it names exactly one
+// exception to: Set-Cookie, which does not use list syntax and may not be
+// folded. RFC 6265 section 3 says the same from the other side.
+//
+// Joining it was not a cosmetic loss. A cookie's Expires date carries a comma
+// of its own ("Expires=Wed, 21 Oct 2026 07:28:00 GMT"), so two cookies joined
+// with ", " cannot be split back apart by anything, and a response that arrived
+// with two Set-Cookie lines was rebuilt with one holding both -- one malformed
+// cookie where the server sent two, with the second silently gone. For an
+// interception proxy that is a session the client never receives; for a
+// recorded response it is evidence that says the server sent something it did
+// not.
+//
+// So Set-Cookie is a list here, one element per line, and it is a list whether
+// there is one cookie or five: a field whose type depended on how many values
+// happened to arrive would need every script to handle both. Every other field
+// stays a string, so nothing that reads headers["Content-Type"] changes.
 func headerToHash(header http.Header) *object.Hash {
 	pairs := make(map[string]object.Object, len(header))
 	for k, vals := range header {
+		if headerMustNotBeCombined(k) {
+			// stringListObj and not stringArrayObj: cookie order is meaning.
+			// Two Set-Cookie lines naming the same cookie leave the last one
+			// standing, so sorting them could change which.
+			pairs[k] = stringListObj(vals)
+			continue
+		}
 		pairs[k] = stringObj(strings.Join(vals, ", "))
 	}
 	return makeHashObject(pairs)
 }
 
+// headerMustNotBeCombined reports whether a field's lines have to stay apart.
+//
+// One field, and it is named rather than guessed at: RFC 9110 section 5.3 gives
+// the rule and the sole exception to it. The name is canonicalised first,
+// because a peer may have spelled it "set-cookie" and http.Header's own keys
+// are canonical.
+func headerMustNotBeCombined(name string) bool {
+	return textproto.CanonicalMIMEHeaderKey(name) == "Set-Cookie"
+}
+
 // headersToOrdered extracts a deterministic, sorted header list from a request
 // or response hash so serialisation is reproducible.
+//
+// An entry holding a list stands for one field line per element, which is how a
+// Set-Cookie that arrived on two lines goes back out on two -- see
+// headerToHash for why that field cannot be folded into one.
 func headersToOrdered(obj object.Object) []orderedHeader {
 	val, ok := objField(obj, "headers")
 	if !ok {
@@ -502,16 +563,91 @@ func headersToOrdered(obj object.Object) []orderedHeader {
 			if !ok {
 				continue
 			}
-			out = append(out, orderedHeader{key: key.Value, value: headerValueString(pair.Value)})
+			out = append(out, orderedHeaderLines(key.Value, pair.Value)...)
 		}
 	case *object.Struct:
 		for k, v := range h.Fields {
-			out = append(out, orderedHeader{key: k, value: headerValueString(v)})
+			out = append(out, orderedHeaderLines(k, v)...)
 		}
 	}
 
-	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	// SliceStable, not Slice. Two lines of the same field sort equal, and an
+	// unstable sort is free to swap them -- which for Set-Cookie decides which
+	// of two cookies of the same name the client keeps.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].key < out[j].key })
 	return out
+}
+
+// orderedHeaderLines turns one hash entry into the field lines it stands for.
+func orderedHeaderLines(key string, value object.Object) []orderedHeader {
+	arr, ok := value.(*object.Array)
+	if !ok {
+		return []orderedHeader{{key: key, value: headerValueString(value)}}
+	}
+	out := make([]orderedHeader, 0, len(arr.Elements))
+	for _, element := range arr.Elements {
+		out = append(out, orderedHeader{key: key, value: headerValueString(element)})
+	}
+	return out
+}
+
+// responseBodyAllowed reports whether a response with this status may carry a
+// body at all.
+//
+// The three cases are RFC 9110's and net/http's alike: every 1xx, a 204 and a
+// 304. For those, Content-Length is not a statement about this message's body
+// and the two cannot be compared -- a 304's Content-Length describes the cached
+// representation the recipient already holds, which an interception proxy never
+// sees, so it parses to an empty body with the header intact and that is
+// correct. RFC 9110 section 8.6 also forbids sending Content-Length at all in a
+// 1xx or a 204, which is why nothing is added for these either.
+func responseBodyAllowed(status int64) bool {
+	return status >= 200 && status != 204 && status != 304
+}
+
+// checkDeclaredLength refuses a Content-Length that disagrees with the body it
+// is about.
+//
+// http_build_request and http_build_response write the caller's headers out as
+// they are and add a Content-Length only when none is there, which meant the
+// one thing these builtins exist for broke them: parse a message, change the
+// body, rebuild it. The parsed hash carries the original Content-Length, so a
+// body of any other length produced a message declaring the old one -- a 12-byte
+// body under "Content-Length: 5". A receiver believes the header, so the next
+// hop reads five bytes of this message and then starts parsing the remaining
+// seven as the beginning of another one. That is a desynchronised connection,
+// and it is the kind that request smuggling is built out of (M26-NET-016).
+//
+// It refuses rather than quietly rewriting the number. The header is the
+// caller's explicit instruction about this message and silently replacing it
+// would be a different answer than the one asked for; the refusal says what to
+// do instead, and dropping the header is a one-line change that gets a correct
+// length computed. A deliberately inconsistent message -- which is a real thing
+// to want to send, for smuggling research against a host under test -- is
+// written with net_conn_write and a string, which these builtins are not in the
+// way of.
+func checkDeclaredLength(opName string, headers []orderedHeader, body string) *object.Error {
+	seen := false
+	for _, h := range headers {
+		if !strings.EqualFold(h.key, "Content-Length") {
+			continue
+		}
+		if seen {
+			return newError("%s: two Content-Length headers; a message declares its length once", opName)
+		}
+		seen = true
+		declared, err := strconv.Atoi(strings.TrimSpace(h.value))
+		if err != nil {
+			return newError("%s: Content-Length %q is not a number", opName, h.value)
+		}
+		if declared != len(body) {
+			return newError(
+				"%s: Content-Length declares %d bytes and the body holds %d; "+
+					"drop the header and a correct one is written for you",
+				opName, declared, len(body))
+		}
+	}
+	return nil
 }
 
 func headerValueString(v object.Object) string {
