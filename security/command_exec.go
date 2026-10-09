@@ -1,7 +1,6 @@
 package security
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -26,10 +26,28 @@ const (
 	//
 	//mutant:limit bytes
 	defaultCommandMaxOutput = 8192
+	// defaultCommandWaitDelay is how much longer than the timeout above one
+	// call may last. The clock starts when the deadline passes or when the
+	// command's own process exits, whichever comes first, and what it bounds is
+	// the wait for everything else the command started: a grandchild holding the
+	// output pipe open used to keep the call alive for as long as it liked,
+	// whatever the timeout said -- `cmd /C ping -n 10 127.0.0.1` took 9.14
+	// seconds against a 3-second timeout and then reported that it had timed out
+	// (M26-TMP-006). Half a second is long enough for a killed process tree to
+	// die and let go of its handles on a loaded host, and short enough that the
+	// worst case of exec_string stays under four seconds.
+	//
+	//mutant:limit milliseconds
+	defaultCommandWaitDelay = 500
 
-	errorCommandEmpty     = "command is empty"
-	errorCommandTimedOut  = "command timed out"
-	errorArgvEmpty        = "argv is empty"
+	errorCommandEmpty    = "command is empty"
+	errorCommandTimedOut = "command timed out"
+	errorArgvEmpty       = "argv is empty"
+	// errorCommandAbandoned is the answer to a command that exited on its own
+	// while something it had started still held its output pipe open. The exit
+	// code is the command's own and is reported as such; what is not known is
+	// whether the output is all of it, so the result does not come back ok.
+	errorCommandAbandoned = "command exited but something it started still holds its output"
 	truncatedOutputSuffix = "\n...[truncated]"
 
 	shellPowerShell = "powershell"
@@ -43,8 +61,13 @@ const (
 	pwshExecutable       = "pwsh"
 	cmdExecutable        = "cmd.exe"
 	cmdFlagExec          = "/C"
-	bashExec             = "bash"
-	shExec               = "sh"
+	// cmd.exe decides whether to keep or strip the quotes around a /C argument
+	// by five conditions at once; /S replaces all five with one rule, which is
+	// the only way to state what becomes of a caller's quotes. See
+	// rawCommandLineFor.
+	cmdFlagQuoteStrip = "/S"
+	bashExec          = "bash"
+	shExec            = "sh"
 	// POSIX shells read the command from an argument, not from a file. Without
 	// it `bash echo hi` is a request to run a script called "echo hi".
 	posixFlagCommand = "-c"
@@ -67,15 +90,37 @@ func ExecuteCommand(shell, command, stage string) CommandResult {
 	RecordCommandAttempt(stage)
 
 	trimmedCommand := strings.TrimSpace(command)
+	// An empty command is refused before any process starts. It used to be
+	// handed to the shell, which started, read nothing, exited 0 and left
+	// exec_string("") answering ok with an empty stdout -- while the error this
+	// package had already written for the case was used nowhere at all
+	// (M26-TMP-009).
+	if trimmedCommand == "" {
+		return refusedCommand(errorCommandEmpty, stage)
+	}
+
 	normalizedShell := normalizeShell(runtime.GOOS, shell)
 	execName, execArgs, err := buildShellCommand(normalizedShell, trimmedCommand)
 	if err != nil {
-		return CommandResult{
-			ErrorMessage: err.Error(),
-		}
+		return refusedCommand(err.Error(), stage)
 	}
 
-	return runProgram(execName, execArgs, stage)
+	return runProgram(execName, execArgs, rawCommandLineFor(normalizedShell, trimmedCommand), stage)
+}
+
+// refusedCommand is the result of a command that never started: an exit code
+// that is not a program's, and the attempt counted as the failure it is.
+//
+// A refusal used to come back as an ErrorMessage next to ExitCode 0, which is
+// what a command that ran and succeeded looks like to anything reading the
+// exit code on its own. RecordCommandFailed was not called either, so an
+// attempt was counted that was never resolved one way or the other.
+func refusedCommand(message, stage string) CommandResult {
+	RecordCommandFailed(stage)
+	return CommandResult{
+		ExitCode:     -1,
+		ErrorMessage: message,
+	}
 }
 
 // ExecuteArgv runs a program with exactly the arguments given and no shell in
@@ -95,38 +140,83 @@ func ExecuteArgv(argv []string, stage string) CommandResult {
 	RecordCommandAttempt(stage)
 
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
-		return CommandResult{
-			ErrorMessage: errorArgvEmpty,
-		}
+		return refusedCommand(errorArgvEmpty, stage)
 	}
 
-	return runProgram(argv[0], argv[1:], stage)
+	// No raw command line, by construction: a caller who wants to decide where
+	// the words break writes them out as argv, which is what this form is for.
+	return runProgram(argv[0], argv[1:], "", stage)
 }
 
 // runProgram is what both forms end at: the timeout, the two capped streams and
 // the one reading of an exit code, in one place so that the two cannot drift.
-func runProgram(execName string, execArgs []string, stage string) CommandResult {
+//
+// rawCommandLine is the Windows command line to hand the program as written
+// instead of letting os/exec escape execArgs into one, or "" to let it escape
+// them. It is how cmd.exe is reached without its quotes being mangled
+// (M26-TMP-008), and it is ignored everywhere else, because off Windows a
+// process is started from an argv and there is no command line to set.
+func runProgram(execName string, execArgs []string, rawCommandLine, stage string) CommandResult {
 	timeout := resolveCommandExecTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, execName, execArgs...)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// The timeout above bounds the command's own process and nothing else. What
+	// bounds the CALL is this: without it Wait reads the output pipes until EOF,
+	// and EOF does not arrive until every process holding the write end has let
+	// go of it, so one `ping` the shell left behind kept a 3-second timeout open
+	// for 9.14 measured seconds (M26-TMP-006).
+	cmd.WaitDelay = resolveCommandWaitDelay()
+	setRawCommandLine(cmd, rawCommandLine)
 
-	runErr := cmd.Run()
+	// Capped writers rather than buffers: the output used to be kept whole and
+	// cut afterwards, so a command printing 64 MiB cost 320 MiB of allocation
+	// and a 257 MiB live heap to keep 8 KiB of it (M26-TMP-007).
+	stdout := newCappedWriter(resolveCommandExecMaxOutput())
+	stderr := newCappedWriter(resolveCommandExecMaxOutput())
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	// The tree is arranged before the process starts, because what it decides is
+	// which processes the kill on timeout reaches: a job object on Windows, a
+	// process group on Unix.
+	tree, treeErr := newProcessTree(cmd)
+	if treeErr != nil {
+		return refusedCommand(treeErr.Error(), stage)
+	}
+	defer tree.release()
+
+	runErr := cmd.Start()
+	if runErr == nil {
+		tree.adopt(cmd)
+		runErr = cmd.Wait()
+	}
+
 	result := CommandResult{
 		ExitCode: 0,
-		Stdout:   truncateOutput(stdout.String(), resolveCommandExecMaxOutput()),
-		Stderr:   truncateOutput(stderr.String(), resolveCommandExecMaxOutput()),
+		Stdout:   stdout.text(),
+		Stderr:   stderr.text(),
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.TimedOut = true
 		result.ErrorMessage = errorCommandTimedOut
 		result.ExitCode = -1
+		RecordCommandFailed(stage)
+		return result
+	}
+
+	// Compared with == and not errors.Is on purpose: Wait returns this sentinel
+	// itself and unwrapped, and a builtin on the purity allowlist may not reach
+	// errors.Is.
+	if runErr == exec.ErrWaitDelay {
+		// The command exited on its own, and exited well -- a bad status comes
+		// back as an ExitError instead -- but something it had started was still
+		// holding the output pipe when the wait gave up on it. The exit code is
+		// the command's and is kept. What is not reported is ok, because this
+		// does not know how much of the output there was going to be.
+		result.ErrorMessage = errorCommandAbandoned
 		RecordCommandFailed(stage)
 		return result
 	}
@@ -208,7 +298,11 @@ func buildShellCommand(shell, command string) (string, []string, error) {
 	case shellPwsh:
 		return pwshExecutable, []string{pwshFlagNoLogo, pwshFlagNoProfile, pwshFlagNonInteractive, pwshFlagCommand, command}, nil
 	case shellCmd, shellBatch:
-		return cmdExecutable, []string{cmdFlagExec, command}, nil
+		// /S is in the argv as well as in the raw command line, so that the two
+		// spellings of this invocation say the same thing. The argv is what is
+		// used where a command line cannot be set, which is every platform but
+		// Windows -- cmd.exe reached from WSL through interop above all.
+		return cmdExecutable, []string{cmdFlagQuoteStrip, cmdFlagExec, command}, nil
 	case shellBash:
 		return bashExec, []string{posixFlagCommand, command}, nil
 	case shellSh:
@@ -255,9 +349,113 @@ func resolveCommandExecMaxOutput() int {
 	return defaultCommandMaxOutput
 }
 
-func truncateOutput(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
+func resolveCommandWaitDelay() time.Duration {
+	return time.Duration(defaultCommandWaitDelay) * time.Millisecond
+}
+
+// rawCommandLineFor returns the Windows command line to give the shell as
+// written, or "" when letting os/exec escape the arguments into one is right.
+//
+// cmd.exe is the one shell here that needs it, and it needs it because it does
+// not read its command line the way the C runtime does. os/exec escapes each
+// argument the C runtime's way, so `echo "a b"` reached cmd.exe as
+// `echo \"a b\"`; cmd.exe has no backslash escape, so it printed the
+// backslashes (M26-TMP-008, measured: stdout was `\"a b\"`).
+//
+// /S reduces cmd.exe's five conditions for keeping or stripping quotes to one:
+// strip the first character if it is a quote, drop the last quote on the line,
+// run what is left. So the pair added here is exactly the pair cmd.exe takes
+// away, and the command arrives as the caller wrote it -- an embedded double
+// quote included, which is the point.
+//
+// This widens nothing. exec_string hands an arbitrary command string to a
+// shell by definition; that string reached the shell before this change too,
+// escaped into something cmd.exe then misread. What changes is that the
+// quoting rule is now one a caller can state.
+func rawCommandLineFor(shell, command string) string {
+	switch shell {
+	case shellCmd, shellBatch:
+		return cmdExecutable + " " + cmdFlagQuoteStrip + " " + cmdFlagExec + ` "` + command + `"`
+	default:
+		return ""
 	}
-	return value[:limit] + truncatedOutputSuffix
+}
+
+// cappedWriter keeps the first limit bytes written to it and counts the rest.
+//
+// The output used to be collected whole in a bytes.Buffer and cut afterwards,
+// so the cap bounded the ANSWER and not the memory: 64 MiB of stdout cost
+// 320 MiB of allocation and a 257 MiB live heap to keep 8 KiB (M26-TMP-007).
+//
+// Every Write reports the whole slice written and never returns an error, and
+// that is the one thing it must do. os/exec copies a stream that is not an
+// *os.File through a pipe in a goroutine; a short write or an error there ends
+// the copy, the pipe fills, and the command blocks forever on a write nobody
+// is reading. Draining what is discarded is the job.
+//
+// One stream, one writer: stdout and stderr each get their own and each is
+// written by its own copying goroutine, so there is nothing here to lock.
+type cappedWriter struct {
+	limit     int
+	kept      []byte
+	discarded int64
+}
+
+func newCappedWriter(limit int) *cappedWriter {
+	if limit < 0 {
+		limit = 0
+	}
+	return &cappedWriter{limit: limit, kept: make([]byte, 0, limit)}
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	room := w.limit - len(w.kept)
+	if room > len(p) {
+		room = len(p)
+	}
+	if room > 0 {
+		w.kept = append(w.kept, p[:room]...)
+	} else {
+		room = 0
+	}
+	w.discarded += int64(len(p) - room)
+	return len(p), nil
+}
+
+// text is the stream as the result reports it: what was kept, and a mark when
+// something was not.
+func (w *cappedWriter) text() string {
+	if w.discarded == 0 {
+		return string(w.kept)
+	}
+	return string(trimPartialRune(w.kept)) + truncatedOutputSuffix
+}
+
+// trimPartialRune drops an incomplete UTF-8 sequence from the end of b.
+//
+// A cap counts bytes and a rune is up to four of them, so the cut landed
+// wherever it landed: 8192 bytes of a command's output ending mid-character
+// came back as a string Mutant could not print -- measured, `"aaaaaaa\xe4"`
+// for a cut at 8 (M26-TMP-007).
+//
+// It trims only what the cut broke. b is already known to be a prefix of
+// something longer, so a sequence that is incomplete at the end of b is
+// incomplete because of the cut. Output that was not truncated is returned
+// untouched, including output that was never valid UTF-8 to begin with: a
+// complete answer is not this function's to alter. For the same reason the
+// result is not promised to be valid UTF-8 for a command that emits binary --
+// the promise is that cutting does not make it invalid.
+func trimPartialRune(b []byte) []byte {
+	for i := 0; i < utf8.UTFMax && i < len(b); i++ {
+		tail := b[len(b)-i-1:]
+		if r, size := utf8.DecodeRune(tail); r != utf8.RuneError || size > 1 {
+			// tail begins a whole rune, so nothing at the end is partial.
+			return b
+		}
+		if utf8.RuneStart(tail[0]) {
+			// tail begins a sequence that is not whole in what was kept.
+			return b[:len(b)-i-1]
+		}
+	}
+	return b
 }

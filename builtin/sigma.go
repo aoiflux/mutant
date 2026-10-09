@@ -90,7 +90,10 @@ func SigmaMatch(args ...object.Object) object.Object {
 	if !ok {
 		return resultAndError(nil, newError("argument 2 to `sigma_match` must be HASH, got %s", args[1].Type()))
 	}
-	matched, hits, seen, missing := matchSigmaRule(rule, event)
+	matched, hits, seen, missing, err := matchSigmaRule(rule, event)
+	if err != nil {
+		return resultAndError(nil, newError("sigma_match: %s", err.Error()))
+	}
 	return resultAndError(sigmaMatchHash(rule, matched, hits, seen, missing), nil)
 }
 
@@ -117,7 +120,14 @@ func SigmaScan(args ...object.Object) object.Object {
 	for _, rule := range rules {
 		ruleHits := int64(0)
 		for index, event := range events {
-			matched, searches, seen, missing := matchSigmaRule(rule, event)
+			matched, searches, seen, missing, err := matchSigmaRule(rule, event)
+			if err != nil {
+				// One event the scan could not read is the whole scan's
+				// problem. A timeline reported as 999 of its 1000 events clean
+				// is a timeline you believe was looked at; sigma_parse_all
+				// refuses a ruleset for the same reason one rule down.
+				return resultAndError(nil, newError("sigma_scan: rule %q, event %d: %s", rule.title, index, err.Error()))
+			}
 			for _, field := range seen {
 				everSeen[field] = true
 			}

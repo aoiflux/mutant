@@ -79,6 +79,13 @@ So these are all errors, each naming itself:
 | `Field\|startswithish: x` | An unknown modifier. Guessing what it meant is how a rule ends up meaning something else. |
 | `condition: selection and filter` with no `filter` | The condition names a search the detection block does not define. |
 | `condition: not all of filter*` with no `filter*` | `all of` over nothing is true for every event ever seen, and the rule did not mean that. |
+| `condition: all of them` where every identifier starts with `_` | `them` covers the identifiers that do *not* start with an underscore, so this one covers nothing. |
+| `condition: 2 of them` where `them` covers one search | A quantifier counts hits among the identifiers its target covers, so asking for more than it covers is false for every event there will ever be. `2 of selection*` over one `selection` is refused for the same reason. |
+| `selection: {}`, or a `- {}` entry in a list of mappings | A mapping with no field tests is the AND of nothing. It holds for every event. |
+| `Field: []` and `Field\|all: []` | No values is no test. One of those two spellings holds for every event and the other for none, and neither is a question. |
+| `Field: ['x', null]` | Sigma keeps `null` out of a list of values, because it shares no type with any other value. Flattening it to `''` would quietly change the test from "absent" to "empty". A null test goes in a field test of its own. |
+| `keywords: ['x', null]` | Same: as a keyword, `null` becomes the empty string, which every event contains. |
+| `Field\|windash: ' -a -b -c -d -e '` | Five interchangeable characters over five switch positions is 3125 spellings. Expanding part of the way would be the evasion `windash` exists to close. |
 
 `sigma_parse_all` refuses the whole ruleset when one rule in it does not
 compile, for the same reason: a ruleset that loads 43 of its 44 rules is a
@@ -90,11 +97,27 @@ ruleset you believe covers something it does not.
 (OR-ed), or a list of keywords, matched against every value the event carries
 wherever it sits. A field whose value is a list is OR-ed unless `|all`.
 
+A keyword search reads the whole event, and says so when it cannot: an event
+nesting deeper than 256 levels is refused by name rather than searched as far
+as the walk happened to get. 256 is the bound the file parsers enforce on a
+document they convert, so an event read with `yaml_parse`, `toml_parse`,
+`cbor_parse` or `msgpack_parse` is always searched whole. `json_parse` and
+`ndjson_parse` do not bound their conversion at all — they inherit only
+`encoding/json`'s own limit, measured at 10000 levels — so a JSON document can
+carry an event this refuses, which is why it is a refusal and not a quiet
+no-match.
+
 **Conditions.** `and`, `or`, `not`, parentheses, bare identifiers, and the
 quantifiers `all of them`, `1 of them`, `any of selection*`, `N of selection*`.
 A list of conditions is OR-ed, as the spec says. Identifier patterns are
 resolved when the rule compiles, so `all of filter_optional_*` knows which
 filters it covers before an event ever arrives.
+
+`them` covers the search identifiers whose names do not begin with an
+underscore, which is what the specification says it covers. `_helper` is a
+search the condition has to name outright: `all of them` does not require it
+and `1 of them` is not satisfied by it. A pattern is an explicit naming, so
+`all of _h*` does cover it.
 
 **Value modifiers.**
 
@@ -106,7 +129,7 @@ filters it covers before an event ever arrives.
 | `re`, with `i` / `m` / `s` | a regular expression instead of wildcards |
 | `base64`, `base64offset` | the value as it appears encoded; `base64offset` covers all three byte offsets |
 | `utf16`, `utf16le`, `utf16be`, `wide` | the value as it sits in memory before encoding |
-| `windash` | `-enc`, `/enc`, and the three Unicode dashes Windows also accepts |
+| `windash` | every permutation of `-`, `/` and the three Unicode dashes, at each position where a switch starts. `' -nop /enc '` is one of the spellings of `' -nop -enc '`, because an attacker does not pick one dash and then use it twice. Capped at 625 spellings for one value; past that the rule is refused rather than expanded part of the way. |
 | `cidr` | the field is an address inside the network |
 | `lt`, `lte`, `gt`, `gte` | numeric comparison |
 | `exists` | the field is present, or is not |

@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"fmt"
 	"strings"
 
 	"mutant/token"
@@ -77,9 +78,37 @@ func (l *Lexer) NextToken() token.Token {
 func (l *Lexer) scanToken() token.Token {
 	var tok token.Token
 
-	l.skipTrivia()
+	// Trivia can fault, and until now it could end the file: a NUL byte inside
+	// a `//` comment stopped the comment scan, and the lexer read that stop as
+	// end of input, so every statement after the comment was dropped without a
+	// word. The comment is consumed whole before the fault is reported, so the
+	// author gets one error at the byte rather than a statement assembled out
+	// of the comment's words.
+	if fault := l.skipTrivia(); fault.bad() {
+		tok.Type = token.ILLEGAL
+		tok.Literal = "\x00"
+		tok.Err = fault.message()
+		tok.Start = fault.where
+		tok.End = fault.after()
+		return tok
+	}
 
 	start := l.currentPos()
+
+	// End of input is a position, not a character. It used to be the character
+	// l.ch == 0, which is also what a NUL byte in the file decodes to, so the
+	// two were one thing and a program ended at its first NUL. atEOF is the
+	// test now, here and in every scan below, and a real NUL falls through the
+	// switch to ILLEGAL like any other character no rule begins with.
+	if l.atEOF() {
+		// A zero-width marker one past the last rune. Its Literal is the
+		// "\x00" newToken makes from l.ch, kept because the existing lexer
+		// tests assert on it.
+		tok = newToken(token.EOF, l.ch)
+		tok.Start = start
+		tok.End = start
+		return tok
+	}
 
 	switch l.ch {
 	case '=':
@@ -248,18 +277,17 @@ func (l *Lexer) scanToken() token.Token {
 		tok = newToken(token.DOT, l.ch)
 	case ';':
 		tok = newToken(token.SEMICOLON, l.ch)
-	case 0:
-		tok = newToken(token.EOF, l.ch)
-		// EOF is a zero-width marker at the current position. Do not
-		// advance beyond the end of input. Preserve the legacy Literal
-		// value (produced by newToken from l.ch == 0) for back-compat
-		// with existing lexer tests that assert on it.
-		tok.Start = start
-		tok.End = start
-		return tok
 	case '"':
 		tok = l.readStringToken(start.Offset, false, l.peekRune() == '"' && l.peekRuneAt(2) == '"')
 	default:
+		// End of input was decided before the switch, so a 0 here is a NUL
+		// byte in the file. It is ILLEGAL like any other character no rule
+		// begins with, and it says so rather than ending the program.
+		if l.ch == 0 {
+			tok = newToken(token.ILLEGAL, l.ch)
+			tok.Err = scanFault{why: faultNUL, where: start}.message()
+			break
+		}
 		// A raw string is spelled r"..." -- the one place an identifier
 		// character does not start an identifier. The test is the immediately
 		// following quote, which no identifier can be followed by today: there
@@ -319,6 +347,83 @@ func (l *Lexer) currentPos() token.Position {
 	}
 }
 
+// atEOF reports whether the cursor has run past the end of the input, and is
+// the only honest test for it.
+//
+// l.ch is 0 there. l.ch is also 0 on a NUL byte in the file, and reading those
+// two as one thing is how a NUL came to mean "the file stops here": a NUL
+// between two statements dropped the second, a NUL inside a comment dropped
+// the whole program, and `mutant fmt` wrote the truncation back over the
+// author's file with no diagnostic at all. readRune clamps position to
+// len(input), so this becomes true exactly once the cursor steps off the final
+// rune.
+func (l *Lexer) atEOF() bool {
+	return l.position >= len(l.input)
+}
+
+// more reports whether there is another byte after the cursor. It is what the
+// escape scans need: they asked `l.peekRune() != 0`, which is the same
+// confusion one position further on, so a backslash standing before a NUL byte
+// would have been told there was nothing after it.
+func (l *Lexer) more() bool {
+	return l.readPosition < len(l.input)
+}
+
+// scanFault is what a scan found that the source cannot survive: a literal
+// with no closing delimiter, a ${ with no closing brace, or a NUL byte. The
+// zero value means nothing is wrong.
+//
+// It is a value and not a field on the Lexer because these scans nest -- a
+// hole inside a literal inside a hole -- and a field would let an inner scan
+// overwrite the position the outer one is about to report.
+type scanFault struct {
+	why   string
+	where token.Position
+}
+
+// The two faults, worded as the author reads them. message() appends the
+// position, so each of these is the whole of what the lexer has to say.
+//
+// A literal with no closing delimiter is not among them. That is
+// token.UNTERMINATED, a token type of its own with its own parser handler,
+// because it is a token many runes wide that was read correctly and that no
+// program can contain -- not a character no rule begins with (M26-LEX-005).
+// These two are the other shape: one character inside a construct that was
+// otherwise read, which is what an ILLEGAL carrying Err is for.
+const (
+	faultOpenHole = "unterminated ${ inside a string literal: this hole is never closed by a }"
+	faultNUL      = "NUL byte in the source, which a Mutant source file cannot hold -- a string literal that needs one writes \\0"
+)
+
+func (f scanFault) bad() bool { return f.why != "" }
+
+// or is f, or g when f is the zero fault. A scan keeps the FIRST fault it
+// finds, which is the one nearest the top of the file and so the one to show.
+func (f scanFault) or(g scanFault) scanFault {
+	if f.bad() {
+		return f
+	}
+	return g
+}
+
+// message is the fault with the position it is about. A token carries the range
+// of the whole construct it belongs to, which is what an editor underlines;
+// the line and column here are the one character inside it that is wrong.
+func (f scanFault) message() string {
+	return fmt.Sprintf("%s (line %d, column %d)", f.why, f.where.Line, f.where.Column)
+}
+
+// after is the position immediately past the faulting character, for a token
+// standing for that character alone. Only the NUL fault needs it, and a NUL is
+// one byte.
+func (f scanFault) after() token.Position {
+	return token.Position{
+		Line:   f.where.Line,
+		Column: f.where.Column + 1,
+		Offset: f.where.Offset + 1,
+	}
+}
+
 // prevRune is the rune before the cursor, or 0 at the start of input. Only
 // readNumber asks for it, to tell a decimal point from a field selector.
 func (l *Lexer) prevRune() rune {
@@ -352,6 +457,10 @@ func (l *Lexer) readRune() {
 	// one position at a time, rather than silently misread.
 	width := 1
 	if l.readPosition >= len(l.input) {
+		// Past the end l.ch is 0 -- and so is a NUL byte in the file. This
+		// assignment stays only because the EOF token's Literal is made from
+		// it and the existing tests assert on that. Nothing may test l.ch for
+		// the end of input; atEOF is the test.
 		l.ch = 0
 	} else {
 		l.ch, width = utf8.DecodeRuneInString(l.input[l.readPosition:])
@@ -394,40 +503,55 @@ func (l *Lexer) nextRune() rune {
 // a closing quote both stop this loop and used to be indistinguishable to the
 // caller, which is why an unterminated literal became an ordinary STRING
 // holding the rest of the file (M26-LEX-005).
-func (l *Lexer) readQuotedBody() (string, bool) {
+//
+// The third carries out what a hole inside the literal found. The stop test is
+// atEOF and not `l.ch == 0`, because a NUL byte in the file decodes to the same
+// zero: a literal holding one ended here, and the quote that really closed it
+// was then read as the opening of the next (M26-LEX-006). The escape test is
+// l.more() for the same reason one position further on -- a backslash standing
+// before a NUL was told there was nothing after it.
+func (l *Lexer) readQuotedBody() (string, bool, scanFault) {
 	start := l.readPosition
+	var fault scanFault
 	for {
 		l.readRune()
-		if l.ch == 0 {
-			return l.input[start:l.position], false
+		if l.atEOF() {
+			return l.input[start:l.position], false, fault
 		}
 		if l.ch == '"' {
 			break
 		}
-		if l.ch == '\\' && l.peekRune() != 0 {
+		if l.ch == '\\' && l.more() {
 			l.readRune()
 			continue
 		}
 		// Inside a hole a quote belongs to the expression, not to the literal:
 		// "${ h["k"] }" ends at the last quote, not at the third.
 		if l.ch == '$' && l.peekRune() == '{' {
-			l.skipHole()
+			fault = fault.or(l.skipHole())
 		}
 	}
-	return l.input[start:l.position], true
+	return l.input[start:l.position], true, fault
 }
 
 // skipHole advances the cursor from the `$` of a `${` to the matching `}`,
-// counting nested braces and stepping over whole string literals on the way.
-// An unterminated hole runs to end of input, where the caller stops anyway.
-func (l *Lexer) skipHole() {
+// counting nested braces and stepping over whole string literals on the way,
+// and reports whether it found the brace.
+//
+// The comment here used to read "an unterminated hole runs to end of input,
+// where the caller stops anyway", which is true and is the defect: the caller
+// stopped because this had eaten the rest of the file. It now names the `${`
+// it could not close, and the caller refuses the literal.
+func (l *Lexer) skipHole() scanFault {
+	open := l.currentPos()
 	l.readRune() // onto the brace
 	depth := 1
 	for depth > 0 {
 		l.readRune()
+		if l.atEOF() {
+			return scanFault{why: faultOpenHole, where: open}
+		}
 		switch l.ch {
-		case 0:
-			return
 		case '{':
 			depth++
 		case '}':
@@ -435,15 +559,19 @@ func (l *Lexer) skipHole() {
 		case '"':
 			for {
 				l.readRune()
-				if l.ch == 0 || l.ch == '"' {
+				if l.atEOF() {
+					return scanFault{why: faultOpenHole, where: open}
+				}
+				if l.ch == '"' {
 					break
 				}
-				if l.ch == '\\' && l.peekRune() != 0 {
+				if l.ch == '\\' && l.more() {
 					l.readRune()
 				}
 			}
 		}
 	}
+	return scanFault{}
 }
 
 // readRawBody reads the text of an r"..." literal. There are no escapes, so
@@ -451,12 +579,13 @@ func (l *Lexer) skipHole() {
 // that is the entire rule, and r"""..."""  is how a program gets a quote back.
 // The cursor starts on the opening quote and is left on the closing one.
 //
-// The second return says whether that closing quote was found.
+// The second return says whether that closing quote was found. The stop test
+// is atEOF, so a NUL byte inside the literal no longer ends it (M26-LEX-006).
 func (l *Lexer) readRawBody() (string, bool) {
 	start := l.readPosition
 	for {
 		l.readRune()
-		if l.ch == 0 {
+		if l.atEOF() {
 			return l.input[start:l.position], false
 		}
 		if l.ch == '"' {
@@ -482,7 +611,7 @@ func (l *Lexer) readTripleBody(raw bool) (string, bool) {
 	terminated := false
 	for {
 		l.readRune()
-		if l.ch == 0 {
+		if l.atEOF() {
 			end = l.position
 			break
 		}
@@ -493,7 +622,7 @@ func (l *Lexer) readTripleBody(raw bool) (string, bool) {
 			terminated = true
 			break
 		}
-		if !raw && l.ch == '\\' && l.peekRune() != 0 {
+		if !raw && l.ch == '\\' && l.more() {
 			l.readRune()
 		}
 	}
@@ -542,24 +671,32 @@ func (l *Lexer) skipWhiteSpace() {
 	}
 }
 
-func (l *Lexer) skipTrivia() {
+func (l *Lexer) skipTrivia() scanFault {
+	var fault scanFault
 	for {
 		l.skipWhiteSpace()
 		if l.ch == '/' && l.peekRune() == '/' {
-			l.skipLineComment()
+			fault = fault.or(l.skipLineComment())
 			continue
 		}
-		return
+		return fault
 	}
 }
 
 // skipLineComment consumes a `// ...` comment up to (but not including) the
-// terminating newline, recording it as trivia. The cursor is left on the
-// newline (or EOF) so the enclosing skipTrivia loop keeps line accounting
-// intact.
-func (l *Lexer) skipLineComment() {
+// terminating newline, recording it as trivia, and reports a NUL byte inside
+// it. The cursor is left on the newline (or EOF) so the enclosing skipTrivia
+// loop keeps line accounting intact.
+//
+// The loop used to stop on l.ch == 0 as well as on a newline, which made a NUL
+// byte in a comment the end of the file: `// hi<NUL>` followed by a whole
+// program lexed as that one comment and nothing else, and `mutant fmt` then
+// wrote the comment back over the file. The comment is consumed whole now and
+// the byte is reported afterwards, so it costs one error rather than a cascade
+// of identifiers made out of the comment's words.
+func (l *Lexer) skipLineComment() scanFault {
 	start := l.currentPos()
-	for l.ch != '\n' && l.ch != 0 {
+	for l.ch != '\n' && !l.atEOF() {
 		l.readRune()
 	}
 	end := l.currentPos()
@@ -581,6 +718,11 @@ func (l *Lexer) skipLineComment() {
 		Start: start,
 		End:   end,
 	})
+
+	if at := strings.IndexByte(text, 0); at >= 0 {
+		return scanFault{why: faultNUL, where: advance(start, text[:at])}
+	}
+	return scanFault{}
 }
 
 // Comments returns the comment trivia lexed so far, in source order.
@@ -754,13 +896,14 @@ func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
 
 	var body string
 	var terminated bool
+	var fault scanFault
 	switch {
 	case triple:
 		body, terminated = l.readTripleBody(raw)
 	case raw:
 		body, terminated = l.readRawBody()
 	default:
-		body, terminated = l.readQuotedBody()
+		body, terminated, fault = l.readQuotedBody()
 	}
 
 	end := l.readPosition
@@ -768,6 +911,28 @@ func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
 		end = len(l.input)
 	}
 	spelling := l.input[openOffset:end]
+
+	// A raw NUL in the body cannot be carried any further. stripBlockIndent
+	// joins a triple-quoted literal's lines with one as its marker, on the
+	// stated invariant that a literal cannot already hold one -- and nothing
+	// checked it, so a NUL in the source made the marker ambiguous and the
+	// block was re-indented along a line the author never wrote. Now that the
+	// scans above read past a NUL instead of stopping at it, a literal can
+	// reach here holding one, so this is the check that invariant always
+	// needed (M26-LEX-006).
+	if at := strings.IndexByte(body, 0); at >= 0 {
+		fault = fault.or(scanFault{why: faultNUL, where: advance(bodyStart, body[:at])})
+	}
+
+	// Reported ahead of the unterminated literal that usually comes with it,
+	// because a hole left open consumes the rest of the literal and the
+	// unclosed quote is the consequence rather than the mistake: the `${` is
+	// the position the author has to be sent to. The token stands for the whole
+	// literal, which is what an editor underlines; the line and column in the
+	// message are the one character inside it that is wrong.
+	if fault.bad() {
+		return token.Token{Type: token.ILLEGAL, Literal: spelling, Raw: spelling, Err: fault.message()}
+	}
 
 	// Returned before the template check on purpose: a literal that was never
 	// closed has no parts to split, and splitting it would report a hole's
@@ -782,7 +947,17 @@ func (l *Lexer) readStringToken(openOffset int, raw, triple bool) token.Token {
 	// means the text is the text. Nothing else would make r"${x}" usable for
 	// the shell and template snippets it exists to hold.
 	if !raw {
-		if parts, interpolated := splitTemplate(body, bodyStart); interpolated {
+		parts, interpolated, holeFault := splitTemplate(body, bodyStart)
+		// This is the hole fault the quoted path cannot raise, and the reason
+		// the row is not closed by the quoted path alone: a """...""" literal
+		// closes on its own delimiter, so `"""v=${1+2"""` is a literal that
+		// ends properly around a hole that never does. It read as a finished
+		// template and evaluated to v=3 -- an expression the author never
+		// wrote the end of (M26-LEX-017).
+		if holeFault.bad() {
+			return token.Token{Type: token.ILLEGAL, Literal: spelling, Raw: spelling, Err: holeFault.message()}
+		}
+		if interpolated {
 			return token.Token{
 				Type:    token.TEMPLATE,
 				Literal: body,
@@ -825,16 +1000,17 @@ func (l *Lexer) bodyPosition(triple bool) token.Position {
 }
 
 // splitTemplate cuts a literal's source body into alternating text and ${...}
-// hole parts, starting at start, and reports whether it found a hole at all.
+// hole parts, starting at start, and reports whether it found a hole at all and
+// whether any hole was left open.
 //
 // Text parts are returned still encoded, because what a triple-quoted literal
 // does to its indentation has to be decided across the whole block and so
 // cannot happen here; decodeParts finishes them. Text parts are also emitted
 // even when empty, so that the parts alternate strictly -- decodeParts relies
 // on that to line the block up again, and the empty ones are dropped there.
-func splitTemplate(body string, start token.Position) ([]token.StringPart, bool) {
+func splitTemplate(body string, start token.Position) ([]token.StringPart, bool, scanFault) {
 	if !strings.Contains(body, "${") {
-		return nil, false
+		return nil, false, scanFault{}
 	}
 
 	parts := []token.StringPart{}
@@ -842,6 +1018,7 @@ func splitTemplate(body string, start token.Position) ([]token.StringPart, bool)
 	textStart := start
 	var text strings.Builder
 	found := false
+	var fault scanFault
 
 	flushText := func(at token.Position) {
 		parts = append(parts, token.StringPart{Text: text.String(), Start: textStart})
@@ -861,7 +1038,12 @@ func splitTemplate(body string, start token.Position) ([]token.StringPart, bool)
 
 		if body[i] == '$' && i+1 < len(body) && body[i+1] == '{' {
 			exprStart := advance(pos, "${")
-			source, next := scanHole(body, i)
+			source, next, closed := scanHole(body, i)
+			if !closed {
+				// The `${` is where the author has to go, not the end of the
+				// literal, which is only where the scan gave up.
+				fault = fault.or(scanFault{why: faultOpenHole, where: pos})
+			}
 			flushText(exprStart)
 			parts = append(parts, token.StringPart{
 				Text:       source,
@@ -881,18 +1063,24 @@ func splitTemplate(body string, start token.Position) ([]token.StringPart, bool)
 	}
 	flushText(pos)
 
-	return parts, found
+	return parts, found, fault
 }
 
 // scanHole returns the source between the braces of the hole starting at
-// body[i] (which is the `$` of a `${`), and the index just past its `}`.
+// body[i] (which is the `$` of a `${`), the index just past its `}`, and
+// whether it found that `}`.
 //
 // Braces nest and a string inside the hole is skipped whole, so
-// "${ hash[ "${k}" ] }" closes where a reader would say it closes. An
+// "${ hash[ "${k}" ] }" closes where a reader would say it closes.
+//
+// This used to promise what it did not deliver. The comment read: "An
 // unterminated hole runs to the end of the literal and is handed to the parser
 // as it stands: the resulting error points inside the string, which is where
-// the missing brace is.
-func scanHole(body string, i int) (source string, next int) {
+// the missing brace is." There is no such error. A hole with no `}` was closed
+// here, at the end of the literal, and `let a = """v=${1+2""";` compiled and
+// set a to v=3 -- an expression the author never finished, evaluated as though
+// they had. closed is how the caller finds out.
+func scanHole(body string, i int) (source string, next int, closed bool) {
 	depth := 1
 	j := i + 2
 	for j < len(body) && depth > 0 {
@@ -913,9 +1101,9 @@ func scanHole(body string, i int) (source string, next int) {
 		j++
 	}
 	if depth > 0 {
-		return body[i+2:], len(body)
+		return body[i+2:], len(body), false
 	}
-	return body[i+2 : j-1], j
+	return body[i+2 : j-1], j, true
 }
 
 // decodeParts finishes the text parts splitTemplate left encoded and drops the
@@ -926,7 +1114,9 @@ func scanHole(body string, i int) (source string, next int) {
 // re-indented as a whole, and cut apart again. A NUL is safe as the marker
 // because it is one character, so it cannot change a line's indentation, and
 // because the only way to get one into a literal is the \0 escape, which is
-// still two characters at this point.
+// still two characters at this point -- an invariant readStringToken now
+// enforces by refusing a literal that holds a raw NUL byte, where before
+// nothing checked it.
 func decodeParts(parts []token.StringPart, triple bool) []token.StringPart {
 	if triple {
 		var masked strings.Builder

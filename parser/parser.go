@@ -470,6 +470,10 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 	p.nextToken()
 
 	identStart := p.startMark()
+	if !p.curTokenIs(token.IDENT) {
+		p.refuseParameter()
+		return nil
+	}
 	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 	p.recordRange(ident, identStart)
 	identifiers = append(identifiers, ident)
@@ -479,6 +483,10 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 		p.nextToken()
 
 		nextStart := p.startMark()
+		if !p.curTokenIs(token.IDENT) {
+			p.refuseParameter()
+			return nil
+		}
 		ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 		p.recordRange(ident, nextStart)
 		identifiers = append(identifiers, ident)
@@ -489,6 +497,40 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 	}
 
 	return identifiers
+}
+
+// refuseParameter rejects the token standing in a parameter slot when it is
+// not a name, and reports the lexer's own account of it when it is an ILLEGAL
+// that carries one.
+//
+// Both slots in parseFunctionParameters took p.curToken.Literal as a
+// parameter's name without asking what the token was, which made this the one
+// position in the grammar where an ILLEGAL never became an error: in
+// `fn("a<NUL>b") { 1 }` the illegal literal became a parameter named with the
+// illegal text, both of the caller's expectPeeks then succeeded, and the file
+// parsed with no diagnostic anywhere. The same slot accepted `fn(1)` and
+// `fn("ok")`, and the formatter reprinted the second as `fn(ok)`, dropping the
+// author's quotes.
+//
+// It then steps onto the list's `)` when what is left of the list is well
+// formed, so a refused parameter costs the author one error and not two:
+// without that step the caller's expectPeek(token.LBRACE) reports a missing
+// `{` that is in fact there, one token further on. The walk advances only over
+// a `,` or a name, so it can neither enter the function's body nor run past
+// the end of the input.
+func (p *Parser) refuseParameter() {
+	msg := fmt.Sprintf("a parameter must be a name, but got %s", p.curToken.Type)
+	if detail := illegalDetail(p.curToken); detail != "" {
+		msg = detail
+	}
+	p.appendError(p.curToken, msg)
+
+	for p.peekTokenIs(token.COMMA) || p.peekTokenIs(token.IDENT) {
+		p.nextToken()
+	}
+	if p.peekTokenIs(token.RPAREN) {
+		p.nextToken()
+	}
 }
 
 func (p *Parser) parseCallArguments() []ast.Expression {
@@ -528,6 +570,9 @@ func (p *Parser) peekTokenIs(tokenType token.TokenType) bool { return p.peekToke
 func (p *Parser) curTokenIs(tokenType token.TokenType) bool  { return p.curToken.Type == tokenType }
 func (p *Parser) peekError(t token.TokenType) {
 	msg := fmt.Sprintf("expected next token to be %s, but got %s instead", t, p.peekToken.Type)
+	if detail := illegalDetail(p.peekToken); detail != "" {
+		msg = detail
+	}
 	p.appendError(p.peekToken, msg)
 }
 
@@ -559,5 +604,20 @@ func (p *Parser) registerInfix(tokenType token.TokenType, fn infixParseFn) {
 
 func (p *Parser) notPrefixParseFnError(t token.TokenType) {
 	msg := fmt.Sprintf("no prefix parse function for %s found", t)
+	if detail := illegalDetail(p.curToken); detail != "" {
+		msg = detail
+	}
 	p.appendError(p.curToken, msg)
+}
+
+// illegalDetail is the lexer's own account of an ILLEGAL token, when it has
+// one. The lexer knows that a quote is never closed, that a ${ has no }, that a
+// NUL byte is in the file; the parser knows only that no rule begins with
+// ILLEGAL, which is the less useful half of the truth. So the lexer's sentence
+// replaces the parser's, and the position is the token's either way.
+func illegalDetail(tok token.Token) string {
+	if tok.Type == token.ILLEGAL {
+		return tok.Err
+	}
+	return ""
 }

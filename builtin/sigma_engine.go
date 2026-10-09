@@ -245,7 +245,18 @@ func compileSigmaSearch(name string, raw any) (*sigmaSearch, error) {
 			}
 			// A bare scalar in the list is a keyword: matched against every
 			// value the event carries rather than against a named field.
-			matcher, err := compileSigmaMatchers(sigmaValueStrings(entry), []string{"contains"}, nil)
+			if entry == nil {
+				// `null` in a keyword list flattens to "", and an empty
+				// `contains` pattern matches every string there is, so the
+				// search holds for every event carrying any value at all
+				// (M26-ART-018).
+				return nil, fmt.Errorf("has `null` in its keyword list: a null keyword compiles to the empty string, which matches every event")
+			}
+			texts, err := sigmaValueStrings(entry)
+			if err != nil {
+				return nil, err
+			}
+			matcher, err := compileSigmaMatchers(texts, []string{"contains"}, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -262,6 +273,15 @@ func compileSigmaSearch(name string, raw any) (*sigmaSearch, error) {
 
 func compileSigmaGroup(mapping map[string]any) (sigmaGroup, error) {
 	group := sigmaGroup{}
+	if len(mapping) == 0 {
+		// A group with no field tests is the AND of nothing, which is true, so
+		// `selection: {}` holds for every event there is and the rule reports a
+		// hit on all of them. No rule means that, and a backend reading it the
+		// other way round would make the same rule fire on nothing instead: it
+		// is a rule bug either way, and this is where it can be said out loud
+		// (M26-ART-018).
+		return group, fmt.Errorf("has an empty mapping, which tests nothing: as written it holds for every event")
+	}
 	keys := make([]string, 0, len(mapping))
 	for key := range mapping {
 		keys = append(keys, key)
@@ -303,7 +323,11 @@ func compileSigmaField(key string, raw any) (sigmaField, error) {
 		field.matchers = []sigmaMatcher{{kind: sigmaMatchNull, text: "null"}}
 		return field, nil
 	}
-	matchers, err := compileSigmaMatchers(sigmaValueStrings(raw), mods, raw)
+	values, err := sigmaValueStrings(raw)
+	if err != nil {
+		return field, fmt.Errorf("field %q: %s", name, err)
+	}
+	matchers, err := compileSigmaMatchers(values, mods, raw)
 	if err != nil {
 		return field, fmt.Errorf("field %q: %s", name, err)
 	}
@@ -314,6 +338,14 @@ func compileSigmaField(key string, raw any) (sigmaField, error) {
 // compileSigmaMatchers runs the value through the transform modifiers in the
 // order they were written, then builds one matcher per resulting value.
 func compileSigmaMatchers(values []string, mods []string, raw any) ([]sigmaMatcher, error) {
+	if len(values) == 0 {
+		// An empty value list compiles to no matchers, and a field test with no
+		// matchers is answered by arithmetic rather than by the event:
+		// `Field|all: []` asks 0 == 0 and holds for everything, `Field: []`
+		// asks 0 > 0 and holds for nothing. Neither is a question anybody wrote
+		// (M26-ART-018).
+		return nil, fmt.Errorf("has an empty value list, which tests nothing")
+	}
 	compare := ""
 	cased := false
 	reFlags := ""
@@ -354,7 +386,11 @@ func compileSigmaMatchers(values []string, mods []string, raw any) ([]sigmaMatch
 			case "utf16":
 				next = append(next, sigmaUTF16(value, false, true))
 			case "windash":
-				next = append(next, sigmaWindash(value)...)
+				expanded, err := sigmaWindash(value)
+				if err != nil {
+					return nil, err
+				}
+				next = append(next, expanded...)
 			}
 		}
 		values = next
@@ -534,26 +570,99 @@ func sigmaUTF16(value string, bigEndian, bom bool) string {
 	return string(buf)
 }
 
-// sigmaWindash expands the dashes that start a command-line switch, because
-// `-enc`, `/enc` and the three Unicode dashes Windows also accepts are the same
-// switch and an attacker picks whichever one the rule forgot.
-func sigmaWindash(value string) []string {
-	out := []string{value}
-	for _, dash := range []string{"/", "–", "—", "―"} {
-		var sb strings.Builder
-		runes := []rune(value)
-		for i, r := range runes {
-			if r == '-' && (i == 0 || runes[i-1] == ' ' || runes[i-1] == '\t') {
-				sb.WriteString(dash)
-				continue
-			}
-			sb.WriteRune(r)
+// sigmaWindashChars are the characters `|windash` treats as one. The Sigma
+// specification names them: "Creates all possible permutations of the `-`, `/`,
+// `–` (en dash), `—` (em dash), and `―` (horizontal bar) characters."
+var sigmaWindashChars = []rune{'-', '/', '–', '—', '―'}
+
+// sigmaWindashMaxVariants bounds how many spellings one `|windash` value may
+// expand into.
+//
+// Five interchangeable characters over k switch positions is 5^k spellings, and
+// every spelling becomes a compiled regexp that is then run against every event
+// in the timeline. Four switch positions in one value is already more than the
+// rules this engine was written against put there, and 5^5 = 3125 regexps out of
+// one short string is a rule compiler being used as a denial of service. A
+// value past the bound is refused by name: expanding it part of the way would
+// be the same evasion this expansion exists to close, wearing the bound as
+// cover.
+//
+// The bound is per VALUE, which is the whole of what it claims. A list of them
+// multiplies it: five values of four switch positions each compile into 3125
+// matchers in one field test and twenty into 12500, both measured. That is
+// linear in what the rule author typed, with 625 as the constant, where 5^k out
+// of one short string is not, and the line this bound is drawn on is that
+// difference -- so a second cap on the field test is deliberately not added.
+//
+//mutant:limit count
+const sigmaWindashMaxVariants = 625
+
+// sigmaWindash expands a command-line switch into every spelling `|windash`
+// says is the same switch. The specification asks for a permutation rather than
+// a substitution -- "uses all possible permutation of strings in the selection"
+// -- which is the difference between a rule that catches `-nop /enc` and a rule
+// that catches only a command line whose dashes are all of one kind. An
+// attacker writes the mixed one.
+//
+// A switch position is one of those characters at the start of the value or
+// after a character that is not a letter, a digit or an underscore: `pwsh
+// -enc`, `pwsh;/enc`, `pwsh "-enc`. A dash between two word characters belongs
+// to the word -- a date, a GUID, a file name -- and expanding it would claim
+// that `foo-bar.exe` and `foo/bar.exe` are the same string (M26-ART-016).
+func sigmaWindash(value string) ([]string, error) {
+	runes := []rune(value)
+	positions := make([]int, 0, 4)
+	for i, r := range runes {
+		if !sigmaIsWindashChar(r) {
+			continue
 		}
-		if variant := sb.String(); variant != value {
-			out = append(out, variant)
+		if i == 0 || !sigmaIsWordRune(runes[i-1]) {
+			positions = append(positions, i)
 		}
 	}
-	return out
+	if len(positions) == 0 {
+		return []string{value}, nil
+	}
+
+	total := 1
+	for range positions {
+		total *= len(sigmaWindashChars)
+		if total > sigmaWindashMaxVariants {
+			return nil, fmt.Errorf("|windash value %q has %d switch positions, which permute into more spellings than the %d this engine will compile: write the switches as separate values, or as separate field tests", value, len(positions), sigmaWindashMaxVariants)
+		}
+	}
+
+	// Counting in base len(sigmaWindashChars) walks the permutations once each,
+	// the digit at each place choosing that position's character. The value as
+	// written is one of them, so nothing has to be prepended.
+	out := make([]string, 0, total)
+	buf := make([]rune, len(runes))
+	for n := 0; n < total; n++ {
+		copy(buf, runes)
+		rest := n
+		for _, at := range positions {
+			buf[at] = sigmaWindashChars[rest%len(sigmaWindashChars)]
+			rest /= len(sigmaWindashChars)
+		}
+		out = append(out, string(buf))
+	}
+	return out, nil
+}
+
+func sigmaIsWindashChar(r rune) bool {
+	for _, dash := range sigmaWindashChars {
+		if r == dash {
+			return true
+		}
+	}
+	return false
+}
+
+// sigmaIsWordRune is the ASCII word class, the one Go's regexp spells \w. A
+// dash between two of these is part of a word rather than the start of a
+// switch.
+func sigmaIsWordRune(r rune) bool {
+	return r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 // --- the condition language ------------------------------------------------
@@ -759,6 +868,26 @@ func (p *sigmaParser) parsePrimary() (sigmaNode, error) {
 				if count < 1 {
 					return nil, fmt.Errorf("asks for %d of %q, which no event can fail", count, target)
 				}
+				// The mirror of the refusal above with the sign flipped. A
+				// quantifier counts hits among the identifiers its target
+				// resolved to, so `N of ...` over fewer than N of them is
+				// false for every event there will ever be: a rule that is
+				// silent forever, which is the defect this cluster refuses
+				// rather than let an analyst read as a clean host. Both
+				// halves are known here -- the count is written in the rule
+				// and `names` was resolved four lines up.
+				//
+				// `them` is what makes it reachable without a typo, because
+				// `them` covers only the identifiers that do not start with
+				// an underscore (M26-ART-017): a rule defining `selection`
+				// and `_helper` defines two searches and `2 of them` has one
+				// to count. A pattern reaches it too -- `2 of selection*`
+				// over one `selection` never matched, at a812eee either --
+				// and this covers that as well, because the test is on the
+				// resolved set and does not care how it resolved.
+				if count > len(names) {
+					return nil, fmt.Errorf("asks for %d of %q, which covers %d of this rule's search identifiers (%s), so no event can satisfy it", count, target, len(names), strings.Join(names, ", "))
+				}
 				quant.count = count
 			}
 			return quant, nil
@@ -782,7 +911,24 @@ func (p *sigmaParser) resolve(target string) ([]string, error) {
 		if len(p.names) == 0 {
 			return nil, fmt.Errorf("says `of them` with no search identifiers defined")
 		}
-		return p.names, nil
+		// `them` is, in the specification's words, "all defined search
+		// identifiers not starting with an underscore `_`". The underscore is
+		// how a rule carries a search its condition names on purpose and `them`
+		// must not: counting one in makes `all of them` require a search the
+		// rule never asked for, which is a rule that stops firing, and makes
+		// `1 of them` satisfied by that search alone, which is a rule that
+		// fires on something it was not written to report (M26-ART-017).
+		covered := make([]string, 0, len(p.names))
+		for _, name := range p.names {
+			if strings.HasPrefix(name, "_") {
+				continue
+			}
+			covered = append(covered, name)
+		}
+		if len(covered) == 0 {
+			return nil, fmt.Errorf("says `of them` where every search identifier the rule defines (%s) starts with an underscore, which `them` does not cover: name the searches the condition means", strings.Join(p.names, ", "))
+		}
+		return covered, nil
 	}
 	re, err := sigmaPatternRegexp(target, "", true, false)
 	if err != nil {
@@ -813,6 +959,7 @@ type sigmaContext struct {
 	missing map[string]bool // fields the rule read and the event did not have
 	values  []string        // every string value in the event, for keywords
 	walked  bool
+	walkErr error // the keyword walk ran out of depth, so values is partial
 }
 
 func (ctx *sigmaContext) search(name string) bool {
@@ -991,6 +1138,30 @@ func sigmaDescend(root object.Object, name string, path []string) (object.Object
 	return current, true
 }
 
+// sigmaKeywordMaxDepth bounds how deep a keyword search walks an event.
+//
+// A keyword search is the one search shape with no field to look up: it
+// compares its value against every value the event carries, wherever that
+// value sits, which means walking the whole tree. The walk needs a bound for
+// the same reason every decoder in this package has one -- an event is
+// evidence, and evidence is written by whoever is under investigation, so a few
+// hundred bytes can describe a hundred thousand levels and the walk is
+// recursive. It is maxNativeDepth because that is the bound every decoder that
+// converts through nativeToObject already enforces -- yaml_parse, toml_parse,
+// cbor_parse, msgpack_parse -- so an event one of those built is searched
+// whole, and a keyword search that comes back empty came back empty about the
+// event rather than about the part of it this function managed to read.
+//
+// It is NOT a ceiling on how deep an event can be, which is why this bound has
+// to be a refusal and not a quiet return. json.go's jsonValueToObject takes no
+// depth argument at all, so json_parse and ndjson_parse convert as deep as
+// encoding/json's scanner allows: measured, 10000 levels decode and 10001 is
+// refused as "exceeded max depth". A 257-level JSON document is two lines of
+// Mutant away from this function, and at a812eee it got a clean no-match.
+//
+//mutant:limit depth
+const sigmaKeywordMaxDepth = maxNativeDepth
+
 // allValues flattens every string the event carries, once, for keyword
 // searches. Keywords are the one search shape with no field to look up.
 func (ctx *sigmaContext) allValues() []string {
@@ -998,35 +1169,54 @@ func (ctx *sigmaContext) allValues() []string {
 		return ctx.values
 	}
 	ctx.walked = true
-	sigmaCollect(ctx.event, &ctx.values, 0)
+	ctx.walkErr = sigmaCollect(ctx.event, &ctx.values, 0)
 	return ctx.values
 }
 
-func sigmaCollect(value object.Object, out *[]string, depth int) {
-	if value == nil || depth > 24 {
-		return
+// sigmaCollect walks the event. It returns an error rather than stopping
+// quietly when it runs out of depth: a keyword search over a tree it only
+// partly read answers about the part it read, and reports that as an answer
+// about the event. The shape of that wrong answer is always "no match", which
+// is the one answer a detection engine must never invent (M26-LIM-001).
+func sigmaCollect(value object.Object, out *[]string, depth int) error {
+	if value == nil {
+		return nil
+	}
+	if depth > sigmaKeywordMaxDepth {
+		return fmt.Errorf("event nests deeper than %d levels, so a keyword search cannot read all of it", sigmaKeywordMaxDepth)
 	}
 	switch typed := value.(type) {
 	case *object.Hash:
 		for _, pair := range typed.Pairs {
-			sigmaCollect(pair.Value, out, depth+1)
+			if err := sigmaCollect(pair.Value, out, depth+1); err != nil {
+				return err
+			}
 		}
 	case *object.Array:
 		for _, element := range typed.Elements {
-			sigmaCollect(element, out, depth+1)
+			if err := sigmaCollect(element, out, depth+1); err != nil {
+				return err
+			}
 		}
 	default:
 		if text := sigmaObjectString(value); text != "" {
 			*out = append(*out, text)
 		}
 	}
+	return nil
 }
 
 // matchSigmaRule answers one rule against one event, and reports which fields
 // it could not find. A rule that did not match because the event never carried
 // the field it reads is a different answer from a rule that looked and
 // disagreed, and only one of them means "clean".
-func matchSigmaRule(rule *sigmaRule, event object.Object) (bool, []string, []string, []string) {
+//
+// It returns an error instead of an answer when it could not read the event it
+// was asked about. There is one such case -- an event nesting deeper than
+// sigmaKeywordMaxDepth under a keyword search -- and it is an error rather than
+// a flag on the result because a flag is read only by a caller that knows to
+// look for it, and what sits under this one is a false negative (M26-LIM-001).
+func matchSigmaRule(rule *sigmaRule, event object.Object) (bool, []string, []string, []string, error) {
 	ctx := &sigmaContext{
 		rule:    rule,
 		event:   event,
@@ -1044,6 +1234,12 @@ func matchSigmaRule(rule *sigmaRule, event object.Object) (bool, []string, []str
 		ctx.search(name)
 	}
 	matched := rule.cond.eval(ctx)
+	if ctx.walkErr != nil {
+		// A keyword search read part of the event and then ran out of depth.
+		// Whatever the condition computed above, it is not an answer about this
+		// event.
+		return false, nil, nil, nil, ctx.walkErr
+	}
 
 	hitNames := make([]string, 0, len(rule.names))
 	for _, name := range rule.names {
@@ -1065,7 +1261,7 @@ func matchSigmaRule(rule *sigmaRule, event object.Object) (bool, []string, []str
 		seen = append(seen, name)
 	}
 	sort.Strings(seen)
-	return matched, hitNames, seen, missing
+	return matched, hitNames, seen, missing, nil
 }
 
 // --- small helpers ---------------------------------------------------------
@@ -1139,16 +1335,32 @@ func sigmaIsInteger(text string) bool {
 // sigmaValueStrings flattens a scalar or a list of scalars. A nested list in a
 // value position has no meaning in Sigma, so it flattens rather than erroring:
 // the values are still the values.
-func sigmaValueStrings(value any) []string {
+//
+// A `null` inside a list is the one entry it refuses. The specification keeps
+// it out -- "`null` cannot be part of a list of field values as it is its own
+// type and therefore shares no type with any other value" -- and flattening it
+// to "" does not merely lose it, it changes the question being asked: a scalar
+// `Field: null` asks whether the field is absent, while the same word one line
+// further in asked whether it held the empty string. Under |all that reads as
+// "and the field is empty", which no event satisfies, so the rule goes quiet
+// (M26-ART-018).
+func sigmaValueStrings(value any) ([]string, error) {
 	switch typed := value.(type) {
 	case []any:
 		out := make([]string, 0, len(typed))
 		for _, entry := range typed {
-			out = append(out, sigmaValueStrings(entry)...)
+			if entry == nil {
+				return nil, fmt.Errorf("has `null` inside a list of values, which Sigma does not allow there: null is its own type and shares none with any other value. A null test belongs in a field test of its own")
+			}
+			values, err := sigmaValueStrings(entry)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, values...)
 		}
-		return out
+		return out, nil
 	default:
-		return []string{sigmaScalarString(value)}
+		return []string{sigmaScalarString(value)}, nil
 	}
 }
 

@@ -159,9 +159,6 @@ var LimitBudget = map[string][]string{
 	"builtin/serve.go": {
 		"N1 package level: maxServeHandlers = 1024",
 	},
-	"builtin/sigma_engine.go": {
-		"L4 sigmaCollect: 24",
-	},
 	"builtin/sqlite_builtins.go": {
 		"N1 package level: sqliteMaxRows = 1_000_000",
 	},

@@ -18,7 +18,7 @@ written in a shape the guard does not recognise is in neither place. Values fixe
 by a file format or a protocol are not limits; they are marked `//mutant:format`
 and are not listed.
 
-70 limits in 8 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 118 limits that are not named yet; `policy/limit_budget.go` lists each one.
+73 limits in 8 packages bound a run. 4 limits in 2 packages bound the tools around it. The guard finds 117 limits that are not named yet; `policy/limit_budget.go` lists each one.
 
 ## `builtin`
 
@@ -54,6 +54,8 @@ and are not listed.
 | `maxSearchHits` | 1,000 | count | -- | maxSearchHits bounds the hits one search hands back. It bounds the plaintext a result holds -- up to a context on each side of every hit -- and not the count, which covers every match in what was searched. | `builtin/record_search.go` |
 | `maxSearchPattern` | 4 KiB | bytes | -- | maxSearchPattern bounds the literal a search looks for. The matcher keeps a table as long as the pattern and every hit's context holds it, so an unbounded pattern is an unbounded allocation per hit; a page is room for any search term. | `builtin/record_search.go` |
 | `maxZipLinkTargetBytes` | 4 KiB | bytes | -- | maxZipLinkTargetBytes bounds how much of a zip symlink entry's body is read to learn where the link points. It is PATH_MAX on Linux, the longest target a link can be created with there. | `builtin/archive.go` |
+| `sigmaKeywordMaxDepth` | 256 | depth | -- | sigmaKeywordMaxDepth bounds how deep a keyword search walks an event. | `builtin/sigma_engine.go` |
+| `sigmaWindashMaxVariants` | 625 | count | -- | sigmaWindashMaxVariants bounds how many spellings one `\|windash` value may expand into. | `builtin/sigma_engine.go` |
 
 ## `graphstore`
 
@@ -117,6 +119,7 @@ and are not listed.
 | `TimingSuspiciousThresholdUs` | 200ms | microseconds | -- | TimingSuspiciousThresholdUs is how long the loop may take before the timing probe reports it. The loop runs in well under a millisecond on an unhindered machine -- the Windows clock reads it as 0 or 1 ms -- so two hundred is a thread stopped part way through, single-stepped or suspended, and not a slow one. | `security/antitamper_constants.go` |
 | `defaultCommandExecTimeout` | 3s | milliseconds | -- | defaultCommandExecTimeout is how long exec_string and cmd_run let a command run before the shell is killed and the result says timed_out: long enough for a shell to start and answer a short query of the host, short enough that a hung command does not hang the script. | `security/command_exec.go` |
 | `defaultCommandMaxOutput` | 8 KiB | bytes | -- | defaultCommandMaxOutput is how much of each of a command's output streams exec_string and cmd_run hand back; what is past it is cut and marked as truncated. A result is for reading an answer, not for capturing a transcript. | `security/command_exec.go` |
+| `defaultCommandWaitDelay` | 500ms | milliseconds | -- | defaultCommandWaitDelay is how much longer than the timeout above one call may last. The clock starts when the deadline passes or when the command's own process exits, whichever comes first, and what it bounds is the wait for everything else the command started: a grandchild holding the output pipe open used to keep the call alive for as long as it liked, whatever the timeout said -- `cmd /C ping -n 10 127.0.0.1` took 9.14 seconds against a 3-second timeout and then reported that it had timed out (M26-TMP-006). Half a second is long enough for a killed process tree to die and let go of its handles on a loaded host, and short enough that the worst case of exec_string stays under four seconds. | `security/command_exec.go` |
 | `defaultRemoteScanCritical` | 85 | score | -- | defaultRemoteScanCritical is the verdict score from which the scan records a process as critical and, in enforce mode, stops the run; its "critical" band starts here. Like defaultRemoteScanHighRisk, only tests ever reach it. | `security/processscan_config.go` |
 | `defaultRemoteScanHighRisk` | 70 | score | -- | defaultRemoteScanHighRisk is the verdict score from which the remote process scan records a process as suspicious, and where its "high" risk band starts. The scan is off in every shipped binary and its Windows scanner returns no verdicts, so only tests, which supply their own verdicts, ever reach these scores. | `security/processscan_config.go` |
 | `outputDebugTimingThresholdTicks` | 10ms | milliseconds | -- | outputDebugTimingThresholdTicks is how many milliseconds, as GetTickCount counts them, an OutputDebugString call may take before it counts as a debugger's. GetTickCount moves a timer tick at a time, so this fires when the call spans a tick: likely for a call a debugger stops to receive, rare for one nobody receives. | `security/antidebug_windows.go` (windows) |

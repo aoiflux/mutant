@@ -106,6 +106,13 @@ type Token struct {
 	// diagnostic inside a hole underlines the code the author wrote rather
 	// than the string that contains it.
 	Parts []StringPart
+
+	// Err is the lexer's own account of why this token is ILLEGAL: a quote
+	// that is never closed, a ${ with no }, a NUL byte in the file. It is set
+	// only on ILLEGAL, and only where the lexer knows more than "no rule
+	// begins with this character", which is all the parser can work out for
+	// itself. Empty on every other token.
+	Err string
 }
 
 // StringPart is one piece of an interpolated string literal.
