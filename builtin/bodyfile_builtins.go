@@ -31,6 +31,7 @@ func BodyfileParse(args ...object.Object) object.Object {
 	defer f.Close()
 
 	entries := make([]object.Object, 0)
+	malformed := 0
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -39,25 +40,39 @@ func BodyfileParse(args ...object.Object) object.Object {
 			continue
 		}
 		fields := strings.Split(line, "|")
-		if len(fields) < 11 {
-			continue // not a valid bodyfile row
+		if len(fields) < bodyfileFieldCount {
+			malformed++
+			continue // too few fields to be a bodyfile row
 		}
+		// The md5 is the first field and the nine after the name are the last
+		// nine, so each is taken from its own end. Everything between them is
+		// the name, which is the one field that may hold the separator, put
+		// back together with it.
+		tail := fields[len(fields)-9:]
 		entries = append(entries, makeHashObject(map[string]object.Object{
 			"md5":    stringObj(fields[0]),
-			"name":   stringObj(fields[1]),
-			"inode":  stringObj(fields[2]),
-			"mode":   stringObj(fields[3]),
-			"uid":    intObj(parseBodyfileInt(fields[4])),
-			"gid":    intObj(parseBodyfileInt(fields[5])),
-			"size":   intObj(parseBodyfileInt(fields[6])),
-			"atime":  intObj(parseBodyfileInt(fields[7])),
-			"mtime":  intObj(parseBodyfileInt(fields[8])),
-			"ctime":  intObj(parseBodyfileInt(fields[9])),
-			"crtime": intObj(parseBodyfileInt(fields[10])),
+			"name":   stringObj(strings.Join(fields[1:len(fields)-9], "|")),
+			"inode":  stringObj(tail[0]),
+			"mode":   stringObj(tail[1]),
+			"uid":    intObj(parseBodyfileInt(tail[2])),
+			"gid":    intObj(parseBodyfileInt(tail[3])),
+			"size":   intObj(parseBodyfileInt(tail[4])),
+			"atime":  intObj(parseBodyfileInt(tail[5])),
+			"mtime":  intObj(parseBodyfileInt(tail[6])),
+			"ctime":  intObj(parseBodyfileInt(tail[7])),
+			"crtime": intObj(parseBodyfileInt(tail[8])),
 		}))
 	}
 	if err := scanner.Err(); err != nil {
 		return resultAndError(nil, newError("bodyfile_parse: %s", err.Error()))
+	}
+	// A file that yielded nothing while at least one line could not be read is
+	// not an empty bodyfile, it is a file in some other format. Returning an
+	// empty array for it reports a successful parse of nothing.
+	if len(entries) == 0 && malformed > 0 {
+		return resultAndError(nil, newError(
+			"bodyfile_parse: no bodyfile rows; %d line(s) had fewer than %d pipe-separated fields",
+			malformed, bodyfileFieldCount))
 	}
 	return resultAndError(&object.Array{Elements: entries}, nil)
 }
@@ -69,6 +84,12 @@ func parseBodyfileInt(s string) int64 {
 	}
 	return n
 }
+
+// bodyfileFieldCount is the number of pipe-separated fields in a Sleuth Kit
+// bodyfile row: md5, name, inode, mode, uid, gid, size, atime, mtime, ctime,
+// crtime. Only the name may itself contain the separator, which is why the
+// first field and the last nine are read from their own ends.
+const bodyfileFieldCount = 11
 
 // Mactime turns parsed bodyfile entries (from bodyfile_parse) into a chronological
 // timeline. For each entry it groups the four MAC times by value and emits one row

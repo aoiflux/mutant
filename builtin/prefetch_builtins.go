@@ -156,6 +156,35 @@ func parsePrefetch(data []byte) (map[string]object.Object, error) {
 	}, nil
 }
 
+// prefetchVolumeStride is the size of one volume-information entry, which is
+// four different sizes across the five SCCA versions this package reads. The
+// values are libscca's, and PECmd reads the same three layouts (Version17.cs
+// steps 40, Version26.cs steps 104, Version30or31.cs steps 96).
+//
+// A version with no stride here returns 0 and its volumes are not read, rather
+// than read at a neighbouring version's stride. Stepping the wrong distance
+// does not produce an empty field: it produces a field read out of the middle
+// of another one, and a serial number that is really half of a FILETIME looks
+// exactly like a serial number.
+//
+// That path is reachable. prefetch_parse's version switch ends in a default
+// branch that returns the header fields it trusts and carries on, so a version
+// nothing here recognises arrives with its volume section intact. The empty
+// volumes array it gets is not a silent drop: the version this function
+// declined to read is in the same result, under "version", for a caller to see.
+func prefetchVolumeStride(version uint32) int {
+	switch version {
+	case 17:
+		return 40
+	case 23, 26:
+		return 104
+	case 30, 31:
+		return 96
+	default:
+		return 0
+	}
+}
+
 // parsePrefetchVolumes reads the volume-information section (offset @0x6C, count
 // @0x70). Each entry's stride is version-dependent; every field access is
 // bounds-checked so a bad entry is skipped rather than panicking.
@@ -166,9 +195,9 @@ func parsePrefetchVolumes(data []byte, version uint32) []object.Object {
 	if volOff <= 0 || volCount <= 0 || volCount > 256 || volOff >= len(data) {
 		return volumes
 	}
-	stride := 104 // v23
-	if version >= 26 {
-		stride = 96 // v26/v30/v31
+	stride := prefetchVolumeStride(version)
+	if stride == 0 {
+		return volumes
 	}
 	for i := 0; i < volCount; i++ {
 		base := volOff + i*stride

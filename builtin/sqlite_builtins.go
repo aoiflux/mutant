@@ -282,6 +282,17 @@ func sqliteTableExists(db *sql.Conn, name string) bool {
 	return err == nil && n > 0
 }
 
+// sqliteColumnExists reports whether a table in the opened database has a
+// column. It is here for artifact schemas that gained columns over releases:
+// a single SELECT naming a column an older database lacks fails the whole
+// query, so the readable columns have to be asked for rather than assumed.
+func sqliteColumnExists(db *sql.Conn, table, column string) bool {
+	var n int
+	err := db.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&n)
+	return err == nil && n > 0
+}
+
 // rowStr / rowInt read a value out of a scanned row map with type coercion.
 func rowStr(row map[string]object.Object, key string) string {
 	if v, ok := row[key].(*object.String); ok {

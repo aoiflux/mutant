@@ -3,6 +3,7 @@ package builtin
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"mutant/object"
 )
@@ -159,13 +160,30 @@ func cookieEntry(host, name, value, path string, expires int64, secure, httpOnly
 	})
 }
 
-var chromeDownloadStates = map[int64]string{0: "in_progress", 1: "complete", 2: "cancelled", 3: "interrupted"}
+// chromeDownloadStates maps Chromium's DownloadState to a name. INTERRUPTED is
+// 4; 3 is BUG_140687, the value it was given before that bug was fixed, which
+// means the same thing in a History database old enough to hold one. The map
+// had only the 3, so an interrupted download -- a transfer that stopped partway
+// through, which is the state worth noticing -- came back as "unknown".
+var chromeDownloadStates = map[int64]string{
+	0: "in_progress",
+	1: "complete",
+	2: "cancelled",
+	3: "interrupted", // legacy BUG_140687
+	4: "interrupted",
+}
 
 // BrowserDownloads parses a Chromium History (downloads table) or Firefox
 // places.sqlite (moz_annos) database into normalized download records. Firefox
-// support is best-effort (the destination file URI annotation). Returns
-// {browser, count, entries:[{url, target_path, bytes_total, bytes_received,
-// start_time, end_time, state, mime_type, browser}]}.
+// support is best-effort (the destination file URI annotation).
+//
+// For Chromium, "url" is where the file came from -- the last hop of
+// downloads_url_chains -- and "url_chain" is every hop in order. The page the
+// download was started from keeps its own name, "tab_url": it used to be
+// reported as "url", which named the user's open page as the origin of the
+// file. Returns {browser, count, entries:[{url, url_chain, tab_url, referrer,
+// site_url, target_path, bytes_total, bytes_received, start_time, end_time,
+// state, mime_type, browser}]}.
 func BrowserDownloads(args ...object.Object) (result object.Object) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -184,7 +202,32 @@ func BrowserDownloads(args ...object.Object) (result object.Object) {
 		switch {
 		case sqliteTableExists(db, "downloads"): // Chromium
 			browser = "chrome"
-			_, rows, _, e := queryDB(db, `SELECT tab_url, target_path, total_bytes, received_bytes, start_time, end_time, state, mime_type FROM downloads`)
+			// The redirect chain, if this schema has it: one row per hop,
+			// ordered, so the last hop of a download is where its bytes came
+			// from. Read first and keyed by download id, because the download
+			// rows are what it is attached to.
+			chains := map[int64][]object.Object{}
+			if sqliteTableExists(db, "downloads_url_chains") {
+				_, chainRows, _, e := queryDB(db,
+					`SELECT id, url FROM downloads_url_chains ORDER BY id, chain_index`)
+				if e != nil {
+					return e
+				}
+				for _, r := range chainRows {
+					id := rowInt(r, "id")
+					chains[id] = append(chains[id], stringObj(rowStr(r, "url")))
+				}
+			}
+			// tab_referrer_url and site_url were added after tab_url, so they
+			// are selected only where the schema has them.
+			cols := []string{"id", "tab_url", "target_path", "total_bytes",
+				"received_bytes", "start_time", "end_time", "state", "mime_type"}
+			for _, optional := range []string{"tab_referrer_url", "site_url"} {
+				if sqliteColumnExists(db, "downloads", optional) {
+					cols = append(cols, optional)
+				}
+			}
+			_, rows, _, e := queryDB(db, `SELECT `+strings.Join(cols, ", ")+` FROM downloads`)
 			if e != nil {
 				return e
 			}
@@ -193,8 +236,24 @@ func BrowserDownloads(args ...object.Object) (result object.Object) {
 				if state == "" {
 					state = "unknown"
 				}
+				// The file's source is the last hop of its chain. Where there
+				// is no chain table, tab_url is all this database holds, so it
+				// is what "url" can honestly be, and url_chain stays empty to
+				// say the chain was not available rather than that there was
+				// none.
+				chain := chains[rowInt(r, "id")]
+				url := rowStr(r, "tab_url")
+				if len(chain) > 0 {
+					if last, ok := chain[len(chain)-1].(*object.String); ok {
+						url = last.Value
+					}
+				}
 				entries = append(entries, makeHashObject(map[string]object.Object{
-					"url":            stringObj(rowStr(r, "tab_url")),
+					"url":            stringObj(url),
+					"url_chain":      &object.Array{Elements: chain},
+					"tab_url":        stringObj(rowStr(r, "tab_url")),
+					"referrer":       stringObj(rowStr(r, "tab_referrer_url")),
+					"site_url":       stringObj(rowStr(r, "site_url")),
 					"target_path":    stringObj(rowStr(r, "target_path")),
 					"bytes_total":    intObj(rowInt(r, "total_bytes")),
 					"bytes_received": intObj(rowInt(r, "received_bytes")),

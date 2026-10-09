@@ -124,8 +124,10 @@ func GoSymbols(args ...object.Object) (result object.Object) {
 
 	// Recover Go version / arch / os from build info where available.
 	version, osName, arch := "", "", file.GOARCH()
+	mainModule := ""
 	if bi, biErr := buildinfo.ReadFile(path); biErr == nil {
 		version = bi.GoVersion
+		mainModule = bi.Main.Path
 		for _, s := range bi.Settings {
 			switch s.Key {
 			case "GOOS":
@@ -171,7 +173,7 @@ func GoSymbols(args ...object.Object) (result object.Object) {
 	userCount, stdCount := 0, 0
 	for _, fn := range finalTab.ParsedPclntab.Funcs {
 		pkg := fn.PackageName()
-		std := isStdlibPackage(pkg)
+		std := isStdlibPackage(pkg, mainModule)
 		if std {
 			stdCount++
 		} else {
@@ -361,20 +363,61 @@ func normalizeGoVersion(v string) string {
 	return v
 }
 
-// isStdlibPackage classifies a recovered package as Go standard library. This is
-// a heuristic: third-party packages are domain-qualified (a dot in the first path
-// segment, e.g. "github.com/x/y"), `main` is the program itself, and everything
-// else (fmt, runtime, net/http, blank runtime internals) is treated as stdlib.
-func isStdlibPackage(pkg string) bool {
+// stdlibTopLevel is every top-level name in the Go standard library -- the
+// output of `go list std` cut to its first path segment, under the toolchain
+// go.mod pins. It is a list because the standard library is a closed set for a
+// release, where the test it replaces ("no dot in the first path segment")
+// was a shape, and a dotless module path such as `go mod init agent` fitted it
+// exactly.
+//
+// Three of these are not import paths a program writes but do appear in a
+// pclntab: "internal" and "vendor" prefix the standard library's own internals
+// and its vendored dependencies, and "go" prefixes the types the compiler
+// synthesizes.
+//
+// A binary built by a newer Go may hold a top-level name this list does not
+// have, and that package is then reported as user code. That is the safe
+// direction for the one mode this classification exists to serve: "user" shows
+// something extra rather than hiding the program's own functions, which is the
+// failure being fixed here.
+var stdlibTopLevel = map[string]bool{
+	"archive": true, "bufio": true, "bytes": true, "cmp": true,
+	"compress": true, "container": true, "context": true, "crypto": true,
+	"database": true, "debug": true, "embed": true, "encoding": true,
+	"errors": true, "expvar": true, "flag": true, "fmt": true, "go": true,
+	"hash": true, "html": true, "image": true, "index": true, "internal": true,
+	"io": true, "iter": true, "log": true, "maps": true, "math": true,
+	"mime": true, "net": true, "os": true, "path": true, "plugin": true,
+	"reflect": true, "regexp": true, "runtime": true, "slices": true,
+	"sort": true, "strconv": true, "strings": true, "structs": true,
+	"sync": true, "syscall": true, "testing": true, "text": true, "time": true,
+	"unicode": true, "unique": true, "unsafe": true, "vendor": true,
+	"weak": true,
+}
+
+// isStdlibPackage classifies a recovered package as Go standard library.
+//
+// mainModule is the module path the binary was built from, as buildinfo
+// reports it, or "" when the binary carries no build information. A package at
+// or under it is the program's own code however it is spelled, which is the
+// fact the previous test could not reach: it asked whether the first path
+// segment held a dot, so a module named `agent` answered as standard library
+// and took every one of the program's packages with it.
+//
+// With the main module settled, what is left is the list above.
+func isStdlibPackage(pkg, mainModule string) bool {
 	if pkg == "" {
 		return true
 	}
 	if pkg == "main" {
 		return false
 	}
+	if mainModule != "" && (pkg == mainModule || strings.HasPrefix(pkg, mainModule+"/")) {
+		return false
+	}
 	first := pkg
 	if i := strings.IndexByte(pkg, '/'); i >= 0 {
 		first = pkg[:i]
 	}
-	return !strings.Contains(first, ".")
+	return stdlibTopLevel[first]
 }
