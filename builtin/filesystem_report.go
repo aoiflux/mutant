@@ -115,6 +115,7 @@ const (
 	fsReportWarnMirrorMismatch     = "allocation_tables_disagree"
 	fsReportWarnBackupBootUsed     = "opened_from_backup_boot_sector"
 	fsReportWarnOrphansTruncated   = "orphan_list_truncated"
+	fsReportWarnPartitionOffset    = "recorded_partition_offset_disagrees"
 )
 
 const (
@@ -1130,6 +1131,9 @@ func (s *realXFATSession) Report() (fsReport, error) {
 		return fsReport{}, err
 	}
 
+	recordedSectors, offsetAgrees := xfatPartitionOffset(
+		raw.Filesystem.PartitionOffset, raw.Filesystem.SectorSize, raw.Filesystem.Base)
+
 	report := fsReport{
 		Filesystem:         "exfat",
 		SchemaVersion:      int64(raw.SchemaVersion),
@@ -1155,6 +1159,8 @@ func (s *realXFATSession) Report() (fsReport, error) {
 			"media_failure":       boolObj(raw.Filesystem.MediaFailure),
 			"active_fat":          intObj(int64(raw.Filesystem.ActiveFAT)),
 			"allocated_clusters":  intObj(int64(raw.Filesystem.AllocatedClusters)),
+			"base":                intObj(raw.Filesystem.Base),
+			"partition_offset":    intObj(recordedSectors),
 		},
 		Scope: "the reachable directory tree with deleted entries reported at " +
 			"the slots they occupy. No extent is assumed, and the sweep for " +
@@ -1171,6 +1177,22 @@ func (s *realXFATSession) Report() (fsReport, error) {
 	if raw.Filesystem.VolumeDirty {
 		report.warn(fsReportWarnVolumeDirty, "volume",
 			"this volume's flags say it was not cleanly unmounted, so its allocation bitmap and directory entries may disagree with each other")
+	}
+
+	if !offsetAgrees {
+		if recordedSectors < 0 {
+			report.warn(fsReportWarnPartitionOffset, "volume",
+				"this volume records a partition offset too large to express as a byte "+
+					"count, so where it says its partition began cannot be compared with "+
+					"where its boot record was found")
+		} else {
+			report.warn(fsReportWarnPartitionOffset, "volume", fmt.Sprintf(
+				"this volume records that its partition began at sector %d, but its boot "+
+					"record was found at byte %d of the image. exFAT treats that field as "+
+					"informational, so a volume imaged at the partition level disagrees here "+
+					"as a matter of course; it is reported rather than refused",
+				recordedSectors, raw.Filesystem.Base))
+		}
 	}
 
 	var truncated, unlocated, failed int64
@@ -1262,6 +1284,37 @@ func (s *realXFATSession) Report() (fsReport, error) {
 	fsReportFragmentWarnings(&report, truncated, unlocated, failed)
 	report.finish()
 	return report, nil
+}
+
+// xfatPartitionOffset reads the PartitionOffset a volume records about itself
+// and says whether it agrees with the byte its boot record was found at.
+//
+// Both numbers reach the report whatever the answer, because a disagreement
+// here is a fact about the evidence and not a fault. exFAT section 3.1.3 makes
+// PartitionOffset informational, so a volume imaged at the partition level
+// records the LBA its partition began at and is then handed over as a file
+// whose byte 0 is the volume -- the ordinary shape of exFAT evidence, and why
+// realXFATBackend.Open skips libxfat's cross-check when the caller gave no
+// offset. This is where the number it stopped refusing over is reported
+// instead, so skipping the check costs the examiner nothing. See M26-FS1-020.
+//
+// sectors is -1 when the recorded value will not fit in an int64, following
+// fsVolumeEnd, and agrees is false then: skipping the cross-check also skips
+// libxfat's own representability guard on this field, so neither the value nor
+// the product of it can be assumed to be a number.
+func xfatPartitionOffset(recorded uint64, sectorSize int, base int64) (sectors int64, agrees bool) {
+	if recorded > uint64(math.MaxInt64) {
+		return -1, false
+	}
+	sectors = int64(recorded)
+	if sectorSize <= 0 {
+		return sectors, false
+	}
+	hi, lo := bits.Mul64(recorded, uint64(sectorSize))
+	if hi != 0 || lo > uint64(math.MaxInt64) {
+		return sectors, false
+	}
+	return sectors, int64(lo) == base
 }
 
 // --- hfs --------------------------------------------------------------------

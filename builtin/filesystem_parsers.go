@@ -1827,17 +1827,38 @@ func (realXFATBackend) Open(volumePath string, region fsRegion) (xfatSession, er
 	// the library's recommended setting for evidence processing -- it turns on
 	// the partition cross-check and file-name checksum verification.
 	//
-	// Base is what gives that cross-check its second operand. exFAT records in
-	// its own boot record the sector it believes it lives at, and opening at a
-	// known offset lets libxfat compare the two: a volume found somewhere other
-	// than where it says it belongs refuses to open rather than being read as
-	// though nothing were unusual. Opening with no offset compares against zero,
-	// which is what this did before and what a partition-relative image needs.
+	// Base is what gives that cross-check its second operand, and it only has
+	// one when the caller said where the volume sits. exFAT records in its own
+	// boot record the sector it believes its partition began at; region.Offset
+	// is the byte we opened it at inside this file. Those are different
+	// quantities -- one a position on the original media, the other a position
+	// in an image -- and they are comparable only when the image is the whole
+	// disk. A caller passing a partition hash or an explicit offset asserted
+	// exactly that, so the comparison is real and a disagreement still refuses:
+	// a volume found somewhere other than where it says it belongs is not read
+	// as though nothing were unusual.
+	//
+	// A caller passing no offset asserted nothing. region.Offset is zero because
+	// the volume IS the file, which is what imaging a partition produces, and it
+	// says nothing about where that partition began -- 1 MiB alignment makes 2048
+	// the commonest recorded value there is. Comparing against zero there refuses
+	// a sound volume over an assumption nobody made, and did: until M26-FS1-020
+	// every xfat_* builtin was unreachable for a partition-level exFAT image,
+	// because this file passed neither option the library's own error names.
+	// exFAT section 3.1.3 makes PartitionOffset informational and lets an
+	// implementation ignore it, which is what exfatprogs does, so the check is
+	// skipped and the two numbers are reported instead: Report carries base and
+	// partition_offset and warns when they disagree.
+	//
+	// Strict stays on either way. The file-name checksum verification and the
+	// rest of strict mode are the library's recommended posture for evidence,
+	// and are not what refused here.
 	fs, err := libxfat.Open(libxfat.Source{
-		Reader: reader,
-		Size:   size,
-		Base:   region.Offset,
-		Strict: true,
+		Reader:                reader,
+		Size:                  size,
+		Base:                  region.Offset,
+		Strict:                true,
+		IgnorePartitionOffset: region.Offset == 0,
 	})
 	if err != nil {
 		_ = img.Close()
