@@ -268,12 +268,12 @@ So a reader does not go looking for a switch that is not there:
 | --- | --- | --- |
 | Protection profile | fixed at `standard`; `minimal`/`paranoid` remain only so V3 release trailers can be read back | `security/profile.go` — `ResolveProtectionProfile` |
 | Tamper response | derived from mode: `terminate` in secure mode, `warn` in `--compat`/`--dev` | `security/response_policy.go` — `ResolveTamperResponse` |
-| Tamper delay | `250` ms constant | `security/response_policy.go` — `DefaultTamperDelayMs` |
+| Tamper delay | `250` ms constant, and no mode selects the `delay` response it belongs to, so no run waits on it | `security/response_policy.go` — `DefaultTamperDelayMs` |
 | Process protection | always on; its five probes run on Windows only, so on Linux and macOS it measures nothing and the run says so on stderr | `runner/runner.go` — `isProcessProtectionEnabled` |
 | Process-protection terminate threshold | confidence `80` | `runner/runner.go` — `processProtectionTerminateConfidence` |
 | Anti-tamper probe | on by default; the setter exists for tests | `security/antitamper_probe.go` — `antiTamperProbeEnabled` |
 | Remote process scan | off; reachable only from tests | `security/processscan_config.go` |
-| Capability configuration | **under design.** No interface is specified. | — |
+| Capability configuration | **none, and none is planned.** A builtin runs with this process's own permissions; declined 2026-10-10. | no gate exists; the decision is note 1 in [SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md) |
 
 Mode selection (`--secure` / `--compat` / `--dev`), signer enforcement
 (`--signer-auth` / `--no-signer-auth`), the trusted key file (`--trusted-key`),

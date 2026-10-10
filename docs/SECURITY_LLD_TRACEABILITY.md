@@ -87,6 +87,11 @@ run a program they did not write needs it stated rather than softened:
 - The LSP's `commandInjection` rule is an editor-time warning. It can be
   switched off and it does not run at execution time, so it is not an
   enforcement point.
+- The `policy_*` builtins are not this control under another name. They wrap
+  Open Policy Agent, so a program loads a Rego module and asks it a question,
+  and the program itself decides what to do with the answer. Nothing outside
+  those five builtins calls the engine, so it is never consulted before a
+  builtin runs.
 
 The design is revisited if a user asks for it. Until then this row exists so
 that a reviewer auditing control coverage finds a recorded decision rather

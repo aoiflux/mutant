@@ -648,9 +648,9 @@ stops -- see `ExplainTamperTermination` in
 error directly rather than going through the response policy, so they call the
 explainer themselves.
 
-### 10.5 Builtin Capability Configuration
-
-Under design. No interface is specified.
+The probe schedule of 10.3 feeding this response, end to end. The `delay`
+branch is the seam described in 4.2: `ApplyTamperResponse` implements it, and
+no mode selects it, so a detection reaches `WarnContinue` or `Terminate`.
 
 ```mermaid
 stateDiagram-v2
@@ -665,13 +665,37 @@ stateDiagram-v2
     ProbeSweep --> TamperDetected: any mismatch
 
     TamperDetected --> WarnContinue: policy=warn
-    TamperDetected --> DelayContinue: policy=delay
+    TamperDetected --> DelayContinue: policy=delay (unreachable seam)
     TamperDetected --> Terminate: policy=terminate
 
     WarnContinue --> Running
     DelayContinue --> Running
     Terminate --> [*]
 ```
+
+### 10.5 Builtin Capability Configuration
+
+There is none, and none is planned. This is a decision taken on 2026-10-10,
+not an unfinished design: a Mutant program carries the authority of the process
+that runs it, the same way a program written in Python, Ruby, Node or Go does.
+A program that can reach `exec_string`, `exec_argv` or `cmd_run` can run
+commands, and one that can reach the `fs_*`, `net_*` or `http_*` families can
+read files and open sockets, with this process's own permissions.
+
+The `policy_*` builtins are not this control under another name: they wrap
+Open Policy Agent, so a program loads a Rego module and asks it a question,
+and the program itself decides what to do with the answer. Nothing outside
+those five builtins calls the engine, so it is never consulted before a
+builtin runs.
+
+What constrains command execution is fixed rather than configurable -- a
+3-second timeout bounding the whole call, 8 KiB kept of each output stream, and
+a kill that reaches the process tree -- and those bound blast radius, not
+permission. The operator's decision is whether to run the program at all, which
+is what the trust model of section 8 and the mode semantics of section 4
+support, not a capability set. Note 1 under the control matrix in
+[SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md) records the
+decision and the reasoning, and SEC-017 there carries status `D`.
 
 ---
 
