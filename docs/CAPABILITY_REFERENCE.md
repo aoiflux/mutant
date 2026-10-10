@@ -24,7 +24,7 @@ Almost every builtin is cross-platform. The exceptions:
 | `process_memory_scan` | windows, linux | fails honestly on other platforms |
 | `process_modules` | windows, linux | fails honestly on other platforms |
 
-`exec_argv`, `exec_string`, `process_kill`, and `reg_open` work on all platforms but have platform-specific behavior in one path; hover in the editor shows the note.
+`cmd_run`, `exec_argv`, `exec_string`, `process_kill`, and `reg_open` work on all platforms but have platform-specific behavior in one path; hover in the editor shows the note.
 
 ---
 
@@ -525,13 +525,13 @@ Embed and securely execute Lua in a restricted sandbox (no `io`, dangerous `os.*
 
 ## Command Execution (5)
 
-Guarded execution of external commands, subject to the `command_exec` capability policy.
+Run an external command and read back what it printed. What guards one is fixed and not configurable: a 3-second timeout, 8 KiB kept of each output stream, a kill that reaches the whole process tree, and a shell named rather than written as a command line. There is no per-builtin capability gate -- SEC-017 in [SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md) is under design -- so a program that can reach these builtins can run commands, and the lint rule `commandInjection` is an editor-time warning and not an enforcement.
 
 | Builtin | Platforms | Description |
 | --- | --- | --- |
-| `cmd_add(builder: HASH, arg: STRING) -> (HASH, ERROR)` | all | Appends an argument to a command builder. |
-| `cmd_builder(shell?: STRING) -> (HASH, ERROR)` | all | Creates a command builder object for step-wise command composition. |
-| `cmd_run(builder: HASH) -> (HASH, ERROR)` | all | Executes a composed command and returns run output metadata. |
+| `cmd_add(builder: HASH, arg: STRING) -> (HASH, ERROR)` | all | Appends a line to a command builder and returns the builder with it. The builder is a value, not a handle: the line is on the hash this returns and not on the one passed in. |
+| `cmd_builder(shell?: STRING) -> (HASH, ERROR)` | all | Creates a command builder object for step-wise command composition. The shell is recorded as given and decides, at cmd_run, how the lines are joined into one command. |
+| `cmd_run(builder: HASH) -> (HASH, ERROR)` | all | Runs every line a builder collected, in order, and returns the command's output streams, exit code and timeout status. The lines are joined with what the named shell reads as the end of one line: a newline for powershell, pwsh, sh, bash and any other name, and "&" for cmd and batch, whose command line ends at the first newline. The exit code is the last line's in every shell, so a line that fails does not stop the rest and is not reported on its own; a blank line is a no-op, and a builder holding nothing but blank lines is refused rather than run. |
 | `exec_argv(argv: ARRAY) -> (HASH, ERROR)` | all | Runs a program with exactly the arguments given, with no shell in between. |
 | `exec_string(command: STRING, shell?: STRING) -> (HASH, ERROR)` | all | Executes a shell command string via security-guarded command execution. |
 

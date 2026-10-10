@@ -2148,22 +2148,23 @@ var builtinDocs = map[string]builtinDoc{
 		returns:      pairRet("the program's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
 	BuiltinNameCmdBuilder: {
 		signature: "cmd_builder(shell?)",
-		summary:   "Creates a command builder object for step-wise command composition.",
+		summary:   "Creates a command builder object for step-wise command composition. The shell is recorded as given and decides, at cmd_run, how the lines are joined into one command.",
 		params:    []builtinParamDoc{param("shell?", "Optional shell NAME, not a path and not a command line: powershell, pwsh, cmd, batch, bash and sh are invoked with their own flags, and any other bare name is run with -c. Defaults to powershell on Windows and sh elsewhere.", ParamString)},
 		returns:   pairRet("a fresh command builder", ParamHash).withFields("lines", "shell")},
 	BuiltinNameCmdAdd: {
 		signature: "cmd_add(builder, arg)",
-		summary:   "Appends an argument to a command builder.",
+		summary:   "Appends a line to a command builder and returns the builder with it. The builder is a value, not a handle: the line is on the hash this returns and not on the one passed in.",
 		params: []builtinParamDoc{
 			param("builder", "Builder hash returned by cmd_builder/cmd_add.", ParamHash),
-			param("arg", "Command line text appended as a new line.", ParamString),
+			param("arg", "One command line. It reaches the shell as written; nothing here quotes or escapes it.", ParamString),
 		},
 		returns: pairRet("the builder, with the argument appended", ParamHash).withFields("lines", "shell")},
 	BuiltinNameCmdRun: {
-		signature: "cmd_run(builder)",
-		summary:   "Executes a composed command and returns run output metadata.",
-		params:    []builtinParamDoc{param("builder", "Builder hash containing shell and command lines.", ParamHash)},
-		returns:   pairRet("the command's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
+		signature:    "cmd_run(builder)",
+		summary:      "Runs every line a builder collected, in order, and returns the command's output streams, exit code and timeout status. The lines are joined with what the named shell reads as the end of one line: a newline for powershell, pwsh, sh, bash and any other name, and \"&\" for cmd and batch, whose command line ends at the first newline. The exit code is the last line's in every shell, so a line that fails does not stop the rest and is not reported on its own; a blank line is a no-op, and a builder holding nothing but blank lines is refused rather than run.",
+		params:       []builtinParamDoc{param("builder", "Builder hash containing shell and command lines.", ParamHash)},
+		platformNote: "Under cmd and batch a line cannot read a variable an earlier line set: cmd expands %VAR% when it parses the command line, before any of it has run, so the later line gets the unexpanded name. A run that needs state across steps belongs in a script the caller controls, started with exec_argv.",
+		returns:      pairRet("the command's output streams, exit code, and timeout status", ParamHash).withFields("error", "exit_code", "ok", "schema_version", "stderr", "stdout", "timed_out")},
 	BuiltinNameFsDelete: {
 		signature: "fs_delete(path)", summary: "Deletes a file from disk.",
 		params:  []builtinParamDoc{param("path", "Path to the file to delete.", ParamString)},

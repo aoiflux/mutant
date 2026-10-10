@@ -124,7 +124,12 @@ func CmdRun(args ...object.Object) object.Object {
 		return resultAndError(nil, newError("argument to `cmd_run` has no lines to execute"))
 	}
 
-	command := strings.Join(builder.lines, "\n")
+	// Joined by the package that knows what the shell name means, because the
+	// separator is not the same for every shell: cmd.exe reads its command from
+	// a command line and a command line ends at the first newline, so a
+	// "\n"-joined builder ran line one and dropped the rest while the result
+	// said ok (M26-NET-018).
+	command := security.JoinShellLines(builder.shell, builder.lines)
 	result := security.ExecuteCommand(builder.shell, command, "builtin:cmd_run")
 	return resultAndError(commandResultHash(result), nil)
 }

@@ -20,13 +20,18 @@ let updated_tasks_builder, err = cmd_add(tasks_builder, "Get-ScheduledTask | Sel
 tasks_builder = updated_tasks_builder;
 let tasks, err = cmd_run(tasks_builder);
 
-if (startup["allowed"] == false) {
-    putln("command execution blocked by policy");
-    putln("update command execution policy/profile to enable this example");
-} else {
-    putln("startup command exit_code: ", startup["exit_code"], " timed_out=", startup["timed_out"]);
-    putln("task command exit_code: ", tasks["exit_code"], " timed_out=", tasks["timed_out"]);
+// A command result says whether it ran with ok, and why not in error. It has
+// no "allowed" field and never had one -- this used to test for it, so the
+// failure branch could not run and a collection that never happened was
+// reported by its exit code alone.
+if (startup["ok"] == false) {
+    putln("startup collection did not run: ", startup["error"]);
 };
+if (tasks["ok"] == false) {
+    putln("scheduled-task collection did not run: ", tasks["error"]);
+};
+putln("startup command exit_code: ", startup["exit_code"], " timed_out=", startup["timed_out"]);
+putln("task command exit_code: ", tasks["exit_code"], " timed_out=", tasks["timed_out"]);
 
 let report = {
     "profile": "persistence_triage",

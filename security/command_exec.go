@@ -66,8 +66,12 @@ const (
 	// the only way to state what becomes of a caller's quotes. See
 	// rawCommandLineFor.
 	cmdFlagQuoteStrip = "/S"
-	bashExec          = "bash"
-	shExec            = "sh"
+	// cmdLineSeparator is what goes between the lines of a command builder for
+	// cmd.exe, where a newline cannot: see JoinShellLines. It carries no
+	// spaces, so that the join contributes nothing to any line's own text.
+	cmdLineSeparator = "&"
+	bashExec         = "bash"
+	shExec           = "sh"
 	// POSIX shells read the command from an argument, not from a file. Without
 	// it `bash echo hi` is a request to run a script called "echo hi".
 	posixFlagCommand = "-c"
@@ -339,6 +343,75 @@ func isBareProgramName(shell string) bool {
 		}
 	}
 	return true
+}
+
+// JoinShellLines turns the lines a command builder collected into the one
+// command string the named shell runs, which is not the same string for every
+// shell.
+//
+// cmd.exe reads its command from the command line, and a command line ends at
+// the first newline. Joined with "\n", a builder made with cmd_builder("cmd")
+// therefore ran its first line, silently dropped every later one, and came
+// back ok with exit_code 0 (M26-NET-018, measured: the lines `echo FIRST` and
+// `echo SECOND` gave stdout "FIRST\r\n"). The same builder under powershell
+// printed both.
+//
+// "&" and not "&&": "&&" runs the next line only if the one before it
+// succeeded, and a newline in powershell, sh and bash does not work that way.
+// Measured, `sh -c "false\necho SECOND"` prints SECOND and exits 0. A builder
+// is a list of lines to run, and the shells that already worked run all of
+// them, so this one does too; the exit code is the last line's, in every
+// shell, and an earlier line that failed does not stop the rest and does not
+// show up in the result. That is the shell's rule rather than a choice made
+// here, and it is why a step whose failure must stop the run is tested by the
+// script that asked for it.
+//
+// The separator carries no spaces, which is not cosmetic. cmd's echo prints
+// everything up to the separator, trailing space included: measured,
+// `echo FIRST & echo SECOND` printed "FIRST \r\nSECOND\r\n", putting a space
+// on the end of every line's output but the last. With a bare "&" the join
+// contributes nothing to any line's own text, and a line's own trailing space
+// still survives, because the caller wrote that one.
+//
+// A blank line is left out of the cmd command instead of joined. A blank line
+// does nothing in every other shell, and in this one "&" with nothing beside
+// it is a syntax error that costs the whole command: measured, `&echo B`
+// answers `& was unexpected at this time.` and runs neither line. Leaving it
+// out drops nothing that would have happened. When every line is blank the
+// result is the empty string, which ExecuteCommand refuses -- the same answer
+// a "\n"-joined blank script already got.
+//
+// What this does not give cmd is state across lines. cmd expands %VAR% when it
+// parses the command line, before any of it has run, so a line reading a
+// variable an earlier line set gets the unexpanded name: measured,
+// `set X=1&echo %X%` prints `%X%`. That is cmd's own answer to the same
+// command typed by hand, and the alternative -- /V:ON and !VAR! -- would make
+// "!" a metacharacter in every command that does not want one. A run that
+// needs state across steps belongs in a script the caller controls, reached
+// with exec_argv.
+func JoinShellLines(shell string, lines []string) string {
+	return joinShellLinesFor(runtime.GOOS, shell, lines)
+}
+
+// joinShellLinesFor takes the OS as an argument rather than reading
+// runtime.GOOS, for the reason defaultShellFor does: the answer for a shell
+// name that is only reachable on another platform is then checkable from this
+// one. An empty shell name means the host's default, which is why the OS is
+// needed at all.
+func joinShellLinesFor(goos, shell string, lines []string) string {
+	switch normalizeShell(goos, shell) {
+	case shellCmd, shellBatch:
+		kept := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		return strings.Join(kept, cmdLineSeparator)
+	default:
+		return strings.Join(lines, "\n")
+	}
 }
 
 func resolveCommandExecTimeout() time.Duration {

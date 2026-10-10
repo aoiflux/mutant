@@ -21,9 +21,12 @@ package analyzer
 // It says nothing about `exec_string(command)` where the whole string arrives
 // as one value. That is a real hazard too, but it is a question about where the
 // value came from rather than about what this line does with it, and answering
-// it needs the taint tracking pathTraversal carries. Nor does it consult the
-// capability policy that guards these builtins at run time (§1): the lint says
-// what the code does, the policy decides what the program may do.
+// it needs the taint tracking pathTraversal carries.
+//
+// And nothing else guards these builtins: there is no runtime capability policy
+// for them -- SEC-017 in docs/SECURITY_LLD_TRACEABILITY.md is under design --
+// so this warning is the only thing between a spliced value and a shell, which
+// is a reason to keep it quiet enough to stay switched on.
 
 import (
 	"fmt"
