@@ -233,6 +233,71 @@ func (m *Mapper) ByteOffset(pos lsp.Position) (int, bool) {
 	return m.lineStart[line] + m.byteColumn(line, pos.Character), true
 }
 
+// EditOffsets is the byte range of src that the range of a text-document
+// change event names, and whether it names one at all.
+//
+// This is the inbound direction of everything above, and it is the one place
+// where a position the document does not contain still has to mean something.
+// A client says "to the end of the document" by sending a line one past the
+// last, or a character past the end of its line, and the protocol requires
+// both to be read as the end rather than refused: a character greater than
+// the line's length "defaults back to the line length" (LSP 3.16,
+// textDocument/didChange). An edit has to land where the client thinks it
+// landed, because the two copies of the document have no way to find out that
+// they have diverged.
+//
+// glsp's own Range.IndexesIn does not do this. Measured against v0.2.2: a
+// character past the end of the only line of "abc" answers 0..0, so an insert
+// at (0, 10) landed at the START of the document and "abc" became "Xabc"; a
+// range ending at (lineCount, 0) answers 11..0, an end before its start, which
+// the caller could only refuse. That is M26-LSP-004, and both answers are
+// wrong in the same way -- a position outside the content is reported as
+// offset zero, which is a real position in the document.
+//
+// The character is clamped by byteColumn, which the whole file already relies
+// on. A line past the last line is the end of src. A start after its own end is
+// refused: the protocol orders a range's ends, so a start past its end is a
+// malformed request and not a position this can guess at.
+func EditOffsets(src string, rng lsp.Range) (start, end int, ok bool) {
+	m := NewMapper(src)
+	start, ok = m.EditOffset(rng.Start)
+	if !ok {
+		return 0, 0, false
+	}
+	end, ok = m.EditOffset(rng.End)
+	if !ok {
+		return 0, 0, false
+	}
+	if end < start {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// EditOffset is ByteOffset with the one rule an edit needs and a query must not
+// have: a line the document does not have is the end of the document, not an
+// absent position.
+//
+// ByteOffset answers false there and has to. A caller asking which node is
+// under the cursor is asking about a position in the text, and a line that is
+// not in the text has no answer -- clamping one would make every such question
+// return something about the last line instead of nothing. A caller applying an
+// edit is being told where the client put it, and the client is entitled to say
+// "past the end".
+func (m *Mapper) EditOffset(pos lsp.Position) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	line := int(pos.Line)
+	if line < 0 {
+		return 0, false
+	}
+	if line >= len(m.lineStart) {
+		return len(m.src), true
+	}
+	return m.lineStart[line] + m.byteColumn(line, pos.Character), true
+}
+
 // ContainsPosition reports whether an AST range covers a protocol position.
 //
 // The position is converted, not the range: a caller asking this is usually

@@ -355,6 +355,15 @@ func (s *Server) didChange(ctx *glsp.Context, params *lsp.DidChangeTextDocumentP
 		if errors.Is(err, workspace.ErrStaleDocumentVersion) {
 			return nil
 		}
+		// didChange is a notification, so this error reaches nobody: jsonrpc2
+		// sends no response to one, and returning it only reaches a log. The
+		// store has refused the change and now records that about itself, which
+		// is what every handler that hands the client an edit reads. Take the
+		// diagnostics down too, because the set already published describes text
+		// the client does not have, and a squiggle over code that is fine is
+		// worse than no squiggle at all (M26-LSP-004).
+		log.Printf("didChange uri=%s version=%d refused: %v", params.TextDocument.URI, params.TextDocument.Version, err)
+		s.publishDiagnostics(ctx, params.TextDocument.URI, lsp.UInteger(params.TextDocument.Version), &analyzer.Snapshot{})
 		return err
 	}
 	snapshot := s.analyzeDoc(doc.URI, doc.Text)
@@ -428,8 +437,8 @@ func (s *Server) signatureHelp(_ *glsp.Context, params *lsp.SignatureHelpParams)
 }
 
 func (s *Server) codeActions(_ *glsp.Context, params *lsp.CodeActionParams) (any, error) {
-	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
-	if !ok || doc == nil {
+	doc, ok := s.syncedDocument(params.TextDocument.URI)
+	if !ok {
 		return nil, nil
 	}
 	snapshot, _ := s.snapshot(params.TextDocument.URI)
@@ -1220,13 +1229,38 @@ func semanticTokenEdits(old, next []lsp.UInteger) []lsp.SemanticTokensEdit {
 	}}
 }
 
+// syncedDocument is the open document a URI names, and whether this copy of it
+// is the client's.
+//
+// Every handler that answers with a lsp.TextEdit builds that edit out of the
+// text stored here, so a handler that cannot tell a desynced copy from a
+// current one offers the user an edit that replaces their file with the
+// server's idea of it. Format-on-save is on by default for Mutant documents,
+// which makes formatting the path that loses work without being asked, and a
+// quick fix is applied the moment it is clicked. All four refuse instead
+// (M26-LSP-004).
+//
+// The read-only features -- hover, completion, highlights, navigation -- are
+// deliberately left alone. They are wrong on a desynced document too, but being
+// wrong about what a name means costs an answer, while being wrong about the
+// text costs the file; and they come right again the moment the client sends a
+// whole document. The diagnostics are the exception, because a published set
+// stays on screen: didChange clears them.
+func (s *Server) syncedDocument(uri lsp.DocumentUri) (*workspace.Document, bool) {
+	doc, ok := s.documents.Snapshot(uri)
+	if !ok || doc == nil || doc.Desynced {
+		return nil, false
+	}
+	return doc, true
+}
+
 func (s *Server) formatting(_ *glsp.Context, params *lsp.DocumentFormattingParams) ([]lsp.TextEdit, error) {
 	if !s.strictFormattingEnabled() {
 		return nil, nil
 	}
 
-	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
-	if !ok || doc == nil {
+	doc, ok := s.syncedDocument(params.TextDocument.URI)
+	if !ok {
 		return nil, nil
 	}
 
@@ -1263,8 +1297,8 @@ func (s *Server) rangeFormatting(_ *glsp.Context, params *lsp.DocumentRangeForma
 		return nil, nil
 	}
 
-	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
-	if !ok || doc == nil {
+	doc, ok := s.syncedDocument(params.TextDocument.URI)
+	if !ok {
 		return nil, nil
 	}
 
@@ -1291,8 +1325,8 @@ func (s *Server) onTypeFormatting(_ *glsp.Context, params *lsp.DocumentOnTypeFor
 		return nil, nil
 	}
 
-	doc, ok := s.documents.Snapshot(params.TextDocument.URI)
-	if !ok || doc == nil {
+	doc, ok := s.syncedDocument(params.TextDocument.URI)
+	if !ok {
 		return nil, nil
 	}
 

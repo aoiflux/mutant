@@ -4,8 +4,29 @@ import "sort"
 
 // Position identifies a location in source code.
 //
-// Line and Column are 1-based (LSP-friendly) and count runes, not bytes.
-// Offset is a 0-based byte offset into the source input.
+// Line is 1-based. Column is 1-based and counts BYTES, not runes and not UTF-16
+// code units: the lexer computes it as l.position - l.lineStart + 1, which is a
+// difference of byte offsets. Offset is a 0-based byte offset into the source
+// input, so Offset and Column measure in the same unit and a caller can slice
+// the source with either.
+//
+// This comment used to say "1-based (LSP-friendly) and count runes, not bytes",
+// which was wrong twice over and was M26-LEX-014. It was wrong about the unit,
+// and the parenthesis was wrong about the protocol: LSP 3.16 measures
+// Position.character in UTF-16 code units, which is a third unit again, equal
+// to the rune count only for text inside the basic multilingual plane. Three
+// units agree on ASCII, which is why the claim went unnoticed and why the tests
+// that assert a Column all used ASCII.
+//
+// Bytes are the deliberate choice and not an accident waiting to be corrected.
+// The CLI prints these columns, the parser's messages quote them, and the sweep
+// goldens pin them, so every one of those would move if the unit here changed.
+// The conversion to what an editor needs happens once, at the protocol
+// boundary, in lsp/internal/protocol.Mapper -- see its type comment for why it
+// is there and nowhere else. Anything that converts a Column must go through a
+// Mapper; a conversion written at a call site is M26-LSP-027, which is how the
+// language server came to report every position after a non-ASCII character on
+// the same line in the wrong place.
 //
 // A zero-value Position (Line == 0) means "unknown position" and is used
 // by hand-constructed tokens (e.g. in tests) that pre-date position tracking.
