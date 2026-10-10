@@ -184,7 +184,10 @@ if ($Quick) {
 
 Invoke-Step "go test ./..." {
     Param($log)
-    Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("test", "./...", "-count=1")
+    # -timeout 45m, matching the race step below; see M26-TOOL-045. Go's 10-minute
+    # default is under the builtin package's measured spread of 503-604 s, so the
+    # gate's verdict depended on machine load.
+    Invoke-Logged -Log $log -Env @{ CGO_ENABLED = "0" } -Exe $Go -Arguments @("test", "./...", "-count=1", "-timeout", "45m")
 }
 
 if ($Quick) {

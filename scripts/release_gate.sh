@@ -172,7 +172,12 @@ cross_compile() {
   run "$log" env GOOS=js GOARCH=wasm CGO_ENABLED=0 "$GO" build -o "$out/mutant_repl.wasm" ./cmd/replwasm
 }
 
-go_test() { run "$1" env CGO_ENABLED=0 "$GO" test ./... -count=1; }
+# -timeout 45m, matching the race step below. Go's default is 10 minutes per
+# package and the builtin package measured 503 s and 604 s on one machine within
+# one hour, so the default left the gate's verdict depending on machine load --
+# M26-TOOL-045. 45m still catches a genuine hang; it does not make the package
+# faster, and the duration is printed on every run.
+go_test() { run "$1" env CGO_ENABLED=0 "$GO" test ./... -count=1 -timeout 45m; }
 
 # A SKIP does not fail the gate, so a host with no C compiler used to print
 # "Release gate passed" over no race coverage at all -- the Linux baseline did
