@@ -143,7 +143,7 @@ var categorySections = []categorySection{
 	{
 		category: "command execution",
 		heading:  "Command Execution",
-		blurb:    "Run an external command and read back what it printed. What guards one is fixed and not configurable: a 3-second timeout, 8 KiB kept of each output stream, a kill that reaches the whole process tree, and a shell named rather than written as a command line. There is no per-builtin capability gate -- SEC-017 in [SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md) is under design -- so a program that can reach these builtins can run commands, and the lint rule `commandInjection` is an editor-time warning and not an enforcement.",
+		blurb:    "Run an external command and read back what it printed. What guards one is fixed and not configurable: a 3-second timeout, 8 KiB kept of each output stream, a kill that reaches the whole process tree, and a shell named rather than written as a command line. There is no per-builtin capability gate and none is planned -- SEC-017 in [SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md) records that decision -- so a program that can reach these builtins can run commands, and the lint rule `commandInjection` is an editor-time warning and not an enforcement.",
 	},
 	{
 		category: "cryptography",

@@ -32,6 +32,8 @@ Evidence levels used in this matrix:
 - `T` = tested
 - `C` = wired into the repository-wide `go test ./...` gate
 - `P` = partial / pending depth
+- `D` = declined by decision: no control exists, none is planned, and the
+  decision is recorded beside the row
 
 ---
 
@@ -55,8 +57,41 @@ Evidence levels used in this matrix:
 | SEC-014 | Generator must use a stable per-host signing identity                              | Signing workflow              | [generator/generate.go](../generator/generate.go#L36), [generator/generate.go](../generator/generate.go#L80), [security/key_bootstrap.go](../security/key_bootstrap.go#L37)                                                                                                                                                                              | None; local keystore only                                 | indirectly validated by signature verification tests                                                                                                                                                                        | I/P    |
 | SEC-015 | The security suites must run on every supported OS before a release                | Release validation            | [CONTRIBUTING.md](../CONTRIBUTING.md), [SECURITY_LLD.md](SECURITY_LLD.md#162-running-the-security-profile)                                                                                                                                                                     | None; `go test ./...` with `CGO_ENABLED=0`                | the suites themselves; **nothing automates the "every OS" half** since the CI workflow was removed                                                                                                                           | I/P    |
 | SEC-016 | Protection profile must define default tamper behavior                             | Runtime policy profile        | [security/profile.go](../security/profile.go), [security/response_policy.go](../security/response_policy.go)                                                                                                                                                                                                                          | None; fixed at `standard`                                 | [security/security_test.go](../security/security_test.go)                                                                                                                                                                      | I/T    |
-| SEC-017 | Builtin capability configuration (under design)                                    | Builtin capability gates      | [builtin/builtin.go](../builtin/builtin.go), [builtin/command_exec.go](../builtin/command_exec.go), [builtin/fs.go](../builtin/fs.go), [builtin/net.go](../builtin/net.go), [builtin/http.go](../builtin/http.go)                                                                                                                              | Under design                                              | [builtin/command_exec_test.go](../builtin/command_exec_test.go)                                                                                                                                                                | I/T    |
+| SEC-017 | Per-builtin capability configuration -- declined; none exists (note 1)             | Builtin capability gates      | None. A gate would have to cover: [builtin/builtin.go](../builtin/builtin.go), [builtin/command_exec.go](../builtin/command_exec.go), [builtin/fs.go](../builtin/fs.go), [builtin/net.go](../builtin/net.go), [builtin/http.go](../builtin/http.go)                                                                                            | None. No per-builtin gate exists (note 1)                 | [security/command_exec_bounds_test.go](../security/command_exec_bounds_test.go) covers the fixed limits that do apply, there being no gate to test                                                                             | D      |
 | SEC-018 | Standalone release artifacts must carry profile attestation and provenance         | Release trailer attestation   | [generator/writebinary.go](../generator/writebinary.go), [runner/runner.go](../runner/runner.go), [security/profile.go](../security/profile.go), [security/const.go](../security/const.go)                                                                                                                                                  | build profile + release generation path                   | [runner/runner_test.go](../runner/runner_test.go)                                                                                                                                                                              | I/T    |
+
+### 3.1 Note 1 -- SEC-017, per-builtin capability configuration
+
+**There is no per-builtin capability gate, and none is planned for 2.6.0.**
+This is a decision taken on 2026-10-10, not an unfinished item: a Mutant
+program carries the authority of the process that runs it, the same way a
+program written in Python, Ruby, Node or Go does. None of those puts a
+per-call gate in front of `subprocess`, `os/exec` or opening a socket
+either.
+
+What follows from that, stated plainly because a reader deciding whether to
+run a program they did not write needs it stated rather than softened:
+
+- A program that can reach `exec_string`, `exec_argv` or `cmd_run` can run
+  commands, and one that can reach the `fs_*`, `net_*` or `http_*` families
+  can read files and open sockets, with this process's own permissions.
+- The operator's decision is **whether to run the program**, not what it may
+  do once running. The controls that support that decision are the signed
+  artifact envelope and the mode flags (SEC-001), not a capability set.
+- What does constrain command execution is fixed and not configurable: a
+  3-second timeout bounding the whole call rather than one process, 8 KiB
+  kept of each output stream, a kill that reaches the process tree, and a
+  shell named rather than written out as a command line. Those are limits on
+  blast radius, not permissions, and they are tested in
+  [security/command_exec_bounds_test.go](../security/command_exec_bounds_test.go).
+- The LSP's `commandInjection` rule is an editor-time warning. It can be
+  switched off and it does not run at execution time, so it is not an
+  enforcement point.
+
+The design is revisited if a user asks for it. Until then this row exists so
+that a reviewer auditing control coverage finds a recorded decision rather
+than a gap, and so that nothing in this repository describes the control as
+pending.
 
 ---
 
@@ -151,8 +186,9 @@ variables the Go runtime and Mutant's libraries still read on its behalf.
 
 ### 5.2 Fixed behaviour (no control surface)
 
-These were once environment variables and are now constants. Listed so a
-reviewer does not go looking for the control that used to exist:
+These were once environment variables and are now constants, with one entry
+that was never a control at all. Listed so a reviewer does not go looking
+for a control that used to exist, or never did:
 
 1. Protection profile -- `standard`
    ([security/profile.go](../security/profile.go)).
@@ -169,7 +205,8 @@ reviewer does not go looking for the control that used to exist:
    ([security/telemetry.go](../security/telemetry.go)).
 8. Signing key -- local keystore only
    ([security/key_bootstrap.go](../security/key_bootstrap.go)).
-9. Builtin capability configuration -- under design.
+9. Builtin capability configuration -- never existed and is not planned;
+   declined 2026-10-10. See note 1 under the control matrix.
 
 ---
 

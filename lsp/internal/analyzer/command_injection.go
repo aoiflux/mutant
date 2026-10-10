@@ -24,7 +24,8 @@ package analyzer
 // it needs the taint tracking pathTraversal carries.
 //
 // And nothing else guards these builtins: there is no runtime capability policy
-// for them -- SEC-017 in docs/SECURITY_LLD_TRACEABILITY.md is under design --
+// for them, and none is planned -- SEC-017 in docs/SECURITY_LLD_TRACEABILITY.md
+// records that decision --
 // so this warning is the only thing between a spliced value and a shell, which
 // is a reason to keep it quiet enough to stay switched on.
 

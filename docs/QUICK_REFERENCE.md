@@ -33,7 +33,10 @@ artifact, runtime, and risky builtins.
 
 5. Builtin capability configuration
 
-- Under design. No interface is specified.
+- Declined, not pending. A program carries the authority of the process that
+  runs it, as in any general-purpose language; the operator's decision is
+  whether to run a program they did not write. See note 1 under the control
+  matrix in [SECURITY_LLD_TRACEABILITY.md](SECURITY_LLD_TRACEABILITY.md).
 
 6. Release attestation
 
@@ -114,8 +117,10 @@ Standalone release trailer V3:
 
 ## Quick checks
 
-- Unexpected builtin behaviour? There is no capability gate to check: builtin
-  capability configuration is under design.
+- Unexpected builtin behaviour? There is no capability gate to check and none
+  is planned; a builtin runs with this process's own permissions. What bounds
+  an external command is fixed: a 3-second timeout, 8 KiB kept per stream,
+  and a kill that reaches the process tree.
 - Signature failure? Check the `--trusted-key` file and the release signer
   chain; without the flag, verification is against the local bootstrap keypair,
   which trusts whatever signed the artifact on this machine.
